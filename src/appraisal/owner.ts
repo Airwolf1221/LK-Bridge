@@ -30,6 +30,7 @@ import { cleanPrefixes } from '../registry/names.js';
 import { deepText, ownText } from './extract.js';
 import type { LoadedPage, PageReader } from './reader.js';
 import type { CheckId } from './rules.js';
+import type { PageSplitAppraisal } from './split.js';
 import type { EvidenceClass, FindingSource, GovernanceRule, Group } from './types.js';
 
 type Obj = Record<string, unknown>;
@@ -79,6 +80,11 @@ export interface OwnerContext {
   readonly referenceTypeRow: string;
   /** The two lifecycle indexes (never appraised as indexes: they are flat lists by design). */
   readonly lifecycleIndexIds: ReadonlySet<string>;
+  /**
+   * v3 F3e (ADR 0059): the split appraisal (A6) of a page, whose candidates A2 gathers into its architectural group
+   * (null when the approved pack has no split rules: A2's own scope-overload pointer is used instead).
+   */
+  readonly split?: (p: LoadedPage, role: PageRole) => PageSplitAppraisal | null;
 }
 
 // ============================================================================================ text helpers
@@ -559,36 +565,68 @@ function indexChecks(ctx: OwnerContext, p: LoadedPage, out: Draft[]): void {
     });
 }
 
-/** Scope overload and a Core holding a specialist block (architectural candidates: a pointer for A6). */
+/**
+ * The architectural candidates: a Core holding a large specialist block (A2's own pointer), and, v3 F3e (ADR 0059), the
+ * split appraisal's (A6) measurable Split Triggers on any content page, each with its evidence, the draft destination
+ * map and the Anti-Fragmentation note. Without the pack's split rules (an approved version from before F3e), A2's own
+ * scope-overload pointer stands in.
+ */
 function architectureChecks(ctx: OwnerContext, p: LoadedPage, role: PageRole, out: Draft[]): void {
   const t = characterType(ctx.rules);
-  if (!t || !p.body || (role.role !== 'core' && role.role !== 'compact')) return;
-  const o = t.text.overload;
-  const sections = sectionsOf(p.body.blocks as unknown as LkBlock[]).filter((s) => s.heading);
-  const domains = new Map<string, string[]>();
-  const large: { domain: string; section: string; chars: number }[] = [];
-  for (const s of sections) {
-    const title = textKey(s.title);
-    const d = Object.entries(o.domains).find(([, words]) => words.some((w) => title.includes(textKey(w))));
-    if (!d) continue;
-    domains.set(d[0], [...(domains.get(d[0]) ?? []), s.title]);
-    const chars = s.blocks.reduce((n, b) => n + deepText(b as unknown as Obj).length, 0);
-    if (o.roles.includes(role.role) && chars >= o.minChars)
-      large.push({ domain: d[0], section: s.title, chars });
+  const identity = role.role === 'core' || role.role === 'compact';
+  if (t && p.body && identity) {
+    const o = t.text.overload;
+    for (const s of sectionsOf(p.body.blocks as unknown as LkBlock[]).filter((x) => x.heading)) {
+      const title = textKey(s.title);
+      const d = Object.entries(o.domains).find(([, words]) => words.some((w) => title.includes(textKey(w))));
+      if (!d) continue;
+      const chars = s.blocks.reduce((n, b) => n + deepText(b as unknown as Obj).length, 0);
+      if (o.roles.includes(role.role) && chars >= o.minChars)
+        out.push({
+          check: 'core_holds_specialist',
+          pageId: p.page.id,
+          key: textKey(s.title),
+          message: `The Core holds a large ${d[0].toLowerCase()} block (“${s.title}”, ${chars} characters): a candidate for a specialist page. A pointer only: the split appraisal (A6, arkona_split_appraisal) gives the evidence and a draft destination map, and the owner decides.`,
+          details: { domain: d[0], section: s.title, chars },
+        });
+    }
   }
-  for (const l of large)
-    out.push({
-      check: 'core_holds_specialist',
-      pageId: p.page.id,
-      key: textKey(l.section),
-      message: `The Core holds a large ${l.domain.toLowerCase()} block (“${l.section}”, ${l.chars} characters): a candidate for a specialist page. A pointer only; the split appraisal (A6) comes with F3e.`,
-      details: l,
-    });
+  if (!p.body || p.page.kind === 'index') return;
+  const a6 = ctx.split?.(p, role);
+  if (a6) {
+    for (const c of a6.candidates)
+      out.push({
+        check: c.check,
+        pageId: p.page.id,
+        ...(c.key ? { key: c.key } : {}),
+        message: c.message,
+        // Compact here (A2 reports many pages at once, and answers inline up to about 40,000 characters): the trigger and
+        // its evidence. The draft destination map, the Anti-Fragmentation note and the owner's questions are the split
+        // appraisal's own report (arkona_split_appraisal, or "Split appraisal (A6)" on the Appraisal page).
+        details: {
+          trigger: c.trigger,
+          evidence: c.evidence,
+          splitAppraisal:
+            'arkona_split_appraisal gives the draft destination map, the Anti-Fragmentation note and the owner’s questions',
+        },
+      });
+    return;
+  }
+  // No split rules in the approved pack: A2's own pointer (ADR 0054), for a Core or a Compact Reference only.
+  if (!t || !identity) return;
+  const domains = new Map<string, string[]>();
+  for (const s of sectionsOf(p.body.blocks as unknown as LkBlock[]).filter((x) => x.heading)) {
+    const title = textKey(s.title);
+    const d = Object.entries(t.text.overload.domains).find(([, words]) =>
+      words.some((w) => title.includes(textKey(w))),
+    );
+    if (d) domains.set(d[0], [...(domains.get(d[0]) ?? []), s.title]);
+  }
   if (domains.size >= 3)
     out.push({
       check: 'scope_overload',
       pageId: p.page.id,
-      message: `The page covers ${domains.size} specialist domains (${[...domains.keys()].join(', ')}): a candidate for splitting. A pointer only; the split appraisal (A6) comes with F3e.`,
+      message: `The page covers ${domains.size} specialist domains (${[...domains.keys()].join(', ')}): a candidate for splitting. A pointer only: the split appraisal (A6) needs the pack version with its split rules approved.`,
       details: { domains: Object.fromEntries(domains) },
     });
 }

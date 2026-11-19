@@ -474,6 +474,8 @@ function JobDetailView({ id }: { id: string }) {
     /** v3 F3d (ADR 0058): where a package, a rename or a recreate stopped part-way, and whether Resume applies. */
     stop?: JobStop;
     resume?: ResumeView;
+    /** v3 F3e (ADR 0059): the split whose phase 1 this job is (Revert applies although it was approved). */
+    split?: { id: string; state: string; retire: boolean };
   }>(`/jobs/${encodeURIComponent(id)}`, project);
   const now = useNow();
   const { set } = d;
@@ -511,10 +513,11 @@ function JobDetailView({ id }: { id: string }) {
               </div>
               <span className="row">
                 <JobControls job={job} project={project} onDone={d.reload} />
-                {/* v3 F3.4 (ADR 0055): an agent's finished direct write can be reverted (the server decides what). */}
+                {/* v3 F3.4 (ADR 0055): an agent's finished direct write can be reverted (the server decides what);
+                    v3 F3e (ADR 0059): so can a split's phase 1, although you approved it. */}
                 {!ACTIVE.includes(job.status) &&
                   job.principalId !== 'system' &&
-                  job.approvedBy === null &&
+                  (job.approvedBy === null || d.data?.split !== undefined) &&
                   job.kind !== 'paginate_all' && (
                     <RevertButton jobId={job.id} project={project} onDone={d.reload} />
                   )}

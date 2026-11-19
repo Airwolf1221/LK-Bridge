@@ -72,6 +72,9 @@ describe('the MCP surface with the official client', () => {
         'arkona_appraisal_fix',
         // v3 F3d: the Arkona pack's rename, and resuming a job that stopped part-way
         'arkona_rename',
+        // v3 F3e (ADR 0059): the split tools.
+        'arkona_split_appraisal',
+        'arkona_split_owner',
         'bridge_job_resume',
         'create_document',
         'create_index',

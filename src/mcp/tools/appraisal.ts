@@ -107,6 +107,7 @@ function answer(
     detail?: string | undefined;
   },
   cost: string,
+  readOnly = 'Nothing was written. A finding whose followUp is "fix" can become ONE proposal with arkona_appraisal_fix { findingId }; a "judgement" names the tool and what has to be decided (ask the owner, never guess).',
 ): McpToolResult {
   const list = o.group ? r.findings.filter((f) => f.group === o.group) : r.findings;
   const from = o.offset ?? 0;
@@ -136,8 +137,9 @@ function answer(
       offset: from,
       nextOffset: from + page.length < list.length ? from + page.length : null,
       findings: page.map((f) => findingView(f, o.detail === 'full')),
-      readOnly:
-        'Nothing was written. A finding whose followUp is "fix" can become ONE proposal with arkona_appraisal_fix { findingId }; a "judgement" names the tool and what has to be decided (ask the owner, never guess).',
+      // v3 F3e (ADR 0059): the split appraisal's questions, the triggers only the owner can answer.
+      ...(r.questions && r.questions.length > 0 ? { questions: r.questions } : {}),
+      readOnly,
       cost,
     },
     () => ({
@@ -296,6 +298,90 @@ export function appraisalTools(deps: ToolDeps): McpToolProvider[] {
               report,
               args,
               reads > 0 ? `${reads} read(s) (live)` : 'none',
+            );
+          } catch (e) {
+            return refusal(e, pd);
+          }
+        }),
+    }),
+    defineTool({
+      name: 'arkona_split_appraisal',
+      title: 'Appraise whether an owner page should be split (Arkona pack, read-only)',
+      access: 'read',
+      description:
+        'The Arkona pack, read-only and free: the measurable Split Triggers of Character Architecture on one page (`page`) or a branch (`under`), with Anti-Fragmentation as the counterweight. Scope Overload (the Scope or the sections name 3 or more domains), Retrieval Cost (long text AND 2 or more domains: length alone never counts), Asset Ownership (a non-Art page interpreting images, or a wardrobe, form or outfit section with images), Shared Ownership (a long section about one named character with no relationship owner), Distinct Unresolved Material (its items cluster under one domain) and Distinct Dependencies (a Dependency only one section relies on); the thresholds are the pack’s data. ' +
+        'Each result is an ARCHITECTURAL CANDIDATE, never a decision: its trigger, its evidence (sections, counts, sizes), a DRAFT destination map (which sections might go where) and the Anti-Fragmentation note (sections that should probably stay together); the triggers it cannot measure (Independent Retrieval, Independent Maintenance, Downstream Dependency) come back as questions for the owner. ' +
+        'Splitting is a deliberate, owner-approved decision (“do not split merely because a character has many facts”): bring the candidates, the Anti-Fragmentation note and the questions to the owner, and split only when asked, with arkona_split_owner (never by hand). Nothing is ever written. ' +
+        'Cost: none (the snapshots). live: true re-reads each page now (2 reads each, at most 25 pages).',
+      inputSchema: z.object({
+        page: pageArg.optional().describe('One page (name or id).'),
+        under: pageArg.optional().describe('A branch: this page and everything beneath it (name or id).'),
+        include: z
+          .array(z.enum(['legacy', 'design', 'archived']))
+          .max(3)
+          .optional()
+          .describe('Bring the non-current areas into a branch.'),
+        live: z.boolean().optional().describe('Re-read the pages now (2 reads each, at most 25).'),
+        ...pagingArgs,
+        project: projectArg,
+      }),
+      annotations: READ_ANNOTATIONS,
+      listed,
+      handler: (args, mctx) =>
+        withProject(deps, args.project, 'read', async (pd) => {
+          const s = service(pd);
+          if (!s.ok) return s.result;
+          const SAID =
+            'Nothing was written. These are architectural candidates, never decisions: bring them, the Anti-Fragmentation note and the questions to the owner. Split only when the owner asks, with arkona_split_owner (dryRun first), never by hand.';
+          if (args.runId) {
+            const r = stored(pd, args.runId, 'arkona_split_appraisal');
+            return isResult(r)
+              ? r
+              : answer(pd, mctx, 'arkona_split_appraisal', r, args, 'none (a stored run)', SAID);
+          }
+          const given = [args.page, args.under].filter((x) => x !== undefined);
+          if (given.length !== 1)
+            return errorResult(
+              {
+                code: 'INVALID_PARAMS',
+                message: 'Give exactly one of page or under (or runId to read a stored run).',
+              },
+              pd,
+            );
+          const rc = repoContext(pd);
+          if (!rc.ok) return rc.result;
+          let pageId: string | undefined;
+          let underId: string | undefined;
+          if (args.page) {
+            const r = resolvePage(rc.ctx, args.page);
+            if (!r.ok) return r.result;
+            pageId = r.node.id;
+          }
+          if (args.under) {
+            const r = resolvePage(rc.ctx, args.under, { what: `under:${args.under}` });
+            if (!r.ok) return r.result;
+            underId = r.node.id;
+          }
+          try {
+            const report = await s.a.splitAppraisal({
+              projectId: pd.project.id,
+              actor: actorOf(mctx, 'arkona_split_appraisal'),
+              scope: {
+                ...(pageId ? { pageId } : {}),
+                ...(underId ? { underId } : {}),
+                ...(args.include ? { include: args.include } : {}),
+              },
+              ...(args.live ? { live: liveReader(pd, mctx, 'arkona_split_appraisal') } : {}),
+            });
+            const reads = report.source.live?.reads ?? 0;
+            return answer(
+              pd,
+              mctx,
+              'arkona_split_appraisal',
+              report,
+              { ...args, detail: args.detail ?? 'full' },
+              reads > 0 ? `${reads} read(s) (live)` : 'none',
+              SAID,
             );
           } catch (e) {
             return refusal(e, pd);

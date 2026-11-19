@@ -397,3 +397,12 @@ the page. When LegendKeeper gives ids on the write (no legacy document can be ma
 what to do (`LKB_BLOCKIDS_DOCUMENT=<resourceId>/<documentId>` names a legacy page in a disposable copy). Unlike the other
 checks it records its verdict (PASS, NOTED or FAIL) in the bridge's own database (`DB_PATH`, `block_id_sandbox_checks`),
 with the bridge version: the sweep can be enabled only with a PASS for the running version, or the owner's override.
+
+## The splits' check (v3 F3e)
+
+`split-ids.test.ts` (`… sandbox-test.sh --project test -- split-ids`; ADR 0059): what `arkona_split_owner` assumes of
+LegendKeeper when it moves blocks verbatim between pages. It writes two throwaway pages and checks that a block written
+to the second with the id it has in the first keeps that id (its children theirs) and arrives verbatim, and that the
+first page's own edit (the block taken out, an interface summary in its place) leaves the copy as it is. What
+LegendKeeper does with an id the destination already uses is recorded as NOTED (the split never sends one: it derives
+another id and says so in the job). Both pages are deleted at the end. Written for the owner to run; agents never run it.

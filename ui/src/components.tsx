@@ -443,7 +443,14 @@ export function ResumeCard({
 }) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
-  const what = stop.kind === 'recreate' ? 'recreate' : stop.kind === 'rename' ? 'rename' : 'package';
+  const what =
+    stop.kind === 'recreate'
+      ? 'recreate'
+      : stop.kind === 'rename'
+        ? 'rename'
+        : stop.kind === 'split'
+          ? 'split (phase 1)'
+          : 'package';
   return (
     <section className="card" aria-label="Stopped part-way">
       <h3>Stopped part-way</h3>

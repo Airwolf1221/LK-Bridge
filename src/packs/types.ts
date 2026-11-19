@@ -313,6 +313,85 @@ export const ownersRulesSchema = z
   .strict();
 export type OwnersRules = z.infer<typeof ownersRulesSchema>;
 
+// ============================================================================================ v3 F3e: splits
+
+/**
+ * v3 F3e (ADR 0059; the owner-approved design docs/design/F3e-splits.md): the measurable Split Triggers of Character
+ * Architecture, with Anti-Fragmentation as their counterweight, and what `arkona_split_owner` checks. DATA the owner
+ * tunes with a new pack version (decision D4: Scope Overload at `scopeOverload.minDomains` or more domains; Retrieval Cost
+ * needs `retrievalCost.minWords` words AND `retrievalCost.minDomains` or more domains, never length alone).
+ */
+export const splitsRulesSchema = z
+  .object({
+    /** Scope Overload: the Scope (or the top-level sections) name this many separate domains or more (D4: 3). */
+    scopeOverload: z.object({ minDomains: z.number().int().min(2).max(20) }).strict(),
+    /** Retrieval Cost: this many words or more AND top-level sections in this many domains or more (D4). */
+    retrievalCost: z
+      .object({
+        minWords: z.number().int().min(100).max(1_000_000),
+        minDomains: z.number().int().min(2).max(20),
+      })
+      .strict(),
+    /**
+     * Asset Ownership: a non-Art page whose body holds this many image blocks or more, or a section whose heading
+     * carries one of `sectionWords` (wardrobe, form, outfit) and holds an image.
+     */
+    assetOwnership: z
+      .object({
+        minImages: z.number().int().min(1).max(100),
+        sectionWords: z.array(text(100)).min(1).max(30),
+      })
+      .strict(),
+    /** Shared Ownership: a section about one named character, at least this many words (it could stand alone). */
+    sharedOwnership: z.object({ minWords: z.number().int().min(10).max(100_000) }).strict(),
+    /** Distinct Unresolved Material: at least this many of its items under one domain. */
+    unresolved: z.object({ minItems: z.number().int().min(2).max(100) }).strict(),
+    /** A character page's domains: the domain's name → the words of a heading (or Scope) that names it. */
+    domains: z.record(text(100), z.array(text(100)).min(1).max(40)),
+    /** Any other owner page's domains (an owner type's name where one owns it: Military, Religion, Law…). */
+    ownerDomains: z.record(text(100), z.array(text(100)).min(1).max(40)),
+    /** Headings that are the page's own frame (Purpose, Identity, Source Boundaries…): they stay in a draft map. */
+    stays: z.array(text(200)).max(30),
+    /**
+     * The Anti-Fragmentation Rule's examples: groups of heading words whose sections should probably stay together
+     * (personality and habits; body, face and forms; a shared romantic hierarchy).
+     */
+    together: z
+      .array(z.object({ example: text(300), words: z.array(text(100)).min(2).max(40) }).strict())
+      .max(20),
+    /** A character domain → the new owner a draft destination map suggests (an F3a role, its title, Reference Type). */
+    destinations: z.record(
+      text(100),
+      z
+        .object({
+          role: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
+          title: text(200).optional(),
+          referenceType: text(200).optional(),
+        })
+        .strict(),
+    ),
+    /** The visual audit (step 5): an Art or visual owner is one of these roles, Reference Types or tags. */
+    visual: z
+      .object({
+        roles: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/)).max(10),
+        referenceTypes: z.array(text(200)).max(20),
+        tags: z.array(text(100)).max(20),
+      })
+      .strict(),
+    /** Universal owners (step 4): an Authoritative owner page tagged with one of these owner types' primary tags. */
+    universalTypes: z.array(text(100)).max(40),
+    /** The triggers the bridge cannot measure, put to the owner as questions. */
+    questions: z.array(z.object({ trigger: text(100), question: text(1000) }).strict()).max(10),
+    /**
+     * Steering away from manual splits (as F3d.1 steers renames): `write_page` that would remove whole top-level
+     * sections holding this many words or more from a pack page is refused with `USE_ARKONA_SPLIT` (`plainEdit` with a
+     * reason lets it through).
+     */
+    guardWords: z.number().int().min(20).max(100_000),
+  })
+  .strict();
+export type SplitsRules = z.infer<typeof splitsRulesSchema>;
+
 /** An owner's ruling the pack follows that its governance pages do not record yet (design 1.5: the AU tag). */
 export const rulingSchema = z
   .object({
@@ -392,6 +471,8 @@ export const packRulesSchema = z
      * 0035). A project not listed is `append`. Applies once the version holding it is approved.
      */
     lifecycleTagPosition: z.record(text(200), z.enum(['lead', 'append'])).optional(),
+    /** v3 F3e (ADR 0059): the split appraisal's triggers and the split tool's audits (absent: no split tools). */
+    splits: splitsRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {

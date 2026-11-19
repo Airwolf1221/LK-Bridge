@@ -197,7 +197,9 @@ export class ResumeService {
 
   private resumableOf(projectId: string, jobId: string): ResumableShape | null {
     const r = this.d.engine.jobOptions(projectId, jobId)[RESUMABLE_OPTION] as ResumableShape | undefined;
-    return r && (r.kind === 'package' || r.kind === 'rename' || r.kind === 'recreate') ? r : null;
+    return r && (r.kind === 'package' || r.kind === 'rename' || r.kind === 'recreate' || r.kind === 'split')
+      ? r
+      : null;
   }
 
   private onJob(job: JobView): void {

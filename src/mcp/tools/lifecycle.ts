@@ -1113,6 +1113,103 @@ function runSubtree(
   return runSet(deps, mctx, action, args);
 }
 
+/**
+ * archive_page's plan for one page (the tool's, and v3 F3e's phase 2 of a split, which the bridge proposes itself once
+ * phase 1 has verified: src/packs/split/service.ts).
+ */
+function archivePlan(
+  pd: ProjectDeps,
+  ctx: RepoCtx,
+  c: LifecycleConfig,
+  idx: { working: TreeNode; archived: TreeNode },
+  page: PageNow,
+  o: {
+    readonly propertyTitle: string;
+    readonly date: string;
+    readonly incomplete: LifecycleRecord | null;
+    readonly rules: LifecycleTagRules;
+  },
+): Plan | Answer {
+  const facts = factsOf(c, o.propertyTitle, page.sidebar);
+  const rec = o.incomplete;
+  if (!rec) {
+    if (page.kind === 'index')
+      return refuse(
+        pd,
+        'INDEX_PAGE',
+        `“${page.name}” is an index: archive_page takes a page. To archive a whole character (its index and all its pages) pass subtree: true on its [INDEX].`,
+      );
+    if (page.kind === 'barc')
+      return refuse(
+        pd,
+        'ALREADY_ARCHIVED',
+        `“${page.name}” is already archived. unarchive_page puts it back; nothing else to do.`,
+      );
+    if (page.kind !== 'bsrc' && page.kind !== 'bwrk') {
+      return refuse(
+        pd,
+        'NOT_LIFECYCLE_PAGE',
+        `“${page.name}” is neither an Authoritative [BSRC] page nor a Working [BWRK] page, so archive_page does not take it (an unclassified page is the owner’s to sort out: tell the person).`,
+      );
+    }
+    const st = stateOf(c, page, facts);
+    if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
+  }
+  const sub = subpageRefusal(pd, ctx, page.node, 'archive_page');
+  if (sub) return sub;
+  const from: 'authoritative' | 'working' = rec
+    ? rec.previousState === 'working'
+      ? 'working'
+      : 'authoritative'
+    : page.kind === 'bwrk'
+      ? 'working'
+      : 'authoritative';
+  let target: LifecycleTarget;
+  if (rec) target = rec.target;
+  else {
+    const doc = mainDocument(page);
+    if (!doc) {
+      return refuse(
+        pd,
+        'NO_PAGE_DOCUMENT',
+        `“${page.name}” has no page document for the archive note; nothing was done.`,
+      );
+    }
+    target = archiveTarget(c, page, facts, from, idx.archived.id, o.date, doc, o.rules);
+  }
+  const twin = ctx.tree
+    .children(ctx.projectId, target.parentId)
+    .data.find(
+      (x) => x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
+    );
+  if (twin) {
+    return refuse(
+      pd,
+      'NAME_TAKEN',
+      `[INDEX] ${c.indexNames.archived} already holds “${twin.rawName}”; rename one of them first.`,
+      {
+        existing: { id: twin.id, name: twin.rawName },
+      },
+    );
+  }
+  return {
+    action: 'archive',
+    tool: 'archive_page',
+    page,
+    target,
+    record: {
+      previousState: rec ? rec.previousState : from,
+      previousFacts: rec ? rec.previousFacts : facts,
+      tagsRemoved: target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t)) || rec !== null),
+      tagsAdded: target.tagsAdd,
+      date: o.date,
+      detail: {},
+      ...(rec ? { resumeOf: rec.id } : {}),
+    },
+    flags: [],
+  };
+}
+
 function archivePageTool(deps: ToolDeps): McpToolProvider {
   return defineTool({
     name: 'archive_page',
@@ -1130,90 +1227,98 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
     handler: (args, mctx) =>
       args.subtree === true
         ? runSubtree(deps, mctx, 'archive', args)
-        : runLifecycle(deps, mctx, 'archive', args, (pd, ctx, c, idx, page, o) => {
-            const facts = factsOf(c, o.propertyTitle, page.sidebar);
-            const rec = o.incomplete;
-            if (!rec) {
-              if (page.kind === 'index')
-                return refuse(
-                  pd,
-                  'INDEX_PAGE',
-                  `“${page.name}” is an index: archive_page takes a page. To archive a whole character (its index and all its pages) pass subtree: true on its [INDEX].`,
-                );
-              if (page.kind === 'barc')
-                return refuse(
-                  pd,
-                  'ALREADY_ARCHIVED',
-                  `“${page.name}” is already archived. unarchive_page puts it back; nothing else to do.`,
-                );
-              if (page.kind !== 'bsrc' && page.kind !== 'bwrk') {
-                return refuse(
-                  pd,
-                  'NOT_LIFECYCLE_PAGE',
-                  `“${page.name}” is neither an Authoritative [BSRC] page nor a Working [BWRK] page, so archive_page does not take it (an unclassified page is the owner’s to sort out: tell the person).`,
-                );
-              }
-              const st = stateOf(c, page, facts);
-              if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
-            }
-            const sub = subpageRefusal(pd, ctx, page.node, 'archive_page');
-            if (sub) return sub;
-            const from: 'authoritative' | 'working' = rec
-              ? rec.previousState === 'working'
-                ? 'working'
-                : 'authoritative'
-              : page.kind === 'bwrk'
-                ? 'working'
-                : 'authoritative';
-            let target: LifecycleTarget;
-            if (rec) target = rec.target;
-            else {
-              const doc = mainDocument(page);
-              if (!doc) {
-                return refuse(
-                  pd,
-                  'NO_PAGE_DOCUMENT',
-                  `“${page.name}” has no page document for the archive note; nothing was done.`,
-                );
-              }
-              target = archiveTarget(c, page, facts, from, idx.archived.id, o.date, doc, o.rules);
-            }
-            const twin = ctx.tree
-              .children(ctx.projectId, target.parentId)
-              .data.find(
-                (x) =>
-                  x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
-              );
-            if (twin) {
-              return refuse(
-                pd,
-                'NAME_TAKEN',
-                `[INDEX] ${c.indexNames.archived} already holds “${twin.rawName}”; rename one of them first.`,
-                {
-                  existing: { id: twin.id, name: twin.rawName },
-                },
-              );
-            }
-            return {
-              action: 'archive',
-              tool: 'archive_page',
-              page,
-              target,
-              record: {
-                previousState: rec ? rec.previousState : from,
-                previousFacts: rec ? rec.previousFacts : facts,
-                tagsRemoved: target.tagsRemove.filter(
-                  (t) => page.tags.some((x) => same(x, t)) || rec !== null,
-                ),
-                tagsAdded: target.tagsAdd,
-                date: o.date,
-                detail: {},
-                ...(rec ? { resumeOf: rec.id } : {}),
-              },
-              flags: [],
-            };
-          }),
+        : runLifecycle(deps, mctx, 'archive', args, archivePlan),
   });
+}
+
+/** archive_page's plan and job for one page, ready to submit (v3 F3e: a split's phase 2). */
+export interface ArchiveProposalPlan {
+  readonly pageId: string;
+  readonly pageName: string;
+  readonly newName: string;
+  readonly steps: StepSpec[];
+  readonly marker: LifecycleMarker;
+  readonly hold: { resourceId: string };
+  readonly holdDocument?: { documentId: string };
+  readonly holdAlso?: { resourceId: string };
+  readonly operation: Obj;
+  /** The page as read (the proposal's prefetched read). */
+  readonly raw: unknown;
+}
+
+/**
+ * v3 F3e (ADR 0059, decision D2): archive_page's own plan for one page, exactly as the tool makes it (its note, facts,
+ * tags and move; the AU and lead rules), for a proposal the BRIDGE makes once a split's phase 1 has verified
+ * (src/packs/split/archive.ts submits it, as the owner's request). Reads through `pd` and `mctx` as given; writes nothing.
+ */
+export async function archiveProposalPlan(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  pageId: string,
+): Promise<{ ok: true; value: ArchiveProposalPlan } | { ok: false; code: string; message: string }> {
+  const failOf = (r: McpToolResult) => {
+    const text = r.content.map((c) => ('text' in c ? c.text : '')).join('');
+    try {
+      const e = (JSON.parse(text.split('\n')[0] ?? '{}') as { error?: { code?: string; message?: string } })
+        .error;
+      return {
+        ok: false as const,
+        code: e?.code ?? 'NOT_PROPOSED',
+        message: e?.message ?? text.slice(0, 500),
+      };
+    } catch {
+      return { ok: false as const, code: 'NOT_PROPOSED', message: text.slice(0, 500) };
+    }
+  };
+  const rc = repoContext(pd);
+  if (!rc.ok) return failOf(rc.result);
+  const ctx = rc.ctx;
+  const lc = pd.services?.lifecycle;
+  if (!lc) return { ok: false, code: 'TOOL_UNAVAILABLE', message: 'The page lifecycle is not available.' };
+  const c = lc.config(ctx.projectId);
+  const idx = lifecycleIndexes(c, (id) => ctx.tree.node(ctx.projectId, id).data);
+  if (!idx.ok) return { ok: false, code: idx.code, message: idx.message };
+  const node = ctx.tree.node(ctx.projectId, pageId).data;
+  if (!node) return { ok: false, code: 'PAGE_NOT_FOUND', message: `There is no page ${pageId} now.` };
+  const incomplete = lc.store.incomplete(ctx.projectId, node.id);
+  if (incomplete)
+    return {
+      ok: false,
+      code: 'LIFECYCLE_INCOMPLETE',
+      message: `${TOOL[incomplete.action]} of “${node.rawName}” stopped part-way (record ${incomplete.id}); finish it first.`,
+    };
+  const read = await readPage(pd, mctx, 'archive_page', node);
+  if (!read.ok) return failOf(read.result);
+  const settings = pd.services?.projectSettings?.(ctx.projectId) ?? {};
+  const propertyTitle =
+    typeof settings.factsPropertyName === 'string' && settings.factsPropertyName.trim() !== ''
+      ? settings.factsPropertyName
+      : 'PROPERTIES';
+  const planned = archivePlan(pd, ctx, c, idx, read.value, {
+    propertyTitle,
+    date: isoDate(Date.now()),
+    incomplete: null,
+    rules: tagRulesOf(pd, ctx.projectId),
+  });
+  if ('kind' in planned) return failOf(planned.result);
+  const built = await build(pd, mctx, ctx, c, propertyTitle, planned);
+  if (!built.ok) return failOf(built.result);
+  const b = built.value;
+  return {
+    ok: true,
+    value: {
+      pageId: node.id,
+      pageName: node.rawName,
+      newName: String(b.head.newName),
+      steps: b.steps,
+      marker: b.marker,
+      hold: b.hold,
+      ...(b.holdDocument ? { holdDocument: b.holdDocument } : {}),
+      ...(b.holdAlso ? { holdAlso: b.holdAlso } : {}),
+      operation: b.operation,
+      raw: read.value.raw,
+    },
+  };
 }
 
 function unarchivePageTool(deps: ToolDeps): McpToolProvider {

@@ -82,10 +82,13 @@ export const registerJobs: Register = (api, ctx) => {
     // v3 F3d (ADR 0058): where a package or a rename stopped, and whether Resume applies now.
     const resume = ctx.deps.runtime.resume;
     const stop = resume?.stopOf(project.id, id) ?? null;
+    // v3 F3e (ADR 0059): a split's phase 1 (Revert applies to it although the owner approved it).
+    const split = ctx.deps.runtime.splits?.byJob(project.id, id) ?? null;
     return {
       job: redactDeep({ ...job, steps }, { maxString: 4000 }),
       principals: ctx.principals([job.principalId]),
       ...(stop ? { stop, resume: resume!.view(project.id, id) } : {}),
+      ...(split ? { split: { id: split.id, state: split.state, retire: split.retire } } : {}),
     };
   });
 

@@ -13,10 +13,12 @@ import { PROJECT } from '../tools/helpers.js';
 import { approve, compactPackage, packWorld, type PackWorld } from './world.js';
 import { fixture } from '../images/world.js';
 
-describe('the seed (arkona-2026-11-17-f3-4)', () => {
-  it('names this session and supersedes F3.3’s seed (labelled f3d)', () => {
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-17-f3-4');
+describe('the seed (arkona-2026-11-18-f3e, superseding F3.4’s arkona-2026-11-17-f3-4)', () => {
+  it('supersedes F3.3’s seed (labelled f3d) and F3.4’s', () => {
+    // v3 F3e (ADR 0059): the split appraisal's data made a new seed; F3.4's switches are unchanged in it.
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-18-f3e');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-17-f3d');
+    expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-17-f3-4');
   });
 
   it('the creation tools always propose; adding art and an appraisal fix follow the agent’s scope', () => {

@@ -26,7 +26,7 @@ import {
   type DocumentChecker,
   type RegisteredChecker,
 } from '../jobs/internal-steps.js';
-import { stableJson } from '../jobs/sidebar-state.js';
+import { rowsContentHash, rowsState, stableJson } from '../jobs/sidebar-state.js';
 import {
   SYSTEM_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
@@ -86,6 +86,11 @@ export interface RevertPreview {
   readonly ready: number;
   /** Targets that would not (changed since, gone, not revertible): a revert of the rest needs `confirmPartial`. */
   readonly notReverted: number;
+  /**
+   * v3 F3e (ADR 0059): a split's phase 1: the pages it made, which go to ONE deletion proposal once the revert has run
+   * (or at once, when nothing else needs putting back).
+   */
+  readonly split?: { readonly pagesMade: number };
 }
 
 export type RevertResult =
@@ -93,6 +98,16 @@ export type RevertResult =
       readonly status: 'submitted';
       readonly revertJobId: string;
       readonly partial: boolean;
+      readonly targets: readonly TargetCheck[];
+      readonly message: string;
+    }
+  | {
+      /**
+       * v3 F3e (ADR 0059): a split's phase 1 that stopped before anything left its source: nothing to put back, so no
+       * revert job; the pages it made go to ONE deletion proposal for the owner.
+       */
+      readonly status: 'proposed';
+      readonly deletionProposalId: string | null;
       readonly targets: readonly TargetCheck[];
       readonly message: string;
     }
@@ -125,6 +140,23 @@ export interface RevertDeps {
    * staging and its record back on the Staging page.
    */
   readonly images?: Pick<ImageService, 'store' | 'copyPlacedToStaging' | 'restage' | 'dropCopy'>;
+  /**
+   * v3 F3e (ADR 0059): a split's phase 1 is revertible although the owner approved it (the design: "phase 1 can be
+   * reverted, putting the moved content back and removing what it created"): the pages it made are not reverted by the
+   * job but go to ONE deletion proposal once it has succeeded (`afterRevert`).
+   */
+  readonly splits?: {
+    isPhase1(projectId: string, jobId: string): boolean;
+    /** Whether a split's phase 1 has been reverted (with or without a revert job). */
+    isReverted?(projectId: string, jobId: string): boolean;
+    /** How many pages a split's phase 1 made (its deletion proposal's pages, at most). */
+    pagesMade?(projectId: string, jobId: string): number;
+    afterRevert(
+      projectId: string,
+      jobId: string,
+      revertJobId: string | null,
+    ): Promise<{ readonly deletionProposalId: string | null; readonly problem?: string } | null>;
+  };
   readonly log?: { warn(o: unknown, m: string): void };
 }
 
@@ -196,7 +228,8 @@ export class RevertService {
         code: 'IS_A_REVERT',
         message: `Job ${jobId} is a revert, and a revert is never itself reverted. The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold every target as it was before it.`,
       };
-    if (!this.d.review.store.get(projectId, jobId)) {
+    const split = this.d.splits?.isPhase1(projectId, jobId) === true;
+    if (!this.d.review.store.get(projectId, jobId) && !split) {
       if (job.approvedBy !== null)
         return {
           ok: false,
@@ -231,6 +264,12 @@ export class RevertService {
         ok: false,
         code: 'ALREADY_REVERTED',
         message: `Job ${jobId} has been reverted (job ${prev.revert_job_id}).`,
+      };
+    if (split && this.d.splits?.isReverted?.(projectId, jobId) === true)
+      return {
+        ok: false,
+        code: 'ALREADY_REVERTED',
+        message: `Split job ${jobId} has been reverted: the pages it made were proposed for deletion.`,
       };
     return { ok: true, job };
   }
@@ -277,9 +316,25 @@ export class RevertService {
     const io = this.io(projectId, jobId);
     const plans: TargetPlan[] = [];
     const blocksByDoc = new Map<string, BlockTarget[]>();
+    const split = this.d.splits?.isPhase1(projectId, jobId) === true;
     for (const t of targets) {
       if (t.kind === 'block') {
         blocksByDoc.set(t.documentId, [...(blocksByDoc.get(t.documentId) ?? []), t]);
+        continue;
+      }
+      // v3 F3e (ADR 0059): what a split made is not reverted here: once the revert has run, those pages go to ONE
+      // deletion proposal (each only while it is exactly as the split made it).
+      if (split && t.kind === 'none' && t.creation === true) {
+        plans.push({
+          check: {
+            key: t.key,
+            kind: t.kind,
+            page: t.page,
+            what: t.what,
+            state: 'nothing_to_do',
+            detail: `${t.what}: made by the split; proposed for deletion once the revert has run (only while it is as the split made it)`,
+          },
+        });
         continue;
       }
       plans.push(await this.planOne(t, io, projectId));
@@ -329,6 +384,7 @@ export class RevertService {
           .map((c) => c.key)
           .sort(),
       );
+    const split = this.d.splits?.isPhase1(projectId, jobId) === true;
     return {
       jobId,
       projectId,
@@ -336,6 +392,7 @@ export class RevertService {
       targets,
       ready: targets.filter((c) => c.state === 'ready').length,
       notReverted: targets.filter((c) => c.state !== 'ready' && c.state !== 'nothing_to_do').length,
+      ...(split ? { split: { pagesMade: this.d.splits?.pagesMade?.(projectId, jobId) ?? 0 } } : {}),
     };
   }
 
@@ -394,6 +451,28 @@ export class RevertService {
     const others = targets.filter((c) => c.state !== 'ready' && c.state !== 'nothing_to_do');
     const readyKeys = readyPlans.map((p) => p.check.key).sort();
     if (readyPlans.length === 0) {
+      // v3 F3e (ADR 0059): a split's phase 1 that stopped before anything left the source made pages and nothing else
+      // to put back: those pages go to ONE deletion proposal (each only while it is as the split made it).
+      const splits = this.d.splits;
+      const splitMade =
+        splits?.isPhase1(projectId, jobId) === true &&
+        jobTargets.some((t) => t.kind === 'none' && t.creation === true);
+      if (splits && splitMade && others.length === 0) {
+        const out = await splits.afterRevert(projectId, jobId, null);
+        this.d.policy.audit('owner', 'job.revert', jobId, undefined, {
+          outcome: 'proposed',
+          deletionProposal: out?.deletionProposalId ?? null,
+          targets: summary(),
+        });
+        return {
+          status: 'proposed',
+          deletionProposalId: out?.deletionProposalId ?? null,
+          targets,
+          message: out?.deletionProposalId
+            ? `Nothing of job ${jobId} had left the source, so there is nothing to put back: the pages it made are proposed for deletion (proposal ${out.deletionProposalId}), for the owner to approve.`
+            : `Nothing of job ${jobId} had left the source, and none of the pages it made could be proposed for deletion${out?.problem ? ` (${out.problem})` : ' (each changed since, or is gone)'}.`,
+        };
+      }
       if (others.length > 0 && others.every((c) => c.deletion === true))
         return refuse(
           'DELETION',
@@ -485,7 +564,7 @@ export class RevertService {
     // ONE job, every lock held for the whole run. CR-2026-11-R2 (R2-20): every target's check runs first, in one go, before
     // the first write (and again if the job takes its locks back before anything is sent): a target changed since is
     // caught before ANY target is written, so a revert stays all or nothing.
-    const steps = checksFirst(readyPlans.map((p) => p.steps ?? []));
+    const steps = freshRowVersions(checksFirst(readyPlans.map((p) => p.steps ?? [])));
     const resources = [...new Set(readyPlans.flatMap((p) => p.resources ?? []))];
     const documents = [...new Set(readyPlans.flatMap((p) => p.documents ?? []))];
     const assets = [...new Set(readyPlans.flatMap((p) => p.assets ?? []))];
@@ -632,6 +711,16 @@ export class RevertService {
     }
     this.d.review.markReverted(row.project_id, row.job_id);
     if (notes.length > 0) void this.afterImages(row.id, row.project_id, row.job_id, note, notes);
+    // v3 F3e (ADR 0059): a split's phase 1 reverted: the pages it made go to ONE deletion proposal.
+    if (this.d.splits?.isPhase1(row.project_id, row.job_id))
+      void this.d.splits
+        .afterRevert(row.project_id, row.job_id, job.id)
+        .catch((err: unknown) =>
+          this.d.log?.warn(
+            { err, jobId: row.job_id },
+            'the pages a reverted split made could not be proposed for deletion',
+          ),
+        );
   }
 
   /**
@@ -732,6 +821,51 @@ export function checksFirst(parts: readonly (readonly StepSpec[])[]): StepSpec[]
   parts.forEach((ss, i) => ss.forEach((_, j) => j >= lead[i]! && order.push({ part: i, local: j + 1 })));
   const at = new Map(order.map((o, k) => [`${o.part}:${o.local}`, k + 1]));
   return order.map((o) => renumberStep(parts[o.part]![o.local - 1]!, (n) => at.get(`${o.part}:${n}`) ?? n));
+}
+
+/** The sidebar writes a revert job can make (each moves the page's sidebar version on). */
+const SIDEBAR_WRITES = new Set([
+  'updateProperty',
+  'createProperty',
+  'deleteProperty',
+  'updatePropertyRow',
+  'createPropertyRow',
+  'deletePropertyRow',
+]);
+const ROW_WRITES = new Set(['updatePropertyRow', 'createPropertyRow', 'deletePropertyRow']);
+
+/**
+ * v3 F3e (ADR 0059): a row write whose If-Match is its target's check (read before the first write) while an EARLIER
+ * write of the same revert job changed the same page's sidebar (another target's link collection: a split's phase 1
+ * changes a page's Related Sources and its Last Major Revision, two targets) would send a version that is no longer the
+ * page's. Such a write is judged inside its lock instead: the rows must still be exactly as the check read them, and the
+ * version sent is the one read there. Every other write keeps its chain unchanged.
+ */
+export function freshRowVersions(steps: readonly StepSpec[]): StepSpec[] {
+  const wrote = new Set<string>();
+  return steps.map((s) => {
+    const rid = s.params?.path?.resourceId;
+    const from = s.ifMatchFrom;
+    let out = s;
+    if (typeof rid === 'string' && from?.key !== undefined && ROW_WRITES.has(s.op) && wrote.has(rid)) {
+      const check = steps[from.step - 1];
+      const checks =
+        check?.op === EXPECT_STEP
+          ? ((check.params?.body as { checks?: Record<string, unknown>[] } | undefined)?.checks ?? [])
+          : [];
+      const c = checks.find((x) => x.label === from.key && x.kind === 'propertyRows' && x.resourceId === rid);
+      if (c && Array.isArray(c.rows)) {
+        const { ifMatchFrom: _stale, ...rest } = s;
+        void _stale;
+        out = {
+          ...rest,
+          expectCurrent: { state: 'rows', hash: rowsContentHash(rowsState(c.rows)), label: from.key },
+        };
+      }
+    }
+    if (typeof rid === 'string' && SIDEBAR_WRITES.has(s.op)) wrote.add(rid);
+    return out;
+  });
 }
 
 // ------------------------------------------------------------------------------------------------ in-lock checks

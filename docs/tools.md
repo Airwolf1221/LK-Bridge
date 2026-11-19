@@ -67,7 +67,10 @@ tools on). **Since v3 F3c** it lists ten ([below](#setting-packs-appraisal-and-f
 profile (the four read-only appraisal tools; 33 with the low-level tools on). **Since v3 F3d** the Arkona pack lists eleven
 tools ([below](#setting-packs-renames-selective-approval-and-resume-v3-f3d)), and `bridge_job_resume` is added: **68 tools** in
 a `propose` or `write` profile (`arkona_rename` and `bridge_job_resume` are write tools; 73 with the low-level tools on), and
-the same **30** in a `read` profile. The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
+the same **30** in a `read` profile. **Since v3 F3e** it lists thirteen ([below](#setting-packs-splits-v3-f3e)): **70
+tools, about 46,790 tokens**, in a `propose` or `write` profile (`arkona_split_owner`, a write tool, about 2,230 of them;
+`arkona_split_appraisal`, a read tool, about 790; 75 with the low-level tools on), and **31, about 12,460**, in a `read`
+profile (34 with the low-level tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -209,7 +212,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (163 tools in all with the Arkona pack's eleven tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five and v3 F3d's `arkona_rename`, and v3 F3d's `bridge_job_resume`; 165 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (165 tools in all with the Arkona pack's thirteen tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename` and v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, and v3 F3d's `bridge_job_resume`; 167 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -431,7 +434,7 @@ to check it. Design: [ADR 0031](adr/0031-write-page.md). The agent guide's "Writ
 Last Major Revision: a `write_page` edit that is a major revision (8 words or more, or a heading's wording) sets it, in the
 same job or proposal; `lastMajorRevision` overrides ([above](#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c)).
 
-**`write_page`** `{ page, document?, mode, section?, markdown, baseVersion?, dropRegions?, dryRun?, detail?, lastMajorRevision?, project }`:
+**`write_page`** `{ page, document?, mode, section?, markdown, baseVersion?, dropRegions?, dryRun?, detail?, lastMajorRevision?, plainEdit?, project }`:
 `access: write`, annotations `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`,
 `openWorldHint: false`. A `read` profile neither sees nor may call it. `project` follows A1's rule: required while the
 bridge serves several projects.
@@ -534,8 +537,9 @@ with `blockIds`, `MENTION_NOT_FOUND`, `MENTION_AMBIGUOUS` with the candidates in
 (above), `WRONG_TOOL_FOR_DOCUMENT`, `PAGE_NOT_WRITABLE` (v2 E4: the page holds blocks LegendKeeper's write schema
 would not take back, such as text with an inline icon, and this edit would change, remove, move or re-send one of them,
 or delete an `unsupported` block; `reason` says which, and `blocks` lists them. Any other edit of such a page is written
-block by block: see below), `INVALID_PARAMS` (a section mode without `section`, or a whole-page mode with one), and the name and tree
-codes of the read tools (`NOT_FOUND`, `NOT_IN_REPOSITORY`, `AMBIGUOUS`, `DOCUMENT_NOT_FOUND`, `TREE_NOT_READY`).
+block by block: see below), `INVALID_PARAMS` (a section mode without `section`, or a whole-page mode with one),
+`USE_ARKONA_SPLIT` (v3 F3e, [below](#setting-packs-splits-v3-f3e)), and the name and tree codes of the read tools
+(`NOT_FOUND`, `NOT_IN_REPOSITORY`, `AMBIGUOUS`, `DOCUMENT_NOT_FOUND`, `TREE_NOT_READY`).
 
 **At scope `propose`** (or whenever policy turns the write into a proposal) the same plan is captured as ONE proposal
 that holds the **high-level operation** (page, document, mode, section, the Markdown, `baseVersion`) and its planned
@@ -556,10 +560,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). **Since v3 F3b: 61 for `propose` or `write`, 26 for `read`** with the Arkona pack attached (its five tools; `arkona_character_brief` is a read tool). **Since v3 F3c: 66 for `propose` or `write`, 30 for `read`** (its ten tools; the four appraisal reports are read tools, `arkona_appraisal_fix` a write tool). **Since v3 F3d: 68 for `propose` or `write`, 30 for `read`** (`arkona_rename` and `bridge_job_resume`, both write tools). A `read` profile does not see the write tools |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; with the Arkona pack attached 66 and 29 since v3 F3b, 62 with F3a's one tool), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). **Since v3 F3b: 61 for `propose` or `write`, 26 for `read`** with the Arkona pack attached (its five tools; `arkona_character_brief` is a read tool). **Since v3 F3c: 66 for `propose` or `write`, 30 for `read`** (its ten tools; the four appraisal reports are read tools, `arkona_appraisal_fix` a write tool). **Since v3 F3d: 68 for `propose` or `write`, 30 for `read`** (`arkona_rename` and `bridge_job_resume`, both write tools). **Since v3 F3e: 70 for `propose` or `write`, 31 for `read`** (`arkona_split_owner`, a write tool, and `arkona_split_appraisal`, a read tool). A `read` profile does not see the write tools |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; with the Arkona pack attached 66 and 29 since v3 F3b, 62 with F3a's one tool), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -1754,6 +1758,110 @@ place: its own check runs again first, no succeeded step runs again, nothing is 
 safe is refused with its reason. Work the owner approved resumes without a new approval and is audited (`job.resume`). F2's
 "Finish" of a recreate uses the same mechanism (its new proposal of what is missing, as before). Revert (ADR 0055) stays
 the alternative for a direct job.
+
+## Setting packs: splits (v3 F3e)
+
+[ADR 0059](adr/0059-v3-f3e-splits.md); the owner-approved design: [design/F3e-splits.md](design/F3e-splits.md). The
+agent guide's part is "Arkona splits" (under "Setting packs (Arkona)"). Both tools need the pack version
+`arkona-2026-11-18-f3e` (its split rules), approved on the Packs page; until then they refuse (`SPLIT_RULES_MISSING`, or
+`PACK_NOT_CURRENT` while the new version awaits the owner's approval).
+
+### `arkona_split_appraisal` (A6)
+
+`{ page | under, include?, live?, limit?, offset?, group?, runId?, project? }`: `access: read`, free. The measurable
+Split Triggers of Character Architecture on one page or a branch, with Anti-Fragmentation as the counterweight, from the
+snapshot overlay (`live: true` re-reads each page: 2 reads a page, at most 25). The thresholds are the pack's data
+(`rules.splits`, D4):
+
+| Trigger (`check`)                                    | Fires when                                                                                              |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Scope Overload (`scope_overload`)                    | the Scope, or else the top-level sections, name 3 or more domains (`scopeOverload.minDomains`)          |
+| Retrieval Cost (`retrieval_cost`)                    | 2,000 words or more AND 2 or more section domains (`retrievalCost`); length alone never counts          |
+| Asset Ownership (`asset_ownership`)                  | a non-Art, non-visual page with 3 or more images, or a wardrobe, form or outfit section with an image   |
+| Shared Ownership (`shared_ownership`)                | a section of 120 words or more about one other named character, with no relationship owner for the pair |
+| Distinct Unresolved Material (`distinct_unresolved`) | 2 or more Unresolved Material items under one domain                                                    |
+| Distinct Dependencies (`distinct_dependencies`)      | a Dependency on a universal owner that only one section relies on                                       |
+
+Each finding is an **architectural candidate** (`group: "architectural"`, evidence class Potential Maintenance Issue,
+`followUp: judgement` naming `arkona_split_owner`) with its trigger, its evidence (sections, counts, sizes), the page's
+**draft destination map** (each section, its domain, and where it might go: a specialist page by the pack's
+destinations, a relationship owner, an Art page, or `stays`) and its **Anti-Fragmentation note**. The report's
+`questions` are the triggers the bridge cannot measure (Independent Retrieval, Independent Maintenance, Downstream
+Dependency). `arkona_appraise_owner` carries the same candidates in its architectural group (trigger and evidence, with a
+pointer to A6). Nothing is ever written.
+
+### `arkona_split_owner` (C2)
+
+`{ source, retire?, destinations, map, dependencies?, lastMajorRevision?, dryRun?, operation_id?, project? }`, or
+`{ report, project? }`. `access: write`; **always ONE canonical proposal** at every scope (D7); not subject to the bulk
+rail.
+
+| Argument       | Meaning                                                                                                                                                                                                                                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`       | The owner page to split (name, alias, path or id): an Authoritative or Working page, not an index or an Archived page.                                                                                                                                                                                                                                           |
+| `retire`       | D2: archive the source once phase 1 has verified (a separate canonical proposal by the bridge). Default `false`: it survives.                                                                                                                                                                                                                                    |
+| `destinations` | Each `{ key, kind, … }`: `new` (`role`, `title`, `referenceType`, `specialistTag` for a character's page; `type`, `name`, `descriptor`, `home`, `nation`, `temporalScope` for any other owner; `scope` and `purpose` required), `existing` (`page`, `under`), `relationship` (`page`, or `with` and `label` for a new one), `universal` (`owner`, `text`, `in`). |
+| `map`          | Each `{ section, to }` (a heading's text or block id, or `(preamble)`; a key or `stays`), or `{ section, blocks: [{ ids, to, summary?, under? }] }` to divide a section block by block; `summary` (required for each section that leaves a surviving source) and `under`.                                                                                        |
+| `dependencies` | D5: each `{ page, to, keepSource? }`: a page that depends on the source, to the destination it needs (every one when `retire`).                                                                                                                                                                                                                                  |
+
+**Refusals before anything is proposed** (each with its list; `refusals` holds them all, `preview` what the plan saw):
+`SPLIT_COVERAGE` (`unassigned`, `twice`: block, section, excerpt, destinations), `SPLIT_DUPLICATED_AUTHORITY`
+(`duplicated`), `SPLIT_VISUAL` (`blocks`), `SPLIT_UNSUPPORTED_BLOCK`, `SPLIT_UNIVERSAL_TEXT_REQUIRED`,
+`SPLIT_UNIVERSAL_OWNER_REQUIRED`, `SPLIT_UNIVERSAL_OWNER_NOT_FOUND`, `SPLIT_UNIVERSAL_OWNER_NOT_UNIVERSAL`,
+`SPLIT_UNIVERSAL_IN`, `SPLIT_SUMMARY_REQUIRED` (`missing`), `SPLIT_DEPENDENCIES_UNMAPPED` (`unmapped`),
+`SPLIT_DEPENDENCY_NOT_INCOMING`, `SPLIT_DEPENDENCY_TO`, `SPLIT_DEPENDENCY_KEEPS_RETIRED`, `SPLIT_RETIRE_IDENTITY`,
+`SPLIT_SECTION_NOT_FOUND` (`headings`), `SPLIT_SECTION_AMBIGUOUS`, `SPLIT_BLOCK_NOT_IN_SECTION`, `SPLIT_MAP_ENTRY`,
+`SPLIT_DESTINATION_KEY`, `SPLIT_DESTINATION_UNKNOWN`, `SPLIT_DESTINATION_EMPTY`, `SPLIT_DESTINATION_PAGE`,
+`SPLIT_DESTINATION_SOURCE`, `SPLIT_DESTINATION_NOT_OWNER`, `SPLIT_LIFECYCLE_MISMATCH`, `SPLIT_UNDER_REQUIRED`,
+`SPLIT_PURPOSE_REQUIRED`, `SPLIT_SCOPE_REQUIRED`, `SPLIT_OWNER_TYPE`, `SPLIT_NOT_A_RELATIONSHIP`,
+`SPLIT_RELATIONSHIP_NOT_CHARACTER`, `SPLIT_RELATIONSHIP_WITH`, `SPLIT_SOURCE_INDEX`, `SPLIT_SOURCE_ARCHIVED`,
+`SPLIT_SOURCE_UNCLASSIFIED`, `SPLIT_NO_PAGE_DOCUMENT`, `SPLIT_BLOCK_IDS_PENDING` (a legacy page: the block-id sweep
+first), `SPLIT_IMPACT_UNAVAILABLE` (retiring needs the incoming Dependencies), `SPLIT_RULES_MISSING`, `PACK_NOT_CURRENT`,
+and F3a's and F3b's own refusals for a new page (`DOMAIN_EXISTS`, `REFERENCE_TYPE_REQUIRED`, a home, a name…).
+**Warnings**: `SPLIT_RELATIONSHIP_SECTION` (the relationship audit), `SPLIT_UNIVERSAL_CANDIDATE`, `SPLIT_RETIRED_CONTENT`
+(what stays is archived with the source).
+
+**The plan** (`dryRun`, and the proposal's operation): `sections` (each and where it goes), `destinations` (each with its
+item, page, sections, blocks, words, images), `interfaceSummaries`, `indexEntries`, `dependencies` (`remapped`,
+`unmapped`, `chronologyRows`), `items` (each with `ifLeftOut`: what leaving it out means), `blockIds`,
+`lastMajorRevision`, `warnings`, `notes` and `cost` (`planReads` as made; the job's estimate).
+
+**Items.** `dest:<key>` (a destination and its own source edit), `universal:<key>` (universal material whose text stays
+in the source), `index:<id>` (a new character index), `existing:<id>` (an existing page's changes from F3a or F3b, such
+as a relationship's links), `route:<id>` (a new page's line in an existing index), `dep:<id>` (a remapped Dependency).
+A destination left out keeps its sections in the source; what needs it is left out with it.
+
+**Phase 1** (one job): the first check (`split.source`: governance, the new names still free, the source as planned:
+`SPLIT_SOURCE_GONE`, `SPLIT_SOURCE_ARCHIVED`, `SPLIT_SOURCE_CHANGED`), the new owners (F3a's and F3b's steps; each
+page's text its Purpose and the moved blocks verbatim with their ids), the existing owners' appends (inside the page's
+lock, rebased on a conflict), the destinations check (`split.destinations`, before anything leaves the source:
+`SPLIT_DESTINATIONS_UNVERIFIED`), the source's edits (a core rebase), universal material's Dependency, index lines,
+remapped Dependencies, Last Major Revision per page, the pack's read-back, and the verification (`split.verify`:
+`SPLIT_VERIFY_FAILED`). A stop is resumable (Resume) and revertible (Revert: the job puts back what it changed; the pages
+it made go to ONE deletion proposal, each only while it is as the split made it).
+
+**Phase 2**: with `retire`, once phase 1 has verified and nothing was left out or skipped, the bridge proposes
+archiving the source with `archive_page`'s own plan (a separate canonical proposal, owner-forced). Never a delete.
+`{ report }` (a split's id, proposal or job) answers its state, its destinations and phase 2 (or why there is none), free.
+
+**`write_page` and splits.** On a project whose approved pack has split rules, an edit that takes `splits.guardWords`
+(120) words or more off a pack page (a page of a character's set, a page with a Subject fact, a pack owner) is refused
+with `USE_ARKONA_SPLIT` (`hint`, `useTool: "arkona_split_owner"`, `removedWords`); nothing is written.
+`plainEdit: { reason }` lets a page's own revision through; the reason is in the job's title and journal and on the
+proposal. `arkona_create_character`'s `split` is refused with the same code.
+
+### Costs (measured against the mock)
+
+| Call                                                                   | Requests                                                                          | Writes |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------ |
+| `arkona_split_appraisal`                                               | 0 (`live: true`: 2 a page, at most 25)                                            | 0      |
+| `arkona_split_owner`, a character monolith: plan (dry run)             | 11 (8 the plan's own, 3 the pack's governance)                                    | 0      |
+| the same, proposed                                                     | 23                                                                                | 0      |
+| its job (six new owners and a new index, one remapped Dependency)      | 243 (estimated 171 reads)                                                         | 87     |
+| `arkona_split_owner`, an owner with two domains: proposed              | 12                                                                                | 0      |
+| its job (one new owner, one existing owner, two remapped Dependencies) | 84 (estimated 58 reads)                                                           | 22     |
+| phase 2                                                                | `archive_page`'s own (about 6 reads to propose, then about 15 reads and 8 writes) | 8      |
+| a conflict on an existing owner's append (LegendKeeper answers 412)    | one more read, and the write again                                                | 1      |
 
 ## The calendar and the timelines (v2 D1)
 

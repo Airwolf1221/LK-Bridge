@@ -3410,7 +3410,8 @@ function normaliseOrigin(origin: JobOrigin): JobOrigin {
 
 /** v3 F3d (ADR 0058): `BatchSubmit.resumable` as stored (bridge code only; anything malformed is left out). */
 function resumableOf(r: BatchSubmit['resumable']): ResumableShape | undefined {
-  if (!r || (r.kind !== 'package' && r.kind !== 'rename' && r.kind !== 'recreate')) return undefined;
+  if (!r || (r.kind !== 'package' && r.kind !== 'rename' && r.kind !== 'recreate' && r.kind !== 'split'))
+    return undefined;
   const recheck = (r.recheck ?? []).filter((n) => Number.isInteger(n) && n >= 1);
   return {
     kind: r.kind,

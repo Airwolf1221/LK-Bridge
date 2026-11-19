@@ -460,9 +460,11 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       );
   }
   if (input.split !== undefined) {
+    // v3 F3e (ADR 0059): steered to the split tools, as F3d.1 steers renames.
     refuse(
-      'MONOLITH_SPLIT_UNSUPPORTED',
-      'Splitting an existing page into new owners moves established material and needs its own plan and approval (the split tool, F3b). This tool only adds new pages; edit the existing page with write_page.',
+      'USE_ARKONA_SPLIT',
+      'Splitting an existing page into owners moves established material: it is arkona_split_owner’s (appraise first with arkona_split_appraisal, bring it to the owner, then split with a destination map). This tool only adds new pages.',
+      { useTool: 'arkona_split_owner' },
     );
   }
 

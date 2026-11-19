@@ -38,6 +38,7 @@ import { runWriteJob } from './write-job.js';
 import { lastMajorRevisionArg } from './schemas.js';
 import type { LmrMode } from '../../jobs/lmr-hook.js';
 import { pickDocument } from './read-document.js';
+import { manualSplitRefusal } from '../../packs/split/guard.js';
 import { finish, liveRead, repoContext, resolvePage } from './repo.js';
 import {
   railBody,
@@ -181,7 +182,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Write a page (Markdown)',
     access: 'write',
     description:
-      'Changes the text of one page document with Markdown (rules: get_markdown_guide). Facts and links are set_facts; maps, timelines and boards have their own tools (refused here). Read the page first with read_document and pass its version as baseVersion: a stale version is refused, though a section edit still goes ahead if its section is unchanged. Modes: append, prepend, replace (the whole page: every keep region must be in it or named in dropRegions), replace_section (start with the heading to replace it too) and append_to_section; `section` is a heading path such as "Biography > Early Life". Prefer the section modes: they touch nothing else. Unchanged text keeps its ids and styling; an unchanged page writes nothing. dryRun returns the plan and the diff and writes nothing. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Avoid: writing a page you have not read; replace when a section edit will do; retrying VERSION_CONFLICT unchanged (read again, redo the edit on what it holds now). Cost: 2 reads, 1 write and 1 verify read (a dry run or a proposal: 1 read).',
+      'To move material out of an owner page on a pack project (a split), use `arkona_split_appraisal`, then `arkona_split_owner`: here an edit that takes a section’s worth of text off a pack page is refused with USE_ARKONA_SPLIT unless plainEdit gives a reason. Changes the text of one page document with Markdown (rules: get_markdown_guide). Facts and links are set_facts; maps, timelines and boards have their own tools (refused here). Read the page first with read_document and pass its version as baseVersion: a stale version is refused, though a section edit still goes ahead if its section is unchanged. Modes: append, prepend, replace (the whole page: every keep region must be in it or named in dropRegions), replace_section (start with the heading to replace it too) and append_to_section; `section` is a heading path such as "Biography > Early Life". Prefer the section modes: they touch nothing else. Unchanged text keeps its ids and styling; an unchanged page writes nothing. dryRun returns the plan and the diff and writes nothing. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Avoid: writing a page you have not read; replace when a section edit will do; retrying VERSION_CONFLICT unchanged (read again, redo the edit on what it holds now). Cost: 2 reads, 1 write and 1 verify read (a dry run or a proposal: 1 read).',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('Page name or id (inside the AI REPOSITORY).'),
       document: z.string().min(1).max(500).optional().describe('Document name or id. Default "Main".'),
@@ -212,6 +213,13 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
       dryRun: z.boolean().optional().describe('Return the plan and the Markdown diff; write nothing.'),
       detail: z.enum(['summary', 'full']).optional().describe('"full" adds the Markdown diff to the result.'),
       lastMajorRevision: lastMajorRevisionArg,
+      plainEdit: z
+        .object({ reason: z.string().trim().min(3).max(500) })
+        .strict()
+        .optional()
+        .describe(
+          'Only when an edit on a pack project takes substantial material off an owner page on purpose (not a split): why. Without it such an edit is refused with USE_ARKONA_SPLIT (arkona_split_owner moves material between owners, verified). The reason is shown to the owner.',
+        ),
       project: projectArg,
     }),
     annotations: WRITE_PAGE_ANNOTATIONS,
@@ -384,6 +392,31 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         }
+        // v3 F3e (ADR 0059): taking substantial material off a pack owner is a split (arkona_split_owner), unless
+        // plainEdit says why it is not.
+        if (!args.plainEdit) {
+          const sb = ctx.tree.sidebars(ctx.projectId, [node.id]).data.get(node.id) ?? null;
+          const refusal = manualSplitRefusal({
+            packs: pd.services?.packs,
+            projectId: ctx.projectId,
+            node,
+            before: current.blocks,
+            after: plan.blocks,
+            characterOf: (id) => {
+              try {
+                return ctx.types.characterOfPage(id).ok;
+              } catch {
+                return false;
+              }
+            },
+            factKeys: sb
+              ? (sb as readonly { kind?: string; rows?: readonly { key: string }[] }[])
+                  .filter((x) => x.kind === 'keyValue')
+                  .flatMap((x) => (x.rows ?? []).map((r) => r.key))
+              : null,
+          });
+          if (refusal) return errorResult(refusal, pd);
+        }
         const diff = markdownDiff(plan.before, plan.after);
         const diffBody = (full: boolean) =>
           full
@@ -424,6 +457,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           plannedOn: plan.version,
           ...(args.baseVersion !== undefined ? { baseVersion: args.baseVersion } : {}),
           ...(args.dropRegions && args.dropRegions.length > 0 ? { dropRegions: args.dropRegions } : {}),
+          ...(args.plainEdit ? { plainEdit: args.plainEdit.reason } : {}),
         };
         const replanInput: WritePageReplanInput | undefined =
           sectional && plan.section && args.section !== undefined
@@ -450,8 +484,9 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           before: plan.before,
           after: plan.after,
           ...warnings,
+          ...(args.plainEdit ? { plainEdit: args.plainEdit.reason } : {}),
         };
-        const title = `write_page ${mode}${head.section ? ` “${head.section}”` : ''} on “${node.displayName}” (${doc.name ?? doc.id})`;
+        const title = `write_page ${mode}${head.section ? ` “${head.section}”` : ''} on “${node.displayName}” (${doc.name ?? doc.id})${args.plainEdit ? ` (plain edit: ${args.plainEdit.reason})` : ''}`;
         if (blockwise) {
           return writeBlockwise(pd, mctx, {
             resourceId: node.id,

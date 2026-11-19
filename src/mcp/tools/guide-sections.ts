@@ -206,6 +206,20 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'working digest',
       'visual hygiene',
     ],
+    // v3 F3e (ADR 0059): the splits part (the appraisal of the Split Triggers, and the split itself).
+    'Arkona splits': [
+      'Split an Arkona owner into several owners',
+      'See whether an owner page should be split (free)',
+      'Split an owner page into owners',
+      'arkona_split_appraisal',
+      'arkona_split_owner',
+      'split an owner',
+      'split a character',
+      'split triggers',
+      'split',
+      'splits',
+      'monolith',
+    ],
     'Rename, move, delete and restore': [
       'Rename, tag, alias, hide, lock',
       'Move a page',
@@ -263,6 +277,7 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'Arkona owners': 'home nation polity institution place species race',
   // Not "finding": it stands for "audit" (a synonym group), which must keep leading to "Audit findings".
   'Arkona appraisal': 'appraise appraisal impact digest hygiene',
+  'Arkona splits': 'split monolith trigger fragmentation destination',
 };
 
 interface Entry {

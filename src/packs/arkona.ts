@@ -492,6 +492,157 @@ const rules: PackRules = packRulesSchema.parse({
   // Native Tagging Standard v1.8 orders it ("a leading, exact-case native tag Working … Archived"): archive_page writes
   // `Archived, Magic`, not `Magic, Archived`. Every other attached project (the test world) keeps `append` (ADR 0035).
   lifecycleTagPosition: { arkona: 'lead' },
+  // v3 F3e (ADR 0059; the owner-approved design docs/design/F3e-splits.md, D4): the measurable Split Triggers of Character
+  // Architecture and the split tool's audits. The thresholds are D4's; the words are the triggers' own examples
+  // (biography, appearance, personality, relationships, powers, wardrobe, career…) and the Anti-Fragmentation Rule's.
+  splits: {
+    scopeOverload: { minDomains: 3 },
+    retrievalCost: { minWords: 2000, minDomains: 2 },
+    assetOwnership: { minImages: 3, sectionWords: ['wardrobe', 'outfit', 'outfits', 'form', 'forms'] },
+    sharedOwnership: { minWords: 120 },
+    unresolved: { minItems: 2 },
+    domains: {
+      Biography: ['biography', 'history', 'early life', 'life story', 'background', 'life', 'past'],
+      Appearance: [
+        'appearance',
+        'physical',
+        'physique',
+        'body',
+        'face',
+        'features',
+        'forms',
+        'form',
+        'visual',
+      ],
+      Personality: [
+        'personality',
+        'temperament',
+        'conduct',
+        'ethos',
+        'lifestyle',
+        'habits',
+        'mannerisms',
+        'beliefs',
+      ],
+      Relationships: [
+        'relationships',
+        'relationship',
+        'family',
+        'bonds',
+        'romance',
+        'romantic',
+        'consorts',
+        'allies',
+      ],
+      Powers: ['powers', 'abilities', 'magic', 'mechanics', 'combat', 'sorcery', 'skills', 'talents'],
+      Wardrobe: ['wardrobe', 'outfits', 'outfit', 'clothing', 'attire', 'presentation', 'costume', 'regalia'],
+      Career: ['career', 'occupation', 'profession', 'service', 'offices', 'work'],
+    },
+    ownerDomains: {
+      History: ['history', 'historical', 'origins', 'founding', 'chronology'],
+      Geography: ['geography', 'territory', 'territories', 'regions', 'lands', 'settlements', 'borders'],
+      Government: ['government', 'politics', 'governance', 'rulers', 'administration', 'court'],
+      Military: ['military', 'army', 'armies', 'armed forces', 'navy', 'fleet', 'defence', 'warfare'],
+      Economy: ['economy', 'trade', 'commerce', 'industry', 'currency', 'wealth'],
+      Culture: ['culture', 'society', 'customs', 'traditions', 'language', 'arts'],
+      Religion: ['religion', 'faith', 'faiths', 'worship', 'gods', 'deities', 'temples', 'clergy'],
+      Law: ['law', 'laws', 'legal', 'courts', 'justice'],
+      Magic: ['magic', 'sorcery', 'arcane', 'spells', 'rituals'],
+      Technology: ['technology', 'technologies', 'inventions', 'engineering'],
+      Education: ['education', 'schools', 'academies', 'learning'],
+    },
+    stays: [
+      'Purpose',
+      'Identity',
+      'Overview',
+      'Summary',
+      'Source Boundaries',
+      'Unresolved Material',
+      'How to Use This Index',
+    ],
+    together: [
+      {
+        example: 'personality and habits',
+        words: ['personality', 'habits', 'temperament', 'mannerisms', 'lifestyle'],
+      },
+      {
+        example: 'body, face and forms',
+        words: ['body', 'face', 'forms', 'form', 'physique', 'appearance', 'physical'],
+      },
+      {
+        example: 'a shared romantic hierarchy',
+        words: ['romance', 'romantic', 'consorts', 'consort', 'spouses', 'lovers', 'hierarchy', 'harem'],
+      },
+    ],
+    destinations: {
+      Biography: { role: 'specialist', title: 'Biography', referenceType: 'Character Biography' },
+      Appearance: {
+        role: 'specialist',
+        title: 'Physical & Visual Reference',
+        referenceType: 'Character Physical & Visual Reference',
+      },
+      Personality: {
+        role: 'specialist',
+        title: 'Personality & Lifestyle',
+        referenceType: 'Character Personality & Lifestyle Reference',
+      },
+      Relationships: { role: 'relationship' },
+      Powers: {
+        role: 'specialist',
+        title: 'Powers & Mechanics',
+        referenceType: 'Character Powers & Mechanics Reference',
+      },
+      Wardrobe: {
+        role: 'specialist',
+        title: 'Wardrobe & Personal Presentation',
+        referenceType: 'Character Wardrobe & Personal Presentation Reference',
+      },
+      Career: { role: 'specialist', title: 'Career', referenceType: 'Character Biography' },
+    },
+    visual: {
+      roles: ['art'],
+      referenceTypes: ['Character Art', 'Character Physical & Visual Reference'],
+      tags: ['Character Art', 'Visual Reference'],
+    },
+    universalTypes: [
+      'Species',
+      'Creature',
+      'Culture',
+      'Magic',
+      'Technology',
+      'Material',
+      'Equipment',
+      'Religion',
+      'Law',
+      'Condition',
+      'Ceremony',
+      'Education',
+      'Programme',
+      'Institution',
+      'Military',
+      'Polity',
+      'Place',
+      'Event',
+    ],
+    questions: [
+      {
+        trigger: 'Independent Retrieval',
+        question:
+          'Would anyone open one of these sections on its own, without needing the rest of the page (a reader looking only for the wardrobe, only the powers)?',
+      },
+      {
+        trigger: 'Independent Maintenance',
+        question:
+          'Is one of these sections revised on its own schedule, or by a different hand, so that keeping it here makes every edit touch the whole page?',
+      },
+      {
+        trigger: 'Downstream Dependency',
+        question:
+          'Do other pages depend on one section alone (they cite this page only for its powers, its relationship, its biography)?',
+      },
+    ],
+    guardWords: 120,
+  },
   rulings: [
     {
       key: 'au-status-tag',
@@ -510,13 +661,15 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // v3 F3b (ADR 0052): the owner tools' seed. A pack stored from F3a's or F3b's seed is offered these rules as a new
   // version. `-f3b1` (ADR 0052 amendment, 16 November 2026): the pinned headings exactly as the pages have them, and a
   // Working owner keeps its specialist tag. `-f3d` (ADR 0053, 17 November 2026; session F3.3): the lifecycle tag leads on
-  // Arkona. `-f3-4` (ADR 0055, 17 November 2026; session F3.4): the per-tool "always propose" switches.
-  seed: 'arkona-2026-11-17-f3-4',
+  // Arkona. `-f3-4` (ADR 0055, 17 November 2026; session F3.4): the per-tool "always propose" switches. `-f3e` (ADR 0059,
+  // 18 November 2026; session F3e): the split appraisal's triggers and the split tool's audits (`splits`, D4).
+  seed: 'arkona-2026-11-18-f3e',
   supersedes: [
     'arkona-2026-11-16',
     'arkona-2026-11-16-f3b',
     'arkona-2026-11-16-f3b1',
     'arkona-2026-11-17-f3d',
+    'arkona-2026-11-17-f3-4',
   ],
   rules,
   governance: [

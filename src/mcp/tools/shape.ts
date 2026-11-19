@@ -50,6 +50,7 @@ import type { ProjectView } from '../../projects/types.js';
 import type { McpToolResult } from '../server.js';
 import { unknownOperationBody } from './discovery.js';
 import type { RenameService } from '../../packs/rename/service.js';
+import type { SplitService } from '../../packs/split/service.js';
 import type { ResumeService } from '../../resume/service.js';
 import type { GuardOptions } from './upload-http.js';
 
@@ -98,6 +99,8 @@ export interface DiscoverServices {
   readonly resume?: ResumeService;
   /** v3 F3d (ADR 0058): `arkona_rename`'s records, token versions and leftover reports. */
   readonly renames?: RenameService;
+  /** v3 F3e (ADR 0059): `arkona_split_owner`'s records, phase 2 (the source's archive proposal) and reverts. */
+  readonly splits?: SplitService;
 }
 
 /** What every tool handler needs. */
