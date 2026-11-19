@@ -21,9 +21,11 @@ tasks come first and the reference after. The last section, **Operations**, list
 5. **Do not invent.** Names and ids come from `search`, `browse_repository_tree` and `get_resource`; dates from
    `calendar_date`; operation ids from the Operations list. A name that matches several pages is never guessed: pass the id.
 
-**Rename a subject → `arkona_rename` (never `update_resource`).** On a project with a setting pack, a character, culture,
-race or other subject is renamed with `arkona_rename`, which renames it everywhere it is referred to; `update_resource`
-refuses it (`USE_ARKONA_RENAME`).
+**Rename a subject → `arkona_rename` (never `update_resource`).** It renames a pack's character, culture, race or other
+subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
+
+**Split an owner → `arkona_split_appraisal`, then `arkona_split_owner` (never by hand).** Only when the owner asks;
+`write_page` refuses moving a section's worth of text off a pack page (`USE_ARKONA_SPLIT`).
 
 **Which tool?**
 
@@ -42,6 +44,7 @@ refuses it (`USE_ARKONA_RENAME`).
 | Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`                | separate creates; `upload_image` to a destination |
 | Recall who an Arkona character is                   | `arkona_character_brief` (free: the bridge's own records)               | many `get_resource` and `read_document` calls     |
 | Rename an Arkona character or owner everywhere      | `arkona_rename` (one canonical proposal, approved item by item)         | `update_resource` and `write_page` page by page   |
+| Split an Arkona owner into several owners           | `arkona_split_appraisal`, then `arkona_split_owner` (one proposal)      | `write_page` and the create tools by hand         |
 | Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact` (free, read-only)       | reading every page yourself                       |
 | Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` (rare: see Create a page)  |
 | Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                     |
@@ -59,21 +62,20 @@ refuses it (`USE_ARKONA_RENAME`).
 | Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations                        |                                                   |
 
 **What your scope means.** The tools you are shown depend on your connection's scope. `read` shows read tools only.
-`propose` shows every tool, but a write becomes a **proposal**: nothing is written, the owner sees exactly your change on the
-dashboard and approves or rejects it. `write` writes directly, except for the always-proposal changes in rule 4 and
-`restore_snapshot`. `bridge_info` tells you which you have. Every result names its project and ends with that project's
-budget line.
+`propose` shows every tool, but a write becomes a **proposal**: nothing is written; the owner sees your change on the
+dashboard and approves or rejects it. `write` writes directly, except for rule 4's always-proposal changes and
+`restore_snapshot`. `bridge_info` tells you which you have. Every result names its project and ends with its budget line.
 
 **Sections to ask for.** `get_bridge_guide` takes `section`. Ask for one of these exact names (a near miss is matched
-loosely, but only a clear match is returned, and each miss costs a call):
+loosely when the match is clear; each miss costs a call):
 
 - `How to decide` (this section)
 - `Find and read a page`
 - `Edit a page's text`
 - `Change facts and links`
 - `Create a page or a character (Working first)`
-- `Setting packs (Arkona)` (the Arkona pack's eleven tools), and under it `Arkona characters`, `Arkona owners`,
-  `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`
+- `Setting packs (Arkona)` (the Arkona pack's thirteen tools), and under it `Arkona characters`, `Arkona owners`,
+  `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -83,7 +85,7 @@ loosely, but only a clear match is returned, and each miss costs a call):
 - `Audit findings`
 - `Budgets, jobs and proposals`
 - `Canon and approval`
-- `At write scope` (what is made at once, what is still a proposal, and why)
+- `At write scope` (what is made at once, what is still a proposal)
 - `When the low-level tools are right`
 - `Reference`, and under it `What the bridge is`, `Projects`, `The repository tree`, `The tools you are shown`,
   `When something goes wrong`
@@ -320,7 +322,7 @@ whose answer was lost: it may have been made, so read the pages before anything 
 A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates, homes and tags,
 taken from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list
 only when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`,
-naming the projects they work on). The Arkona pack has eleven tools. Ask for the part you need:
+naming the projects they work on). The Arkona pack has thirteen tools. Ask for the part you need:
 
 | You want                                           | Use                          | Part to ask for                           |
 | -------------------------------------------------- | ---------------------------- | ----------------------------------------- |
@@ -335,6 +337,8 @@ naming the projects they work on). The Arkona pack has eleven tools. Ask for the
 | Check the images and the asset library             | `arkona_visual_hygiene`      | `Arkona appraisal`                        |
 | Make the fix an appraisal finding offers           | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
 | Rename a character or owner everywhere it is named | `arkona_rename`              | `Arkona renames`                          |
+| See whether an owner page should be split (free)   | `arkona_split_appraisal`     | `Arkona splits`                           |
+| Split an owner page into owners                    | `arkona_split_owner`         | `Arkona splits`                           |
 
 **What every pack tool that makes pages does the same way** (the appraisal tools only read: see `Arkona appraisal`).
 
@@ -654,7 +658,7 @@ identity fields (one read). Use it before you write about a character, and tell 
 
 ### Arkona appraisal
 
-Four reports and one way to act on a finding. **The reports are read-only and free**: they read the bridge's snapshots
+Four reports and one way to act on a finding (a fifth report, whether an owner should be split, is `Arkona splits`). **The reports are read-only and free**: they read the bridge's snapshots
 (the nightly full snapshot plus the change snapshots since), the audits and its own records, never LegendKeeper, and they
 **write nothing and propose nothing**. Each says what it inspected, how fresh its data was and what it could not check.
 
@@ -747,6 +751,60 @@ what the rename does not edit, and anything written since. To propose exactly th
 
 **Never resubmit a rename**: follow it with `bridge_proposal_status`. A rename's job that stops part-way is resumed by the
 owner on the dashboard (it ran work the owner approved); `bridge_job_status` shows where it stopped.
+
+### Arkona splits
+
+Splitting an owner page (a character monolith, a polity page covering its law and its faith) is a **deliberate,
+owner-approved decision**: "do not split merely because a character has many facts". Two tools, used in order, and
+**never by hand**: `write_page` refuses an edit that takes a section's worth of text off a pack page
+(`USE_ARKONA_SPLIT`); a page's own revision that removes material on purpose passes `plainEdit: { "reason": "…" }`, and
+the reason is shown to the owner.
+
+**1. Appraise: `arkona_split_appraisal { "page": "…" }`** (or `under` for a branch). Read-only and free (the snapshots;
+`live: true` re-reads each page, 2 reads a page). It measures Character Architecture's Split Triggers with the pack's own
+thresholds: **Scope Overload** (the Scope or the sections name 3 or more domains), **Retrieval Cost** (long text AND 2 or
+more domains: length alone never counts), **Asset Ownership** (a non-Art page interpreting images, or a wardrobe, form or
+outfit section with images), **Shared Ownership** (a long section about one other named character with no relationship
+owner), **Distinct Unresolved Material** and **Distinct Dependencies**. Each candidate comes with its evidence, a **draft
+destination map** and the **Anti-Fragmentation note** (what should stay together, such as personality and habits). What
+it cannot measure (Independent Retrieval, Independent Maintenance, Downstream Dependency) comes back as **questions**.
+`arkona_appraise_owner` shows the same candidates in its architectural group. Bring all of it to the owner; a candidate is
+never a decision.
+
+**2. Split, only when the owner asks: `arkona_split_owner`.** You give the **destination map**, and `dryRun: true` first:
+
+- `destinations`: each with a `key` and a `kind`: `new` (a character's page by its role, `title`, `referenceType`, or any
+  other owner by `type`, `name`, `home`; each with `scope` and `purpose`), `existing` (`page`, and `under`: the heading
+  the material goes under), `relationship` (an existing relationship `page`, or a new one `with` the other character), or
+  `universal` (material a universal owner already owns, a magic rule for one: `owner` and the subject's own application
+  `text`; it is not migrated, the text replaces it and the owner becomes a Dependency).
+- `map`: every section of the source to one destination's `key` or `stays`. A section that must be divided is divided
+  block by block (`blocks: [{ "ids": […], "to": "…" }]`, the block ids from `read_document`): each block exactly once.
+- `summary` for each section that leaves a source that survives: a short interface summary; the bridge adds the exact link.
+- `dependencies`: each page that depends on the source, to the new owner it actually needs. `retire: true` (archive the
+  source once phase 1 has verified) needs every one of them.
+
+**Refused before anything is proposed, with lists:** a block unassigned or assigned twice (`SPLIT_COVERAGE`), a section
+listed twice (`SPLIT_DUPLICATED_AUTHORITY`), images going to a page that is not an Art or visual owner (`SPLIT_VISUAL`),
+content LegendKeeper cannot create (it can only stay), a missing summary (`SPLIT_SUMMARY_REQUIRED`), an unmapped
+Dependency of a source to be retired (`SPLIT_DEPENDENCIES_UNMAPPED`), a character's identity page to be retired, and
+whatever the pack's own rules refuse for a new page (its name, template, tags, home). **Warnings** for the owner: a
+section about one other character not going to a relationship owner, and a block citing a universal owner moving into
+a character's page.
+
+**What happens.** ONE **canonical proposal**, whatever your scope; never resubmit it. The owner approves it whole or
+destination by destination: a destination left out keeps its sections in the source (nothing is lost). **Phase 1** (one
+job) makes and extends the owners with every block moved **verbatim, its id kept**, checks that each destination holds
+what it receives **before anything leaves the source**, then takes the blocks out of the source with their summaries,
+writes the index lines and the remapped Dependencies, dates Last Major Revision by the owner's rule, and **verifies** with
+a direct re-read (every original block in exactly one place). If any of it fails, the job stops before phase 2: the
+owner resumes or reverts it on the dashboard. **Phase 2**, with `retire: true`, once phase 1 has verified and nothing was
+left out: the bridge proposes archiving the source with `archive_page`, a separate canonical proposal. The split never
+deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it.
+
+**Cost**, measured on the test fixtures: a character monolith split into six new owners with one remapped Dependency
+costs 23 requests to propose and a job of 243 (87 writes); an owner split into one new and one existing owner, 12 to
+propose and 84 (22 writes). The dry run states the plan's reads and the job's estimate.
 
 ## Rename, move, delete and restore
 

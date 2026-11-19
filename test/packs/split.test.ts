@@ -469,8 +469,8 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 
   it('the costs, measured: the proposal’s capture and the job', () => {
     expect(cost).toEqual(COSTS.zahra);
-    // The preview's estimate of the job's writes is the job's writes.
-    expect(proposal.cost.job.writes).toBe(cost.writes);
+    // The preview's estimate: the job's writes exactly, its reads within about a tenth (171 estimated, 156 made).
+    expect(proposal.cost).toMatchObject({ planReads: 8, job: { reads: 171, writes: cost.writes } });
   });
 
   it('Revert of phase 1: the moved content back in the source; the pages it made to ONE deletion proposal', async () => {
@@ -597,7 +597,8 @@ describe('arkona_split_owner: phase 2 on an owner with two domains (the source r
 
   it('the costs, measured', () => {
     expect(cost).toEqual(COSTS.statutes);
-    expect(proposal.cost.job.writes).toBe(cost.writes);
+    // 58 reads estimated, 62 made; the writes exactly.
+    expect(proposal.cost).toMatchObject({ planReads: 6, job: { reads: 58, writes: cost.writes } });
   });
 });
 

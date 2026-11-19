@@ -84,6 +84,11 @@ describe('the misses of the owner’s evaluation (14 to 15 November 2026)', () =
     // v3 F3d (ADR 0058): the renames part.
     ['arkona_rename', 'Setting packs (Arkona) > Arkona renames'],
     ['Arkona renames', 'Setting packs (Arkona) > Arkona renames'],
+    // v3 F3e (ADR 0059): the splits part.
+    ['arkona_split_owner', 'Setting packs (Arkona) > Arkona splits'],
+    ['arkona_split_appraisal', 'Setting packs (Arkona) > Arkona splits'],
+    ['Arkona splits', 'Setting packs (Arkona) > Arkona splits'],
+    ['Split an Arkona owner into several owners', 'Setting packs (Arkona) > Arkona splits'],
     ['Make a character', 'Create a page or a character (Working first)'],
     ['set_facts', 'Change facts and links'],
     ['write_page', "Edit a page's text"],
