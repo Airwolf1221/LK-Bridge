@@ -208,7 +208,7 @@ describe('the Appraisal page shows them: A2’s architectural group', () => {
       },
       body: JSON.stringify({ confirm: true, project: 'test', tool: 'split', page: S.zahra }),
     });
-    const json = (await res.json());
+    const json = await res.json();
     expect(res.status, JSON.stringify(json)).toBe(200);
     const report = json.report;
     expect(report.tool).toBe('arkona_split_appraisal');

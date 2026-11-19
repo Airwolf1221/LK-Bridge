@@ -779,7 +779,8 @@ never a decision.
   `universal` (material a universal owner already owns, a magic rule for one: `owner` and the subject's own application
   `text`; it is not migrated, the text replaces it and the owner becomes a Dependency).
 - `map`: every section of the source to one destination's `key` or `stays`. A section that must be divided is divided
-  block by block (`blocks: [{ "ids": […], "to": "…" }]`, the block ids from `read_document`): each block exactly once.
+  block by block (`blocks: [{ "ids": […], "to": "…" }]`; the ids from `read_document` with `format: "json"`, or from a
+  refusal's lists): each block exactly once.
 - `summary` for each section that leaves a source that survives: a short interface summary; the bridge adds the exact link.
 - `dependencies`: each page that depends on the source, to the new owner it actually needs. `retire: true` (archive the
   source once phase 1 has verified) needs every one of them.
