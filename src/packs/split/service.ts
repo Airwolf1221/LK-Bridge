@@ -55,7 +55,8 @@ export interface SplitPhase2 {
 }
 
 export interface SplitRevert {
-  readonly revertJobId: string;
+  /** The revert job (null: nothing but the pages it made was left to put back, so no job ran). */
+  readonly revertJobId: string | null;
   /** The proposal deleting the pages phase 1 made (null when none could be proposed). */
   readonly deletionProposalId: string | null;
   readonly deleted: readonly { readonly id: string; readonly name: string }[];
@@ -410,10 +411,15 @@ export class SplitService {
     }
     this.proposing.add(rec.id);
     try {
-      const r = await this.archiver(rec.projectId, rec.sourceId, {
-        detail: `split:${rec.id} phase 2`,
-        summary: `phase 2 of split ${rec.id}: phase 1 verified (job ${job.id})`,
-      });
+      let r: Awaited<ReturnType<Archiver>>;
+      try {
+        r = await this.archiver(rec.projectId, rec.sourceId, {
+          detail: `split:${rec.id} phase 2`,
+          summary: `phase 2 of split ${rec.id}: phase 1 verified (job ${job.id})`,
+        });
+      } catch (e) {
+        r = { ok: false, code: 'NOT_PROPOSED', message: e instanceof Error ? e.message : String(e) };
+      }
       if (r.ok) {
         this.update(rec.id, {
           state: 'retiring',
@@ -444,25 +450,43 @@ export class SplitService {
     return this.byJob(projectId, jobId) !== null;
   }
 
+  /** Whether a split's phase 1 has been reverted (it is never resumed then). */
+  isReverted(projectId: string, jobId: string): boolean {
+    return this.byJob(projectId, jobId)?.state === 'reverted';
+  }
+
   /**
    * After a revert of phase 1 has succeeded: the pages it made go to ONE deletion proposal, children before their
    * parents, each only while it is exactly as phase 1 made it (its text as written, its name).
    */
-  async afterRevert(projectId: string, jobId: string, revertJobId: string): Promise<SplitRevert | null> {
+  async afterRevert(
+    projectId: string,
+    jobId: string,
+    revertJobId: string | null,
+  ): Promise<SplitRevert | null> {
     const rec = this.byJob(projectId, jobId);
     if (!rec) return null;
     const records = this.d.engine.stepRecords(projectId, jobId) ?? [];
     const deleted: { id: string; name: string }[] = [];
     const kept: { id: string; name: string; why: string }[] = [];
-    for (const p of rec.plan.newPages) {
-      const made = records.find(
+    // Every page the job made (a new index too), never one it did not make (left out, or the job stopped first).
+    const made = records
+      .filter(
         (s) =>
           (s.opId === 'createResourceFromTemplate' || s.opId === 'createResource') &&
           s.status === 'succeeded' &&
           isObj(s.params.body) &&
-          s.params.body.id === p.id,
-      );
-      if (!made) continue; // never made (left out, or the job stopped first)
+          typeof s.params.body.id === 'string',
+      )
+      .map((s) => {
+        const body = s.params.body as Obj;
+        const id = body.id as string;
+        return {
+          id,
+          name: rec.plan.newPages.find((p) => p.id === id)?.name ?? str(body.name) ?? id,
+        };
+      });
+    for (const p of made) {
       const text = [...records]
         .reverse()
         .find(
@@ -522,7 +546,7 @@ export class SplitService {
     let deletionProposalId: string | null = null;
     let problem: string | undefined;
     if (order.length > 0) {
-      const summary = `Revert of split ${rec.id} (phase 1, job ${jobId}): delete the ${order.length} page${order.length === 1 ? '' : 's'} it made (${order.map((p) => p.name).join(', ')}); the moved material is back in ${rec.sourceName}`;
+      const summary = `Revert of split ${rec.id} (phase 1, job ${jobId}): delete the ${order.length} page${order.length === 1 ? '' : 's'} it made (${order.map((p) => p.name).join(', ')}); ${revertJobId ? `the moved material is back in ${rec.sourceName}` : `nothing had left ${rec.sourceName} yet`}`;
       try {
         const steps: StepSpec[] = order.map((p) => ({
           op: 'deleteResource',

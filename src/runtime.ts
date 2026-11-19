@@ -898,6 +898,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     // v3 F3e (ADR 0059): a split's phase 1 is revertible; the pages it made go to a deletion proposal afterwards.
     splits: {
       isPhase1: (projectId, jobId) => splitsRef.current?.isPhase1(projectId, jobId) ?? false,
+      isReverted: (projectId, jobId) => splitsRef.current?.isReverted(projectId, jobId) ?? false,
       afterRevert: (projectId, jobId, revertJobId) =>
         splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
     },
@@ -923,7 +924,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       const row = o.db
         .prepare(`SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
         .get(projectId, jobId) as { state: string } | undefined;
-      return row?.state === 'submitted' || row?.state === 'succeeded' ? row.state : null;
+      if (row?.state === 'submitted' || row?.state === 'succeeded') return row.state;
+      // v3 F3e (ADR 0059): a split's phase 1 reverted with no revert job (it stopped before anything left the source).
+      return splitsRef.current?.isReverted(projectId, jobId) ? 'succeeded' : null;
     },
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },

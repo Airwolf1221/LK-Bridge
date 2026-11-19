@@ -1246,7 +1246,24 @@ export async function proposeArchiveByBridge(
 ): Promise<{ ok: true; proposalId: string; summary: string } | { ok: false; code: string; message: string }> {
   const sel = deps.selector.select(projectId, 'write');
   if (!sel.ok) return { ok: false, code: sel.error.code, message: sel.error.message };
-  const pd: ProjectDeps = { ...deps, project: sel.project };
+  // The owner's own request (approving a split that retires its source asked for this proposal), made by the bridge:
+  // the dashboard's origin with the system principal, so the canonical guard makes it a canonical proposal (ADR 0042's
+  // owner-forced proposal) and never a write; its reads are sent the same way (no MCP connection made them).
+  const origin = {
+    kind: 'ui' as const,
+    client: 'dashboard',
+    tool: 'archive_page',
+    detail: because.detail,
+    principal: SYSTEM_PRINCIPAL,
+  };
+  const engine = new Proxy(deps.engine, {
+    get(t, k) {
+      const v = Reflect.get(t, k) as unknown;
+      if (k === 'run') return (...a: Parameters<typeof t.run>) => t.run(a[0], a[1], { ...a[2], origin });
+      return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+    },
+  });
+  const pd: ProjectDeps = { ...deps, engine, project: sel.project };
   const mctx: McpToolContext = {
     caller: undefined,
     signal: new AbortController().signal,
@@ -1309,7 +1326,7 @@ export async function proposeArchiveByBridge(
     steps: b.steps,
     onError: 'stop',
     priority: 'P1',
-    origin: { kind: 'system', tool: 'archive_page', detail: because.detail, principal: SYSTEM_PRINCIPAL },
+    origin,
     title: summary.slice(0, 300),
     holdLock: b.hold,
     ...(b.holdDocument ? { holdDocument: b.holdDocument } : {}),

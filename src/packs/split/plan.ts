@@ -266,6 +266,16 @@ function withIds(blocks: readonly unknown[]): Obj[] {
   }));
 }
 
+/**
+ * The exact link a summary or an application text ends with: a plain mention (no custom label, which Arkona's repository
+ * does not use; LegendKeeper shows the page's current name), in a sentence of its own.
+ */
+const seeLink = (resourceId: string, tail = '.'): Obj => ({
+  id: mintClientId(),
+  kind: 'paragraph',
+  content: [{ text: 'See ' }, { mention: { resourceId } }, { text: tail }],
+});
+
 /** A deep copy of a block (moved verbatim: its ids and every attribute kept). */
 const copy = (b: Obj): Obj => JSON.parse(JSON.stringify(b)) as Obj;
 
@@ -302,7 +312,23 @@ export async function planSplit(
 ): Promise<
   { ok: true; plan: SplitPlan } | { ok: false; result?: McpToolResult; refusals?: Issue[]; partial?: Obj }
 > {
-  const { pd, mctx, basis } = env;
+  const { mctx, basis } = env;
+  // Every read the plan makes (its own, and the pack engine's for the new pages) is counted: the preview states it.
+  let reads = 0;
+  const pd: ProjectDeps = {
+    ...env.pd,
+    engine: new Proxy(env.pd.engine, {
+      get(t, k) {
+        const v = Reflect.get(t, k) as unknown;
+        if (k === 'run')
+          return (...a: Parameters<typeof t.run>) => {
+            reads++;
+            return t.run(...a);
+          };
+        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+      },
+    }),
+  };
   const ctx = basis.ctx;
   const projectId = ctx.projectId;
   const rules = basis.pack.rules;
@@ -321,9 +347,7 @@ export async function planSplit(
   const warnings: Issue[] = [];
   const notes: string[] = [];
   const prefetched: SplitPlan['prefetched'] = [];
-  let reads = 0;
   const read = async (op: string, params: Record<string, unknown>): Promise<unknown> => {
-    reads++;
     const r = await liveRead(pd, mctx, SPLIT_TOOL, op, params);
     if (!r.ok) throw new PlanReadError(r.result);
     return r.value;
@@ -678,8 +702,11 @@ export async function planSplit(
             top: topOf(id),
           });
         }
-        headingUse.set(key, [...(headingUse.get(key) ?? []), { entry: i, to: `${g.to} (blocks)` }]);
       });
+      headingUse.set(key, [
+        ...(headingUse.get(key) ?? []),
+        { entry: i, to: `divided (${[...new Set(e.blocks.map((g) => g.to))].join(', ')})` },
+      ]);
       if (out.length > 0) outside.push({ section: e.section, blocks: out });
     } else {
       const to = (e.to ?? '').trim();
@@ -1192,12 +1219,7 @@ export async function planSplit(
     if (r.d.kind !== 'universal' || !r.universalOwner) continue;
     const b = md(r.d.text ?? '', `${r.d.key}: the application text`);
     if (!b.some((x) => mentionedIn(x).has(r.universalOwner!.id)))
-      b.push(
-        ...md(
-          `See [${r.universalOwner.name.replace(/[[\]]/g, '')}](lk://resources/${r.universalOwner.id}) for the rule itself.`,
-          `${r.d.key}: the application text`,
-        ),
-      );
+      b.push(seeLink(r.universalOwner.id, ' for the rule itself.'));
     appText.set(r.d.key, b);
   }
   /** A destination's content: its blocks in source order, the agent's headings, application texts in place. */
@@ -1482,7 +1504,7 @@ export async function planSplit(
   labels.push('check the destinations before anything leaves the source');
 
   // The source's edits: each item's blocks out, its interface summaries (or application text) in their places.
-  const summaries: { section: string; to: string; text: string }[] = [];
+  const summaries: { section: string; to: string; text: string; at: number }[] = [];
   const sourceEdits: SourceEditInput[] = [];
   const editItems: string[] = [];
   const editOf = (item: string, remove: string[], inserts: SourceEditInput['inserts'], where: string) => {
@@ -1502,15 +1524,19 @@ export async function planSplit(
     for (const p of pairs.values()) {
       if (p.to !== r.d.key || !(p.summary ?? '').trim()) continue;
       const b = md(p.summary!, `${r.d.key}: the interface summary of “${titleOfTop(p.top)}”`);
-      if (!b.some((x) => mentionedIn(x).has(r.page!.id)))
-        b.push(
-          ...md(
-            `See [${r.page!.name.replace(/[[\]]/g, '')}](lk://resources/${r.page!.id}).`,
-            'the interface summary',
-          ),
-        );
+      if (!b.some((x) => mentionedIn(x).has(r.page!.id))) b.push(seeLink(r.page!.id));
+      // A section that leaves whole takes its heading with it: its summary keeps the section's heading in the source,
+      // so the page's outline still reads the same (unless the summary brings a heading of its own).
+      const top = o.headings.find((h) => h.id === p.top);
+      if (top && c.moved.includes(top.id) && b[0]?.kind !== 'heading')
+        b.unshift({ id: mintClientId(), kind: 'heading', level: top.level, content: [{ text: top.title }] });
       inserts.push({ before: p.first, blocks: b });
-      summaries.push({ section: titleOfTop(p.top), to: r.page!.name, text: p.summary! });
+      summaries.push({
+        section: titleOfTop(p.top),
+        to: r.page!.name,
+        text: p.summary!,
+        at: o.order.indexOf(p.first),
+      });
     }
     editOf(
       r.d.item,
@@ -1582,7 +1608,14 @@ export async function planSplit(
     const fx = expandFacts(fp, { id: page.id, name: page.name }, pageSidebar, { facts: null, links: [what] });
     const base = stepNo() - 1;
     for (const s0 of fx.steps) {
-      if (s0.op === VERIFY_STEP) continue; // the split's own verification re-reads it
+      if (s0.op === VERIFY_STEP) {
+        // Its read-back joins the job's verify step (Revert reads the sidebar it left from there).
+        for (const t of (s0.params?.body as { targets?: VerifyTarget[] } | undefined)?.targets ?? []) {
+          verifyTargets.push(t);
+          verifyTargetItems.push([item]);
+        }
+        continue;
+      }
       const at = stepNo();
       body.push({
         ...shiftStep(s0, base),
@@ -1774,7 +1807,7 @@ export async function planSplit(
       params: { body: { targets: verifyTargets } },
       itemParts: [{ path: 'body.targets', items: verifyTargetItems }],
     });
-    labels.push('verify the new pages');
+    labels.push('verify the new pages and the remapped Dependencies');
   }
   const original = o.order.map((id) => ({ id, text: textPrint(o.byId.get(id)!), excerpt: excerpt(id) }));
   const contentMoves: {
@@ -1853,7 +1886,7 @@ export async function planSplit(
     const sections = [...new Set((blocksTo.get(r.d.key) ?? []).map((id) => titleOfTop(topOf(id))))];
     const n = (blocksTo.get(r.d.key) ?? []).length;
     const w = (blocksTo.get(r.d.key) ?? []).reduce((k, id) => k + words(blockText(o.byId.get(id)!)), 0);
-    const leftOut = `If left out, ${sections.map((x) => `“${x}”`).join(', ')} ${n === 1 ? 'stays' : 'stay'} in ${node.rawName} (nothing is lost).`;
+    const leftOut = `If left out, ${sections.map((x) => `“${x}”`).join(', ')} ${sections.length === 1 ? 'stays' : 'stay'} in ${node.rawName} (nothing is lost).`;
     if (r.d.kind === 'universal') {
       if (r.universalIn !== 'source') continue; // part of the destination its application text goes to
       destItems.push({
@@ -2014,7 +2047,9 @@ export async function planSplit(
       warnings,
       notes,
       dependencies: { mapped, unmapped, chronology },
-      summaries,
+      summaries: [...summaries]
+        .sort((a, b) => a.at - b.at)
+        .map(({ section, to, text }) => ({ section, to, text })),
       indexEntries,
       ids: {
         kept:

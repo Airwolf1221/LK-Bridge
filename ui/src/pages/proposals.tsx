@@ -1043,6 +1043,12 @@ export function closeSelection(
 
 function ItemDiffView({ diff }: { diff: PlanItem['diff'] }) {
   if (!diff) return null;
+  // v3 F3e (ADR 0059): what leaving the item out means (a split's destination: its sections stay in the source).
+  const context = diff.context ? (
+    <p className="muted small-text" data-testid="item-context">
+      {diff.context}
+    </p>
+  ) : null;
   if (diff.changes && diff.changes.length > 0)
     return (
       <ul className="small-text">
@@ -1053,11 +1059,14 @@ function ItemDiffView({ diff }: { diff: PlanItem['diff'] }) {
         ))}
       </ul>
     );
-  if (diff.before === undefined && diff.after === undefined) return null;
+  if (diff.before === undefined && diff.after === undefined) return context;
   return (
-    <p className="small-text">
-      <del>{diff.before ?? '(none)'}</del> → <ins>{diff.after ?? '(none)'}</ins>
-    </p>
+    <>
+      <p className="small-text">
+        <del>{diff.before ?? '(none)'}</del> → <ins>{diff.after ?? '(none)'}</ins>
+      </p>
+      {context}
+    </>
   );
 }
 
@@ -1178,6 +1187,11 @@ function ItemsView({
                 )}
                 {pending && selection.has(i.id) && !kept.has(i.id) && (
                   <p className="note note-warn small-text">Left out: it needs an item you unticked.</p>
+                )}
+                {pending && !kept.has(i.id) && i.diff?.context && (
+                  <p className="note note-warn small-text" data-testid="item-left-out">
+                    {i.diff.context}
+                  </p>
                 )}
               </div>
             ))}
@@ -1302,6 +1316,18 @@ function ProposalReview({
             {closed.dropped.map((x) => (
               <li key={x.id}>{plan.items.find((i) => i.id === x.id)?.label ?? x.id}</li>
             ))}
+          </ul>
+        </>
+      )}
+      {plan.items.some((i) => !closed.kept.includes(i.id) && i.diff?.context) && (
+        <>
+          <p>What leaving them out means:</p>
+          <ul>
+            {plan.items
+              .filter((i) => !closed.kept.includes(i.id) && i.diff?.context)
+              .map((i) => (
+                <li key={i.id}>{i.diff!.context}</li>
+              ))}
           </ul>
         </>
       )}

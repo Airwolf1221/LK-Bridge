@@ -656,7 +656,7 @@ export async function runWriteScopeRehearsal(
       const r = await rt.reverts.revert('owner', pid, jobId);
       if (r.status !== 'submitted')
         throw new Fails(
-          `the revert was refused: ${r.code}: ${r.message} (${r.targets.map((x) => `${x.what}: ${x.state}`).join('; ')})`,
+          `the revert was refused: ${r.status === 'refused' ? `${r.code}: ` : ''}${r.message} (${r.targets.map((x) => `${x.what}: ${x.state}`).join('; ')})`,
         );
       await waitForJob(rt.engine, pid, r.revertJobId, `the revert of step ${step}`, wait);
       return r.revertJobId;
