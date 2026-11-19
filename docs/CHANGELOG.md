@@ -27,8 +27,9 @@ normally (`sudo systemctl daemon-reload`: the unit file changed). Nothing was ru
   R3-01), that a check meeting the budget was reported as "the page changed" (now parked, R3-02), and that a job whose
   first check needs more reads than an hour's budget never finished (its checks' reads now wait for the budget in their
   queue, and a large check runs again light after a wait, R3-62).
-- **The retag read-back (fix C)** compares each document's version: "each document's body by version unchanged", or says
-  "bodies not compared" (ADR 0060 departure 3 amended).
+- **The retag read-back (fix C)** compares each page document's body by its version: "each page document's body at the
+  same version as before the write; other documents (board, map, timeline) compared by their metadata timestamps only,
+  not their content" (ADR 0060 departure 3 amended).
 - **Renames.** A rebase finds an edit again by its sentence only when no other occurrence shares it (R3-25), and never
   re-applies an item left out (R3-12); another character's longer name is never renamed (R3-26); D1 (a) on every
   occurrence of a fact or row and in quote blocks (R3-27, R3-28); history judged again when the job runs (R3-29);

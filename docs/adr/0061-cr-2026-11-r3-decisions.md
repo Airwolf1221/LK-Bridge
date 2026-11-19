@@ -55,11 +55,13 @@ that is the owner's.
    (never part-way through a write) and records it queued, to continue when the bridge starts; ends every wait for
    budget, pacing, a lock or a retry's back-off at once; closes the database and exits, with a 25-second watchdog.
    `TimeoutStopSec=75` in `deploy/lk-bridge.service` is the cushion. Measured in the tests: 1.5 s with a write in
-   flight, under 0.1 s otherwise (section 5 of the review).
-8. **The retag read-back (the owner's fix C)** compares each document's own version (`getDocumentBlocks`, one read a
-   document), not only getResource's metadata: "written and read back exactly (the tags as proposed, the sidebar,
-   name, place and each document's body by version unchanged)"; where a version cannot be read it says
-   "documents' metadata (name, type, rank, hidden, updatedAt) unchanged; bodies not compared".
+   flight for 1.5 s, 4 s with the block-id sweep's 4-second request in flight, under 0.1 s with nothing in flight
+   (section 5 of the review).
+8. **The retag read-back (the owner's fix C)** compares each page document's own version (`getDocumentBlocks`, one read
+   a document), not only getResource's metadata: "written and read back: the tags exactly as proposed; name, aliases,
+   parentage and sidebar unchanged; each page document's body at the same version as before the write; other documents
+   (board, map, timeline) compared by their metadata timestamps only, not their content". A body that cannot be read is
+   reported as a difference, never taken as unchanged.
 
 9. **A large job waits for the budget instead of starting over** (R3-62, amends CR-2026-11-R2's R2-29 re-check). A
    check's or a read-back's reads, in a job holding no job-level lock, wait in their queue for the budget however long
