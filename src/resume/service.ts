@@ -197,7 +197,12 @@ export class ResumeService {
 
   private resumableOf(projectId: string, jobId: string): ResumableShape | null {
     const r = this.d.engine.jobOptions(projectId, jobId)[RESUMABLE_OPTION] as ResumableShape | undefined;
-    return r && (r.kind === 'package' || r.kind === 'rename' || r.kind === 'recreate' || r.kind === 'split')
+    return r &&
+      (r.kind === 'package' ||
+        r.kind === 'rename' ||
+        r.kind === 'recreate' ||
+        r.kind === 'split' ||
+        r.kind === 'retag')
       ? r
       : null;
   }

@@ -22,6 +22,7 @@ import type { AuditRule } from '../config.js';
 import { contentPages, fact, factAmbiguous, pathOf, type AuditContext } from '../context.js';
 import { nameKey, type AuditPage, type PropertySummary } from '../model.js';
 import type { FindingDraft } from '../types.js';
+import { retagTagFindings } from './retag-tags.js';
 
 const key = (s: string | null | undefined): string => nameKey((s ?? '').replace(/\s+/g, ' '));
 
@@ -499,7 +500,12 @@ export function rulesCheck(ctx: AuditContext): FindingDraft[] {
     }
   }
 
-  // Tag rules.
+  // Tag rules. v3 F3f (ADR 0060): on a project whose approved pack has retag rules, the retag engine's verdicts (the
+  // same as arkona_retag_audit's), never the tag-definition document's.
+  if (ctx.retag) {
+    out.push(...retagTagFindings(ctx));
+    return out;
+  }
   const def = tagDefinitionOf(ctx);
   if (def !== null) {
     if (!def.ok) {

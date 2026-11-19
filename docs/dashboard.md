@@ -186,6 +186,33 @@ categories with the review queue; seed once, "add missing", edit singular, alias
 **drift** report (with links into the Repository Tree) and a read-only **Try it** panel (resolve a name, plan a
 character placement, compute an ordering slot). How to use it: [registry.md](registry.md).
 
+## Tagging (v3 F3f)
+
+The **Tagging** page (Repository group; [ADR 0060](adr/0060-v3-f3f-retag-audit-and-apply.md)) holds the Controlled Native
+Tagging Standard's workflows for the Arkona pack. Above the tabs: the policy (the approved pack version, the Tagging
+Standard's label and the digest), or why the retag is unavailable (no approved version with retag rules, or drift).
+
+- **Audit**: run the free audit (the snapshots; nothing is read from LegendKeeper) on everything, a page or a branch;
+  choose a stored run and what to show (deterministic corrections by default, holds, exceptions, compliant, Working and
+  Archived, excluded). Each page shows its current and proposed arrays, its disposition and a rationale per slot (holds
+  and removals with their reasons). Tick deterministic corrections and **Propose the picked corrections**: after a
+  confirmation, ONE batch proposal (each page an item), approved on the Proposals page like any other.
+- **Holds**: each hold of the latest audit with its reasons and agents' suggestions. An uncertain category (or
+  specialist) is resolved by choosing the category, and the specialist if any, from the closed list, with a reason:
+  **Classify** asks for a confirmation and the password again, is audited (`retag.classify`), and is used by every later
+  audit. **Withdraw** removes a classification (password again; audited `retag.unclassify`).
+- **Batches**: each batch's state, proposal and job, and what became of each page: applied (and whether its read-back
+  verified), already compliant, held, conflicted or inaccessible.
+- **Reconciliation**: start a named reconciliation (a first audit, free), open one to see its counts (audited,
+  corrections, holds, exceptions, proposed, applied, conflicted, stale, remaining) and its pages, and **Resume**: what
+  remains is audited afresh, then its next batch is proposed. Pages whose facts, Reference Type or template changed in the
+  snapshots since their verdict show as stale.
+
+Its admin API is `/api/admin/tagging` (`GET`), `/tagging/audit`, `/tagging/runs/:id`, `/tagging/holds`,
+`/tagging/classify` and `/tagging/unclassify` (re-authenticated), `/tagging/batches`, and `/tagging/reconciliations`
+(start, `/:id`, `/:id/resume`). The Packs page's token-map editor also takes the Excluded Routine Tags (one per line),
+which make a new version as the token maps do.
+
 ## Asset Tree (v2 A4)
 
 The **Asset Tree** page shows the selected project's asset library as the bridge knows it: status, counts, the build

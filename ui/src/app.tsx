@@ -33,6 +33,7 @@ import { LifecyclePage } from './pages/lifecycle';
 import { ChronologyPage } from './pages/chronology';
 import { WritersPage } from './pages/writers';
 import { PacksPage } from './pages/packs';
+import { TaggingPage } from './pages/tagging';
 import { EvaluationPanel } from './pages/evaluation';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -87,6 +88,7 @@ export const NAV: NavItem[] = [
   { to: '/lifecycle', label: 'Archive and lifecycle', group: 'Repository' },
   { to: '/chronology', label: 'Chronology', group: 'Repository' },
   { to: '/tree', label: 'Repository Tree', group: 'Repository' },
+  { to: '/tagging', label: 'Tagging', group: 'Repository' },
   { to: '/maintenance', label: 'Maintenance Jobs', group: 'Setup' },
   { to: '/packs', label: 'Packs', group: 'Setup' },
   { to: '/projects', label: 'Projects', group: 'Setup' },
@@ -129,6 +131,7 @@ export const ROUTES: { path: string; prefix?: boolean; render: (session: Session
   { path: '/snapshots', render: () => <SnapshotsPage /> },
   { path: '/audits', render: () => <AuditsPage /> },
   { path: '/appraisal', render: () => <AppraisalPage /> },
+  { path: '/tagging', render: () => <TaggingPage /> },
   { path: '/offsite', render: () => <OffsitePage /> },
   { path: '/settings', render: () => <SettingsPage /> },
   { path: '/account', render: () => <AccountPage /> },

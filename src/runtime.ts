@@ -46,6 +46,8 @@ import { ResumeService } from './resume/service.js';
 import { registerRenameChecks } from './packs/rename/checks.js';
 import { registerSplitChecks } from './packs/split/checks.js';
 import { SplitService } from './packs/split/service.js';
+import { RetagService } from './packs/retag/service.js';
+import { registerRetagChecks } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
 import { RenameService } from './packs/rename/service.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
@@ -166,6 +168,8 @@ export interface Runtime {
   readonly renames: RenameService;
   /** v3 F3e (ADR 0059): arkona_split_owner's records, phase 2 and reverts. */
   readonly splits: SplitService;
+  /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
+  readonly retag: RetagService;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -690,6 +694,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   void snapshots.start();
   // v2 E2 (ADR 0044): the audits, over the snapshots, the registry, the lifecycle records and the chronology check. Its
   // "Propose a fix" for a paragraph with line breaks checks the block inside the lock (the two checkers below).
+  // v3 F3f (ADR 0060): the retag service is made later (it needs the appraisal and the proposals); the audits (its tag
+  // findings) and Revert (an approved retag batch is revertible) reach it through this.
+  const retagRef: { current: RetagService | null } = { current: null };
   const audits: Audits = new Audits({
     db: o.db,
     snapshots,
@@ -705,6 +712,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     assetLibrary: (projectId) => assetLibraryOf(assets, projectId),
     // v3 F3d (ADR 0053): where the lifecycle tag goes and the AU ruling, from the project's approved pack.
     lifecycleTags: (projectId) => packs.lifecycleRules(projectId),
+    // v3 F3f (ADR 0060): the tag findings from the retag engine, where the approved pack has retag rules.
+    retag: (projectId) => retagRef.current?.auditHook(projectId) ?? null,
   });
   audits.start();
   // v3 F3c (ADR 0054): the appraisal tools and the full-text index, over the snapshot overlay, the audits, the asset tree
@@ -903,6 +912,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       afterRevert: (projectId, jobId, revertJobId) =>
         splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
     },
+    approvedRevertible: (projectId, jobId) => retagRef.current?.isApplyJob(projectId, jobId) ?? false,
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReverts = reverts.start();
@@ -977,6 +987,29 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   const detachSplits = splits.start();
   splitsRef.current = splits;
+  // v3 F3f (ADR 0060): the retag audit and its separately approved apply: the job's checks (the policy, a fresh read per
+  // page, the in-lock tags rebaser, the read-back), each batch's dispositions, the owner's classifications.
+  const retag = new RetagService({
+    db: o.db,
+    packs,
+    appraisal,
+    templateOf: (projectId, pageId) => tree.queries.node(projectId, pageId).data?.templateId ?? null,
+    engine,
+    proposals: {
+      addHooks: (h) => policy.proposals.addHooks(h),
+      get: (id) => policy.proposals.get(id),
+    },
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const unregisterRetagChecks = registerRetagChecks(engine, {
+    policy: (packId) => retag.currentPolicy(packId),
+    governance: (packId) => packs.governance(packId),
+  });
+  const detachRetag = retag.start();
+  retagRef.current = retag;
 
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
@@ -1052,6 +1085,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       renames,
       // v3 F3e (ADR 0059): arkona_split_owner's records, phase 2 and reverts.
       splits,
+      // v3 F3f (ADR 0060): the retag audit and apply.
+      retag,
     },
   };
   // v3 F3e (ADR 0059, D2): phase 2 is archive_page's own plan, proposed by the bridge (it needs the tool layer's deps).
@@ -1143,6 +1178,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     resume,
     renames,
     splits,
+    retag,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -1184,6 +1220,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       unregisterRenameChecks();
       detachSplits();
       unregisterSplitChecks();
+      detachRetag();
+      unregisterRetagChecks();
       detachReview();
       detachRestores();
       unregisterPackEngine();

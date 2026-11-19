@@ -62,8 +62,11 @@ describe('a compact polity and promoteNation', () => {
     expect(r.body.promoteNation.moves).toMatchObject({ id: O.tarim, idKept: true });
     const index = r.body.pages.find((p: { name: string }) => p.name === '[INDEX] Sultanate of Tarim');
     expect(index.indexText).toMatch(/## How to Use This Index/);
-    expect(index.indexText).toContain('Sultanate of Tarim - Historical Polity Reference');
-    expect(index.indexText).toContain('Court of Pearls - Institution Reference');
+    // v3 F3f (ADR 0060, D): routing lines are plain mentions (the page's current name, never a custom label).
+    expect(index.indexText).toContain(
+      '- [](lk://resources/tarimref): A coastal sultanate of eastern Salahad',
+    );
+    expect(index.indexText).toMatch(/- \[\]\(lk:\/\/resources\/[a-z0-9]+\): /);
     // The Polities index itself as home stands for the new nation index.
     const viaPolities = await call({
       ...institution({ promoteNation: true, home: 'Salahad Polities' }),

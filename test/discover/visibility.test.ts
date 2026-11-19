@@ -70,6 +70,9 @@ describe('showLowLevelTools, per profile', () => {
         // v3 F3e (ADR 0059): the split tools.
         'arkona_split_appraisal',
         'arkona_split_owner',
+        // v3 F3f (ADR 0060): the retag tools.
+        'arkona_retag_audit',
+        'arkona_retag_apply',
         'bridge_job_resume',
         'create_document',
         'create_index',
@@ -130,14 +133,15 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 70 tools off and 70 + 3 + 2 + 89 on', async () => {
+  it('shows 72 tools off and 72 + 3 + 2 + 89 on', async () => {
     const t = w.stack.newToken('counting', 'write');
     // 61 before v2 E3b; get_resources, bridge_proposals_mine and bridge_job_wait were merged (-3) and lk_upload_image and
     // create_bare_resource are hidden by default (-2); v3 F3b's four pack tools (+4); v3 F3c's five appraisal tools (+5);
-    // v3 F3d's bridge_job_resume and arkona_rename (+2); v3 F3e's arkona_split_appraisal and arkona_split_owner (+2).
-    expect(await list(t.token)).toHaveLength(70);
+    // v3 F3d's bridge_job_resume and arkona_rename (+2); v3 F3e's arkona_split_appraisal and arkona_split_owner (+2);
+    // v3 F3f's arkona_retag_audit and arkona_retag_apply (+2).
+    expect(await list(t.token)).toHaveLength(72);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(70 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(72 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

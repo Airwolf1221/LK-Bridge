@@ -25,14 +25,27 @@ beforeAll(async () => {
   });
   expect(d.isError, d.text).toBe(false);
   desk = d.body.findings;
-  const q = await w.call('arkona_appraise_owner', {
+  // v3 F3f: read a page at a time (the Qishen branch's report, with its routing-line findings, is over the inline size).
+  const first = await w.call('arkona_appraise_owner', {
     under: C.qishen,
-    limit: 200,
+    limit: 20,
     detail: 'full',
     project: 'test',
   });
-  expect(q.isError, q.text).toBe(false);
-  qishen = q.body.findings;
+  expect(first.isError, first.text).toBe(false);
+  qishen = [...first.body.findings];
+  for (let offset = first.body.nextOffset; offset !== null;) {
+    const q = await w.call('arkona_appraise_owner', {
+      runId: first.body.runId,
+      offset,
+      limit: 20,
+      detail: 'full',
+      project: 'test',
+    });
+    expect(q.isError, q.text).toBe(false);
+    qishen.push(...q.body.findings);
+    offset = q.body.nextOffset;
+  }
 });
 afterAll(async () => w?.close());
 

@@ -286,11 +286,12 @@ describe('the audit_findings tool', () => {
     const reader = w.stack.newToken('reader', 'read');
     const c = await w.stack.connect(reader.token);
     const tools = (await c.listTools()).tools.map((t) => t.name);
-    expect(tools.filter((n) => /audit/i.test(n))).toEqual(['audit_findings']);
+    // v3 F3f (ADR 0060): the Arkona pack's retag audit is its own read-only tool, not the audits'.
+    expect(tools.filter((n) => /audit/i.test(n) && !n.startsWith('arkona_'))).toEqual(['audit_findings']);
     const r = await w.stack.call(c, 'audit_findings', { project: 'test', limit: 1 });
     expect(r.isError).toBe(false);
     const all = (await (await w.stack.connect()).listTools()).tools.map((t) => t.name);
-    expect(all.filter((n) => /audit/i.test(n))).toEqual(['audit_findings']);
+    expect(all.filter((n) => /audit/i.test(n) && !n.startsWith('arkona_'))).toEqual(['audit_findings']);
     expect(all).not.toContain('run_audit');
   });
 });

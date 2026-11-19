@@ -24,7 +24,7 @@ const EXPECTED: [string, string[]][] = [
   ['Limits', ['Concurrent Writers', 'Request Budgets']],
   ['Monitoring', ['Errors', 'Journal', 'Tool calls']],
   ['Quality', ['Appraisal', 'Audits', 'Evaluation']],
-  ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree']],
+  ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree', 'Tagging']],
   ['Setup', ['Maintenance Jobs', 'Packs', 'Projects', 'Repository Mappings', 'Settings']],
 ];
 

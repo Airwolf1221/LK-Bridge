@@ -288,7 +288,7 @@ export interface ItemPartShape {
  * job before it continues from where it stopped).
  */
 export interface ResumableShape {
-  readonly kind: 'package' | 'rename' | 'recreate' | 'split';
+  readonly kind: 'package' | 'rename' | 'recreate' | 'split' | 'retag';
   /** The steps (1-based) run again on resume before the step it stopped at (the job's own checks). */
   readonly recheck?: readonly number[];
   /** What the kind needs to find its record (a recreate's restore id). */

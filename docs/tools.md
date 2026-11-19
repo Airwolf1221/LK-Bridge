@@ -70,7 +70,9 @@ a `propose` or `write` profile (`arkona_rename` and `bridge_job_resume` are writ
 the same **30** in a `read` profile. **Since v3 F3e** it lists thirteen ([below](#setting-packs-splits-v3-f3e)): **70
 tools, about 46,790 tokens**, in a `propose` or `write` profile (`arkona_split_owner`, a write tool, about 2,230 of them;
 `arkona_split_appraisal`, a read tool, about 790; 75 with the low-level tools on), and **31, about 12,460**, in a `read`
-profile (34 with the low-level tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
+profile (34 with the low-level tools on). **Since v3 F3f** it lists fifteen ([below](#setting-packs-retagging-v3-f3f)):
+**72 tools** in a `propose` or `write` profile (`arkona_retag_apply` a write tool; 77 with the low-level tools on), and
+**32** in a `read` profile (`arkona_retag_audit` a read tool). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -212,7 +214,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (165 tools in all with the Arkona pack's thirteen tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename` and v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, and v3 F3d's `bridge_job_resume`; 167 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (167 tools in all with the Arkona pack's fifteen tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner` and v3 F3f's `arkona_retag_audit` and `arkona_retag_apply`, and v3 F3d's `bridge_job_resume`; 169 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -1862,6 +1864,57 @@ proposal. `arkona_create_character`'s `split` is refused with the same code.
 | its job (one new owner, one existing owner, two remapped Dependencies) | 84 (estimated 58 reads)                                                           | 22     |
 | phase 2                                                                | `archive_page`'s own (about 6 reads to propose, then about 15 reads and 8 writes) | 8      |
 | a conflict on an existing owner's append (LegendKeeper answers 412)    | one more read, and the write again                                                | 1      |
+
+## Setting packs: retagging (v3 F3f)
+
+[ADR 0060](adr/0060-v3-f3f-retag-audit-and-apply.md). The agent guide's part is "Arkona retagging" (under "Setting packs
+(Arkona)"). Both tools need the pack version `arkona-2026-11-19-f3f` (its retag rules), approved on the Packs page; until
+then they refuse (`RETAG_UNAVAILABLE`, or `PACK_NOT_CURRENT` while the pack is not approved or its governance drifted).
+They build what the Controlled Native Tagging Standard asks of the Bridge: a read-only policy audit, a separately
+approved guarded apply, and resumable reconciliation. One engine (src/packs/retag/engine.ts) gives every verdict, and the
+audits' tag findings come from it too ([audits.md](audits.md)).
+
+### `arkona_retag_audit`
+
+Read-only and free (the snapshot overlay; `live: true` re-reads each page, one `getResource` each, at most 50). Input: one
+of `page`, `under` or `all: true`; or `runId` (a stored run, read again with `filter`, `offset`, `limit`); or
+`reconciliation: "<name>"` (starts a named reconciliation with this scope, default everything, or audits an open one
+again); `detail: "full"` adds each page's inputs; `suggest: { page, primary, specialist?, reason }` records a suggested
+classification for a hold (for the owner; never used by itself).
+
+Each page: `pageId`, `name`, `disposition` (`compliant`, `correction`, `hold`, `exception`; null outside the grammar),
+`scope` (`grammar`, `lifecycle`, `excluded`), `current`, `proposed`, `policy` (pack version and digest), `rationale` (each
+slot, `status`, `primary`, `specialist`, `race`, `culture` or `other`, with its tag and where it comes from), `holds`,
+`exceptions`, `removals`, and, for a Working or Archived page, `lifecycle` (the lifecycle grammar's verdict), or for an
+excluded page, `excluded` (why). The run: `runId`, `policy` (`packId`, `version`, `label`, `sources`, `digest`),
+`source` (the snapshots and their age, live reads), `counts` (by disposition, lifecycle-only, excluded).
+
+The rules: the scope is current Authoritative Main CANON owners and AU owners (the AU ruling); Working and Archived pages
+only for the lifecycle grammar; the Legacy Canon Archive, Design References, navigation indexes and repository
+governance never. The primary category comes from the owner's classification, else the page's own pack record, else its
+current tags when they hold exactly one valid primary category its Reference Type does not contradict; otherwise a hold
+("uncertain category; owner classification needed"). The specialist is on the closed list and backed the same way, else
+omitted with a hold. Identity tokens (a Core, a Compact Reference, the eligible references) come from Race / Species and
+Naming Culture through their own token maps, typed and de-duplicated; a missing, `Unestablished`, unmapped or
+contradictory value omits its slot with a hold. No other tag is proposed; a tag outside the grammar is removed only when
+the Standard's Excluded Routine Tags list it, otherwise it is an owner exception. Status and lifecycle tags are never
+added or removed; a status tag present is moved first. Cost: none.
+
+### `arkona_retag_apply`
+
+Input: `runId` and `pages` (page ids of that run), or `reconciliation: "<name>"`. Only deterministic corrections, at most
+the pack's `retag.batchSize` (25): `RETAG_NOT_DETERMINISTIC` (a hold, an exception, a compliant or excluded page),
+`RETAG_BATCH_TOO_LARGE`, `RETAG_PAGE_IN_BATCH` (already in an open batch), `RETAG_POLICY_CHANGED` (the run was made under
+another policy), `RUN_NOT_FOUND`. ONE proposal by the pack's switch ("always propose" in the seed), each page an item.
+The job: the policy and its governance checked first (one read per source; changed: the whole job stops, "policy changed
+since the audit; audit again"); per page a fresh read (conflicted, held, already compliant or inaccessible pages are
+skipped and recorded), the write inside the page's lock (judged again there), and an independent read-back (the exact
+array in order; name, aliases, parentage, documents and sidebar unchanged). Each page's disposition is recorded:
+`applied` (verified or not), `already_compliant`, `held`, `conflicted`, `inaccessible`. Last Major Revision is never set.
+Resume (owner, Jobs page) and Revert (the exact prior array, only where nothing changed since) work. With
+`reconciliation`: stale pages marked, what remains audited afresh (free), its next batch proposed (`status`: `proposed`,
+`nothing_to_propose` or `nothing_remaining`). Cost: none to propose; the job 3 reads for the governance, then 3 reads and
+1 write a page.
 
 ## The calendar and the timelines (v2 D1)
 

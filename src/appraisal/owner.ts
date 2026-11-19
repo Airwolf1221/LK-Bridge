@@ -563,6 +563,53 @@ function indexChecks(ctx: OwnerContext, p: LoadedPage, out: Draft[]): void {
       message: `The index lacks ${lacking.join(', ')}.`,
       details: { lacking },
     });
+  routingLabelChecks(ctx, p, blocks, out);
+}
+
+/**
+ * v3 F3f (ADR 0060, part D): a mention with a custom label in an index's routing section ("How to Use This Index"). A
+ * plain mention always shows the page's current name; a custom label keeps whatever it was given, so a rename leaves
+ * the old name in it. LegendKeeper's API cannot change a mention's custom label (ADR 0058 amendment, D), so the
+ * follow-up is `none`: change it in the app. The bridge's own routing-line writers emit plain mentions since F3f.
+ */
+function routingLabelChecks(
+  ctx: OwnerContext,
+  p: LoadedPage,
+  blocks: readonly LkBlock[],
+  out: Draft[],
+): void {
+  const headings = new Set(
+    [
+      ...ctx.rules.types.map((t) => t.index.routing),
+      ...(ctx.rules.owners ? [ctx.rules.owners.index.routing] : []),
+    ].map(textKey),
+  );
+  for (const s of sectionsOf(blocks)) {
+    if (!s.heading || !headings.has(textKey(s.title))) continue;
+    for (const top of s.blocks)
+      for (const { b } of walk([top])) {
+        const runs = Array.isArray(b.content) ? (b.content as unknown[]) : [];
+        for (const r of runs) {
+          const m = isObj(r) && isObj(r.mention) ? r.mention : null;
+          if (!m || typeof m.text !== 'string' || m.text === '' || typeof m.resourceId !== 'string') continue;
+          const target = ctx.reader.page(m.resourceId);
+          out.push({
+            check: 'routing_labelled_mention',
+            pageId: p.page.id,
+            ...(typeof b.id === 'string' ? { blockId: b.id } : {}),
+            ...(p.body ? { documentId: p.body.documentId } : {}),
+            key: `${typeof b.id === 'string' ? b.id : '?'}:${m.resourceId}`,
+            message: `A routing line in “${s.title}” mentions ${target ? `“${target.displayName}”` : m.resourceId} with the custom label “${m.text}”: a rename would leave that label as it is. A plain mention shows the page’s current name. LegendKeeper’s API cannot change a mention’s label, so change it in the app (remove the custom label).`,
+            details: {
+              section: s.title,
+              label: m.text,
+              target: { id: m.resourceId, name: target?.rawName ?? null },
+              currentName: target?.displayName ?? null,
+            },
+          });
+        }
+      }
+  }
 }
 
 /**

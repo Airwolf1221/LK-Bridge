@@ -662,7 +662,10 @@ describe('arkona_split_owner: a new page’s line in an EXISTING character index
     expect(r.body.indexEntries).toEqual([
       {
         index: '[INDEX] Zahra al-Rashid',
-        line: expect.stringContaining('Zahra al-Rashid - Personality & Lifestyle'),
+        // v3 F3f (ADR 0060, D): a plain mention of the new page, with its Scope.
+        line: expect.stringMatching(
+          /^- \[\]\(lk:\/\/resources\/[a-z0-9]+\): Zahra al-Rashid: her temperament and habits$/,
+        ),
       },
     ]);
     const done = await approveSplit(w, String(r.body.proposalId));

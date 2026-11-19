@@ -128,7 +128,8 @@ async function attack(t: Target): Promise<string[]> {
         // No bridge tool even claims to administer policy.
         expect(tool.name).not.toMatch(
           // v2 E2: `audit_findings` reads the audits' findings (read-only); the policy audit log stays unreachable.
-          /approve|reject|revoke|scope|profile|token|grant|policy|consent|audit(?!_findings$)/i,
+          // v3 F3f (ADR 0060): `arkona_retag_audit` is the Tagging Standard's read-only tag audit, not the policy log.
+          /approve|reject|revoke|scope|profile|token|grant|policy|consent|(?<!^arkona_retag_)audit(?!_findings$)/i,
         );
       }
       for (const args of argumentSets(tool.inputSchema as never, ids)) {
