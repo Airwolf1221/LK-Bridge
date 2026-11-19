@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
 /**
  * v3 F3e (ADR 0059): `arkona_split_appraisal` (A6), read-only and free, against the splits' test world (fixtures built from
  * the design's shapes, never fetched): every measurable trigger on its own evidence, the thin character silent (the
@@ -208,7 +208,7 @@ describe('the Appraisal page shows them: A2’s architectural group', () => {
       },
       body: JSON.stringify({ confirm: true, project: 'test', tool: 'split', page: S.zahra }),
     });
-    const json = (await res.json()) as any;
+    const json = (await res.json());
     expect(res.status, JSON.stringify(json)).toBe(200);
     const report = json.report;
     expect(report.tool).toBe('arkona_split_appraisal');
