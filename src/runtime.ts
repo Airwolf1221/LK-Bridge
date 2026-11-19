@@ -46,7 +46,7 @@ import { ResumeService } from './resume/service.js';
 import { registerRenameChecks } from './packs/rename/checks.js';
 import { registerSplitChecks } from './packs/split/checks.js';
 import { SplitService } from './packs/split/service.js';
-import { proposeArchiveByBridge } from './mcp/tools/lifecycle.js';
+import { bridgeArchiver } from './packs/split/archive.js';
 import { RenameService } from './packs/rename/service.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
@@ -1055,9 +1055,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
   };
   // v3 F3e (ADR 0059, D2): phase 2 is archive_page's own plan, proposed by the bridge (it needs the tool layer's deps).
-  splits.setArchiver((projectId, pageId, because) =>
-    proposeArchiveByBridge(toolDeps, projectId, pageId, because),
-  );
+  splits.setArchiver(bridgeArchiver(toolDeps));
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.

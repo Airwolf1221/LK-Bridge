@@ -125,7 +125,7 @@ const toRecord = (r: Row): SplitRecord => ({
   updatedAt: r.updated_at,
 });
 
-/** Proposes archiving a page as the bridge (src/mcp/tools/lifecycle.ts `proposeArchiveByBridge`). */
+/** Proposes archiving a page as the bridge (src/packs/split/archive.ts `bridgeArchiver`). */
 export type Archiver = (
   projectId: string,
   pageId: string,

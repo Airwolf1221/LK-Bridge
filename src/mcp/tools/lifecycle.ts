@@ -37,7 +37,6 @@ import {
 } from '../../jobs/internal-steps.js';
 import { rowsContentHash } from '../../jobs/sidebar-state.js';
 import type { LifecycleMarker, StepSpec } from '../../jobs/index.js';
-import { SYSTEM_PRINCIPAL } from '../../jobs/types.js';
 import { mintClientId } from '../../jobs/ids.js';
 import { compareStoredBlocks } from '../../jobs/verify-blocks.js';
 import {
@@ -1232,45 +1231,31 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
   });
 }
 
+/** archive_page's plan and job for one page, ready to submit (v3 F3e: a split's phase 2). */
+export interface ArchiveProposalPlan {
+  readonly pageId: string;
+  readonly pageName: string;
+  readonly newName: string;
+  readonly steps: StepSpec[];
+  readonly marker: LifecycleMarker;
+  readonly hold: { resourceId: string };
+  readonly holdDocument?: { documentId: string };
+  readonly holdAlso?: { resourceId: string };
+  readonly operation: Obj;
+  /** The page as read (the proposal's prefetched read). */
+  readonly raw: unknown;
+}
+
 /**
- * v3 F3e (ADR 0059, decision D2): phase 2 of a split, made BY THE BRIDGE once phase 1 has verified: the source archived
- * through archive_page's own plan (its note, facts, tags and move; the AU and lead rules as the tool applies them), as
- * ONE canonical proposal for the owner (forced, whatever any scope: only "Approve and accept as canon" runs it). The
- * split never deletes the source; deleting it later is a separate decision of the owner's.
+ * v3 F3e (ADR 0059, decision D2): archive_page's own plan for one page, exactly as the tool makes it (its note, facts,
+ * tags and move; the AU and lead rules), for a proposal the BRIDGE makes once a split's phase 1 has verified
+ * (src/packs/split/archive.ts submits it, as the owner's request). Reads through `pd` and `mctx` as given; writes nothing.
  */
-export async function proposeArchiveByBridge(
-  deps: ToolDeps,
-  projectId: string,
+export async function archiveProposalPlan(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
   pageId: string,
-  because: { readonly detail: string; readonly summary: string },
-): Promise<{ ok: true; proposalId: string; summary: string } | { ok: false; code: string; message: string }> {
-  const sel = deps.selector.select(projectId, 'write');
-  if (!sel.ok) return { ok: false, code: sel.error.code, message: sel.error.message };
-  // The owner's own request (approving a split that retires its source asked for this proposal), made by the bridge:
-  // the dashboard's origin with the system principal, so the canonical guard makes it a canonical proposal (ADR 0042's
-  // owner-forced proposal) and never a write; its reads are sent the same way (no MCP connection made them).
-  const origin = {
-    kind: 'ui' as const,
-    client: 'dashboard',
-    tool: 'archive_page',
-    detail: because.detail,
-    principal: SYSTEM_PRINCIPAL,
-  };
-  const engine = new Proxy(deps.engine, {
-    get(t, k) {
-      const v = Reflect.get(t, k) as unknown;
-      if (k === 'run') return (...a: Parameters<typeof t.run>) => t.run(a[0], a[1], { ...a[2], origin });
-      return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
-    },
-  });
-  const pd: ProjectDeps = { ...deps, engine, project: sel.project };
-  const mctx: McpToolContext = {
-    caller: undefined,
-    signal: new AbortController().signal,
-    log: SILENT_LOG,
-    principal: SYSTEM_PRINCIPAL,
-    scope: 'write',
-  };
+): Promise<{ ok: true; value: ArchiveProposalPlan } | { ok: false; code: string; message: string }> {
   const failOf = (r: McpToolResult) => {
     const text = r.content.map((c) => ('text' in c ? c.text : '')).join('');
     try {
@@ -1319,43 +1304,22 @@ export async function proposeArchiveByBridge(
   const built = await build(pd, mctx, ctx, c, propertyTitle, planned);
   if (!built.ok) return failOf(built.result);
   const b = built.value;
-  const summary = `archive_page: ${node.rawName} → ${String(b.head.newName)} (${because.summary})`;
-  const r = await pd.engine.submit({
-    kind: 'batch_ops',
-    project: ctx.projectId,
-    steps: b.steps,
-    onError: 'stop',
-    priority: 'P1',
-    origin,
-    title: summary.slice(0, 300),
-    holdLock: b.hold,
-    ...(b.holdDocument ? { holdDocument: b.holdDocument } : {}),
-    ...(b.holdAlso ? { holdAlso: b.holdAlso } : {}),
-    lifecycle: b.marker,
-    forceProposal: true,
-    internal: true,
-    proposal: {
-      operations: [b.operation],
-      summary,
-      prefetched: [{ op: 'getResource', path: { resourceId: node.id }, body: read.value.raw }],
+  return {
+    ok: true,
+    value: {
+      pageId: node.id,
+      pageName: node.rawName,
+      newName: String(b.head.newName),
+      steps: b.steps,
+      marker: b.marker,
+      hold: b.hold,
+      ...(b.holdDocument ? { holdDocument: b.holdDocument } : {}),
+      ...(b.holdAlso ? { holdAlso: b.holdAlso } : {}),
+      operation: b.operation,
+      raw: read.value.raw,
     },
-  });
-  if ('proposalId' in r) return { ok: true, proposalId: r.proposalId, summary };
-  return { ok: false, code: 'NOT_PROPOSED', message: 'The archive was not captured as a proposal.' };
+  };
 }
-
-/** A logger that says nothing (the bridge's own lifecycle proposal has no request to log against). */
-const SILENT_LOG = {
-  level: 'silent',
-  fatal: () => undefined,
-  error: () => undefined,
-  warn: () => undefined,
-  info: () => undefined,
-  debug: () => undefined,
-  trace: () => undefined,
-  silent: () => undefined,
-  child: () => SILENT_LOG,
-} as unknown as McpToolContext['log'];
 
 function unarchivePageTool(deps: ToolDeps): McpToolProvider {
   return defineTool({
