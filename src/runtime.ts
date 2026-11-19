@@ -1,6 +1,7 @@
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
 import { registerPackEngine } from './packs/engine/checks.js';
+import { PACK_CHECKS } from './packs/engine/job.js';
 import { addPackTaxonomyEntry, renamePackTaxonomyEntry } from './packs/taxonomy.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
 import { listDropsReader } from './policy/list-drops.js';
@@ -43,12 +44,12 @@ import { footerFor } from './mcp/tools/shape.js';
 import { ReviewService } from './review/service.js';
 import { RevertService } from './review/revert.js';
 import { ResumeService } from './resume/service.js';
-import { registerRenameChecks } from './packs/rename/checks.js';
+import { registerRenameChecks, RENAME_CHECKS } from './packs/rename/checks.js';
 import { registerSplitChecks } from './packs/split/checks.js';
 import { ROUTE_BACK_REBASER, routeBackRebaser } from './jobs/route-back.js';
 import { SplitService } from './packs/split/service.js';
 import { RetagService } from './packs/retag/service.js';
-import { registerRetagChecks } from './packs/retag/checks.js';
+import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
 import { RenameService } from './packs/rename/service.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
@@ -1026,6 +1027,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const unregisterSplitChecks = registerSplitChecks(engine);
   // CR-2026-11-R3 (R3-37): "Propose these again" puts back the routing lines a partial approval left out.
   const unregisterRouteBack = engine.registerRebaser(ROUTE_BACK_REBASER, routeBackRebaser);
+  // CR-2026-11-R3 (R3-62): the governance checks a large check runs again when its job goes on after a wait.
+  const unmarkRelock = [PACK_CHECKS.governance, RENAME_CHECKS.pack, RETAG_CHECKS.policy].map((c) =>
+    engine.markRelockCheck(c),
+  );
   const splits = new SplitService({
     db: o.db,
     engine,
@@ -1334,6 +1339,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     unregisterSplitChecks();
     unregisterContinueGuard();
     unregisterRouteBack();
+    for (const f of unmarkRelock) f();
     detachRetag();
     unregisterRetagChecks();
     detachReview();

@@ -61,6 +61,14 @@ that is the owner's.
    name, place and each document's body by version unchanged)"; where a version cannot be read it says
    "documents' metadata (name, type, rank, hidden, updatedAt) unchanged; bodies not compared".
 
+9. **A large job waits for the budget instead of starting over** (R3-62, amends CR-2026-11-R2's R2-29 re-check). A
+   check's or a read-back's reads, in a job holding no job-level lock, wait in their queue for the budget however long
+   it takes (behind higher priorities; a cancel, a pause or a restart ends the wait). After a wait before its first
+   write, a check of more than 300 estimated reads runs again light (its governance checks only, its result kept); a
+   smaller one runs again whole, as R2-29 decided. Alternatives: (a) as built; (b) refuse a plan whose check needs more
+   than about a third of an hour's budget (a 700-page rename could then not run at all); (c) split large checks into
+   steps (a planner change for every pack tool).
+
 ## Part B: the owner's decisions (open findings; their tests are kept as `it.fails`)
 
 1. **Text emptied through a raw route** (R3-53: `lk_api_write` `replaceDocumentBlocks` keeping every id, or

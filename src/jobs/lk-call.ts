@@ -40,6 +40,8 @@ export interface CallOptions {
   readonly idempotencyKey?: string | null | undefined;
   readonly ifMatch?: string | null | undefined;
   readonly signal?: AbortSignal | undefined;
+  /** CR-2026-11-R3 (R3-62): waits for the budget in its queue (`ExecuteRequest.patient`). */
+  readonly patient?: boolean | undefined;
   readonly requestIdPrefix: string;
   readonly verify?:
     ((ctx: { error: BridgeLkError; signal: AbortSignal }) => Promise<VerifyResult<unknown>>) | undefined;
@@ -89,6 +91,7 @@ export async function callOp(
       ...(o.idempotencyKey && op.method === 'POST' ? { idempotencyKey: o.idempotencyKey } : {}),
       ...(o.signal ? { signal: o.signal } : {}),
       ...(o.verify ? { verify: o.verify } : {}),
+      ...(o.patient === true ? { patient: true } : {}),
       run: async (sdk, signal) => {
         stats.attempts++;
         const requestId = `${o.requestIdPrefix}.${stats.attempts}`.slice(0, 64);

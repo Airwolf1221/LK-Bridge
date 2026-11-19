@@ -9,7 +9,7 @@ findings needed the owner's own approval or Revert (a split losing a moved block
 leaving its sections on no page, then deleting their only copy, R3-09, R3-10). Deploy this before the next approved
 rename or split. The review covers `88c640e` to `6eeff4c` (F3.5, R2.1, F3d, F3d.1, F3e, F3f; ADRs 0056 to 0060)
 ([docs/reviews/CR-2026-11-R3.md](reviews/CR-2026-11-R3.md); decisions in
-[ADR 0061](adr/0061-cr-2026-11-r3-decisions.md), proposed). 61 findings (5 critical, 21 high, 21 medium, 14 low): 52
+[ADR 0061](adr/0061-cr-2026-11-r3-decisions.md), proposed). 63 findings (5 critical, 23 high, 21 medium, 14 low): 54
 fixed, each with a test that fails on the reviewed code; 9 open, their tests kept as `it.fails`. No migration; deploy
 normally (`sudo systemctl daemon-reload`: the unit file changed). Nothing was run against a live system.
 
@@ -18,10 +18,15 @@ normally (`sudo systemctl daemon-reload`: the unit file changed). Nothing was ru
   step boundary (never part-way through a write) and records it queued to continue at the next start, ends every wait
   for budget, pacing, a lock or a back-off at once, and exits (watchdog 25 s). `TimeoutStopSec=75`. Measured: 1.5 s with
   a write in flight (20.2 s before).
-- **Memory (fix B).** Measured in the mock: a 700-page rename and a split of more than 2,000 blocks stay far under the
-  400 MB ceiling (figures in the review, section 5); an opt-in test guards it (`LKB_MEASURE=1`). Building it found that a
+- **Memory (fix B).** Measured in the mock: a 700-page rename peaks at +337 MB RSS over the baseline and a split of
+  2,046 blocks at +201 MB, under the 400 MB ceiling; an opt-in test guards it (`LKB_MEASURE=1`). Before, the rename could
+  not run (R3-01, R3-02, R3-62), then peaked at +561 to +683 MB because a run of ~1,400 request-free steps never yielded
+  the event loop, blocking the bridge for ten seconds (now it yields every ten steps, and a Last Major Revision decision
+  reads only its own page's journal entries, R3-64). Building it found that a
   700-page rename was refused with `INVALID_PARAMS` (one check step now holds 5,000 entries; beyond it `STEP_TOO_LARGE`,
-  R3-01) and that a check meeting the budget was reported as "the page changed" (now parked, R3-02).
+  R3-01), that a check meeting the budget was reported as "the page changed" (now parked, R3-02), and that a job whose
+  first check needs more reads than an hour's budget never finished (its checks' reads now wait for the budget in their
+  queue, and a large check runs again light after a wait, R3-62).
 - **The retag read-back (fix C)** compares each document's version: "each document's body by version unchanged", or says
   "bodies not compared" (ADR 0060 departure 3 amended).
 - **Renames.** A rebase finds an edit again by its sentence only when no other occurrence shares it (R3-25), and never

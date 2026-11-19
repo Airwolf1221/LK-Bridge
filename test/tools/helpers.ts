@@ -134,8 +134,16 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     LOG_LEVEL: 'silent',
     SESSION_SECRET: throwawaySecret(),
     JWT_SIGNING_KEY: throwawaySecret(),
-    ...(MEASURE_LIMITS ? { LK_TIER_LIMITS: JSON.stringify(MEASURE_LIMITS) } : {}),
     ...o.env,
+    // Measurement mode: merged over a world's own (its env's LK_TIER_LIMITS, if any), never replaced by it.
+    ...(MEASURE_LIMITS
+      ? {
+          LK_TIER_LIMITS: JSON.stringify({
+            ...(JSON.parse(o.env?.LK_TIER_LIMITS ?? '{}') as Record<string, number>),
+            ...MEASURE_LIMITS,
+          }),
+        }
+      : {}),
   });
   const toolsSettings: ToolsSettings = {
     ...DEFAULT_TOOLS_SETTINGS,

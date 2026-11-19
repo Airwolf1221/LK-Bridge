@@ -43,6 +43,13 @@ export interface ExecuteRequest<T> {
   /** Per-attempt deadline for this call, instead of `requestTimeoutMs` (the signed upload PUT uses its own). */
   readonly timeoutMs?: number;
   /**
+   * CR-2026-11-R3 (R3-62): waits in its queue for the budget however long it takes (behind every call of a higher
+   * priority, as any queued call), instead of a `BudgetWaitError` once the wait passes `maxQueueWaitMs`. For the reads
+   * of a job's check or read-back that holds no lock: parking there runs the whole step again, so a step needing more
+   * reads than an hour's budget would never finish. A restart still ends the wait at once (`RestartWaitError`).
+   */
+  readonly patient?: boolean;
+  /**
    * Makes exactly one LK request through the governed fetch (the SDK client from `createLkClient`, or
    * `governor.fetch`). Must honour `signal`. May return the raw `Response`; non-2xx responses then throw.
    */

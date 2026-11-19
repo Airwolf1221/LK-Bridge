@@ -54,12 +54,24 @@ async function peakDuring<T>(base: { rss: number; heap: number }, fn: () => Prom
   }
 }
 
-async function settleJob(rt: any, jobId: string, ms = 1_800_000): Promise<any> {
+/**
+ * Waits for a job to end, reading only its status row (a full job view loads every step: polled every 50 ms through a
+ * 2,000-step job, that is the test's own memory, not the bridge's), then returns the job as the engine shows it.
+ */
+async function settleJob(rt: any, db: any, jobId: string, ms = 1_800_000): Promise<any> {
   const until = Date.now() + ms;
+  let said = Date.now();
+  const row = db.prepare('SELECT status, wait_reason FROM jobs WHERE id = ?');
   for (;;) {
-    const j = rt.engine.queries.getJob(PROJECT, jobId);
-    if (['succeeded', 'failed', 'cancelled'].includes(j.status) || Date.now() > until) return j;
-    await new Promise((r) => setTimeout(r, 50));
+    const j = row.get(jobId) as { status: string; wait_reason: string | null };
+    if (['succeeded', 'failed', 'cancelled'].includes(j.status) || Date.now() > until)
+      return rt.engine.queries.getJob(PROJECT, jobId);
+    // Once a minute, where it is (its state and what it waits for), so a long run says so.
+    if (Date.now() - said > 60_000) {
+      said = Date.now();
+      console.info(`[R3 fix B] job ${j.status}; waiting for ${j.wait_reason ?? 'nothing'}`);
+    }
+    await new Promise((r) => setTimeout(r, 200));
   }
 }
 
@@ -70,7 +82,7 @@ describe.skipIf(!MEASURE)('CR-2026-11-R3 fix B: peak memory of the largest renam
     const { SidebarModel } = await import('../../resources/world.js');
     const w: any = await renameWorld();
     try {
-      const N = 700;
+      const N = Number(process.env.LKB_MEASURE_PAGES ?? 700);
       for (let i = 0; i < N; i++) {
         const id = `mr${String(i).padStart(6, '0')}`;
         w.repo.seed({
@@ -117,7 +129,6 @@ describe.skipIf(!MEASURE)('CR-2026-11-R3 fix B: peak memory of the largest renam
         }),
       );
       expect(dry.isError, dry.text.slice(0, 500)).toBeFalsy();
-      const items = (dry.body.items ?? dry.body.plan?.items ?? dry.body.package?.items ?? []) as any[];
       console.info(`[R3 fix B] the plan's keys: ${Object.keys(dry.body).join(', ')}`);
       const [jobView, runPeak] = await peakDuring(base, async () => {
         const r = await w.call('arkona_rename', {
@@ -139,7 +150,7 @@ describe.skipIf(!MEASURE)('CR-2026-11-R3 fix B: peak memory of the largest renam
               ).id;
         await w.stack.runtime.policy.commands.approveAsCanon('owner', proposalId);
         const jobId = w.stack.runtime.policy.proposals.get(proposalId).jobId;
-        return settleJob(w.stack.runtime, jobId);
+        return settleJob(w.stack.runtime, w.stack.db, jobId);
       });
       expect(jobView.status, JSON.stringify(jobView.lastError)).toBe('succeeded');
       const renamed = [...w.repo.res.values()].filter(
@@ -148,7 +159,7 @@ describe.skipIf(!MEASURE)('CR-2026-11-R3 fix B: peak memory of the largest renam
           JSON.stringify(w.repo.blocks.get(w.mainOf(r.id))).includes('Laila al-Khalid'),
       ).length;
       console.info(
-        `[R3 fix B] rename of ${N} referencing pages (${items.length} plan items, ${renamed} pages renamed): ` +
+        `[R3 fix B] rename of ${N} referencing pages (${renamed} pages renamed): ` +
           `plan peak +${planPeak.rssMb} MB RSS (+${planPeak.heapMb} MB heap); ` +
           `propose, approve and run peak +${runPeak.rssMb} MB RSS (+${runPeak.heapMb} MB heap); baseline ` +
           `${Math.round(base.rss / MB)} MB RSS`,

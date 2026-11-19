@@ -792,7 +792,12 @@ export class Governor {
             progressed = true;
             break scan;
           }
-          if (at - now > this.settings.maxQueueWaitMs && tier !== null && tier !== 'pacing') {
+          if (
+            at - now > this.settings.maxQueueWaitMs &&
+            tier !== null &&
+            tier !== 'pacing' &&
+            head.req.patient !== true
+          ) {
             lane.shift();
             if (lane.length === 0) this.lanes[cls].delete(key);
             head.cleanup();

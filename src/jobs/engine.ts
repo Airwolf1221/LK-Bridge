@@ -218,6 +218,13 @@ const authItem = (def: OperationDef, params: OpParams, options: StepOptions): Au
 /** A job-level lock (`BatchSubmit.holdLock`), stored in the job's options. */
 const HELD_LOCK = 'heldLock';
 /**
+ * CR-2026-11-R3 (R3-62): the largest check (in estimated reads) that runs again whole when its job goes on after a wait
+ * before its first write (R2-29); a larger one runs again light (`recheckOnRelock`).
+ */
+export const RELOCK_RECHECK_MAX = 300;
+/** CR-2026-11-R3 (R3-64): a running job gives the event loop a turn at least this often (in steps). */
+const YIELD_EVERY_STEPS = 10;
+/**
  * v2 C2c: the further job-level locks (`BatchSubmit.holdDocument`, `holdAlso`), stored with `heldLock` as one list. A job
  * holding several takes them in sorted key order, so two such jobs can never wait on each other.
  */
@@ -322,6 +329,9 @@ export class JobEngine {
       recordLkError: (err, ref) => this.recordLkError(err, ref),
       setJobWaiting: (jobId, waiting, detail) => this.setWaitingLock(jobId, waiting, detail),
       writeHold: (projectId) => this.writeHold(projectId),
+      relockLight: (jobId, stepNo) => this.lightRechecks.has(`${jobId}:${stepNo}`),
+      relockLightDone: (jobId, stepNo) => this.lightRechecks.delete(`${jobId}:${stepNo}`),
+      isRelockCheck: (checker) => this.relockChecks.has(checker),
       customSteps: o.customSteps,
       planner: (name) => this.planners.get(name),
       rebaser: (name) => this.rebasers.get(name),
@@ -2419,6 +2429,15 @@ export class JobEngine {
     );
     if (sent) return;
     for (const s of checks) {
+      // CR-2026-11-R3 (R3-62): a check too large to run again whole (more reads than RELOCK_RECHECK_MAX) runs again
+      // light: only its relock checks (the pack's governance, which R2-29 is about), keeping its earlier result. Run
+      // again whole, a check that took most of an hour's budget used it again at every wait, and the job never wrote.
+      // What it judged of each page is judged again inside each write's lock.
+      if (internalReads(EXPECT_STEP, this.repo.stepParams(s)) > RELOCK_RECHECK_MAX) {
+        this.repo.updateStep(jobId, s.stepNo, { status: 'pending', finishedAt: null });
+        this.lightRechecks.add(`${jobId}:${s.stepNo}`);
+        continue;
+      }
       this.repo.updateStep(jobId, s.stepNo, {
         status: 'pending',
         resultSummary: null,
@@ -2427,6 +2446,23 @@ export class JobEngine {
       });
     }
     this.refreshProgress(jobId);
+  }
+
+  /** CR-2026-11-R3 (R3-62): check steps put back for a light re-check (see `recheckOnRelock`), by job and step. */
+  private readonly lightRechecks = new Set<string>();
+  /** CR-2026-11-R3 (R3-62): the checkers a light re-check runs again (a pack's governance). */
+  private readonly relockChecks = new Set<string>();
+
+  /**
+   * CR-2026-11-R3 (R3-62): names a registered checker a light re-check runs again (see `recheckOnRelock`): one whose
+   * answer can change while a job waits without any page changing (a pack's approved version, its governance sources,
+   * a tool's switch). Returns an unregister.
+   */
+  markRelockCheck(checker: string): () => void {
+    this.relockChecks.add(checker);
+    return () => {
+      this.relockChecks.delete(checker);
+    };
   }
 
   private async runSteps(
@@ -2444,7 +2480,15 @@ export class JobEngine {
     this.emitJob(jobId, 'updated');
     let last: StepOutcome | undefined;
     const values: unknown[] = [];
+    let sinceYield = 0;
     for (;;) {
+      // CR-2026-11-R3 (R3-64): steps that need no request (a Last Major Revision decided "no", a write it then skips)
+      // complete without giving the event loop a turn: a 700-page rename ran 1,400 of them in one 10-second stretch,
+      // and the bridge answered nothing meanwhile (its health check included). It yields every few steps.
+      if (++sinceYield >= YIELD_EVERY_STEPS) {
+        sinceYield = 0;
+        await new Promise<void>((r) => setImmediate(r));
+      }
       job = this.requireJob(jobId);
       let step = this.repo.nextStep(jobId);
       // v3 F2: a staged image's placement (a batch) uploads it too, so its createImageAsset takes the upload key as well.

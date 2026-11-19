@@ -71,6 +71,11 @@ export interface JournalFilter {
   /** One entry by its journal id (the dashboard's detail view). */
   readonly id?: number;
   readonly jobId?: string;
+  /**
+   * CR-2026-11-R3 (R3-63): only the entries of these steps of the job (`jobId`): what one step's Last Major Revision
+   * measures, not every entry of a large job.
+   */
+  readonly stepNos?: readonly number[];
   readonly resourceId?: string;
   readonly documentId?: string;
   /** Matches the entry's own target, and any of the targets of a multi-target write. */
@@ -295,6 +300,12 @@ export function journalLookup(db: Db, scope: ProjectScope, filter: JournalFilter
   }
   if (filter.id !== undefined) eq('id', filter.id);
   if (filter.jobId !== undefined) eq('job_id', filter.jobId);
+  if (filter.stepNos !== undefined) {
+    const nos = filter.stepNos.filter((n) => Number.isInteger(n));
+    if (nos.length === 0) return [];
+    where.push(`step_no IN (${nos.map(() => '?').join(', ')})`);
+    vals.push(...nos);
+  }
   if (filter.resourceId !== undefined) eq('resource_id', filter.resourceId);
   if (filter.documentId !== undefined) eq('document_id', filter.documentId);
   if (filter.targetId !== undefined) {
