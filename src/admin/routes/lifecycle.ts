@@ -92,7 +92,7 @@ export const registerLifecycle: Register = (api, ctx) => {
    * `confirm: true` required. Audited as `project.set_lifecycle` with the old and new values.
    */
   api.put('/projects/:name/lifecycle', (req) => {
-    // C2d (ADR 0036 decision 4, the owner's): signing in again within the last 5 minutes, as for keys (ADR 0028).
+    // C2d (ADR 0036 decision 4, the owner's): a step-up within the last 10 minutes (ADR 0062), as for keys (ADR 0028).
     requireReauth(ctx.deps.services, req);
     const p = projectByName(parseInput(nameParam, req.params).name);
     const body = (req.body ?? {}) as Record<string, unknown>;

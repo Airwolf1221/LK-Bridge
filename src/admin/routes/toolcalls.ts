@@ -9,6 +9,7 @@
  *   match and how many of them are such writes; how long rows are kept.
  * - `PUT /tool-calls/retention`: how many days rows are kept (0 switches recording off). Audited.
  */
+import { requireReauth } from '../guard.js';
 import * as z from 'zod';
 import { MAX_RETENTION_DAYS } from '../../toolcalls/index.js';
 import { AdminHttpError } from '../http.js';
@@ -77,6 +78,7 @@ export const registerToolCalls: Register = (api, ctx) => {
   });
 
   api.put('/tool-calls/retention', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(
       z.object({ days: z.number().int().min(0).max(MAX_RETENTION_DAYS), confirm: z.literal(true) }),
       req.body,

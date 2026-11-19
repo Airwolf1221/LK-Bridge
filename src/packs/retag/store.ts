@@ -345,13 +345,22 @@ export class RetagStore {
     );
   }
 
+  /**
+   * CR-2026-11-R3 (R3-47): one suggestion per page from each principal (its newer one replaces its older): one agent's
+   * suggestions never push another's off the owner's Holds view, however many it makes.
+   */
   suggest(projectId: string, s: Omit<Suggestion, 'id'>): Suggestion {
-    const r = this.db
-      .prepare(
-        `INSERT INTO retag_suggestions (project_id, page_id, primary_tag, specialist, reason, by, at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(projectId, s.pageId, s.primary, s.specialist, s.reason, s.by, s.at);
+    const r = this.db.transaction(() => {
+      this.db
+        .prepare(`DELETE FROM retag_suggestions WHERE project_id = ? AND page_id = ? AND by = ?`)
+        .run(projectId, s.pageId, s.by);
+      return this.db
+        .prepare(
+          `INSERT INTO retag_suggestions (project_id, page_id, primary_tag, specialist, reason, by, at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(projectId, s.pageId, s.primary, s.specialist, s.reason, s.by, s.at);
+    })();
     return { ...s, id: Number(r.lastInsertRowid) };
   }
 
@@ -572,7 +581,13 @@ export class RetagStore {
          inputs_hash, run_id, batch_id, updated_at) VALUES (?, ?, ?, ?, NULL, 0, ?, ?, NULL, ?)
          ON CONFLICT (reconciliation_id, page_id) DO UPDATE SET name = excluded.name,
            disposition = excluded.disposition, stale = 0, inputs_hash = excluded.inputs_hash, run_id = excluded.run_id,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at,
+           -- CR-2026-11-R3 (R3-46): a page applied before that a NEW audit finds needing a correction again (edited back
+           -- in the app) is not "applied" any more: it remains until a batch applies it again.
+           outcome = CASE WHEN excluded.disposition = 'correction' AND outcome = 'applied'
+               AND excluded.run_id <> run_id THEN NULL ELSE outcome END,
+           batch_id = CASE WHEN excluded.disposition = 'correction' AND outcome = 'applied'
+               AND excluded.run_id <> run_id THEN NULL ELSE batch_id END`,
     );
     this.db.transaction(() => {
       for (const v of verdicts) {

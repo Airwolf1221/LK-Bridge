@@ -56,6 +56,17 @@ import {
 } from './store.js';
 
 type Obj = Record<string, unknown>;
+/**
+ * CR-2026-11-R3 (fix C): a page's disposition when its read-back found nothing different, saying exactly what was
+ * compared. A page document's body is compared by its real version (read before and after the write); any other
+ * document only by the metadata `getResource` lists, whose `updatedAt` LegendKeeper's governance warns may describe
+ * creation or metadata time rather than the body.
+ */
+export const READ_BACK_VERIFIED =
+  'written and read back: the tags exactly as proposed; name, aliases, parentage and sidebar unchanged; each page ' +
+  "document's body at the same version as before the write; other documents (board, map, timeline) compared by " +
+  'their metadata timestamps only, not their content';
+
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export const RETAG_PACK = 'arkona';
@@ -90,6 +101,7 @@ export interface RetagDeps {
   readonly proposals: {
     addHooks(h: {
       afterSubmit?(ctx: { readonly proposal: ProposalView; readonly jobId: string }): void;
+      refuseRepropose?(original: ProposalView): string | null;
     }): () => void;
     get(id: string): ProposalView | undefined;
   };
@@ -167,6 +179,13 @@ export class RetagService {
             this.d.log?.warn({ err }, 'a retag batch could not follow its proposal');
           }
         },
+        // CR-2026-11-R3 (R3-15, F6 of the retag pass): the pages left out of a batch are applied from a fresh audit,
+        // never re-proposed from the old one (an untracked job: no dispositions, not busy, not revertible).
+        refuseRepropose: (original) =>
+          this.store.batchByProposal(original.id)
+            ? 'The pages left out of a retag batch are not proposed again from the old audit (its verdicts may be stale ' +
+              'by now): ask the agent to run arkona_retag_audit again and apply them from the new run.'
+            : null,
       }),
       this.d.engine.events.on('job', (e: { type: string; job: JobView }) => {
         try {
@@ -212,11 +231,18 @@ export class RetagService {
         'RETAG_UNAVAILABLE',
         'The approved Arkona pack version has no retag rules: the owner approves the version that adds them (arkona-…-f3f) on the Packs page.',
       );
-    return { pack, rules, policy: policyOf(pack, rules, pack.approved) };
+    return {
+      pack,
+      rules,
+      policy: policyOf(pack, rules, pack.approved, this.settingsPrint(projectId, pack, rules)),
+    };
   }
 
-  /** The current approved policy of a pack (null: none, or not current), for the job's policy check. */
-  currentPolicy(packId: string): RetagPolicy | null {
+  /**
+   * The current approved policy of a pack for a project (null: none, or not current), for the job's policy check.
+   * CR-2026-11-R3 (R3-08): its digest covers the project's lifecycle settings, as the audit's did.
+   */
+  currentPolicy(packId: string, projectId?: string): RetagPolicy | null {
     const pack = this.d.packs.get(packId);
     if (!pack?.approved || pack.drift) return null;
     const rules =
@@ -224,7 +250,39 @@ export class RetagService {
         ? pack.rules
         : this.d.packs.store.rulesAt(pack.id, pack.approved.version);
     if (!rules?.retag) return null;
-    return policyOf(pack, rules, pack.approved);
+    return policyOf(
+      pack,
+      rules,
+      pack.approved,
+      projectId === undefined ? undefined : this.settingsPrint(projectId, pack, rules),
+    );
+  }
+
+  /**
+   * CR-2026-11-R3 (R3-08): what of the project's own settings a verdict depends on (the status values and tags, the
+   * lifecycle fields, the Reference Type row, the AU tag). A change to any of them makes every stored run's policy
+   * "changed since the audit".
+   */
+  private settingsPrint(projectId: string, pack: Pack, rules: PackRules): Readonly<Record<string, unknown>> {
+    const c = this.context(projectId, rules, pack);
+    return {
+      lifecycle: c.lifecycle,
+      referenceTypeRow: c.referenceTypeRow,
+      au: c.tagRules.au?.tag ?? null,
+    };
+  }
+
+  /** CR-2026-11-R3 (R3-03): the owner's classification and the pack's record of a page now, as a verdict's basis holds them. */
+  recordsOf(
+    projectId: string,
+    pageId: string,
+  ): { owner: readonly [string, string | null] | null; packRecord: readonly [string, string | null] | null } {
+    const owner = this.store.classification(projectId, pageId);
+    const record = this.store.pageRecord(projectId, pageId);
+    return {
+      owner: owner ? [owner.primary, owner.specialist] : null,
+      packRecord: record ? [record.primary, record.specialist] : null,
+    };
   }
 
   private context(projectId: string, rules: PackRules, pack: Pack): RetagContext {
@@ -330,6 +388,8 @@ export class RetagService {
             ancestors: lp.path.names.slice(0, -1),
             area: lp.labels.area,
             templateId: this.d.templateOf(o.projectId, id),
+            // CR-2026-11-R3 (R3-04): where it was audited; the apply compares it.
+            parentId: lp.page.parentId ?? null,
             packRecord: record
               ? {
                   primary: record.primary,
@@ -447,6 +507,27 @@ export class RetagService {
           })),
         },
       );
+    // CR-2026-11-R3 (R3-03): a verdict computed from a classification (or a pack record) the owner has changed since is
+    // stale: the page is refused here (audit again), and the job's check holds it if it changes after the proposal.
+    const printOf = (x: unknown): readonly [string, string | null] | null =>
+      Array.isArray(x) && typeof x[0] === 'string' ? [x[0], typeof x[1] === 'string' ? x[1] : null] : null;
+    const samePrint = (
+      a: readonly [string, string | null] | null,
+      b: readonly [string, string | null] | null,
+    ) => (a === null ? b === null : b !== null && a[0] === b[0] && a[1] === b[1]);
+    const stale = verdicts.filter((v) => {
+      const now = this.recordsOf(o.projectId, v.pageId);
+      return (
+        !samePrint(printOf(v.basis.owner), now.owner) ||
+        !samePrint(printOf(v.basis.packRecord), now.packRecord)
+      );
+    });
+    if (stale.length > 0)
+      throw new RetagError(
+        'RETAG_STALE',
+        `The owner's classification (or the pack's record) of ${stale.map((v) => v.name).join(', ')} changed since audit ${run.id}: audit again, then apply from the new run.`,
+        { pages: stale.map((v) => v.pageId) },
+      );
     const busy = new Map<string, string>();
     for (const b of this.store.openBatches(o.projectId)) {
       const state = this.syncBatch(b);
@@ -499,6 +580,10 @@ export class RetagService {
         proposed: v.proposed,
         propertiesName,
         facts: Object.fromEntries(factKeys),
+        // CR-2026-11-R3 (R3-03, R3-04): where the page was and how it was classified when audited.
+        ...(v.parentId !== undefined ? { parentId: v.parentId } : {}),
+        owner: printOf(v.basis.owner),
+        packRecord: printOf(v.basis.packRecord),
       };
       steps.push({
         op: EXPECT_STEP,
@@ -525,7 +610,8 @@ export class RetagService {
         items: [item],
         rebase: {
           rebaser: RETAG_REBASER,
-          input: { item, current: v.current, proposed: v.proposed },
+          // CR-2026-11-R3 (R3-05): the check's whole input, so the write judges the page inside its lock as the check did.
+          input: pageInput,
           always: true,
         },
         journalOperation: {
@@ -563,7 +649,8 @@ export class RetagService {
         items: [item],
       });
       labels.push(
-        `${v.name}: read back (the array in order; name, aliases, parentage, documents and sidebar unchanged)`,
+        `${v.name}: read back (the array in order; name, aliases, parentage and sidebar unchanged; each page ` +
+          "document's body at the same version; other documents compared by their metadata timestamps only)",
       );
       items.push({
         id: item,
@@ -735,9 +822,11 @@ export class RetagService {
         : [];
       out[p.pageId] = {
         outcome: 'applied',
+        // CR-2026-11-R3 (fix C): what the read-back compared, said exactly (a document's updatedAt is a metadata
+        // timestamp, so a board, map or timeline document's body is not claimed unchanged).
         reason:
           status === 'verified'
-            ? 'written and read back exactly'
+            ? READ_BACK_VERIFIED
             : status === 'mismatch'
               ? 'written; the read-back found a difference'
               : 'written; not read back',

@@ -2,13 +2,14 @@
  * The owner's account (OPS2, docs/auth.md › Managing the owner account from the dashboard): the password, the
  * authenticator app and its recovery codes, the encrypted store's state, and re-authentication.
  *
- * Every change here needs a re-authentication within the last 5 minutes (`requireReauth`), on top of the session,
+ * Every change here needs a step-up within the last 10 minutes (`requireReauth`, ADR 0062), on top of the session,
  * Origin and CSRF checks every admin request passes. Only two responses ever carry a secret, each once and marked
  * `shownOnce`: the authenticator secret when an enrolment starts, and recovery codes when they are made.
  */
 import * as z from 'zod';
 import { clientIp } from '../../auth/http.js';
 import { otpauthUri } from '../../auth/totp.js';
+import { REAUTH_WINDOW_SECONDS } from '../../auth/owner.js';
 import { requireReauth, sessionTokenOf } from '../guard.js';
 import { parseInput, type Register } from './util.js';
 
@@ -40,7 +41,9 @@ export const registerSecurity: Register = (api, ctx) => {
         recoveryCodesLeft: totp.state === 'off' ? 0 : credentials.recoveryCodesLeft(),
         enrolmentPending: credentials.pendingTotp(sessionHash(token)) !== undefined,
       },
-      reauth: { until: until === null ? null : until * 1000, windowSeconds: 300 },
+      reauth: { until: until === null ? null : until * 1000, windowSeconds: REAUTH_WINDOW_SECONDS },
+      // ADR 0062: the sessions kept on the server, and when this one ends unless it is used again (30 days on).
+      sessions: { active: owner.activeSessions(), thisEndsAt: session ? session.expiresAt * 1000 : null },
       store: {
         available: store.available,
         problem: store.problem,
@@ -55,16 +58,41 @@ export const registerSecurity: Register = (api, ctx) => {
     };
   });
 
+  /** ADR 0062: the step-up: the authenticator code (or a recovery code), or the password when no authenticator is set up. */
   api.post('/security/reauth', async (req) => {
     const b = parseInput(
-      z.object({ password: z.string().min(1).max(1024), totp: z.string().max(64).optional() }),
+      z
+        .object({ password: z.string().min(1).max(1024).optional(), totp: z.string().max(64).optional() })
+        .refine((x) => x.password !== undefined || x.totp !== undefined, {
+          message: 'Give the authenticator code (or a recovery code), or the password.',
+        }),
       req.body,
     );
     return actions.reauthenticate(
       sessionTokenOf(req),
-      { password: b.password, ...(b.totp !== undefined ? { totp: b.totp } : {}) },
+      {
+        ...(b.password !== undefined ? { password: b.password } : {}),
+        ...(b.totp !== undefined ? { totp: b.totp } : {}),
+      },
       clientIp(req),
     );
+  });
+
+  /**
+   * ADR 0062: "Sign out everywhere": every owner session ends, this one included (the dashboard then shows the sign-in
+   * page). It only removes access, so no step-up; the Origin and CSRF checks of every change apply. Audited.
+   */
+  api.post('/security/sessions/revoke-all', async (req, reply) => {
+    parseInput(confirm, req.body);
+    const n = owner.revokeAllSessions(clientIp(req));
+    deps.runtime.policy.store.audit('owner', 'owner.sessions_revoked', null, undefined, { sessions: n });
+    void reply.clearCookie(owner.sessionCookie, {
+      path: '/',
+      secure: config.secureCookies,
+      httpOnly: true,
+      sameSite: 'strict',
+    });
+    return { revoked: n };
   });
 
   api.post('/security/password', async (req) => {

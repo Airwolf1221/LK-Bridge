@@ -19,6 +19,7 @@
 import * as z from 'zod';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { RetagError, type RetagService } from '../../packs/retag/service.js';
+import { DEFAULT_WRITE_RAILS } from '../../policy/rails.js';
 import { verdictView } from '../../mcp/tools/retag.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
@@ -168,13 +169,13 @@ export const registerTagging: Register = (api, ctx) => {
     const r = retag();
     const run = q.run ? r.store.run(q.run) : r.store.latestRun(p.id);
     if (!run || run.projectId !== p.id) return { run: null, holds: [] };
-    const suggestions = r.store.suggestions(p.id);
     return {
       run,
       holds: r.store.verdicts(run.id, { disposition: 'hold' }).map((v) => ({
         ...verdictView(v, run.policy, true),
         uncertainCategory: v.holds.some((h) => h.kind === 'uncertain_category' || h.kind === 'specialist'),
-        suggestions: suggestions.filter((s) => s.pageId === v.pageId),
+        // CR-2026-11-R3 (R3-47): each page's own suggestions (not a project-wide list then filtered per page).
+        suggestions: r.store.suggestions(p.id, v.pageId),
         classification: r.store.classification(p.id, v.pageId),
       })),
     };
@@ -231,6 +232,8 @@ export const registerTagging: Register = (api, ctx) => {
       req.body,
     );
     const p = ctx.project(b.project);
+    // ADR 0062: the owner's own change of more than 10 pages at once (the bulk rail's size) needs the step-up.
+    if (b.pageIds.length > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
     return wrap(async () => {
       const r = retag();
       const plan = r.planApply({ projectId: p.id, runId: b.runId, pageIds: b.pageIds });
@@ -273,6 +276,8 @@ export const registerTagging: Register = (api, ctx) => {
   api.post('/tagging/reconciliations/:id/resume', async (req) => {
     const { id } = parseInput(z.object({ id: recIdSchema }), req.params);
     const b = parseInput(z.object({ project: projectParam, confirm: z.literal(true) }).strict(), req.body);
+    // ADR 0062: the next batch may hold up to the pack's batch size: a bulk change, so the step-up first.
+    requireReauth(ctx.deps.services, req);
     const p = ctx.project(b.project);
     return wrap(async () => {
       const out = await retag().resume({

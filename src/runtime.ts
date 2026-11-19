@@ -1,6 +1,9 @@
+import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
+import { textRemovalReader } from './policy/text-removal.js';
 import { registerPackEngine } from './packs/engine/checks.js';
+import { PACK_CHECKS } from './packs/engine/job.js';
 import { addPackTaxonomyEntry, renamePackTaxonomyEntry } from './packs/taxonomy.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
 import { listDropsReader } from './policy/list-drops.js';
@@ -43,11 +46,12 @@ import { footerFor } from './mcp/tools/shape.js';
 import { ReviewService } from './review/service.js';
 import { RevertService } from './review/revert.js';
 import { ResumeService } from './resume/service.js';
-import { registerRenameChecks } from './packs/rename/checks.js';
+import { registerRenameChecks, RENAME_CHECKS } from './packs/rename/checks.js';
 import { registerSplitChecks } from './packs/split/checks.js';
+import { ROUTE_BACK_REBASER, routeBackRebaser } from './jobs/route-back.js';
 import { SplitService } from './packs/split/service.js';
 import { RetagService } from './packs/retag/service.js';
-import { registerRetagChecks } from './packs/retag/checks.js';
+import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
 import { RenameService } from './packs/rename/service.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
@@ -107,6 +111,9 @@ import {
  * MCP endpoint), then the MCP tools. `src/server.ts` builds the HTTP side around it. The policy layer (chunk 2b) is
  * built first: its live gate and proposal sink go into the engine, and it is attached once the engine has started.
  */
+
+/** CR-2026-11-R3 (R3-65): how often the process's memory is logged ("memory"). */
+const MEMORY_LOG_MS = 10 * 60_000;
 export interface Runtime {
   /**
    * The projects this bridge serves (v2 A1), each with its own governor and key; which are served now, and why not.
@@ -180,6 +187,36 @@ export interface Runtime {
   readonly envConfig: Config;
   /** Drain (bounded), stop the engine, close the governor. Does not close the database. */
   shutdown(drainTimeoutMs?: number): Promise<void>;
+  /**
+   * CR-2026-11-R3 (fix A): the stop for a restart (SIGTERM; `server.ts` `stopForRestart`). Does not close the database.
+   * Every stage is bounded, so it ends well inside systemd's stop timeout.
+   */
+  stopForRestart(o?: RestartStopOptions): Promise<RestartStopReport>;
+  /** CR-2026-11-R3 (fix A): true from the moment a stop for a restart begins (the HTTP layer refuses new requests). */
+  readonly restarting: boolean;
+}
+
+/** CR-2026-11-R3 (fix A): how long a restart's stop may wait at each stage. */
+export interface RestartStopOptions {
+  /** How long running jobs have to reach their next step boundary (requests in flight finish). Default 10 s. */
+  readonly graceMs?: number;
+  /** How long background work (maintenance runs, passes) may take to stop, alongside the grace. Default 10 s. */
+  readonly backgroundMs?: number;
+  /** How long a job still in a request after the grace may take before it is left to the start-up recovery. 1 s. */
+  readonly engineStopMs?: number;
+  /** How long the tree's and the asset tree's final stop may take. Default 2 s. */
+  readonly treesMs?: number;
+}
+
+/** CR-2026-11-R3 (fix A): what a restart's stop did. */
+export interface RestartStopReport {
+  readonly ms: number;
+  /** Jobs parked at a step boundary for the next start. */
+  readonly parked: readonly string[];
+  /** Jobs still in a request when the grace ran out: the start-up recovery verifies their step before re-sending. */
+  readonly stillRunning: readonly string[];
+  /** Stages that ran out of time (the stop went on without them). */
+  readonly overran: readonly string[];
 }
 
 export interface RuntimeOptions {
@@ -231,6 +268,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const config = applyStoredSettings(envConfig, o.db);
   const logOptions = { level: o.logLevel ?? config.logLevel, base: { component: 'engine' } };
   const log = o.logStream ? pino(logOptions, o.logStream) : pino(logOptions);
+  // CR-2026-11-R3 (R3-65): what background tasks log their start and finish with (task-log.ts).
+  const taskLog: TaskLogger = { info: (obj, msg) => log.info(obj, msg) };
   // Signed upload URLs are on another host: the transport sends LegendKeeper's host through the platform fetch
   // and every other host through the SSRF guard. Both stay under the governor.
   // The SSRF guard for every non-LegendKeeper fetch of the tool layer (the signed-URL PUT and an image source URL):
@@ -255,7 +294,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     else log.warn({}, w);
   }
   // ADR 0023: exactly one bridge process serves a database (and so its projects). Refuses a second one.
-  const guard = o.instanceGuard === false ? null : new InstanceGuard({ db: o.db });
+  const guard = o.instanceGuard === false ? null : new InstanceGuard({ db: o.db, taskLog });
   const took = guard?.acquire();
   if (took?.tookOver) {
     log.warn(
@@ -510,6 +549,31 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     drops: listDropsReader((projectId, opId, params) =>
       engine.internalRead(projectId, opId, params, { priority: 'P1' }),
     ),
+    // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool is a removal.
+    textRemoved: textRemovalReader({
+      packs,
+      node: treeNode,
+      characterOf: (projectId, id) => {
+        try {
+          return registry.forProject(projectId).characterOfPage(id).ok;
+        } catch {
+          return false;
+        }
+      },
+      factKeys: (projectId, id) => {
+        try {
+          const sb = tree.queries.sidebars(projectId, [id]).data.get(id) ?? null;
+          return sb
+            ? (sb as readonly { kind?: string; rows?: readonly { key: string }[] }[])
+                .filter((x) => x.kind === 'keyValue')
+                .flatMap((x) => (x.rows ?? []).map((r) => r.key))
+            : null;
+        } catch {
+          return null;
+        }
+      },
+      read: (projectId, opId, params) => engine.internalRead(projectId, opId, params, { priority: 'P1' }),
+    }),
   });
   const lifecycleGuard = new LifecycleGuard({
     settings: (projectId) => projectStore.byId(projectId)?.settings,
@@ -684,7 +748,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
     afterFull: async (projectId) => {
-      await offsite.afterFullSnapshot();
+      // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory.
+      await loggedTask(taskLog, 'off-site copy after the full snapshot', { project: projectId }, () =>
+        offsite.afterFullSnapshot(),
+      );
       // v2 E2: an audit of the snapshot just completed (in the background; it reads no LegendKeeper).
       audits?.afterFullSnapshot(projectId);
       // v3 F3c (ADR 0054): the appraisal's overlay and full-text index rebuilt from it (likewise).
@@ -707,7 +774,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
-    log: { warn: (obj, msg) => log.warn(obj, msg) },
+    log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
     // v3 F2 (ADR 0049 decision 9): duplicate asset folders, from the bridge's asset tree (no LegendKeeper read).
     assetLibrary: (projectId) => assetLibraryOf(assets, projectId),
     // v3 F3d (ADR 0053): where the lifecycle tag goes and the AU ruling, from the project's approved pack.
@@ -742,7 +809,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     assetHosts: imageSettings.assetHosts,
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
-    log: { warn: (obj, msg) => log.warn(obj, msg) },
+    log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
   });
   // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation. Its candidates come from the appraisal's
   // snapshot overlay (no LegendKeeper read); each document is one P3 job with its own check and verify (two checkers).
@@ -908,7 +975,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits: {
       isPhase1: (projectId, jobId) => splitsRef.current?.isPhase1(projectId, jobId) ?? false,
       isReverted: (projectId, jobId) => splitsRef.current?.isReverted(projectId, jobId) ?? false,
+      isRetired: (projectId, jobId) => splitsRef.current?.isRetired(projectId, jobId) ?? false,
       pagesMade: (projectId, jobId) => splitsRef.current?.pagesMade(projectId, jobId) ?? 0,
+      coreUpgrade: (projectId, jobId) => splitsRef.current?.coreUpgrade(projectId, jobId) ?? null,
       afterRevert: (projectId, jobId, revertJobId) =>
         splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
     },
@@ -917,6 +986,29 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   const detachReverts = reverts.start();
   // v3 F3d (ADR 0058): resuming a package, a rename or a recreate that stopped part-way.
+  /**
+   * Whether a job has been reverted, is being, or was partly (CR-2026-11-R3, R3-45: a revert job that failed or was
+   * cancelled may have put some of it back): it is never continued then (Resume, or a step Retry).
+   */
+  const revertStateOf = (projectId: string, jobId: string): 'submitted' | 'succeeded' | 'stopped' | null => {
+    const row = o.db
+      .prepare(`SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
+      .get(projectId, jobId) as { state: string } | undefined;
+    if (row?.state === 'submitted' || row?.state === 'succeeded') return row.state;
+    if (row?.state === 'failed' || row?.state === 'cancelled') return 'stopped';
+    // v3 F3e (ADR 0059): a split's phase 1 reverted with no revert job (it stopped before anything left the source).
+    return splitsRef.current?.isReverted(projectId, jobId) ? 'succeeded' : null;
+  };
+  const unregisterContinueGuard = engine.setContinueGuard((projectId, jobId) => {
+    const r = revertStateOf(projectId, jobId);
+    return r === 'succeeded'
+      ? `Job ${jobId} has been reverted: what it did was undone, so it is not continued. Plan the work again.`
+      : r === 'submitted'
+        ? `A revert of job ${jobId} is running: it is not continued.`
+        : r === 'stopped'
+          ? `A revert of job ${jobId} stopped part-way, so some of what it did may be undone already: it is not continued. Look at the revert on the Review page.`
+          : null;
+  });
   const resume = new ResumeService({
     db: o.db,
     engine,
@@ -924,28 +1016,33 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     proposals: {
       byJob: (projectId, jobId) => policy.proposals.byJob(projectId, jobId),
       jobResumed: (projectId, jobId) => policy.proposals.jobResumed(projectId, jobId),
+      stateOf: (proposalId) => policy.proposals.get(proposalId)?.state ?? null,
     },
+    // CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4): an agent's Resume meets its profile's rails again.
+    rails: (projectId, principalId, items, tool) =>
+      policy.gate.rails({ principalId, profile: '', label: '' }, items, {
+        project: projectId,
+        jobKind: 'batch_ops',
+        ...(tool !== undefined ? { tool } : {}),
+      }),
     finishRecreate: async (projectId, restoreId, origin, by) => {
       const r = await restores.finish(projectId, restoreId, origin, by);
       return r.status === 'nothing_to_do'
         ? { status: 'nothing_to_do' as const, summary: r.plan.summary }
         : { status: 'proposal_captured' as const, proposalId: r.proposalId, summary: r.summary };
     },
-    revertState: (projectId, jobId) => {
-      const row = o.db
-        .prepare(`SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
-        .get(projectId, jobId) as { state: string } | undefined;
-      if (row?.state === 'submitted' || row?.state === 'succeeded') return row.state;
-      // v3 F3e (ADR 0059): a split's phase 1 reverted with no revert job (it stopped before anything left the source).
-      return splitsRef.current?.isReverted(projectId, jobId) ? 'succeeded' : null;
-    },
+    revertState: (projectId, jobId) => revertStateOf(projectId, jobId),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachResume = resume.start();
   // v3 F3d (ADR 0058): `arkona_rename`: its in-job checks, its record, the token change's pack version (the job waits for
   // the owner to approve it) and what a rename left, from the full-text index.
-  const unregisterRenameChecks = registerRenameChecks(engine, packs);
+  const unregisterRenameChecks = registerRenameChecks(engine, packs, (projectId, pageId) => {
+    // CR-2026-11-R3 (R3-29): the tree's view of a page (its name and path), for the rename's history check.
+    const n = tree.queries.node(projectId, pageId).data;
+    return n ? { rawName: n.rawName, path: n.path } : null;
+  });
   const renames = new RenameService({
     db: o.db,
     engine,
@@ -972,6 +1069,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v3 F3e (ADR 0059): arkona_split_owner: its in-job checks and rebasers, its record, phase 2 (the source's archive,
   // proposed by the bridge once phase 1 has verified) and the deletion proposal after a revert of phase 1.
   const unregisterSplitChecks = registerSplitChecks(engine);
+  // CR-2026-11-R3 (R3-37): "Propose these again" puts back the routing lines a partial approval left out.
+  const unregisterRouteBack = engine.registerRebaser(ROUTE_BACK_REBASER, routeBackRebaser);
+  // CR-2026-11-R3 (R3-62): the governance checks a large check runs again when its job goes on after a wait.
+  const unmarkRelock = [PACK_CHECKS.governance, RENAME_CHECKS.pack, RETAG_CHECKS.policy].map((c) =>
+    engine.markRelockCheck(c),
+  );
   const splits = new SplitService({
     db: o.db,
     engine,
@@ -1005,8 +1108,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const unregisterRetagChecks = registerRetagChecks(engine, {
-    policy: (packId) => retag.currentPolicy(packId),
+    policy: (packId, projectId) => retag.currentPolicy(packId, projectId),
     governance: (packId) => packs.governance(packId),
+    records: (projectId, pageId) => retag.recordsOf(projectId, pageId),
   });
   const detachRetag = retag.start();
   retagRef.current = retag;
@@ -1022,7 +1126,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     settings: maintenanceSettings,
     expirySweepMs: policySettings.expirySweepMs,
     proposalRetentionMs: policySettings.proposalRetentionMs,
-    log: { warn: (obj, msg) => log.warn(obj, msg) },
+    log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
     tree,
     assets,
     links: lifecycle,
@@ -1032,6 +1136,27 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     blockIds,
   });
   maintenance.start();
+  // CR-2026-11-R3 (R3-65): the process's memory in the log every 10 minutes (and once at start), so a long run shows which
+  // part grows: the V8 heap (used, and what V8 holds for it), memory outside it (Buffers, native), or the resident set.
+  const logMemory = () => {
+    const m = process.memoryUsage();
+    const mb = (n: number) => Math.round(n / 1048576);
+    log.info(
+      {
+        memory: {
+          rssMb: mb(m.rss),
+          heapUsedMb: mb(m.heapUsed),
+          heapTotalMb: mb(m.heapTotal),
+          externalMb: mb(m.external),
+          arrayBuffersMb: mb(m.arrayBuffers),
+        },
+      },
+      'memory',
+    );
+  };
+  logMemory();
+  const memoryTimer = setInterval(logMemory, MEMORY_LOG_MS);
+  memoryTimer.unref();
   const mappings = createMappings({
     db: o.db,
     engine,
@@ -1149,6 +1274,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }
   });
 
+  /** CR-2026-11-R3 (fix A): set when a stop for a restart begins. */
+  let restarting = false;
   return {
     projects,
     secrets,
@@ -1184,6 +1311,45 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     instructions: BRIDGE_INSTRUCTIONS,
     config,
     envConfig,
+    get restarting() {
+      return restarting;
+    },
+    async stopForRestart(o: RestartStopOptions = {}): Promise<RestartStopReport> {
+      const started = Date.now();
+      const overran: string[] = [];
+      const bounded = async (label: string, p: Promise<unknown>, ms: number): Promise<void> => {
+        if (!(await within(p, ms))) overran.push(label);
+      };
+      restarting = true;
+      // 1. Nothing new is accepted (the HTTP layer answers BRIDGE_RESTARTING; the engine refuses submissions); every
+      //    job stops at its next step boundary; every lock, slot, governor and budget wait ends at once.
+      const parking = engine.stopForRestart(o.graceMs ?? 10_000);
+      projects.stopWaits();
+      // 2. Background work stops alongside: a build resumes at the next start; a sweep or check in flight ends as
+      //    interrupted. The trees keep following writes while jobs reach their boundary.
+      const background = (async () => {
+        await Promise.allSettled([tree.stopPasses(), assets.stopPasses()]);
+        lifecycle.stop();
+        chronology.stop();
+        snapshots.stop();
+        images.stop();
+        await maintenance.stop(o.backgroundMs ?? 10_000);
+      })();
+      const { parked, stillRunning } = await parking;
+      await bounded(
+        'background work',
+        background,
+        Math.max(0, (o.backgroundMs ?? 10_000) - (Date.now() - started)),
+      );
+      // 3. The rest of the shutdown, each part bounded.
+      await windDown({ engineStopMs: o.engineStopMs ?? 1_000, treesMs: o.treesMs ?? 2_000, bounded });
+      return {
+        ms: Date.now() - started,
+        parked,
+        stillRunning,
+        overran,
+      };
+    },
     async shutdown(drainTimeoutMs = 20_000) {
       // A build resumes at the next start; a sweep or check in flight ends as interrupted. Writes are still followed
       // while the engine drains, so their re-reads are made (or owed) before the tree stops.
@@ -1202,35 +1368,70 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         }),
       ]);
       clearTimeout(timer);
-      detachPolicy();
-      await engine.stop();
-      unregisterPlanner();
-      unregisterGuard();
-      unregisterLmr();
-      detachLifecycle();
-      detachChronology();
-      for (const off of detachMaps) off();
-      for (const off of detachSnapshotCheckers) off();
-      for (const off of detachAuditCheckers) off();
-      detachBlockIds();
-      detachBlockwiseUndo();
-      detachReverts();
-      detachResume();
-      detachRenames();
-      unregisterRenameChecks();
-      detachSplits();
-      unregisterSplitChecks();
-      detachRetag();
-      unregisterRetagChecks();
-      detachReview();
-      detachRestores();
-      unregisterPackEngine();
-      detachPackTools();
-      await tree.stop();
-      detachRegistry();
-      await assets.stop();
-      projects.close(); // every governor saves its counts
-      guard?.release();
+      await windDown({});
     },
   };
+
+  /** The end of every shutdown: hooks detached, the engine stopped, the trees stopped, the governors closed. */
+  async function windDown(w: {
+    readonly engineStopMs?: number;
+    readonly treesMs?: number;
+    readonly bounded?: (label: string, p: Promise<unknown>, ms: number) => Promise<void>;
+  }): Promise<void> {
+    const run = (label: string, p: Promise<unknown>, ms: number | undefined) =>
+      ms === undefined || !w.bounded ? p : w.bounded(label, p, ms);
+    detachPolicy();
+    await run(
+      'the engine',
+      engine.stop(w.engineStopMs),
+      w.engineStopMs === undefined ? undefined : w.engineStopMs + 500,
+    );
+    unregisterPlanner();
+    unregisterGuard();
+    unregisterLmr();
+    detachLifecycle();
+    detachChronology();
+    for (const off of detachMaps) off();
+    for (const off of detachSnapshotCheckers) off();
+    for (const off of detachAuditCheckers) off();
+    detachBlockIds();
+    clearInterval(memoryTimer);
+    detachBlockwiseUndo();
+    detachReverts();
+    detachResume();
+    detachRenames();
+    unregisterRenameChecks();
+    detachSplits();
+    unregisterSplitChecks();
+    unregisterContinueGuard();
+    unregisterRouteBack();
+    for (const f of unmarkRelock) f();
+    detachRetag();
+    unregisterRetagChecks();
+    detachReview();
+    detachRestores();
+    unregisterPackEngine();
+    detachPackTools();
+    await run('the repository tree', tree.stop(), w.treesMs);
+    detachRegistry();
+    await run('the asset tree', assets.stop(), w.treesMs);
+    projects.close(); // every governor saves its counts
+    guard?.release();
+  }
+}
+
+/** CR-2026-11-R3 (fix A): true when `p` settled within `ms` (real time), false when the time ran out first. */
+async function within(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const done = await Promise.race([
+    p.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), Math.max(0, ms));
+    }),
+  ]);
+  clearTimeout(timer);
+  return done;
 }

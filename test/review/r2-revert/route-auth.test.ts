@@ -1,7 +1,7 @@
 /**
  * R2-revert, attack (e): run a revert without the owner's re-authentication or `confirm`, or as an agent.
  *
- * The admin route (src/admin/routes/review.ts) re-authenticates (5 minutes), requires `confirm: true` (strict body), and
+ * The admin route (src/admin/routes/review.ts) re-authenticates (10 minutes since ADR 0062), requires `confirm: true` (strict body), and
  * every /api/admin route refuses bearer tokens. No MCP tool reaches the revert service (src/runtime.ts wires it to the
  * admin route only). These are controls: each should HOLD.
  */
@@ -38,7 +38,7 @@ const reauth = () =>
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 301, s.services.sessionHash(s.sessionToken));
+    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
 
 async function directWrite(): Promise<string> {
   const r = await s.runtime.engine.run(

@@ -368,6 +368,8 @@ export function rebaseEdits(
     readonly edits: readonly PlannedEdit[];
     readonly oldName: string;
     readonly newName: string;
+    /** CR-2026-11-R3 (R3-25): every old-name occurrence's sentence when planned (see `DocumentEditsInput`). */
+    readonly sentences?: readonly string[];
     readonly where?: string;
   },
 ): {
@@ -398,16 +400,35 @@ export function rebaseEdits(
     const edits: BlockEdit[] = [];
     const items: string[] = [];
     const done: string[] = [];
+    const skippedFast: {
+      item: string;
+      reason: string;
+      before: string;
+      after: string | null;
+      where?: string;
+    }[] = [];
     for (const e of plan.edits) {
-      // A proposal made before the amendment may hold a mention label's edit: kept as it was planned.
-      const o = e.kind === 'mention' ? found.mentions[e.ordinal] : found.text[e.ordinal];
+      // CR-2026-11-R3 (R3-38): a mention label's edit (a proposal captured before the amendment) is never written:
+      // LegendKeeper's API cannot change a custom label (ADR 0058 amendment D).
+      if (e.kind === 'mention') {
+        skippedFast.push({
+          item: e.item,
+          reason:
+            'a custom mention label: LegendKeeper’s API cannot change it (change it in the app if wanted)',
+          before: (e as { sentence?: string }).sentence ?? '',
+          after: null,
+          ...where,
+        });
+        continue;
+      }
+      const o = found.text[e.ordinal];
       if (o && !o.isOld) done.push(e.item);
       else {
         edits.push({ kind: e.kind, ordinal: e.ordinal });
         items.push(e.item);
       }
     }
-    return { edits, items, done, skipped: [] };
+    return { edits, items, done, skipped: skippedFast };
   }
   const occ = occurrencesWithSentences(block, oldName, newName);
   const edits: BlockEdit[] = [];
@@ -432,6 +453,24 @@ export function rebaseEdits(
     const want = norm(e.sentence);
     const renamed = norm(replaceName(e.sentence, oldName, newName));
     const olds = occ.filter((o) => o.isOld && o.sentence === want);
+    // CR-2026-11-R3 (R3-25): found again by its sentence only when, as planned, no other occurrence of the old name in
+    // the block had the same sentence (one left out, a quotation repeating it): otherwise the one found may be that one.
+    // A plan made before this release did not keep them: the occurrence cannot be told from another, so it is skipped
+    // (listed, and proposed again from the page as it is), never guessed.
+    const planned = plan.sentences ? plan.sentences.filter((x) => norm(x) === want).length : null;
+    if (planned === null || planned > 1) {
+      skipped.push({
+        item: e.item,
+        reason:
+          planned === null
+            ? 'changed meanwhile (planned before the occurrences were kept with their sentences): which occurrence is meant cannot be told'
+            : 'changed meanwhile, and when planned its sentence held the name more than once: which occurrence is meant cannot be told',
+        before: e.sentence,
+        after: short(now),
+        ...where,
+      });
+      continue;
+    }
     if (olds.length === 1 && !taken.has(olds[0]!.ordinal)) {
       taken.add(olds[0]!.ordinal);
       edits.push({ kind: 'text', ordinal: olds[0]!.ordinal });

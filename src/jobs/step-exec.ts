@@ -54,6 +54,7 @@ import {
   compareSidebarStates,
   factsVersionOf,
   normaliseContent,
+  sameContent,
   rowsState,
   sidebarState,
   stableJson,
@@ -117,6 +118,13 @@ export interface StepExecDeps {
   readonly setJobWaiting: (jobId: string, waiting: 'lock' | null, detail?: Record<string, unknown>) => void;
   /** Null when a new write to this project may start now; otherwise why not. */
   readonly writeHold: (projectId: string) => WriteHold | null;
+  /**
+   * CR-2026-11-R3 (R3-62): a check step put back for a light re-check when its job went on after a wait (too large to
+   * run again whole): only its relock checks run again (`isRelockCheck`), and it keeps its earlier result.
+   */
+  readonly relockLight?: (jobId: string, stepNo: number) => boolean;
+  readonly relockLightDone?: (jobId: string, stepNo: number) => void;
+  readonly isRelockCheck?: (checker: string) => boolean;
   /** Non-registry step types (the upload_image PUT), by step id. */
   readonly customSteps?: CustomStepHandlers | undefined;
   /** v2 C1: the in-lock planners, by name (src/jobs/planners.ts). */
@@ -309,7 +317,7 @@ export class StepExecutor {
     }
     const custom = this.d.customSteps?.[step.opId];
     if (custom) return this.runCustom(job, step, custom);
-    if (isInternalStep(step.opId)) return this.runInternal(job, step);
+    if (isInternalStep(step.opId)) return this.runInternal(job, step, signal);
     const op = requireOperation(step.opId);
     const params = this.d.repo.stepParams(step);
     const ref = { jobId: job.id, stepNo: step.stepNo };
@@ -553,11 +561,25 @@ export class StepExecutor {
    * fails it with `StateConflictError` and the job stops before any write. `bridge.verify` never fails: what it could
    * not read is `not_checked`, a difference is `mismatch` (and an error row), and nothing is retried.
    */
-  private async runInternal(job: JobView, step: StepView): Promise<StepOutcome> {
+  private async runInternal(job: JobView, step: StepView, signal?: AbortSignal): Promise<StepOutcome> {
     if (step.opId === EXPECT_STEP && step.status !== 'running') {
       const hold = this.d.writeHold(job.projectId);
       if (hold) return { kind: 'held', reason: hold };
     }
+    // CR-2026-11-R3 (R3-62): the step's signal (a cancel, a pause, a restart) ends its patient reads' waits.
+    const key = `${job.id}:${step.stepNo}`;
+    if (signal) this.stepSignals.set(key, signal);
+    try {
+      return await this.runInternalSteps(job, step, signal);
+    } finally {
+      this.stepSignals.delete(key);
+    }
+  }
+
+  /** The signals of the internal steps running now (for their patient reads), by job and step. */
+  private readonly stepSignals = new Map<string, AbortSignal>();
+
+  private async runInternalSteps(job: JobView, step: StepView, signal?: AbortSignal): Promise<StepOutcome> {
     const stats = newCallStats();
     this.d.repo.updateStep(job.id, step.stepNo, {
       status: 'running',
@@ -566,6 +588,21 @@ export class StepExecutor {
     const params = this.withoutSkipped(job, step, this.d.repo.stepParams(step));
     try {
       if (step.opId === EXPECT_STEP) {
+        // CR-2026-11-R3 (R3-62): a light re-check runs only the step's relock checks (the pack's governance), and the
+        // step keeps the result its whole run gave (the bodies and versions later steps bind).
+        const previous = this.d.relockLight?.(job.id, step.stepNo) ? this.d.repo.stepResult(step) : null;
+        if (previous !== null && previous !== undefined) {
+          const body = (params.body ?? {}) as { checks?: unknown[] };
+          const only = (Array.isArray(body.checks) ? body.checks : []).filter((c) => {
+            const x = c as { kind?: unknown; checker?: unknown };
+            return (
+              x.kind === 'registered' && typeof x.checker === 'string' && this.d.isRelockCheck?.(x.checker)
+            );
+          });
+          if (only.length > 0) await this.runExpect(job, step, { ...params, body: { checks: only } }, stats);
+          this.d.relockLightDone?.(job.id, step.stepNo);
+          return this.succeed(job, step, stats, previous);
+        }
         return this.succeed(job, step, stats, await this.runExpect(job, step, params, stats));
       }
       if (step.opId === RECORD_STEP) {
@@ -586,6 +623,12 @@ export class StepExecutor {
       if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
       return this.succeed(job, step, stats, { verification });
     } catch (e) {
+      // CR-2026-11-R3 (R3-62): a patient read's wait ended by a cancel, a pause or a restart: the step stops as a lock
+      // wait does, nothing having been decided (it runs again from its start when the job goes on).
+      if (signal?.aborted && !(e instanceof BudgetWaitError)) {
+        this.d.repo.updateStep(job.id, step.stepNo, { status: 'pending' });
+        return { kind: 'aborted' };
+      }
       return this.fail(job, step, stats, e);
     }
   }
@@ -667,7 +710,13 @@ export class StepExecutor {
       (e): e is LmrEvidence =>
         typeof e === 'object' && e !== null && typeof (e as { kind?: unknown }).kind === 'string',
     );
-    const entries = this.d.journal.lookup(job.projectId, { jobId: job.id, limit: 1000 });
+    // CR-2026-11-R3 (R3-63): only the entries of the writes this page's decision follows. Every entry of the job (at most
+    // 1,000) was read for every page: a 700-page rename read them 700 times over (the job's memory peaked hundreds of MB
+    // higher), and a write past the 1,000th entry was measured without its pre-image.
+    const entries =
+      after.length > 0
+        ? this.d.journal.lookup(job.projectId, { jobId: job.id, stepNos: after, limit: after.length * 4 })
+        : [];
     for (const n of after) {
       const s = this.d.repo.step(job.id, n);
       if (s?.status !== 'succeeded') continue;
@@ -846,6 +895,9 @@ export class StepExecutor {
           });
         } catch (e) {
           if (e instanceof JobsError) throw e;
+          // CR-2026-11-R3 (R3-02): a read the check could not make for budget (or because the bridge is restarting) says
+          // nothing about the page: the step is parked and the check runs again, never judged "changed since planned".
+          if (e instanceof BudgetWaitError) throw e;
           throw new StateConflictError(
             EXPECT_STEP,
             c.label,
@@ -896,6 +948,12 @@ export class StepExecutor {
           stats,
         );
         if (!r.exists) {
+          // CR-2026-11-R3 (R3-39): a check that names the items it may skip skips them when its document is gone (a
+          // restatement's page deleted while the rename waited), and the job carries on; any other check still stops.
+          if (c.skipItems && c.skipItems.length > 0) {
+            skipFor(c.skipItems, c.label, [{ path: c.label, expected: 'present', actual: '(gone)' }]);
+            continue;
+          }
           throw new StateConflictError(
             EXPECT_STEP,
             c.label,
@@ -1601,7 +1659,18 @@ export class StepExecutor {
                 continue;
               }
               // getResource gives rows in stored order: compared in rank order, by id (sidebar-state.ts).
-              if (p.rows) compareRows(label, p.rows, rowsState(actual.rows), diffs);
+              if (p.rows) {
+                const got = rowsState(actual.rows);
+                // CR-2026-11-R3 (R3-67): the row a step of this job dated is judged by that step, not here.
+                const want = p.datedRowId
+                  ? p.rows.map((r) =>
+                      r.id === p.datedRowId
+                        ? { ...r, content: got.find((a) => a.id === r.id)?.content ?? r.content }
+                        : r,
+                    )
+                  : p.rows;
+                compareRows(label, want, got, diffs);
+              }
               if (p.collection) compareCollection(label, p.collection, collectionState(actual), diffs);
             }
           } else {
@@ -1712,9 +1781,18 @@ export class StepExecutor {
   ): Promise<{ exists: boolean; body: unknown }> {
     const readOp = requireOperation(opId);
     const opts = this.callOptions(job, step, stats ?? newCallStats(), 'r');
+    // CR-2026-11-R3 (R3-62): a check's or a read-back's reads, in a job that holds no job-level lock, wait for the
+    // budget in their queue. Parked, the step would run again from its start: a check needing more reads than an hour's
+    // budget (a 700-page rename's first check) parked every hour, read again, and never finished.
+    const patient =
+      (step.opId === EXPECT_STEP || step.opId === VERIFY_STEP) &&
+      typeof this.d.repo.jobOptions(job.id).heldLock !== 'string'; // the engine's HELD_LOCK option
+    const stepSignal = patient ? this.stepSignals.get(`${job.id}:${step.stepNo}`) : undefined;
     try {
       const body = await callOp(this.lk(job), readOp, params, {
         ...opts,
+        ...(patient ? { patient: true } : {}),
+        ...(stepSignal ? { signal: stepSignal } : {}),
         onError: (err: BridgeLkError) => {
           if (!isNotFound(err)) opts.onError(err);
         },
@@ -1831,6 +1909,8 @@ export class StepExecutor {
     ): { params: OpParams } | StepOutcome => {
       if (counted) conflicts++;
       const items = [...new Set([...(step.options.items ?? []), ...(rebase?.with ?? [])])];
+      // CR-2026-11-R3 (R3-12): the items skipped earlier in the job are never re-applied by a rebase.
+      const skippedEarlier = new Set(this.d.repo.skippedItems(job.id, step.stepNo).map((x) => x.item));
       const skipAll = (reason: string, before?: string | null, after?: string | null): StepOutcome => {
         if (rebase?.core) throw conflict;
         const list: SkippedItem[] = [
@@ -1857,6 +1937,7 @@ export class StepExecutor {
           opId: op.operationId,
           params,
           input: rebase!.input,
+          items: items.filter((i) => !skippedEarlier.has(i)),
           conflict: conflicts,
           current: {
             exists: cur.exists,
@@ -2355,6 +2436,16 @@ export class StepExecutor {
   private etagOf(job: JobView, op: OperationDef, stats: CallStats): string | undefined {
     if (stats.etag === undefined || !op.versioned) return undefined;
     return this.d.etagVersions?.(job.projectId) === false ? undefined : stats.etag;
+  }
+
+  /**
+   * CR-2026-11-R3 (ADR 0061 part B decision 6, the owner's (b)): a page write's read-back, made again before its stopped
+   * job is resumed: the stored blocks compared with the blocks it sent, exactly as after the write (`verifyWrite`). Read
+   * only; outside the job's locks (nothing is written on its strength but the step's own record).
+   */
+  async reverifyWrite(job: JobView, step: StepView): Promise<WriteVerification> {
+    const op = requireOperation(step.opId);
+    return this.verifyWrite(job, step, op, opMeta(op.operationId), this.d.repo.stepParams(step), undefined);
   }
 
   /**
@@ -2954,7 +3045,7 @@ export function matchCopy(
       }
       want.forEach((w, i) => {
         const g = got[i]!;
-        if (g.key !== w.key || stableJson(g.content) !== stableJson(w.content)) {
+        if (g.key !== w.key || !sameContent(g.content, w.content)) {
           differences.push({
             path: `${where} rows[${i}]`,
             expected: w,
@@ -2998,7 +3089,7 @@ function compareFacts(t: Extract<VerifyTarget, { kind: 'facts' }>, res: Obj, dif
       for (let i = 0; i < n; i++) {
         const g = got[i];
         const w = want[i];
-        if (!g || !w || g.key !== w.key || stableJson(g.content) !== stableJson(w.content)) {
+        if (!g || !w || g.key !== w.key || !sameContent(g.content, w.content)) {
           diffs.push({
             path: `${t.label} ${t.property.title} rows[${i}]${w ? ` “${w.key}”` : ''}`,
             expected: w ?? '(no row)',

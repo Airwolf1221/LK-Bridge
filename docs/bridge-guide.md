@@ -760,7 +760,8 @@ Splitting an owner page (a character monolith, a polity page covering its law an
 owner-approved decision**: "do not split merely because a character has many facts". Two tools, used in order, and
 **never by hand**: `write_page` refuses an edit that takes a section's worth of text off a pack page
 (`USE_ARKONA_SPLIT`); a page's own revision that removes material on purpose passes `plainEdit: { "reason": "…" }`, and
-the reason is shown to the owner.
+the reason is shown to the owner. The low-level tools are no way round it: the same amount of text taken off a pack page
+through `lk_api_write` or `lk_api_batch` is a proposal for the owner (`proposed because: text removal …`).
 
 **1. Appraise: `arkona_split_appraisal { "page": "…" }`** (or `under` for a branch). Read-only and free (the snapshots;
 `live: true` re-reads each page, 2 reads a page). It measures Character Architecture's Split Triggers with the pack's own
@@ -790,8 +791,11 @@ never a decision.
 **Refused before anything is proposed, with lists:** a block unassigned or assigned twice (`SPLIT_COVERAGE`), a section
 listed twice (`SPLIT_DUPLICATED_AUTHORITY`), images going to a page that is not an Art or visual owner (`SPLIT_VISUAL`),
 content LegendKeeper cannot create (it can only stay), a missing summary (`SPLIT_SUMMARY_REQUIRED`), an unmapped
-Dependency of a source to be retired (`SPLIT_DEPENDENCIES_UNMAPPED`), a character's identity page to be retired, and
-whatever the pack's own rules refuse for a new page (its name, template, tags, home). **Warnings** for the owner: a
+Dependency of a source to be retired (`SPLIT_DEPENDENCIES_UNMAPPED`), a character's identity page to be retired, a map
+that would leave a character with an index and several owners but no Character Core (`SPLIT_CORE_REQUIRED`: upgrade its
+Compact Character Reference first with `arkona_create_character`, `target` and `upgradeToCore`), and whatever the pack's
+own rules refuse for a new page (its name, template, tags, home). A Compact Character Reference you split into several
+owners becomes the character's Character Core in the same proposal (its id, text and identity facts kept). **Warnings** for the owner: a
 section about one other character not going to a relationship owner, and a block citing a universal owner moving into
 a character's page.
 
@@ -803,11 +807,17 @@ writes the index lines and the remapped Dependencies, dates Last Major Revision 
 a direct re-read (every original block in exactly one place). If any of it fails, the job stops before phase 2: the
 owner resumes or reverts it on the dashboard. **Phase 2**, with `retire: true`, once phase 1 has verified and nothing was
 left out: the bridge proposes archiving the source with `archive_page`, a separate canonical proposal. The split never
-deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it.
+deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it, and
+its `verified` is the job's own verification: a job that ran to its end but read back a difference leaves the split
+`unverified` (nothing is retired; tell the owner, who looks at the job's differences). A
+destination the owner left out is not proposed again from the old plan: when the owner asks, split what is left as a
+new split, on the source as it is now. A source holding an inline icon cannot be split (`SPLIT_NOT_WRITABLE`: the split
+writes the source back whole); ask the owner to remove the icon first.
 
-**Cost**, measured on the test fixtures: a character monolith split into six new owners with one remapped Dependency
-costs 23 requests to propose and a job of 243 (87 writes); an owner split into one new and one existing owner, 12 to
-propose and 84 (22 writes). The dry run states the plan's reads and the job's estimate.
+**Cost**, measured on the test fixtures: a character monolith (a Compact Character Reference, upgraded to its Character
+Core in the same proposal) split into six new owners with one remapped Dependency costs 26 requests to propose and a job
+of 248 (89 writes); an owner split into one new and one existing owner, 12 to propose and 84 (22 writes). The dry run
+states the plan's reads and the job's estimate.
 
 ### Arkona retagging
 
@@ -840,7 +850,8 @@ most 25 pages. ONE proposal whatever your scope (each page an item the owner can
 owner approves, the job first checks the policy is still the audit's (otherwise it stops: "policy changed since the
 audit; audit again"), then for each page reads it fresh: a page whose tags changed since the audit is **conflicted** and
 skipped (never rebased), one whose facts changed is **held**, one already right is **already compliant**, one gone is
-**inaccessible**; the rest are written and read back exactly. Last Major Revision is never set.
+**inaccessible**; the rest are written and read back (the tags exactly; each page document's body by its version;
+other documents by their metadata timestamps only). Last Major Revision is never set.
 
 **Reconciliation**, for a long run of batches: `arkona_retag_audit { "reconciliation": "First pass", "all": true }`
 starts a named record (a first audit, free); `arkona_retag_apply { "reconciliation": "First pass" }` audits what remains
@@ -1176,7 +1187,10 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
   shows where it stopped (`stoppedAt`: its last verified step, the step it stopped at, why). A job **you** ran at scope
   `write` (one the owner did not approve) can be resumed with `bridge_job_resume { "jobId": "…" }`: its own check runs
   again first, no step that succeeded runs again, and a step that is no longer safe is refused with its reason. Work the
-  owner approved is resumed by the owner only. Resume once, then follow the job; never loop on a refusal.
+  owner approved is resumed by the owner only, and so is a job the owner cancelled (`CANCELLED_BY_OWNER`: the cancel
+  stands; tell the person). Your safety rails are judged again on the steps left: if one now covers a step, the rest
+  becomes one proposal for the owner (`proposal_captured`): follow it with `bridge_proposal_status`, never resume or
+  redo it. Resume once, then follow the job; never loop on a refusal.
 - You cannot approve your own proposals, change your scope, or see other connections' jobs.
 
 ## Canon and approval

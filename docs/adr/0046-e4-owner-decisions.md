@@ -5,6 +5,9 @@
 - Date: 15 November 2026
 - Session: v2 E4 (PLAN-v2 phase E, the E4 row)
 - The review: [docs/reviews/E4-2026-11.md](../reviews/E4-2026-11.md)
+- Amended by: [ADR 0062](0062-dashboard-sessions-and-step-up.md) (proposed, 19 November 2026): decision 3's
+  re-authentication of the off-site settings that weaken a protection now covers every change of them (the step-up: the
+  authenticator code within 10 minutes, or the password without one).
 - Builds on: [ADR 0031](0031-write-page.md) (write_page, `PAGE_NOT_WRITABLE`), [ADR 0035](0035-page-lifecycle.md)
   (decision 10: a Working character's index moves with its Core), [ADR 0036](0036-cr-2026-11-owner-decisions.md)
   (decision 4: re-authentication; decision 5: an approval covers only what it listed), [ADR 0042](0042-snapshots-restore-rehearsal.md)

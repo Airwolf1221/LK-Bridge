@@ -11,6 +11,7 @@ import type { GovernorSettings, PriorityClass } from '../../config/lk.js';
 import {
   BridgeLkError,
   BudgetWaitError,
+  RestartWaitError,
   fromLkResponse,
   toBridgeLkError,
   type LkErrorBody,
@@ -235,7 +236,14 @@ export class Governor {
   private readonly clock: Clock;
   private readonly transport: Transport;
   private readonly random: () => number;
-  private readonly als = new AsyncLocalStorage<AttemptContext>();
+  /**
+   * The call in flight, for `fetch` and `currentResponse` (they run inside `execute`'s `run`). CR-2026-11-R3 (R3-65): a
+   * holder emptied when the attempt ends. On Node 24 every timer and promise made during a call keeps the async context
+   * it was made in, and the LegendKeeper SDK makes a 35-second `AbortSignal.timeout` timer on every request: holding the
+   * attempt itself, that timer kept the caller's whole request (an MCP request's server, its transport and every tool it
+   * registered) for 35 seconds after the call had ended.
+   */
+  private readonly als = new AsyncLocalStorage<{ ctx: AttemptContext | null }>();
   private readonly tiers: Record<TierId, TierState>;
   private readonly lanes: Record<PriorityClass, Map<string, Pending[]>> = {
     P0: new Map(),
@@ -252,6 +260,10 @@ export class Governor {
   private pumping = false;
   private repump = false;
   private closed = false;
+  /** CR-2026-11-R3 (fix A): set by `stopWaits` (a restart): nothing waits any more. */
+  private waitsStopped = false;
+  /** Ends a retry's back-off when the waits stop. */
+  private readonly waitsAbort = new AbortController();
   private readonly persistence: GovernorPersistence | undefined;
   private saveTimer: TimerHandle | null = null;
   private readonly allowedOperations: ReadonlySet<string> | undefined;
@@ -383,9 +395,18 @@ export class Governor {
       switch (decision.action) {
         case 'retry':
           state = decision.state;
+          // CR-2026-11-R3 (fix A): a restart ends a retry's back-off at once. The step is parked as it stands (a write
+          // whose attempt may have reached LegendKeeper keeps `maybeSent`, so the next start verifies it first).
+          if (this.waitsStopped) throw new RestartWaitError(req.opId, this.clock.now());
           try {
-            await sleep(this.clock, decision.delayMs, req.signal);
+            await sleep(
+              this.clock,
+              decision.delayMs,
+              req.signal ? AbortSignal.any([req.signal, this.waitsAbort.signal]) : this.waitsAbort.signal,
+            );
           } catch (cause) {
+            if (this.waitsStopped && !req.signal?.aborted)
+              throw new RestartWaitError(req.opId, this.clock.now());
             throw this.abortedError(req.opId, cause);
           }
           continue;
@@ -406,7 +427,7 @@ export class Governor {
    * `execute`'s `run`; any other use throws `GOVERNOR_BYPASS`.
    */
   readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
-    const ctx = this.als.getStore();
+    const ctx = this.als.getStore()?.ctx;
     // A released ticket means this is a straggler (e.g. a background task spawned by an earlier `run`).
     if (!ctx || ctx.governor !== this || ctx.ticket.released) {
       throw new BridgeLkError({
@@ -466,7 +487,7 @@ export class Governor {
    * undefined outside one or before the response: the `ETag` of a write (v2 D1.1, ADR 0039).
    */
   currentResponse(): CapturedResponse | undefined {
-    const ctx = this.als.getStore();
+    const ctx = this.als.getStore()?.ctx;
     return ctx && ctx.governor === this ? ctx.captured : undefined;
   }
 
@@ -533,6 +554,37 @@ export class Governor {
     if (!set) this.listeners.set(event, (set = new Set()));
     set.add(cb);
     return () => set.delete(cb);
+  }
+
+  /**
+   * CR-2026-11-R3 (fix A, a clean shutdown within systemd's stop timeout): ends every wait at once, and lets nothing
+   * wait from now on. Each call queued for budget, pacing or a free in-flight slot is refused with `RestartWaitError`
+   * (it was never sent); a retry's back-off ends the same way; a new call is dispatched only if it can go at once (so a
+   * step already under way can finish its reads), else refused. Requests already in flight finish. `close()` still
+   * follows at the end of the shutdown. Idempotent.
+   */
+  stopWaits(): void {
+    if (this.waitsStopped || this.closed) return;
+    this.waitsStopped = true;
+    this.waitsAbort.abort();
+    const now = this.clock.now();
+    for (const cls of PRIORITY_CLASSES) {
+      for (const lane of this.lanes[cls].values()) {
+        for (const p of lane) {
+          p.cleanup();
+          p.reject(new RestartWaitError(p.req.opId, now));
+        }
+      }
+      this.lanes[cls].clear();
+    }
+    if (this.wakeTimer) this.clock.clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+    this.wakeAt = Number.POSITIVE_INFINITY;
+  }
+
+  /** True once `stopWaits` has run (a restart). */
+  get waitsHaveStopped(): boolean {
+    return this.waitsStopped;
   }
 
   /** Rejects everything queued and stops the wake timer. In-flight calls finish. Saves the counters (if persisted). */
@@ -621,7 +673,18 @@ export class Governor {
         pending.cleanup = () => req.signal?.removeEventListener('abort', onAbort);
       }
       this.pump();
+      // CR-2026-11-R3 (fix A): while the bridge restarts, a call goes at once (pump dispatches synchronously) or not
+      // at all: one still queued would have to wait.
+      if (this.waitsStopped && this.isQueued(pending)) {
+        this.removePending(pending);
+        pending.cleanup();
+        reject(new RestartWaitError(req.opId, this.clock.now()));
+      }
     });
+  }
+
+  private isQueued(p: Pending): boolean {
+    return this.lanes[p.req.priority].get(p.lane)?.includes(p) === true;
   }
 
   private removePending(p: Pending): void {
@@ -736,7 +799,12 @@ export class Governor {
             progressed = true;
             break scan;
           }
-          if (at - now > this.settings.maxQueueWaitMs && tier !== null && tier !== 'pacing') {
+          if (
+            at - now > this.settings.maxQueueWaitMs &&
+            tier !== null &&
+            tier !== 'pacing' &&
+            head.req.patient !== true
+          ) {
             lane.shift();
             if (lane.length === 0) this.lanes[cls].delete(key);
             head.cleanup();
@@ -813,8 +881,9 @@ export class Governor {
       controller.abort(reason);
       rejectAbort(reason);
     }, req.timeoutMs ?? this.settings.requestTimeoutMs);
+    const holder: { ctx: AttemptContext | null } = { ctx };
     try {
-      const result = await Promise.race([this.als.run(ctx, () => req.run(controller.signal)), aborted]);
+      const result = await Promise.race([this.als.run(holder, () => req.run(controller.signal)), aborted]);
       if (result instanceof Response) {
         if (!result.ok) {
           throw fromLkResponse({
@@ -829,6 +898,9 @@ export class Governor {
       }
       return result;
     } finally {
+      // A straggler of this call (a task its `run` left behind) now finds no call in flight (GOVERNOR_BYPASS, as a
+      // released ticket did), and what the call's timers keep is an empty holder.
+      holder.ctx = null;
       this.clock.clearTimeout(timer);
       req.signal?.removeEventListener('abort', onCallerAbort);
     }

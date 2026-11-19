@@ -40,7 +40,7 @@ const reauth = () =>
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 301, s.services.sessionHash(s.sessionToken));
+    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
 
 /** One direct write by the agent (an alias on a page), run to its end. */
 async function directWrite(): Promise<string> {

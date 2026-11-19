@@ -43,6 +43,8 @@ export {
 export {
   BridgeLkError,
   BudgetWaitError,
+  RestartWaitError,
+  RESTART_TIER,
   LK_ERROR_CODES,
   classify,
   toBridgeLkError,

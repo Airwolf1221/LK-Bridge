@@ -1,3 +1,4 @@
+import { needsBounce, queryOf, sendBounce } from '../../admin/bounce.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CimdError, isCimdClientId, validateCimdUrl } from '../cimd.js';
 import { CODE_CHALLENGE_S256 } from '../crypto.js';
@@ -47,6 +48,10 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
   const { config } = s;
 
   const authorize = async (req: FastifyRequest, reply: FastifyReply) => {
+    // ADR 0062: Claude's redirect here is a cross-site navigation, which a SameSite=Strict cookie does not ride on: open
+    // the same page again from the bridge, which carries it (never twice: that navigation is same-origin).
+    if (needsBounce(req, s.owner.sessionCookie))
+      return sendBounce(reply, `${OAUTH_PATHS.authorize}${queryOf(req)}`, s.owner.sessionCookie);
     const q = rawQuery(req);
     const repeated = SINGLE_PARAMS.filter((k) => q.getAll(k).length > 1);
     const get = (k: string) => {
@@ -61,7 +66,11 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
     const clientId = get('client_id');
     if (!clientId) return sendErrorPage(reply, 400, 'Invalid request', 'The request has no client_id.');
     const sessionToken = req.cookies[s.owner.sessionCookie];
-    const session = s.owner.getSession(sessionToken);
+    const used = s.owner.useSession(sessionToken);
+    const session = used?.session;
+    // ADR 0062: a use of the session moves its end 30 days on; its cookie is renewed with it.
+    if (used?.renewed && sessionToken)
+      reply.setCookie(s.owner.sessionCookie, sessionToken, s.owner.sessionCookieOptions());
     const toLogin = () => {
       const returnTo = req.url.startsWith(OAUTH_PATHS.authorize)
         ? req.url

@@ -60,6 +60,7 @@ import {
   type SnapshotKind,
 } from './manifest.js';
 import { KeptBytes, SnapshotStore } from './store.js';
+import { loggedTask, type TaskLogger } from '../maintenance/task-log.js';
 import { canonicalBytes } from './canonical.js';
 
 type Obj = Record<string, unknown>;
@@ -241,7 +242,7 @@ export class SnapshotService {
       if (TERMINAL.has(e.job.status)) this.queueChange(e.job.projectId, e.job.id);
     });
     this.detach.push(offWrites, offJobs);
-    this.started = (async () => {
+    this.started = loggedTask(this.taskLog(), 'snapshot store start', {}, async () => {
       try {
         if (await this.store.exists()) await this.store.cleanTmp();
         if (this.o.imageDir) {
@@ -258,7 +259,7 @@ export class SnapshotService {
       } catch (e) {
         this.o.log?.warn({ err: e }, 'the snapshot store could not be prepared');
       }
-    })();
+    });
     return this.started;
   }
 
@@ -267,7 +268,9 @@ export class SnapshotService {
     for (const pid of this.o.projects.activeIds()) {
       const r = this.index.runningRun(pid, 'full');
       if (r)
-        void this.runPages(pid, r, 'resume').catch((e: unknown) =>
+        void loggedTask(this.taskLog(), 'snapshot run resumed', { project: pid, run: r.id }, () =>
+          this.runPages(pid, r, 'resume'),
+        ).catch((e: unknown) =>
           this.o.log?.warn({ err: e, runId: r.id }, 'a snapshot run could not continue'),
         );
     }
@@ -1048,6 +1051,28 @@ export class SnapshotService {
       this.taps.delete(jobId);
       return { changed: false, skipped: true, summary: 'Nothing was owed.' };
     }
+    // CR-2026-11-R3 (R3-65): a change snapshot is background work: its start and finish in the log, with the memory.
+    return loggedTask(
+      this.taskLog(),
+      'change snapshot',
+      { project: projectId, job: jobId, pieces: owed.length },
+      () => this.takeOwed(projectId, jobId, owed, tap, o),
+    );
+  }
+
+  /** The info logger for background tasks (task-log.ts), when the runtime gave one. */
+  private taskLog(): TaskLogger | undefined {
+    const log = this.o.log;
+    return log?.info ? { info: (obj, msg) => log.info!(obj, msg) } : undefined;
+  }
+
+  private async takeOwed(
+    projectId: string,
+    jobId: string,
+    owed: ReturnType<SnapshotDb['owedFor']>,
+    tap: JobTap | undefined,
+    o: { readonly priority?: PriorityClass; readonly wait?: boolean; readonly signal?: AbortSignal },
+  ): Promise<RunOutcome> {
     if (this.stopper.signal.aborted) throw new StopError();
     const disk = await this.store.disk();
     if (disk && disk.free < this.o.settings.minFreeBytes) {

@@ -69,6 +69,7 @@ import {
   RENAME_CHECKS,
   RENAME_REBASERS,
   type DocumentEditsInput,
+  type HistoryCheckInput,
   runsValue,
   type FactChangeInput,
 } from './checks.js';
@@ -78,6 +79,8 @@ import {
   deepText,
   occurrences,
   fingerprint,
+  namePattern,
+  occurrencesWithSentences,
   names as namesIn,
   plainText,
   replaceName,
@@ -354,6 +357,20 @@ export async function planRename(
         issue(
           'FOLLOW_UP_MISMATCH',
           `A follow-up (from “${oldName}”) is for a subject that already has its new name; ${identity.rawName} is called “${subjectName}”, not “${newName}”.`,
+        ),
+      ]);
+    // CR-2026-11-R3 (R3-32): `from` must be a name the subject had: one an earlier rename recorded for it, or one its
+    // page keeps as an alias. A name part ("Nadira"), or another character's name, would rename text the owner never
+    // asked to change (and take over another identity).
+    const former = new Set<string>();
+    for (const r of pd.services?.renames?.forSubject(projectId, identity.id, 100) ?? [])
+      former.add(textKey(r.oldName));
+    for (const a of ctx.tree.node(projectId, identity.id).data?.aliases ?? []) former.add(textKey(a));
+    if (!former.has(textKey(oldName)))
+      return refused(pd, [
+        issue(
+          'FROM_NOT_A_FORMER_NAME',
+          `“${oldName}” is not a name ${identity.rawName} had: a follow-up plans what a rename left of the subject's own former name (one an earlier rename recorded, or one the page keeps as an alias). A name part or another character's name is never renamed this way; change such text by hand.`,
         ),
       ]);
   } else if (textKey(subjectName) === textKey(newName)) {
@@ -652,6 +669,10 @@ export async function planRename(
           judgedInLock: true,
           deferTreeReread: true,
           items: [item],
+          // CR-2026-11-R3 (R3-36): never moves back a page the owner moved since the plan; and a move LegendKeeper
+          // refuses (its anchor gone meanwhile) does not stop the rename: the name is written, the place reported.
+          rebase: { rebaser: RENAME_REBASERS.place, input: { parentId }, always: true },
+          followUp: 'placement_failed',
           journalOperation: journal({ id: n.id, name: nextRaw }, 're-placed after the rename'),
         });
         bodyLabels.push(`re-place ${nextRaw} among its siblings`);
@@ -858,6 +879,27 @@ export async function planRename(
   }
   const routingHeading = rules.types[0]?.index.routing ?? 'How to Use This Index';
   const unresolved = rules.types[0]?.text.unresolved ?? 'Unresolved Material';
+  // CR-2026-11-R3 (R3-26): the longer names that hold the old name (another character's "Nadira al-Khalid al-Sughra"
+  // holds "Nadira al-Khalid"): an occurrence inside one is never renamed, nor a fact naming one.
+  const subjectPart = (n: string) => n.split(' - ')[0]!.trim();
+  const longerNames = [
+    ...new Set(
+      (typeof ctx.tree.namesContaining === 'function'
+        ? ctx.tree.namesContaining(projectId, oldName)
+        : []
+      ).map(subjectPart),
+    ),
+  ].filter((n) => {
+    if (n === oldName || n === newName || !namesIn(n, oldName) || namesIn(newName, n)) return false;
+    // A relationship's name ("Nadira al-Khalid & Tarek Basri") is renamed with her: not another character's name.
+    const rest = n.replace(namePattern(oldName), '').trim();
+    return !rest.startsWith('&') && !rest.endsWith('&');
+  });
+  const insideLonger = (text: string, start: number, end: number): string | null => {
+    for (const L of longerNames)
+      for (const o of occurrences(text, L)) if (o.start <= start && o.end >= end) return L;
+    return null;
+  };
   const docEdits: {
     pageId: string;
     documentId: string;
@@ -874,7 +916,7 @@ export async function planRename(
       const current = lifecycle === null || lifecycle === 'Authoritative' || lifecycle === 'Working';
       const out: (typeof docEdits)[number] = { pageId, documentId, blocks: [] };
       let unplanned = 0;
-      for (const { block, section, inTable } of walkBlocks(
+      for (const { block, section, inTable, parentKind } of walkBlocks(
         Array.isArray(b.blocks) ? (b.blocks as unknown[]) : [],
       )) {
         if (inTable || !runsOf(block) || typeof block.id !== 'string') {
@@ -907,7 +949,22 @@ export async function planRename(
           if (!o.isOld) return;
           const start = runStarts[o.run]! + o.start;
           const id = `${routing ? 'routing' : 'text'}:${documentId}:${String(block.id)}:${k}`;
-          const why = routing ? null : d1Why(text, start, section, unresolved);
+          const longer = insideLonger(text, start, start + oldName.length);
+          if (longer) {
+            notPlanned.push({
+              page: { id: pageId, name: pageName },
+              why: `part of another name (“${longer}”): never renamed`,
+              snippet: sentenceAround(text, start, start + oldName.length).slice(0, 240),
+            });
+            return;
+          }
+          // CR-2026-11-R3 (R3-28): a paragraph inside a quote block is a quotation (D1 (a)), as one in quotation marks is.
+          const quoted = parentKind === 'quote' || parentKind === 'blockquote';
+          const why = routing
+            ? null
+            : quoted
+              ? 'inside a quotation (a quote block): left as quoted'
+              : d1Why(text, start, section, unresolved);
           const sentence = sentenceAround(text, start, start + oldName.length);
           edits.push({ edit: { kind: 'text', ordinal: k, item: id, sentence }, item: id });
           items.push({
@@ -961,6 +1018,10 @@ export async function planRename(
         blockId: String(b.block.id),
         fingerprint: fingerprint(b.block, oldName, newName),
         edits: b.edits.map((e) => e.edit),
+        // CR-2026-11-R3 (R3-25): every occurrence's sentence, ticked or not, so a rebase never takes one for another.
+        sentences: occurrencesWithSentences(b.block, oldName, newName)
+          .filter((o) => o.isOld)
+          .map((o) => o.sentence),
         where: b.where,
       })),
     };
@@ -973,6 +1034,8 @@ export async function planRename(
       documentId: d.documentId,
       checker: RENAME_CHECKS.document,
       input,
+      // CR-2026-11-R3 (R3-39): a page deleted while the rename waits skips its items; the rest of the rename runs.
+      skipItems: docItems,
     });
     checkItems.push(docItems);
     checkParts.push({
@@ -1010,6 +1073,7 @@ export async function planRename(
             newName,
             fingerprint: planned.fingerprint,
             edits: planned.edits,
+            ...(planned.sentences ? { sentences: planned.sentences } : {}),
             where: b.where,
           },
         },
@@ -1059,11 +1123,24 @@ export async function planRename(
       for (const row of kv?.rows ?? []) {
         const before = valueOf(row.content);
         if (!namesIn(before, oldName) || textKey(row.key) === textKey(aliasesKey)) continue;
+        // CR-2026-11-R3 (R3-26): a fact naming a longer name that holds the old one (another character's identity
+        // facts, say) is never planned: the row is renamed whole, so it would rename inside that name.
+        const longer = longerNames.find((L) => namesIn(before, L));
+        if (longer) {
+          notPlanned.push({
+            page: { id: pageId, name: node.rawName },
+            why: `sidebar: ${row.key} names another name holding it (“${longer}”): never renamed`,
+            snippet: before.slice(0, 240),
+          });
+          continue;
+        }
         labelsIn(row.content, { id: pageId, name: node.rawName }, `sidebar: ${row.key}`, before);
         const runs = renamedRuns(row.content, oldName, newName);
         facts.push({ key: row.key, value: runs });
         changes.push({ what: row.key, before, after: valueOf(runs) });
-        why ??= d1Why(before, before.indexOf(oldName), [], unresolved);
+        // CR-2026-11-R3 (R3-27): D1 (a) on every whole-name occurrence of the row (it is renamed whole), not the first
+        // substring only: any quoted or "formerly" one unticks the item.
+        for (const o of occurrences(before, oldName)) why ??= d1Why(before, o.start, [], unresolved);
       }
       if (facts.length === 0) continue;
       const item = `factText:${pageId}`;
@@ -1234,6 +1311,13 @@ export async function planRename(
           }
         }
         const dated = effective !== null && date.start < effective;
+        // CR-2026-11-R3 (R3-28): a row whose occurrence is quoted (or after "formerly"…) is left unticked, as D1 (a) asks
+        // for every restatement (the row is renamed whole).
+        let rowWhy: string | null = null;
+        for (const o of occurrences(before, oldName)) rowWhy ??= d1Why(before, o.start, [], unresolved);
+        const longerInRow = longerNames.find((L) => namesIn(before, L));
+        if (longerInRow)
+          rowWhy = `it also names another name holding it (“${longerInRow}”): check it by hand`;
         items.push({
           id: item,
           kind: 'chronology',
@@ -1245,10 +1329,12 @@ export async function planRename(
           },
           diff: { before, after, context: row.dateText },
           dependsOn: root(),
-          selected: !dated,
+          selected: !dated && rowWhy === null,
           ...(dated
             ? { why: `the row is dated before the rename’s effective date (${input.effectiveDate})` }
-            : {}),
+            : rowWhy
+              ? { why: rowWhy }
+              : {}),
         });
       }
     }
@@ -1260,7 +1346,17 @@ export async function planRename(
       config,
       target: { writes },
       writes,
-      ctx: { tableIds, mainTableId: '', rows, counts: {}, lanes, events },
+      // CR-2026-11-R3 (R3-35): each row compared whole (its marks, links and icons), so a row edited since the plan in any
+      // way is skipped, never written over from the plan (the option R2-16 made for Revert).
+      ctx: {
+        tableIds,
+        mainTableId: '',
+        rows,
+        counts: {},
+        lanes,
+        events,
+        rowBlocks: Object.fromEntries([...planned].map(([rowId, p]) => [rowId, p.block])),
+      },
       record: { requestKey: `${RENAME_TOOL}:${renameId}`, ages, summary: `Rename ${oldName} to ${newName}` },
     });
     const base = stepNo() - 1;
@@ -1281,6 +1377,18 @@ export async function planRename(
       let its: string[] = chItems;
       const partsOut: ItemPartShape[] = [];
       let step: StepSpec = shifted;
+      // CR-2026-11-R3 (R3-34): a linked event's rename judged inside its write's lock (renamed meanwhile: skipped).
+      if (s.op === 'updateEvent') {
+        const evId = String(s.params?.path?.eventId ?? '');
+        const before = str(events[evId]?.name);
+        const after = str(b.name);
+        const item = itemOfEvent(evId)[0];
+        if (before !== null && after !== null && item)
+          step = {
+            ...step,
+            rebase: { rebaser: RENAME_REBASERS.event, input: { before, after, item }, always: true },
+          };
+      }
       if (s.op === EXPECT_STEP) {
         // ADR 0058 amendment (A): one check per row (and per event), each skipping only its own row's item when that
         // row (or its event) changed meanwhile. Every row's check keeps the table's label, so whichever rows are approved
@@ -1497,6 +1605,12 @@ export async function planRename(
       params: { path: { assetId: id }, body: { name: nextName } },
       judgedInLock: true,
       items: [item],
+      // CR-2026-11-R3 (R3-33): judged again inside the write's lock (the first check runs without locks).
+      rebase: {
+        rebaser: RENAME_REBASERS.asset,
+        input: { names: [name, nextName], folderId, item },
+        always: true,
+      },
       journalOperation: journal(null, `${what} “${name}” renamed “${nextName}”`),
     });
     bodyLabels.push(`${what} “${name}” → “${nextName}”`);
@@ -1871,6 +1985,37 @@ export async function planRename(
           : `Nothing to rename was found for ${identity.rawName}.`,
       ),
     );
+  // CR-2026-11-R3 (R3-29): history (D2) judged again when the job runs: a page with restatements archived, or filed
+  // under the Legacy Canon Archive or the Design References, since the plan has its items skipped, never written.
+  const restatementPages = new Map<string, { name: string; items: string[] }>();
+  for (const it of items)
+    if (it.kind === 'restatement' && it.page) {
+      const e = restatementPages.get(it.page.id) ?? { name: it.page.name, items: [] };
+      e.items.push(it.id);
+      restatementPages.set(it.page.id, e);
+    }
+  if (restatementPages.size > 0) {
+    const c = checks.length;
+    const hp = [...restatementPages.entries()].map(([pageId, e]) => ({
+      pageId,
+      name: e.name,
+      items: e.items,
+    }));
+    checks.push({
+      label: 'history',
+      kind: 'registered',
+      checker: RENAME_CHECKS.history,
+      input: {
+        archiveIndexId: basis.lifecycle.archiveIndexId ?? null,
+        pages: hp,
+      } satisfies HistoryCheckInput,
+    });
+    checkItems.push([...new Set(hp.flatMap((x) => x.items))]);
+    checkParts.push({ path: `body.checks.${c}.input.pages`, items: hp.map((x) => x.items) });
+    hp.forEach((x, k) =>
+      checkParts.push({ path: `body.checks.${c}.input.pages.${k}.items`, items: x.items.map((i) => [i]) }),
+    );
+  }
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,

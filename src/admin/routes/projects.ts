@@ -104,6 +104,8 @@ export const registerProjects: Register = (api, ctx) => {
   api.put('/projects/:name/draining', (req) => {
     const { name } = parseInput(nameParam, req.params);
     const b = parseInput(z.object({ value: z.boolean() }), req.body);
+    // ADR 0062 (the owner's rule): pausing and draining is one click; resuming it (releasing the brake) asks.
+    if (!b.value && projects.find(name)?.draining === true) requireReauth(ctx.deps.services, req);
     return ctx.actions.setProjectDraining(name, b.value);
   });
 
@@ -128,6 +130,8 @@ export const registerProjects: Register = (api, ctx) => {
     const b = parseInput(z.object({ value: z.boolean(), confirm: z.literal(true) }), req.body);
     const p = projects.find(name);
     if (!p?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${name} with stored data`);
+    // ADR 0062 (the owner's rule): read-only on is one click (a brake); off asks for the step-up.
+    if (!b.value && p.readOnly) requireReauth(ctx.deps.services, req);
     const after = ctx.actions.setProjectReadOnly(p.id, b.value);
     return { project: after };
   });
@@ -142,12 +146,10 @@ export const registerProjects: Register = (api, ctx) => {
       }),
       req.body,
     );
-    // CR-2026-11-R2 (R2-51): the Status of pages agents create is a canon setting, saved with the same re-authentication
-    // as the Canon section (ADR 0036 decision 4), whichever route saves it.
-    if (b.key === 'agentDefaultStatus') requireReauth(ctx.deps.services, req);
-    // ADR 0057 decision 7: switching ChatGPT's file source on (or back to its default, on) lets an agent make the bridge
-    // download more, so it needs the re-authentication of ADR 0028 decision 7; switching it off stays one click.
-    if (b.key === 'fileSourceEnabled' && b.value !== false) requireReauth(ctx.deps.services, req);
+    // ADR 0062 (the owner's rule: tightening is one click, loosening asks): every project setting asks for the step-up
+    // (R2-51's Status of pages agents create among them), except switching ChatGPT's file source off, which is one click
+    // (ADR 0057 decision 7: switching it on, or back to its default, on, lets an agent make the bridge download more).
+    if (!(b.key === 'fileSourceEnabled' && b.value === false)) requireReauth(ctx.deps.services, req);
     return { project: ctx.actions.setProjectSetting(name, b.key, b.value) };
   });
 
@@ -166,7 +168,7 @@ export const registerProjects: Register = (api, ctx) => {
   /**
    * v2 C2a: replaces the rules (`rules: null` restores the defaults); `confirm: true` required. Audited. C2d (ADR 0036
    * decision 4, the owner's): any change, a rule switched off and `rules: []` included, needs the owner to have signed
-   * in again within the last 5 minutes, as the other sensitive actions do (ADR 0028).
+   * in again within the last 10 minutes (ADR 0062), as the other sensitive actions do (ADR 0028).
    */
   api.put('/projects/:name/canon', (req) => {
     requireReauth(ctx.deps.services, req);

@@ -34,7 +34,7 @@ const asBrowser = (s: Managed, b: Browser) => {
 };
 
 describe('re-authentication', () => {
-  it('is needed for every sensitive action, and lasts five minutes', async () => {
+  it('is needed for every sensitive action, and lasts ten minutes (ADR 0062)', async () => {
     const s = await start();
     for (const [path, body] of [
       ['/security/password', { currentPassword: 'x', newPassword: 'y'.repeat(20) }],
@@ -63,9 +63,9 @@ describe('re-authentication', () => {
       s.stack.db
         .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
         .run(now() - ago, hash);
-    set(290);
+    set(590);
     expect((await s.admin.post('/security/totp/enrol', {})).status).toBe(200);
-    set(301);
+    set(601); // ADR 0062: the step-up lasts 10 minutes
     const expired = await s.admin.post('/security/totp/enrol', {});
     expect(expired.status).toBe(403);
     expect(expired.json.error.code).toBe('REAUTH_REQUIRED');

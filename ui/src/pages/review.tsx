@@ -58,7 +58,7 @@ const show = (v: unknown) =>
 /**
  * Revert a finished direct-write job (owner): reads what a revert would do now (each target read live), asks for
  * confirmation (and, when some targets would not be reverted, a deliberate yes to a partial revert), then the owner's
- * password (re-authentication), and submits ONE revert job.
+ * step-up (ADR 0062: the authenticator code, or the password without one), and submits ONE revert job.
  */
 export function RevertButton({
   jobId,
@@ -115,6 +115,16 @@ export function RevertButton({
         toast('ok', out.revert.message);
         onDone?.();
       }
+      return;
+    }
+    // CR-2026-11-R3 (R3-09): a split's phase 1 moved material (the source's edit and each destination's write are two
+    // halves of one move), so it is reverted whole or not at all: never offered as a partial revert.
+    if (p.split && p.notReverted > 0) {
+      const why = p.targets.filter((t) => t.state !== 'ready' && t.state !== 'nothing_to_do');
+      toast(
+        'error',
+        `This split is reverted whole or not at all, and ${p.notReverted} of the ${p.targets.length} things it changed cannot be put back: ${why.map((t) => `${t.page?.name ?? t.page?.id ?? 'no page'}: ${t.what} (${t.detail})`).join('; ')}. Nothing was reverted. Put those back as the split left them (a source phase 2 archived is unarchived first), or take what you need from the journal or a snapshot.`,
+      );
       return;
     }
     if (p.ready === 0) {

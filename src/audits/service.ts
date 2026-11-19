@@ -6,6 +6,7 @@
  * from the maintenance job. Findings are never fixed here: "Propose a fix" and "Re-check now" (src/audits/fixes.ts) are
  * the only two things that read LegendKeeper live, each on the owner's request.
  */
+import { loggedTask } from '../maintenance/task-log.js';
 import type { Db } from '../db/open.js';
 import type { Chronology } from '../chronology/index.js';
 import type { JobEngine, JobOrigin } from '../jobs/index.js';
@@ -88,7 +89,10 @@ export interface AuditDeps {
     after?: unknown,
   ) => void;
   readonly now: () => number;
-  readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
+  readonly log?: {
+    warn(obj: Record<string, unknown>, msg: string): void;
+    info?(obj: Record<string, unknown>, msg: string): void;
+  };
   /** v3 F2: the asset library from the bridge's asset tree (null when it is not built), for duplicate folders. */
   readonly assetLibrary?: (projectId: string) => AssetLibrary | null;
   /** v3 F3d (ADR 0053): a project's lifecycle tag rules (`Packs.lifecycleRules`); absent: the defaults. */
@@ -190,7 +194,14 @@ export class Audits {
 
   /** After a full snapshot completes (the snapshot service's hook): an audit of it, in the background. */
   afterFullSnapshot(projectId: string): void {
-    const p = this.run(projectId, 'snapshot')
+    // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory.
+    const log = this.d.log;
+    const p = loggedTask(
+      log?.info ? { info: (obj, msg) => log.info!(obj, msg) } : undefined,
+      'audit after the full snapshot',
+      { project: projectId },
+      () => this.run(projectId, 'snapshot'),
+    )
       .catch((e: unknown) =>
         this.d.log?.warn({ err: e, projectId }, 'the audit after the full snapshot failed'),
       )

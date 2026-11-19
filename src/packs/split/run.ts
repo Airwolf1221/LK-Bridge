@@ -15,6 +15,8 @@ import { errorResult, render, type ProjectDeps } from '../../mcp/tools/shape.js'
 import { runWriteJob } from '../../mcp/tools/write-job.js';
 import { packBasis } from '../run.js';
 import { planSplit, SPLIT_TOOL, type Issue, type SplitInput, type SplitPlan } from './plan.js';
+import { SPLIT_CHECKS } from './checks.js';
+import { jobVerified } from './service.js';
 
 type Obj = Record<string, unknown>;
 
@@ -185,7 +187,9 @@ export async function runSplit(
         lifecycle: plan.marker,
         forceProposal: true,
         // ADR 0058 (Resume): a split that stops part-way resumes from where it stopped, its first check again first.
-        resumable: { kind: 'split', recheck: [1] },
+        // CR-2026-11-R3 (R3-22): and its destinations check (what left a destination while the job was stopped is never
+        // then taken out of the source).
+        resumable: { kind: 'split', recheck: [1], recheckCheckers: [SPLIT_CHECKS.destinations] },
         lastMajorRevision: plan.lmr.mode,
         proposal: {
           operations: plan.operations,
@@ -233,6 +237,7 @@ export async function runSplit(
             items: plan.items.map((i) => i.id),
             newPages: plan.destinations.filter((d) => d.isNew && d.page).map((d) => d.page!),
             unmapped: plan.dependencies.unmapped,
+            upgrade: plan.upgrade,
           },
         });
       return { kind: 'job', head, labels: plan.labels, ...out };
@@ -255,10 +260,14 @@ export function splitReport(pd: ProjectDeps, mctx: McpToolContext, ref: string):
       pd,
     );
   void mctx;
+  // CR-2026-11-R3 (R3-67): whether phase 1 verified is the job's own verification, never the split's.
+  const job = rec.jobId ? pd.engine.queries.getJob(pd.project.id, rec.jobId) : null;
+  const verified = job && ['succeeded', 'failed', 'cancelled'].includes(job.status) ? jobVerified(job) : null;
   return render(
     {
       split: rec.id,
       state: rec.state,
+      verified,
       source: { id: rec.sourceId, name: rec.sourceName },
       retire: rec.retire,
       proposalId: rec.proposalId,

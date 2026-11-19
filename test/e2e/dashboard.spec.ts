@@ -35,6 +35,22 @@ async function goTo(page: Page, name: string | RegExp, exact = false) {
   await link.click();
 }
 
+/**
+ * ADR 0062: a sensitive change (a setting, a key) asks for the step-up in a dialog: without an authenticator, the
+ * password. The change then goes on by itself.
+ */
+async function stepUp(page: Page) {
+  const dialog = page.getByRole('dialog', { name: 'Confirm it’s you' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Password').fill(PASSWORD);
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  await expect(dialog).toBeHidden();
+}
+
+/** The browser's record of the one refusal that asked for the step-up (403 REAUTH_REQUIRED) on `method path`. */
+const stepUpRefusal = (method: string, path: RegExp) => (p: string) =>
+  new RegExp(`HTTP 403 ${method} .*${path.source}$`).test(p) || /status of 403 \(Forbidden\)$/.test(p);
+
 async function signIn(page: Page, path = '/ui') {
   await page.goto(path);
   await expect(page).toHaveURL(/\/oauth\/login\?return_to=/);
@@ -133,9 +149,10 @@ test('a job runs while the Jobs, Budgets and Writers pages update live', async (
   await expect(page.locator('[data-slot][data-state="busy"]')).toContainText('replaceDocumentBlocks');
   await expect(page.getByTestId('writes-per-minute')).not.toHaveText('0', { timeout: 10_000 });
 
-  // WRITERS_MAX changes without a restart.
+  // WRITERS_MAX changes without a restart (a setting: the step-up first, ADR 0062).
   await page.getByLabel('Writer slots').selectOption('3');
   await page.getByRole('button', { name: 'Apply' }).click();
+  await stepUp(page);
   await expect(page.locator('[data-slot]')).toHaveCount(3);
 
   // Budgets: the writes gauge has moved.
@@ -147,7 +164,9 @@ test('a job runs while the Jobs, Budgets and Writers pages update live', async (
   await goTo(page, 'Jobs', true);
   await page.getByRole('button', { name: 'History' }).click();
   await expect(page.locator(`tr[data-job="${jobId}"]`)).toContainText('Succeeded', { timeout: 30_000 });
-  expect(problems).toEqual([]);
+  const expected = stepUpRefusal('PUT', /\/api\/admin\/writers\/max/);
+  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
+  expect(problems.filter((p) => !expected(p))).toEqual([]);
 });
 
 test('reviews a proposal as a readable diff and approves it; a token is shown once', async ({
@@ -175,13 +194,16 @@ test('reviews a proposal as a readable diff and approves it; a token is shown on
   await goTo(page, 'Clients & Access', true);
   await page.getByLabel('Name', { exact: true }).fill('Playwright laptop');
   await page.getByRole('button', { name: 'Create token' }).click();
+  await stepUp(page); // ADR 0062: a token is a key
   const token = (await page.getByTestId('pat-token').textContent()) ?? '';
   expect(token).toMatch(/^lkb_pat_/);
   await page.getByRole('button', { name: 'I have copied it' }).click();
   await expect(page.getByTestId('pat-token')).toHaveCount(0);
   await page.reload();
   expect(await page.content()).not.toContain(token);
-  expect(problems).toEqual([]);
+  const expected = stepUpRefusal('POST', /\/api\/admin\/clients\/pats/);
+  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
+  expect(problems.filter((p) => !expected(p))).toEqual([]);
 });
 
 test('v2 C1: a write_page proposal shows its Markdown diff, keep regions as placeholders, and is verified once approved', async ({
@@ -264,4 +286,39 @@ test('is usable on a phone, in the dark', async ({ browser }) => {
   await page.screenshot({ path: 'test-results/phone-dark-overview.png', fullPage: true });
   expect(problems).toEqual([]);
   await context.close();
+});
+
+// ADR 0062: the session cookie is SameSite=Strict, so a link to the dashboard from another site arrives without it. The
+// bridge answers that arrival once with a page of its own that opens the address again, a same-origin navigation that
+// carries the cookie: the owner stays signed in.
+test('ADR 0062: a link from another site opens the dashboard signed in (the Strict cookie, bounced once)', async ({
+  page,
+}) => {
+  const problems = watch(page);
+  await signIn(page, '/ui/jobs');
+  await expect(page.getByRole('heading', { name: 'Jobs' })).toBeVisible();
+  const cookie = (await page.context().cookies()).find((c) => /lkb_session$/.test(c.name));
+  expect(cookie?.sameSite).toBe('Strict');
+  expect(cookie?.httpOnly).toBe(true);
+  // About 30 days ahead (a sliding session).
+  expect(cookie!.expires * 1000 - Date.now()).toBeGreaterThan(29 * 86_400_000);
+
+  const elsewhere = 'http://elsewhere.example.test/';
+  await page.route(elsewhere, (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><title>Elsewhere</title><a id="go" href="http://127.0.0.1:${PORT}/ui/budgets">LK-Bridge</a>`,
+    }),
+  );
+  await page.goto(elsewhere);
+  const arrivals: string[] = [];
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.url().includes('/ui/budgets')) arrivals.push(r.url());
+  });
+  await page.click('#go');
+  await expect(page).toHaveURL(/\/ui\/budgets$/);
+  await expect(page.getByRole('heading', { name: 'Request Budgets' })).toBeVisible();
+  // Once without the cookie (cross-site: bounced), once with it (same-origin): never a third time.
+  expect(arrivals).toHaveLength(2);
+  expect(problems).toEqual([]);
 });

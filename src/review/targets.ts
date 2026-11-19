@@ -166,6 +166,11 @@ export interface ResourceTarget extends Common {
   readonly resourceId: string;
   readonly before: Readonly<Partial<Record<ResourceField, unknown>>>;
   readonly left: Readonly<Partial<Record<ResourceField, unknown>>>;
+  /**
+   * CR-2026-11-R3, R3-57 (ADR 0061 part B decision 5, the owner's (b)): a retag batch's page is put back only while its
+   * name and parent are as the job left them too (`TargetDeps.placeAsLeft`), not only its tags.
+   */
+  readonly place?: { readonly name: unknown; readonly parentId: string | null };
 }
 
 export interface MoveTarget extends Common {
@@ -375,6 +380,11 @@ export interface TargetDeps {
   readonly laterLmr?: (resourceId: string, date: string) => string | null;
   /** CR-2026-11-R2 (R2-28): the applied (or possibly applied) journal entries of later jobs. */
   readonly laterWrites?: () => readonly LaterWrite[];
+  /**
+   * CR-2026-11-R3, R3-57 (ADR 0061 part B decision 5): the job is a retag batch (ADR 0060 decision 3.6, "only where the
+   * page is as the job left it"): each page target also keeps the page's name and parent as the job left them.
+   */
+  readonly placeAsLeft?: boolean;
 }
 
 /** A later job's journal entry (CR-2026-11-R2, F10). */
@@ -679,6 +689,15 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       resourceId: pid,
       before,
       left,
+      // R3-57: its name (as the job left it) and parent (the job did not move it), for a retag batch.
+      ...(d.placeAsLeft === true
+        ? {
+            place: {
+              name: 'name' in left ? left.name : (pre.name ?? null),
+              parentId: str(pre.parentId) ?? null,
+            },
+          }
+        : {}),
     });
   }
   const moveSteps = writes.filter((s) => s.opId === 'moveResource' && !handled.has(s.stepNo));

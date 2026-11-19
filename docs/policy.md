@@ -413,8 +413,8 @@ pages under one page is refused at capture (delete or copy them in parts).
 ## Re-authentication for the canon rules and the lifecycle settings (C2d, ADR 0036 decision 4)
 
 Saving the canon rules (`PUT /projects/:name/canon`: any change, a rule switched off and `rules: []` included) and
-saving the lifecycle settings (`PUT /projects/:name/lifecycle`) need the owner to have re-confirmed their password (and
-authenticator code) on this session within the last 5 minutes, as key changes do (ADR 0028); otherwise `403
+saving the lifecycle settings (`PUT /projects/:name/lifecycle`) need the owner's step-up on this session within the
+last 10 minutes (ADR 0062: the authenticator code, or the password without one), as key changes do (ADR 0028); otherwise `403
 REAUTH_REQUIRED` and nothing is saved. "Approve and accept as canon" is unchanged.
 
 ## Timeline, map and board content on Authoritative pages (ADR 0036 decision 6)
@@ -467,6 +467,15 @@ request that a rail covers becomes an ordinary proposal instead of running:
   counts as a removal). A list write that only adds, reorders or edits entries stays an edit. The high-level tools'
   removals (`write_page`, `set_facts`, the chronology tools) are planned, checked and revertible, and stay edits. Revert
   does not put a low-level removal back yet (open in ADR 0057): the journal keeps the pre-image.
+- **Text taken off a pack page through the low-level tools is a removal too** (ADR 0061 part B decision 1, the owner's,
+  19 November 2026; R3-53). On a project whose approved pack has split rules, a request through `lk_api_write`,
+  `lk_api_batch` or `lk_op_*` whose `replaceDocumentBlocks`, `updateBlock` or `replaceBlock` writes take the pack's
+  `splits.guardWords` words (120) or more off a pack page (a page of a character's set, a page with a Subject fact, a
+  pack owner: the split guard's own test, which refuses the same through `write_page` with `USE_ARKONA_SPLIT`) is a
+  proposal under the deletes rail, even when every block id is kept. The words are counted over the whole request, per
+  page, on what LegendKeeper holds now (read live); a document that cannot be read counts as a removal. The proposal
+  says so: `proposed because: text removal (312 words off “Zahra al-Rashid”, a page of a character’s set; the pack's
+threshold is 120)`.
 - **A restore counts every page it may bring back** (ADR 0057 decision 9; R2-03): LegendKeeper restores every page
   deleted by the same delete, so the bulk rail counts the page and its restore set (the set the canon guard reads since
   R2-10: the bridge's journal of its own delete, the snapshots, the tree). A set that cannot be told counts as more than

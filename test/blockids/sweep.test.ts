@@ -288,17 +288,21 @@ describe('prerequisite 2, the override, the dry run and the card (admin API)', (
     w = await blockIdsWorld();
     await w.snapshot();
     const o = owner(w);
+    // ADR 0062: switching a job on is a setting, so the step-up comes first; then the prerequisite.
+    const unstepped = await o.post(`/maintenance/${ID}/enable`);
+    expect(unstepped.status).toBe(403);
+    expect(unstepped.json.error.code).toBe('REAUTH_REQUIRED');
+    // The override: refused without a fresh re-authentication, then set and audited.
+    const denied = await o.put(`/maintenance/${ID}/override`, { on: true });
+    expect(denied.status).toBe(403);
+    expect(denied.json.error.code).toBe('REAUTH_REQUIRED');
+    o.reauth();
     const refused = await o.post(`/maintenance/${ID}/enable`);
     expect(refused.status).toBe(409);
     expect(refused.json.error.code).toBe('PREREQUISITE_MISSING');
     // A run without either is skipped, saying why.
     expect((await runNow()).detail).toMatch(/^Skipped: the sandbox check has no recorded PASS/);
 
-    // The override: refused without a fresh re-authentication, then set and audited.
-    const denied = await o.put(`/maintenance/${ID}/override`, { on: true });
-    expect(denied.status).toBe(403);
-    expect(denied.json.error.code).toBe('REAUTH_REQUIRED');
-    o.reauth();
     const set = await o.put(`/maintenance/${ID}/override`, { on: true });
     expect(set.status).toBe(200);
     expect(set.json.prerequisite).toMatchObject({ ok: true, pass: null });
@@ -327,6 +331,9 @@ describe('prerequisite 2, the override, the dry run and the card (admin API)', (
     await w.snapshot();
     pass();
     const o = owner(w);
+    // ADR 0062: the limit is a setting: refused without the step-up.
+    expect((await o.put(`/maintenance/${ID}/limit`, { maxPerRun: 3 })).status).toBe(403);
+    o.reauth();
     expect((await o.put(`/maintenance/${ID}/limit`, { maxPerRun: 3 })).json.maxPerRun).toBe(3);
     expect((await o.put(`/maintenance/${ID}/limit`, { maxPerRun: 0 })).status).toBe(400);
     const calls = w.stack.mock.calls.length;

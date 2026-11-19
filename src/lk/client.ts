@@ -39,6 +39,8 @@ export interface LkCallRequest<T> {
   /** Caller-facing input `{ path?, query?, ifMatch?, body? }`; used here only to cost `createManyResources`. */
   readonly input?: unknown;
   readonly signal?: AbortSignal;
+  /** CR-2026-11-R3 (R3-62): waits for the budget in its queue (`ExecuteRequest.patient`). */
+  readonly patient?: boolean;
   readonly verify?: (ctx: {
     readonly error: BridgeLkError;
     readonly signal: AbortSignal;
@@ -101,6 +103,7 @@ export function createLkClient(config: LkClientConfig): LkClient {
         ...(req.idempotencyKey !== undefined ? { idempotencyKey: req.idempotencyKey } : {}),
         ...(req.signal ? { signal: req.signal } : {}),
         ...(req.verify ? { verify: req.verify } : {}),
+        ...(req.patient === true ? { patient: true } : {}),
         run: (signal) => req.run(sdk, signal),
       });
     },

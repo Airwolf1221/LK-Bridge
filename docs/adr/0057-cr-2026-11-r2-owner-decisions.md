@@ -4,6 +4,13 @@ Status: **Accepted** (the owner, 17 November 2026: every decision as recommended
 below). Proposed by CR-2026-11-R2 (numbered 0057 because F3.5's block-id sweep took 0056 while the review ran). The
 findings are in [docs/reviews/CR-2026-11-R2.md](../reviews/CR-2026-11-R2.md).
 
+Amended by [ADR 0062](0062-dashboard-sessions-and-step-up.md) (accepted, 19 November 2026): decision 1's
+re-authentication is now the step-up (the authenticator code within 10 minutes, or the password without one); a raise
+still asks and a lowering is still one click (the owner's rule: tightening is one click, loosening asks), and every new
+personal access token asks, at any scope. Decision 7 stands: switching ChatGPT's file source off is one click. And by
+[ADR 0061](0061-cr-2026-11-r3-decisions.md) part B decision 1 (accepted, 19 November 2026): decision 4's deletes rail
+also counts text taken off a pack page through a low-level tool (the split guard's words or more) as a removal.
+
 - Amends (the findings' fixes, each in the review): [ADR 0036](0036-cr-2026-11-owner-decisions.md) decision 3 (a
   lifecycle index name is refused whatever the lifecycle marker) and decision 7 (a template copy takes its template's
   tags, so they are judged); [ADR 0048](0048-chronology-ii.md) decision 7 (the orphan delete lists rows whose date cannot

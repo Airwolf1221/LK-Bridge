@@ -1,3 +1,4 @@
+import { loggedTask } from '../maintenance/task-log.js';
 import fastifyCookie from '@fastify/cookie';
 import type { FastifyInstance } from 'fastify';
 import { registerFormParser } from './form.js';
@@ -35,12 +36,12 @@ export async function authPlugin(app: FastifyInstance, opts: AuthPluginOptions):
 
   const interval = opts.pruneIntervalMs ?? 10 * 60_000;
   if (interval > 0) {
+    // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory.
+    const taskLog = { info: (obj: Record<string, unknown>, msg: string) => app.log.info(obj, msg) };
     const timer = setInterval(() => {
-      try {
-        s.prune();
-      } catch (err) {
-        app.log.error({ err }, 'auth prune failed');
-      }
+      void loggedTask(taskLog, 'auth prune', {}, () => s.prune()).catch((err: unknown) =>
+        app.log.error({ err }, 'auth prune failed'),
+      );
     }, interval);
     timer.unref();
     app.addHook('onClose', () => clearInterval(timer));

@@ -613,13 +613,27 @@ export function resourceDiffs(fields: Readonly<Record<string, unknown>>, live: O
     .map(([k, v]) => ({ path: k, expected: v ?? null, actual: live[k] ?? null }));
 }
 
+/**
+ * R3-57 (ADR 0061 part B decision 5): a retag batch's page, its name and parent as the job left them (`ResourceTarget.place`);
+ * nothing for any other target.
+ */
+export function placeDiffs(place: ResourceTarget['place'], live: Obj): Difference[] {
+  if (!place) return [];
+  const out: Difference[] = [];
+  if (!fieldEq(place.name, live.name))
+    out.push({ path: 'name', expected: place.name ?? null, actual: live.name ?? null });
+  const parent = typeof live.parentId === 'string' && live.parentId !== '' ? live.parentId : null;
+  if (place.parentId !== parent) out.push({ path: 'parent', expected: place.parentId, actual: parent });
+  return out;
+}
+
 export async function planResource(t: ResourceTarget, io: PlanIo): Promise<TargetPlan> {
   const r = await io.read('getResource', { path: { resourceId: t.resourceId } });
   const live = isObj(r.body) ? r.body : {};
   if (!r.exists || typeof live.deletedAt === 'string') return gone(t, 'the page is gone');
   if (resourceDiffs(t.before, live).length === 0)
     return nothing(t, 'the page is already as it was before the job');
-  const d = resourceDiffs(t.left, live);
+  const d = [...resourceDiffs(t.left, live), ...placeDiffs(t.place, live)];
   if (d.length > 0)
     return changed(t, 'the page has changed since the job (an outside edit is never overwritten)', d);
   if (t.laterWrite) return changedLater(t);
@@ -634,7 +648,12 @@ export async function planResource(t: ResourceTarget, io: PlanIo): Promise<Targe
               kind: 'registered',
               checker: REVERT_CHECKER,
               resourceId: t.resourceId,
-              input: { kind: 'resource', resourceId: t.resourceId, fields: t.left },
+              input: {
+                kind: 'resource',
+                resourceId: t.resourceId,
+                fields: t.left,
+                ...(t.place ? { place: t.place } : {}),
+              },
             },
           ],
         },

@@ -12,6 +12,7 @@
  *   writes pause (or while draining); the run history shows it.
  * - **Every run is a P3 job on the Jobs page** when its record policy says so (see `MaintenanceJobDef.record`).
  */
+import { loggedTask } from './task-log.js';
 import type { Db } from '../db/open.js';
 import { SYSTEM_PRINCIPAL, type JobEngine, type JobOrigin, type OpParams } from '../jobs/index.js';
 import type { Clock } from '../lk/index.js';
@@ -59,7 +60,11 @@ export interface SchedulerOptions {
   readonly clock: Clock;
   readonly settings: MaintenanceSettings;
   readonly jobs: readonly MaintenanceJobDef[];
-  readonly log?: { warn(o: Record<string, unknown>, m: string): void };
+  /** CR-2026-11-R3 (R3-65): `info` logs each run's start and finish with the memory (task-log.ts). */
+  readonly log?: {
+    warn(o: Record<string, unknown>, m: string): void;
+    info?(o: Record<string, unknown>, m: string): void;
+  };
 }
 
 export class MaintenanceScheduler {
@@ -142,14 +147,26 @@ export class MaintenanceScheduler {
     this.arm();
   }
 
-  /** Stops the timer and waits for runs in flight. */
-  async stop(): Promise<void> {
+  /**
+   * Stops the timer and waits for runs in flight. CR-2026-11-R3 (fix A): `waitMs` bounds the wait (a restart must end
+   * within systemd's stop timeout). A run still going then is left as it is: its record keeps `runningSince`, so the
+   * next start records it as interrupted ("The bridge stopped while this was running"), as after a crash; the engine
+   * jobs it started are parked and continue by themselves.
+   */
+  async stop(waitMs?: number): Promise<void> {
     this.stopped = true;
     if (this.timer) this.o.clock.clearTimeout(this.timer);
     this.timer = undefined;
     for (const wake of this.waiters) wake();
     this.waiters.clear();
-    await Promise.allSettled([...this.active]);
+    const all = Promise.allSettled([...this.active]);
+    if (waitMs === undefined) {
+      await all;
+      return;
+    }
+    let t: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, Math.max(0, waitMs))))]);
+    clearTimeout(t);
   }
 
   /** Resolves when no run is in flight (tests). */
@@ -558,7 +575,17 @@ export class MaintenanceScheduler {
           });
         },
       };
-      const result = await def.run!(ctx);
+      // CR-2026-11-R3 (R3-65): every run's start and finish in the log, with the memory; a job that runs more often than
+      // once a minute (the budget sampler) only when memory moved or it failed.
+      const sched = this.scheduleOf(def);
+      const log = this.o.log;
+      const result = await loggedTask(
+        log?.info ? { info: (obj, msg) => log.info?.(obj, msg) } : undefined,
+        `maintenance:${id}`,
+        { trigger: trig, ...(projectId !== null ? { project: projectId } : {}) },
+        () => def.run!(ctx),
+        { quiet: sched.kind === 'interval' && sched.everySeconds < 60 },
+      );
       detail = result.summary;
       changed = result.changed === true;
       if (result.skipped === true) outcome = 'skipped';

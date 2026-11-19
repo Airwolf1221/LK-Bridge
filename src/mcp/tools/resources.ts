@@ -1213,6 +1213,8 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
                 factKeys: sidebarFrom({ data: props })
                   .filter((x) => x.kind === 'keyValue')
                   .flatMap((x) => (x.rows ?? []).map((row) => row.key)),
+                childrenOf: (indexId) =>
+                  pd.services?.tree.queries.children(pd.project.id, indexId).data ?? [],
               });
               if (refusal) return errorResult(refusal, pd);
             }

@@ -9,8 +9,8 @@ import { verifyTotp } from './totp.js';
 
 /**
  * The single owner account: Argon2id password (hash from the environment), optional TOTP,
- * server-side sessions in a secure HttpOnly SameSite=Lax cookie, CSRF tokens bound to the
- * session, and login rate limiting (per client IP and globally).
+ * server-side sessions in a secure HttpOnly SameSite=Strict cookie (ADR 0062: sliding, 30 days from the last use by
+ * default), CSRF tokens bound to the session, and login rate limiting (per client IP and globally).
  */
 
 export interface LoginAttempt {
@@ -28,10 +28,13 @@ export type LoginResult =
   /** OPS2: the owner's stored credentials cannot be read (master key missing or wrong); `message` says what to fix. */
   | { readonly ok: false; readonly reason: 'unavailable'; readonly message: string };
 
-/** OPS2: a re-authentication (password, and the second factor when enabled) on an existing session. */
+/**
+ * OPS2, ADR 0062: a step-up on an existing session: the authenticator code (or a recovery code) when the authenticator is
+ * set up, else the password.
+ */
 export interface ReauthAttempt {
   readonly sessionToken: string;
-  readonly password: string;
+  readonly password: string | undefined;
   readonly totp: string | undefined;
   readonly ip: string;
 }
@@ -42,8 +45,8 @@ export type ReauthResult =
   | { readonly ok: false; readonly reason: 'rate_limited'; readonly retryAfterSeconds: number }
   | { readonly ok: false; readonly reason: 'unavailable'; readonly message: string };
 
-/** OPS2: sensitive actions need a re-authentication within this many seconds. */
-export const REAUTH_WINDOW_SECONDS = 300;
+/** OPS2, ADR 0062: sensitive actions need a step-up within this many seconds (10 minutes; was 5). */
+export const REAUTH_WINDOW_SECONDS = 600;
 
 export interface LoginLimits {
   readonly perIp: { readonly limit: number; readonly windowMs: number };
@@ -104,14 +107,23 @@ export class OwnerAuth {
     return this.credentials.totpRequired();
   }
 
+  /**
+   * ADR 0062: `SameSite=Strict` (was Lax): the cookie rides on no navigation from another site; the three pages reached
+   * that way answer with a same-origin bounce (`src/admin/bounce.ts`).
+   */
   cookieOptions(maxAgeSeconds: number) {
     return {
       httpOnly: true,
       secure: this.deps.config.secureCookies,
-      sameSite: 'lax' as const,
+      sameSite: 'strict' as const,
       path: '/',
       maxAge: maxAgeSeconds,
     };
+  }
+
+  /** ADR 0062: the session cookie's options (its `Max-Age` the session's lifetime, renewed on use). */
+  sessionCookieOptions() {
+    return this.cookieOptions(this.deps.config.ttl.sessionSeconds);
   }
 
   async login(a: LoginAttempt): Promise<LoginResult> {
@@ -149,7 +161,7 @@ export class OwnerAuth {
   }
 
   /**
-   * OPS2: re-confirms the owner on an existing session (sensitive dashboard actions need it within the last 5 minutes).
+   * OPS2, ADR 0062: the step-up on an existing session (sensitive dashboard actions need it within the last 10 minutes).
    * Counted against the SAME limits as sign-in, so it is no way around them.
    */
   async reauthenticate(a: ReauthAttempt): Promise<ReauthResult> {
@@ -163,7 +175,9 @@ export class OwnerAuth {
     }
     const reservedIp = this.perIp.hit(a.ip);
     const reservedGlobal = this.global.hit('*');
-    const checked = await this.checkFactors(this.deps.config.owner.username, a.password, a.totp);
+    // ADR 0062: the step-up is the authenticator code (or a recovery code) when the authenticator is set up, else the
+    // password.
+    const checked = await this.checkStepUp(a.password, a.totp);
     if (checked.result !== 'ok') {
       if (checked.result === 'unavailable')
         return { ok: false, reason: 'unavailable', message: checked.message };
@@ -214,7 +228,7 @@ export class OwnerAuth {
     return { ok: true };
   }
 
-  /** OPS2: whether the session re-authenticated within the last 5 minutes; returns until when (Unix seconds). */
+  /** OPS2, ADR 0062: whether the session stepped up within the last 10 minutes; returns until when (Unix seconds). */
   reauthUntil(session: SessionRecord): number | null {
     if (session.reauthAt === null) return null;
     const until = session.reauthAt + REAUTH_WINDOW_SECONDS;
@@ -227,8 +241,63 @@ export class OwnerAuth {
     return this.deps.store.revokeOtherSessions(hashSecret(sessionToken), this.deps.now());
   }
 
+  /** ADR 0062: signs out every owner session, this one included ("Sign out everywhere"). Returns how many. */
+  revokeAllSessions(ip: string): number {
+    const n = this.deps.store.revokeAllSessions(this.deps.now());
+    this.deps.event('logout.everywhere', { ip, sessions: n });
+    return n;
+  }
+
+  /** ADR 0062: how many owner sessions are live now. */
+  activeSessions(): number {
+    return this.deps.store.activeSessions(this.deps.now());
+  }
+
   private waitMs(ip: string): number {
     return Math.max(this.perIp.retryAfterMs(ip), this.global.retryAfterMs('*'));
+  }
+
+  /**
+   * ADR 0062: the step-up's factor. With the authenticator set up, its code (each time step usable once) or a recovery
+   * code (used up), and nothing else; without one, the password (Argon2id).
+   */
+  private async checkStepUp(
+    password: string | undefined,
+    second: string | undefined,
+  ): Promise<
+    | { result: 'ok'; recoveryCode: boolean }
+    | { result: 'invalid'; factor: 'password' | 'totp' }
+    | { result: 'unavailable'; message: string }
+  > {
+    const totp = this.credentials.totp();
+    if (totp.state === 'unreadable') return { result: 'unavailable', message: totp.reason };
+    if (totp.state === 'off') {
+      const pw = this.credentials.password();
+      const ok = await verifyPassword(pw.ok ? pw.hash : await dummy(), password ?? '');
+      if (!pw.ok) return { result: 'unavailable', message: pw.reason };
+      return ok ? { result: 'ok', recoveryCode: false } : { result: 'invalid', factor: 'password' };
+    }
+    return this.checkCode(totp.secret, second);
+  }
+
+  /** The second factor: a TOTP code (each time step usable once), or one of the recovery codes (used up). */
+  private checkCode(
+    secret: string,
+    second: string | undefined,
+  ): { result: 'ok'; recoveryCode: boolean } | { result: 'invalid'; factor: 'totp' } {
+    const code = (second ?? '').trim();
+    if (/^\d{3}\s?\d{3}$/.test(code)) {
+      const now = this.deps.now();
+      const step = verifyTotp(secret, code.replace(/\s+/g, ''), now);
+      if (step !== undefined && this.deps.store.claimTotpStep(step, now))
+        return { result: 'ok', recoveryCode: false };
+      return { result: 'invalid', factor: 'totp' };
+    }
+    if (normaliseRecoveryCode(code) && this.credentials.useRecoveryCode(code)) {
+      this.deps.event('recovery_code.used', { remaining: this.credentials.recoveryCodesLeft() }, 'warn');
+      return { result: 'ok', recoveryCode: true };
+    }
+    return { result: 'invalid', factor: 'totp' };
   }
 
   /**
@@ -254,20 +323,7 @@ export class OwnerAuth {
     if (totp.state === 'unreadable') return { result: 'unavailable', message: totp.reason };
     if (!(passwordOk && usernameOk)) return { result: 'invalid', factor: 'password' };
     if (totp.state === 'off') return { result: 'ok', recoveryCode: false };
-    const code = (second ?? '').trim();
-    if (/^\d{3}\s?\d{3}$/.test(code)) {
-      const now = this.deps.now();
-      const step = verifyTotp(totp.secret, code.replace(/\s+/g, ''), now);
-      if (step !== undefined && this.deps.store.claimTotpStep(step, now)) {
-        return { result: 'ok', recoveryCode: false };
-      }
-      return { result: 'invalid', factor: 'totp' };
-    }
-    if (normaliseRecoveryCode(code) && this.credentials.useRecoveryCode(code)) {
-      this.deps.event('recovery_code.used', { remaining: this.credentials.recoveryCodesLeft() }, 'warn');
-      return { result: 'ok', recoveryCode: true };
-    }
-    return { result: 'invalid', factor: 'totp' };
+    return this.checkCode(totp.secret, second);
   }
 
   createSession(ip: string | undefined, userAgent: string | undefined): string {
@@ -284,15 +340,35 @@ export class OwnerAuth {
     return token;
   }
 
-  /** Returns the live session for a cookie value, or undefined. */
+  /** Returns the live session for a cookie value, or undefined. A use of it (ADR 0062: its end moves 30 days on). */
   getSession(token: string | undefined): SessionRecord | undefined {
+    return this.useSession(token)?.session;
+  }
+
+  /**
+   * ADR 0062: whether a cookie value is a live session, without counting as a use (the live stream's periodic check: an
+   * open, idle dashboard does not keep its session alive by itself).
+   */
+  isLive(token: string | undefined): boolean {
+    if (!token || token.length > 128) return false;
+    const s = this.deps.store.getSession(hashSecret(token));
+    return s !== undefined && s.revokedAt === null && s.expiresAt > this.deps.now();
+  }
+
+  /**
+   * ADR 0062: the live session for a cookie value, used now: a sliding session, its end moved to the session lifetime
+   * ahead (at most once a minute, with its last use). `renewed`: it was, so the caller renews the cookie's Max-Age.
+   */
+  useSession(token: string | undefined): { session: SessionRecord; renewed: boolean } | undefined {
     if (!token || token.length > 128) return undefined;
     const hash = hashSecret(token);
     const s = this.deps.store.getSession(hash);
     const now = this.deps.now();
     if (!s || s.revokedAt !== null || s.expiresAt <= now) return undefined;
-    if (now - s.lastSeenAt >= 60) this.deps.store.touchSession(hash, now);
-    return s;
+    if (now - s.lastSeenAt < 60) return { session: s, renewed: false };
+    const expiresAt = now + this.deps.config.ttl.sessionSeconds;
+    this.deps.store.touchSession(hash, now, expiresAt);
+    return { session: { ...s, lastSeenAt: now, expiresAt }, renewed: true };
   }
 
   logout(token: string | undefined, ip: string): void {

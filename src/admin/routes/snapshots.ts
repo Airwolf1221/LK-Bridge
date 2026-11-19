@@ -33,6 +33,7 @@ import type { Rehearsals } from '../../snapshots/rehearsal.js';
 import { RestoreError } from '../../snapshots/restore.js';
 import type { Restores } from '../../snapshots/restores.js';
 import type { SnapshotService } from '../../snapshots/service.js';
+import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { limitSchema, parseInput, projectParam, type Register } from './util.js';
 
@@ -498,6 +499,7 @@ export const registerSnapshots: Register = (api, ctx) => {
   api.post('/snapshots/rehearsals/:id/delete-root', async (req) => {
     const { id } = parseInput(z.object({ id: z.string().regex(/^rh_[0-9a-f]{16}$/) }), req.params);
     parseInput(z.object({ confirm: z.literal(true) }), req.body);
+    requireReauth(ctx.deps.services, req); // ADR 0062: a delete (the guarded rails' first kind)
     const { rehearsals } = services();
     try {
       const row = await rehearsals.deleteRoot(id);

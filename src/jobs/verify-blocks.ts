@@ -8,7 +8,9 @@
  * `VERIFY_IGNORED_FIELDS` and taken from its spec (3.0.0):
  *
  * 1. `version` on a block: the spec's `Versioned…Block` answers carry a read-only version per block.
- * 2. `name` in a mention: "the resource's current name; it is read-only" (spec `Run`).
+ * 2. A mention's display fields: `name` ("the resource's current name; it is read-only", spec `Run`) and `text` (its
+ *    label, which LegendKeeper fills in on read-back): a mention is compared by its target, `resourceId` and
+ *    `documentId` (CR-2026-11-R3, R3-67: a split's job read its own mentions back as "not verified").
  * 3. Run normalisation: "a run whose `text` is empty is dropped, and adjacent runs carrying identical marks are merged
  *    into one" (spec `Run`). Both sides are normalised the same way before they are compared.
  * 4. The id of a block sent without one: "A block without an id is given a new id" (spec `DocumentBlocksWrite`). The
@@ -21,7 +23,7 @@
 /** The fields LegendKeeper may change on a write without it being a difference (documented in the result). */
 export const VERIFY_IGNORED_FIELDS: readonly string[] = [
   'version on each block (read-only)',
-  'name in a mention (read-only: the page’s current name)',
+  'a mention’s name and text (display fields LegendKeeper fills in: the page’s current name, its label): a mention is compared by its target (resourceId, documentId)',
   'runs normalised as LegendKeeper does on write (empty text runs dropped, neighbouring runs with the same marks merged)',
   'the id LegendKeeper gives a block sent without one',
   'the document’s own version, text and schema (only the blocks are compared)',
@@ -58,7 +60,22 @@ const marksOf = (r: Obj): string =>
       .map((k) => [k, r[k]]),
   );
 
-/** LegendKeeper's run normalisation: empty text runs dropped, neighbours with identical marks merged. */
+/**
+ * CR-2026-11-R3 (R3-67): a mention as the verify compares it: its target only (`resourceId`, and `documentId` when it has
+ * one). Its `name` and `text` are display fields LegendKeeper fills in on read-back (the page's current name, the label
+ * shown). Only comparisons use this: a state the bridge stores (to check against, or to put back) keeps the label.
+ */
+export function mentionTarget(m: Obj): Obj {
+  return {
+    resourceId: m.resourceId,
+    ...(m.documentId !== undefined && m.documentId !== null ? { documentId: m.documentId } : {}),
+  };
+}
+
+/**
+ * LegendKeeper's run normalisation: empty text runs dropped, neighbours with identical marks merged; a mention's
+ * read-only `name` dropped (its label kept: this also makes the states the bridge stores and puts back).
+ */
 export function normaliseRuns(runs: readonly Obj[]): Obj[] {
   const out: Obj[] = [];
   for (const raw of runs) {
@@ -91,7 +108,7 @@ function normalise(v: unknown, depth = 0): unknown {
   for (const [k, x] of Object.entries(v)) {
     if (block && k === 'version') continue;
     if (k === 'mention' && isObj(x)) {
-      out[k] = withoutKey(x, 'name');
+      out[k] = mentionTarget(x);
       continue;
     }
     out[k] =
@@ -100,6 +117,14 @@ function normalise(v: unknown, depth = 0): unknown {
         : normalise(x, depth + 1);
   }
   return out;
+}
+
+/**
+ * CR-2026-11-R3 (R3-17): a value normalised exactly as `compareStoredBlocks` compares it (block versions dropped, runs and
+ * mentions normalised as LegendKeeper stores them), for callers that compare blocks by a print (a split's moved blocks).
+ */
+export function normaliseForCompare(v: unknown): unknown {
+  return normalise(v);
 }
 
 /**

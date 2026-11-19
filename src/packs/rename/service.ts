@@ -23,7 +23,7 @@ import type { ProposalHooks } from '../../policy/proposals.js';
 import type { ProposalView } from '../../policy/types.js';
 import { textKey } from '../engine/text.js';
 import type { Packs } from '../service.js';
-import { names as namesIn } from './text.js';
+import { names as namesIn, namePattern } from './text.js';
 import { reviewList, type ReviewList, type ReviewOccurrence, type ReviewPart } from './review.js';
 import type { SkippedItem } from '../../jobs/types.js';
 
@@ -429,9 +429,13 @@ export class RenameService {
     const out: Leftover[] = [];
     for (const h of hits) {
       // The old name kept as an alias (the page's aliases, the Aliases fact) is not a leftover; nor a historical page.
-      if (h.unit === 'name' || h.unit === 'alias') continue;
+      // CR-2026-11-R3 (R3-31): a page NAME holding the old name is (a page of the set added while the proposal waited,
+      // a "…’s Letters" under the index): a half-renamed identity is reported, never silent.
+      if (h.unit === 'alias') continue;
       if (h.unit === 'fact' && h.field && textKey(h.field) === 'aliases') continue;
-      if (!namesIn(h.text, rec.oldName)) continue; // the index ignores case: only the name as written counts
+      // The index ignores case: only the name as written counts; CR-2026-11-R3 (R3-40): and never the old name inside
+      // the new one ("… al-Kubra" holding the old name).
+      if (!namesIn(h.text.replace(namePattern(rec.newName), ' '), rec.oldName)) continue;
       let labels;
       try {
         labels = reader.labels(h.pageId);
@@ -450,11 +454,13 @@ export class RenameService {
         where:
           h.unit === 'fact'
             ? `the sidebar fact ${h.field ?? ''}`.trim()
-            : h.section
-              ? `under ${h.section}`
-              : h.unit === 'row'
-                ? 'a table row'
-                : 'the page text',
+            : h.unit === 'name'
+              ? 'the page name'
+              : h.section
+                ? `under ${h.section}`
+                : h.unit === 'row'
+                  ? 'a table row'
+                  : 'the page text',
         snippet: h.snippet,
         au,
       });

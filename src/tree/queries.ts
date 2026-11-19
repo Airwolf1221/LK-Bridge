@@ -306,6 +306,22 @@ export class TreeQueries {
     });
   }
 
+  /**
+   * CR-2026-11-R3 (R3-26): every display name, alias and canonical name of the tree that contains `part` (as typed, any
+   * place in it), at most `limit`: a rename asks which LONGER names hold its old name (another character's "Nadira
+   * al-Khalid al-Sughra" holds "Nadira al-Khalid"), so it never renames inside one.
+   */
+  namesContaining(projectId: string, part: string, limit = 500): string[] {
+    if (part.trim() === '') return [];
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT name FROM tree_names
+         WHERE project_id = ? AND field IN ('display', 'alias', 'canonical') AND instr(name, ?) > 0 LIMIT ?`,
+      )
+      .all(projectId, part, limit) as { name: string }[];
+    return rows.map((r) => r.name);
+  }
+
   /** Nodes whose raw name (with its prefix) is exactly `name`. */
   findByRawName(
     projectId: string,

@@ -35,7 +35,8 @@ export interface Maintenance {
   /** v3 F3.5 (ADR 0056): the block-id sweep (its card, dry run and settings), when the runtime built it. */
   readonly blockIds: BlockIdSweep | null;
   start(): void;
-  stop(): Promise<void>;
+  /** CR-2026-11-R3 (fix A): `waitMs` bounds the wait for runs in flight (a restart). */
+  stop(waitMs?: number): Promise<void>;
 }
 
 export interface CreateMaintenanceOptions {
@@ -50,7 +51,10 @@ export interface CreateMaintenanceOptions {
   readonly expirySweepMs: number;
   /** POLICY_PROPOSAL_RETENTION_DAYS in milliseconds: what `proposal-prune` keeps. Default 90 days. */
   readonly proposalRetentionMs?: number;
-  readonly log?: { warn(o: Record<string, unknown>, m: string): void };
+  readonly log?: {
+    warn(o: Record<string, unknown>, m: string): void;
+    info?(o: Record<string, unknown>, m: string): void;
+  };
   /** v2 A2: the repository tree, for the `tree-sweep` and `tree-check` jobs. */
   readonly tree?: TreeMaintenance;
   /** v2 A4: the asset tree, for the `asset-refresh` and `asset-check` jobs. */
@@ -127,9 +131,9 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
     commands: createMaintenanceCommands({ scheduler, store: o.policy.store }),
     blockIds: o.blockIds ?? null,
     start: () => scheduler.start(),
-    stop: async () => {
+    stop: async (waitMs?: number) => {
       offStop?.();
-      await scheduler.stop();
+      await scheduler.stop(waitMs);
     },
   };
 }

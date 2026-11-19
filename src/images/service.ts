@@ -14,6 +14,7 @@
  * - **Records follow the jobs**: a row is settled from its job when the job ends (an engine event), and again whenever
  *   it is read (so a restart, or a proposal approved later, settles it too).
  */
+import { loggedTask } from '../maintenance/task-log.js';
 import { randomBytes } from 'node:crypto';
 import { mkdir, statfs } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -370,15 +371,25 @@ export class ImageService {
     );
     for (const row of this.store.uploading()) this.settle(row);
     if (this.o.timers !== false) {
+      // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory (the minute sweep
+      // only when memory moved or it failed).
+      const log = this.o.log;
+      const taskLog = log?.info
+        ? { info: (obj: Record<string, unknown>, msg: string) => log.info!(obj, msg) }
+        : undefined;
       const t1 = setInterval(
-        () => void this.sweep().catch((err: unknown) => this.o.log?.warn({ err }, 'image sweep failed')),
+        () =>
+          void loggedTask(taskLog, 'image sweep', {}, () => this.sweep(), { quiet: true }).catch(
+            (err: unknown) => this.o.log?.warn({ err }, 'image sweep failed'),
+          ),
         SWEEP_MS,
       );
       const t2 = setInterval(
         () =>
-          void this.expireKept()
-            .then(() => this.expireStaged())
-            .catch((err: unknown) => this.o.log?.warn({ err }, 'kept-bytes or staging expiry failed')),
+          void loggedTask(taskLog, 'kept bytes and staging expiry', {}, async () => {
+            await this.expireKept();
+            await this.expireStaged();
+          }).catch((err: unknown) => this.o.log?.warn({ err }, 'kept-bytes or staging expiry failed')),
         KEPT_SWEEP_MS,
       );
       t1.unref();

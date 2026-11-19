@@ -564,9 +564,14 @@ start through `lkbridge`'s sudo rule. What it does, in order (it stops at the fi
 
    If there is nothing new it says so and exits (`--force` redeploys anyway).
 
-2. **Drains and stops** the service: `systemctl stop lk-bridge` (as `lkbridge`, through sudo). This is the drain. SIGTERM makes the bridge stop
-   taking new work and give running jobs up to 20 seconds to finish; the unit allows 45 seconds before killing it. A job
-   still unfinished then is picked up again by the engine's start-up recovery when the service starts. (The admin API could
+2. **Stops** the service: `systemctl stop lk-bridge` (as `lkbridge`, through sudo). SIGTERM stops the bridge for a
+   restart (CR-2026-11-R3, fix A): new requests are answered 503 "the bridge is restarting" (agents see it as a plain
+   error and try again later); every running job stops at its next step boundary, never part-way through a write
+   (requests already in flight get up to 10 seconds), and is left queued: it **continues by itself** when the service
+   starts, its checks run again before its first write. A job parked for budget keeps its time; one waiting for your
+   approval or a pack version keeps waiting. Every budget, lock and maintenance wait ends at once. It normally takes a
+   second or two, at most about 18 seconds (a watchdog exits at 25); the unit's `TimeoutStopSec=75` is only a cushion.
+   The journal shows `stopped for a restart` with the time it took and how many jobs were parked. (The admin API could
    drain without stopping, but it accepts only your browser session and a script has none; see ADR 0015. For a gentler
    hand-over, press _Drain_ on the dashboard's Writers page before you start.)
 3. Takes a **`pre-deploy` backup** of the database (kept: the newest 5), as `lkbridge`.
@@ -995,6 +1000,29 @@ If `MemoryPeak` over a busy week (with images converted) stays well below 1 GB, 
 it approaches 1400 MB, look for a cause before raising anything; lowering `IMAGE_MAX_PIXELS` (for example to 50000000)
 lowers a conversion's peak in proportion.
 
+The bridge logs its own memory every 10 minutes, and once at start (CR-2026-11-R3, R3-65): the resident set, the V8 heap
+used and what V8 holds for it, and the memory outside the heap (Buffers among it). Over a day it says which part grows:
+
+```bash
+sudo journalctl -u lk-bridge --since today -o cat | grep '"msg":"memory"' | tail -20
+```
+
+`rssMb` climbing while `heapUsedMb` stays level is growth outside the V8 heap (native memory, `externalMb`,
+`arrayBuffersMb`); `heapUsedMb` climbing is the heap's (which the 700 MB ceiling bounds). Check first that the unit
+running is this one (`systemctl cat lk-bridge`: the ceiling and the limits above) and that the env file has no
+`NODE_OPTIONS` line, which would replace the ceiling.
+
+Every scheduled or background task logs its start and finish at info with the memory (`"msg":"task started"` and
+`"task finished"`: `task`, `heapUsedMb`, `rssMb`, and on finish `outcome`, `ms` and how far each moved, `delta`), so a
+step in the memory line can be matched to the task that ran then:
+
+```bash
+sudo journalctl -u lk-bridge --since "17:00" --until "17:30" -o cat | grep -E '"msg":"(task started|task finished|memory)"'
+```
+
+A task that runs every minute or more often (the budget sampler, the image sweep, the instance heartbeat) logs only when
+memory moved by 1 MB or more, or it failed.
+
 ## Images (v2 D3)
 
 [ADR 0041](adr/0041-image-pipeline.md); tools in [tools.md](tools.md#images-v2-d3); the Staging page in
@@ -1164,7 +1192,8 @@ encrypted secret store, never in the env file.
    set **Contact email** under Settings to show a contact line on `/privacy`); the Caddy block already proxies every
    path, so nothing changes there. Open both pages in a private window before saving them at Google.
 4. Dashboard → **Off-site copy** → **Google Drive**: paste the **Client ID** and **Client secret**, **Save the client**
-   (it asks for your password, and authenticator code, if not confirmed in the last five minutes).
+   (it asks for the step-up, your authenticator code or your password without one, if not given in the last ten
+   minutes; ADR 0062).
 5. **Connect Google Drive**: sign in at Google and allow access; back on the page, the card says **Connected** with the
    account's name and email.
 6. **Encryption keys** → **Generate keys**. Save both (the password and the salt) in your password manager, beside
@@ -1423,8 +1452,10 @@ Since OPS2 ([ADR 0028](adr/0028-secrets-on-the-dashboard.md)) projects, their AP
 authenticator app are managed on the dashboard. The keys are kept **encrypted in the bridge's database**
 (AES-256-GCM) under `SECRETS_MASTER_KEY`, which env-sync generates; the env file keeps only the bootstrap secrets
 (`SESSION_SECRET`, `JWT_SIGNING_KEY`, `SECRETS_MASTER_KEY`). Adding, replacing or removing a key, and changing the
-password or the authenticator, ask for your password (and authenticator code) again if you have not confirmed it in the
-last five minutes.
+password or the authenticator, ask for the step-up (your authenticator code, or your password without one) if you have
+not given it in the last ten minutes; so do the settings, scope changes, pack approvals and the guarded rails' approvals
+(ADR 0062). The dashboard session lasts 30 days from its last use: remove an `AUTH_SESSION_TTL_SECONDS` lower than that
+from the env file.
 
 ### The first deploy of this release ✋
 

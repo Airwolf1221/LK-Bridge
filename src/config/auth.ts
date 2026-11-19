@@ -123,7 +123,8 @@ const authEnvSchema = z.object({
   AUTH_REFRESH_TOKEN_TTL_SECONDS: intFrom(30 * 86400, 3600, 365 * 86400),
   AUTH_REFRESH_FAMILY_MAX_SECONDS: intFrom(90 * 86400, 3600, 730 * 86400),
   AUTH_CODE_TTL_SECONDS: intFrom(300, 30, 600),
-  AUTH_SESSION_TTL_SECONDS: intFrom(12 * 3600, 300, 30 * 86400),
+  // ADR 0062: a sliding session, 30 days from its last use by default (was 12 hours from sign-in).
+  AUTH_SESSION_TTL_SECONDS: intFrom(30 * 86400, 300, 30 * 86400),
   AUTH_REFRESH_GRACE_SECONDS: intFrom(10, 0, 60),
 
   AUTH_CIMD_TIMEOUT_MS: intFrom(4000, 100, 8000),

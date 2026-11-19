@@ -27,8 +27,8 @@ export function sessionTokenOf(req: FastifyRequest): string {
 
 /**
  * OPS2: sensitive actions (adding, replacing or removing a key; the password; the authenticator) need the owner to have
- * re-confirmed their password (and authenticator code) on this session within the last 5 minutes, even when signed in.
- * Throws 403 `REAUTH_REQUIRED` otherwise. Returns the session token.
+ * stepped up on this session within the last 10 minutes (ADR 0062: the authenticator code, or the password when no
+ * authenticator is set up), even when signed in. Throws 403 `REAUTH_REQUIRED` otherwise. Returns the session token.
  */
 export function requireReauth(s: AuthServices, req: FastifyRequest): string {
   const token = sessionTokenOf(req);
@@ -37,7 +37,7 @@ export function requireReauth(s: AuthServices, req: FastifyRequest): string {
     throw new AdminHttpError(
       403,
       'REAUTH_REQUIRED',
-      'Confirm your password (and authenticator code) first: this action needs a fresh check, within the last 5 minutes.',
+      'Confirm it is you first (your authenticator code, or your password without one): this action needs a fresh check, within the last 10 minutes.',
     );
   }
   return token;
@@ -51,16 +51,20 @@ export function adminGuard(s: AuthServices) {
       .header('x-content-type-options', 'nosniff')
       .header('referrer-policy', 'no-referrer');
     const token = req.cookies[s.owner.sessionCookie];
-    if (!token || !s.owner.getSession(token)) {
+    const used = token ? s.owner.useSession(token) : undefined;
+    if (!token || !used) {
       return sendError(
         reply,
         new AdminHttpError(401, 'UNAUTHENTICATED', 'Sign in as the owner to use the dashboard.'),
       );
     }
-    // Chunk 8 (F-08): the session cookie is SameSite=Lax (for the consent page), so a top-level navigation from another
-    // site carries it, and admin reads need no CSRF token. Some reads spend budget (overview refresh, mapping preview,
-    // P0). Browsers label every request with Sec-Fetch-Site: the dashboard's own requests are `same-origin`, an address
-    // typed into the bar is `none`. Anything from another site is refused, reads included.
+    // ADR 0062: a sliding session (30 days from its last use): its cookie's Max-Age renewed with it.
+    if (used.renewed) reply.setCookie(s.owner.sessionCookie, token, s.owner.sessionCookieOptions());
+    // Chunk 8 (F-08): admin reads need no CSRF token, and some spend budget (overview refresh, mapping preview, P0).
+    // The session cookie was SameSite=Lax then, so a top-level navigation from another site carried it; since ADR 0062 it
+    // is Strict, and this check stays as a second line. Browsers label every request with Sec-Fetch-Site: the
+    // dashboard's own requests are `same-origin`, an address typed into the bar is `none`. Anything from another site is
+    // refused, reads included.
     const site = req.headers['sec-fetch-site'];
     if (site === 'cross-site' || site === 'same-site') {
       return sendError(

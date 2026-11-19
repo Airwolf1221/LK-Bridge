@@ -89,6 +89,7 @@ export function subjectRenameIn(
       }
     },
     factKeys: sidebar ? sidebar.flatMap((b) => (b.rows ?? []).map((r) => r.key)) : null,
+    childrenOf: (indexId) => services.tree.queries.children(projectId, indexId).data,
   });
 }
 
@@ -134,8 +135,13 @@ export async function executeOne(
       origin,
       priority: 'P1',
       signal: ctx.signal,
+      // CR-2026-11-R3 (R3-49): the reason in the job's title AND its journal entry (ADR 0058 amendment C), as
+      // update_resource records it.
       ...(input.plainRename
-        ? { title: `${op.operationId} (plain rename: ${input.plainRename.reason})`.slice(0, 300) }
+        ? {
+            title: `${op.operationId} (plain rename: ${input.plainRename.reason})`.slice(0, 300),
+            journalOperation: { tool, plainRename: input.plainRename.reason },
+          }
         : {}),
       ...(input.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
       ...(input.confirm ? { confirm: input.confirm } : {}),
@@ -437,6 +443,10 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
               params: (c.params ?? {}) as OpParams,
               ...(c.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
               ...(c.confirm ? { confirm: c.confirm } : {}),
+              // CR-2026-11-R3 (R3-49): a plain rename's reason in its write's journal entry too.
+              ...(c.plainRename && c.operationId === 'updateResource'
+                ? { journalOperation: { tool: 'lk_api_batch', plainRename: c.plainRename.reason } }
+                : {}),
             })),
             onError: onError === 'continue' ? 'continue' : 'stop',
             origin: mcpOrigin(ctx, 'lk_api_batch'),

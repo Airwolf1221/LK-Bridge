@@ -106,6 +106,13 @@ export function isSnapshotId(id: string): boolean {
   return SNAPSHOT_ID.test(id);
 }
 
+/**
+ * How long `recent` remembers a put object: twice the collector's default grace (an hour), which it is the evidence for.
+ * A collection asking for a longer grace falls back on the object file's own time, as it did for objects put before a
+ * restart.
+ */
+export const RECENT_KEEP_MS = 2 * 3_600_000;
+
 export class SnapshotStore {
   readonly lock = new RwLock();
   private ensured = false;
@@ -115,6 +122,12 @@ export class SnapshotStore {
    * that refers to it. In memory on purpose: touching the file's time would make an incremental copy upload it again.
    */
   private readonly recent = new Map<string, number>();
+  /**
+   * CR-2026-11-R3 (R3-65): `recent` is kept to `RECENT_KEEP_MS` as objects are put (at most once a minute), not only when
+   * the collector asks: it held an entry for every object put since the last collection (a day of full and change
+   * snapshots: every piece, unchanged ones included).
+   */
+  private recentPrunedAt = 0;
 
   /** `dir` is created by the first write (not here): a runtime that never snapshots touches no folder. */
   constructor(readonly dir: string) {}
@@ -215,7 +228,7 @@ export class SnapshotStore {
   ): Promise<PutResult> {
     const sha = createHash('sha256').update(bytes).digest('hex');
     const path = this.objectPath(sha);
-    this.recent.set(sha, Date.now());
+    this.noteRecent(sha, Date.now());
     if (await this.has(sha)) {
       const repair = typeof o.repair === 'function' ? o.repair(sha) : o.repair === true;
       if (!repair || (await this.check(sha)) === 'ok')
@@ -265,6 +278,17 @@ export class SnapshotStore {
 
   async remove(sha256: string): Promise<void> {
     await rm(this.objectPath(sha256), { force: true });
+  }
+
+  private noteRecent(sha256: string, now: number): void {
+    this.recent.delete(sha256); // re-inserted last: the map stays in the order of the puts
+    this.recent.set(sha256, now);
+    if (now - this.recentPrunedAt < 60_000) return;
+    this.recentPrunedAt = now;
+    for (const [k, at] of this.recent) {
+      if (now - at <= RECENT_KEEP_MS) break; // in put order: the rest are newer
+      this.recent.delete(k);
+    }
   }
 
   /** Whether this process put the object within the last `withinMs` (see `recent`); old entries are forgotten. */

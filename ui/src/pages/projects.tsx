@@ -895,7 +895,7 @@ function CanonCard({ data }: { data: ProjectsResponse }) {
 function CanonEditor({ project: p }: { project: ProjectInfo }) {
   const c = useApi<CanonConfig>(`/projects/${encodeURIComponent(p.name)}/canon`);
   const { run, busy } = useAction();
-  // C2d (ADR 0036 decision 4): saving the rules asks the owner to sign in again (within 5 minutes).
+  // C2d (ADR 0036 decision 4): saving the rules asks for the owner's step-up (within 10 minutes, ADR 0062).
   const withReauth = useReauth();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<CanonRule[] | null>(null);
@@ -1198,7 +1198,7 @@ function CanonExemptEditor(props: {
 function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
   const v = useApi<LifecycleView>(`/projects/${encodeURIComponent(p.name)}/lifecycle`);
   const { run, busy } = useAction();
-  // C2d (ADR 0036 decision 4): saving the lifecycle settings asks the owner to sign in again (within 5 minutes).
+  // C2d (ADR 0036 decision 4): saving the lifecycle settings asks for the owner's step-up (within 10 minutes, ADR 0062).
   const withReauth = useReauth();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<Partial<Record<Group, Record<string, string>>>>({});

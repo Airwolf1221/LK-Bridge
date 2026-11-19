@@ -1,7 +1,7 @@
 /**
  * The Off-site copy page's API (v2 E1b, ADR 0043; docs/dashboard.md › Off-site copy), behind the owner session, Origin and
  * CSRF like every admin route. Saving the Google client, connecting, disconnecting, setting the encryption keys, deleting
- * an old Drive folder and adopting a folder all need a re-authentication within the last 5 minutes (`requireReauth`).
+ * an old Drive folder and adopting a folder all need a step-up within the last 10 minutes (`requireReauth`, ADR 0062).
  *
  * - `GET /offsite`: everything the page shows (never a secret: the client ID, the secret's last four characters, the
  *   account, whether keys are set and when).
@@ -122,6 +122,7 @@ export const registerOffsite: Register = (api, ctx) => {
   });
 
   api.put('/offsite/settings', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(
       z.object({
         settings: z.record(z.string(), z.unknown()),
@@ -129,12 +130,10 @@ export const registerOffsite: Register = (api, ctx) => {
       }),
       req.body,
     );
-    // v2 E4 (RV1-4; ADR 0046 decision 3): a change that weakens a protection of the copy needs the owner's
-    // re-authentication, as the canon rules and lifecycle settings do (ADR 0036 decision 4): the monthly verify switched
-    // off, fewer verified objects, the stale-copy warning later, removed pieces kept on Drive for fewer days, or another
-    // folder (a new copy from nothing). Times, bandwidth and transfers stay one click.
-    if (weakens(svc().settings().settings as unknown as Record<string, unknown>, b.settings))
-      requireReauth(ctx.deps.services, req);
+    // v2 E4 (RV1-4; ADR 0046 decision 3) asked the re-authentication of a change that weakens a protection of the copy
+    // (the monthly verify switched off, fewer verified objects, the stale-copy warning later, removed pieces kept on Drive
+    // for fewer days, another folder); ADR 0062 asks it of every change of these settings (checked above), times,
+    // bandwidth and transfers included.
     const r = guardedSync(() => svc().updateSettings(b.settings, b.acknowledgeNewFolder === true));
     audit('offsite.settings', 'settings', { ...r.settings, newFolder: r.newFolder?.path ?? null });
     return r;
@@ -171,25 +170,6 @@ export const registerOffsite: Register = (api, ctx) => {
     return { ok: true, folder: f };
   });
 };
-
-/** v2 E4 (RV1-4): whether a settings change weakens a protection of the off-site copy (see the route). */
-export function weakens(
-  now: Readonly<Record<string, unknown>>,
-  next: Readonly<Record<string, unknown>>,
-): boolean {
-  const num = (v: unknown) => (typeof v === 'number' ? v : null);
-  const has = (k: string) => Object.prototype.hasOwnProperty.call(next, k);
-  if (has('verifyEnabled') && next.verifyEnabled !== true && now.verifyEnabled !== false) return true;
-  for (const k of ['verifySamplePercent', 'verifySampleMin', 'deletedRetentionDays'] as const)
-    if (has(k) && (num(next[k]) === null || num(next[k])! < (num(now[k]) ?? 0))) return true;
-  if (
-    has('staleAfterDays') &&
-    (num(next.staleAfterDays) === null || num(next.staleAfterDays)! > (num(now.staleAfterDays) ?? 0))
-  )
-    return true;
-  if (has('folder') && next.folder !== now.folder) return true;
-  return false;
-}
 
 function guardedSync<T>(fn: () => T): T {
   try {

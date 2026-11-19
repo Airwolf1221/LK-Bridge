@@ -33,7 +33,7 @@ afterAll(async () => {
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 301, s.services.sessionHash(s.sessionToken));
+    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
 
 describe('ATK-24: the switch and the fix routes are the owner’s, re-authenticated', () => {
   it('an agent’s bearer token cannot change a switch, approve the pack, or propose an appraisal fix', async () => {

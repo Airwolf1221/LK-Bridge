@@ -211,7 +211,7 @@ export interface StepOptions {
    * table and in the job's result as a follow-up of this kind (for the dashboard), and the job carries on and ends as
    * if the step had not been needed. The work before it stays written: nothing is rolled back.
    */
-  readonly followUp?: 'lmr_failed' | 'image_relink_failed';
+  readonly followUp?: 'lmr_failed' | 'image_relink_failed' | 'placement_failed';
   /**
    * v3 F2 (ADR 0049 decision 9), set by bridge code only, on a `createAssetFolder` the bridge planned: when the job runs,
    * under the project's asset-folder lock, the parent's children are read fresh and a folder with exactly this name is
@@ -291,6 +291,13 @@ export interface ResumableShape {
   readonly kind: 'package' | 'rename' | 'recreate' | 'split' | 'retag';
   /** The steps (1-based) run again on resume before the step it stopped at (the job's own checks). */
   readonly recheck?: readonly number[];
+  /**
+   * CR-2026-11-R3 (R3-22): the registered checkers whose checks run again on resume too (every succeeded `bridge.expect`
+   * step before the step it stopped at that holds one), named rather than numbered so a selection that leaves steps
+   * out does not move them. A split's destinations check: what left a destination while the job was stopped is never
+   * then taken out of the source.
+   */
+  readonly recheckCheckers?: readonly string[];
   /** What the kind needs to find its record (a recreate's restore id). */
   readonly ref?: string;
 }
@@ -393,6 +400,15 @@ export interface BatchSubmit {
    * is written until the owner approves. Nothing an agent sends reaches it (`lk_api_batch` never sets it).
    */
   readonly forceProposal?: boolean;
+  /**
+   * CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4), bridge code only, with `forceProposal`: why the proposal was made,
+   * from the safety rails the bridge judged itself (an agent's Resume of a job whose steps left a rail now covers). The
+   * proposal shows it as its `proposedBecause`.
+   */
+  readonly proposedBecause?: {
+    readonly reason: string;
+    readonly hits: readonly { rail: string; text: string }[];
+  };
   /**
    * v3 F2 (ADR 0049 decision 10), bridge code only: the batch places an image staged on the bridge's server (it uploads
    * it into its final folder). At scope `propose` the policy gate makes it a proposal, where any other upload is refused.
@@ -576,6 +592,11 @@ export interface JobView {
   readonly waitReason: Record<string, unknown> | null;
   readonly pauseRequested: boolean;
   readonly cancelRequested: boolean;
+  /**
+   * CR-2026-11-R3, R3-54 (ADR 0061 part B decision 3): who asked the job to stop: 'owner' (the dashboard), 'system', or
+   * the principal id of the agent that cancelled its own job; null when no cancel was asked (or before it was recorded).
+   */
+  readonly cancelledBy?: string | null;
   /** Set when a step ended `uncertain`: the UI flags the job for a person to check. */
   readonly uncertain: boolean;
   readonly lastError: JobError | null;
@@ -669,6 +690,8 @@ export interface LockView {
 export interface ControlsView {
   readonly writesPaused: boolean;
   readonly draining: boolean;
+  /** CR-2026-11-R3 (fix A): present (true) while the bridge stops for a restart; it accepts no new work. */
+  readonly restarting?: true;
   /**
    * Effective read-only flag: the runtime override if set, else LK_READ_ONLY. Asked for one project
    * (`controls(projectId)`), it is also true when that project's own read-only flag is on (v2 A1).

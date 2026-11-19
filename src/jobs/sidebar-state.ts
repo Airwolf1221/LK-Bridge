@@ -6,7 +6,9 @@
  * What counts, and what does not (taken from LegendKeeper's spec 3.0.0, as for page writes in verify-blocks.ts):
  * - a key-value row is its id, its rank, its key and its value as runs; the runs are normalised as LegendKeeper
  *   normalises them (empty text runs dropped, neighbours with the same marks merged), and a mention's `name`
- *   (read-only: the page's current name) is ignored. A row's `text` is not compared (it is derived from the runs);
+ *   (read-only: the page's current name) is dropped; the generic verify compares a mention by its target only
+ *   (`sameContent`: its label is a display field LegendKeeper may fill in too, R3-67). A row's `text` is not compared
+ *   (it is derived from the runs);
  * - rows are always put in LegendKeeper's ONE order first, by rank (src/lk/row-order.ts): its endpoints give the same
  *   rows in different orders (`listProperties`, `getProperty` and `getResource` in stored order, `listPropertyRows`
  *   sorted by rank), so a comparison by position across two endpoints saw a change on every row after the first one
@@ -17,7 +19,7 @@
  */
 import { createHash } from 'node:crypto';
 import { inRankOrder } from '../lk/row-order.js';
-import { normaliseRuns } from './verify-blocks.js';
+import { mentionTarget, normaliseRuns } from './verify-blocks.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -87,14 +89,7 @@ export function normaliseContent(content: unknown, text?: unknown): Obj[] {
     : typeof text === 'string' && text !== ''
       ? [{ text }]
       : [];
-  return trimRowBreaks(normaliseRuns(runs)).map((r) =>
-    isObj(r.mention) ? { ...r, mention: withoutKey(r.mention, 'name') } : r,
-  );
-}
-
-function withoutKey(o: Obj, key: string): Obj {
-  const { [key]: _drop, ...rest } = o;
-  return rest;
+  return trimRowBreaks(normaliseRuns(runs));
 }
 
 /**
@@ -213,7 +208,7 @@ export function compareRows(
     }
     const name = rowName(label, e.id !== null ? e : { ...e, id: a.id });
     if (e.key !== a.key) out.push({ path: `${name}.key`, expected: e.key, actual: a.key });
-    if (stableJson(e.content) !== stableJson(a.content))
+    if (!sameContent(e.content, a.content))
       out.push({ path: `${name}.value`, expected: short(e.content), actual: short(a.content) });
     if (e.rank && a.rank && e.rank !== a.rank) {
       out.push({ path: `${name}.rank (reordered)`, expected: e.rank, actual: a.rank });
@@ -242,6 +237,15 @@ export function compareRows(
     out.push({ path: `${rowName(label, a)} (added)`, expected: '(no row)', actual: short(a) });
   }
   return out;
+}
+
+/**
+ * CR-2026-11-R3 (R3-67): whether two values (normalised runs) are the same as the verify judges them: a mention by its
+ * target only (its name and label are display fields LegendKeeper fills in on read-back).
+ */
+export function sameContent(a: readonly Obj[], b: readonly Obj[]): boolean {
+  const byTarget = (r: Obj): Obj => (isObj(r.mention) ? { ...r, mention: mentionTarget(r.mention) } : r);
+  return stableJson(a.map(byTarget)) === stableJson(b.map(byTarget));
 }
 
 /** The indexes of `pos` that are not on one longest increasing run (the rows that moved). */

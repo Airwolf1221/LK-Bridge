@@ -40,7 +40,7 @@ function owner(world: AuditsWorld) {
     get: (path: string) => request('GET', path),
     post: (path: string, body: unknown = {}) => request('POST', path, body),
     put: (path: string, body: unknown = {}) => request('PUT', path, body),
-    /** The owner signs in again (the window for sensitive actions is five minutes). */
+    /** The owner steps up (the window for sensitive actions is ten minutes, ADR 0062). */
     reauth: () =>
       world.stack.db
         .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')

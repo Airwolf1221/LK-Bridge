@@ -22,6 +22,7 @@
  * units (`appraisal_fts`, an FTS5 table), its references to other pages (`appraisal_refs`) and its images
  * (`appraisal_images`); and per project the templates' sidebars (`appraisal_index_templates`) and the state.
  */
+import { loggedTask } from '../maintenance/task-log.js';
 import type { Db } from '../db/open.js';
 import type { SnapshotSource } from '../audits/reader.js';
 import type { DocumentEntry, Manifest, PageEntry } from '../snapshots/manifest.js';
@@ -96,7 +97,10 @@ export interface IndexDeps {
   /** The key-value property facts are read from (`PROPERTIES`). */
   readonly propertiesName: (projectId: string) => string;
   readonly now: () => number;
-  readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
+  readonly log?: {
+    warn(obj: Record<string, unknown>, msg: string): void;
+    info?(obj: Record<string, unknown>, msg: string): void;
+  };
   /** Concurrent store reads (default 8). */
   readonly concurrency?: number;
 }
@@ -363,7 +367,14 @@ export class AppraisalIndex {
 
   /** After a full snapshot completes (the snapshot service's hook): the overlay rebuilt from it, in the background. */
   afterFullSnapshot(projectId: string): void {
-    const p = this.ensure(projectId)
+    // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory.
+    const log = this.d.log;
+    const p = loggedTask(
+      log?.info ? { info: (obj, msg) => log.info!(obj, msg) } : undefined,
+      'appraisal index after the full snapshot',
+      { project: projectId },
+      () => this.ensure(projectId),
+    )
       .then(() => undefined)
       .catch((e: unknown) =>
         this.d.log?.warn(

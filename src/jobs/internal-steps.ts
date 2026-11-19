@@ -360,9 +360,20 @@ export const expectCheckSchema = z.union([
   registeredCheck,
 ]);
 
+/**
+ * How many checks one `bridge.expect` step, and how many targets one `bridge.verify` step, may hold. C2d raised it to
+ * 400 for a whole set (a hundred pages' rows and notes). CR-2026-11-R3 (R3-01): a rename's first check and its read-back
+ * hold one entry per block, page and asset they cover, so a heavily referenced character (700 pages) was refused at
+ * submission, after its plan had spent its reads, with an internal INVALID_PARAMS. 5,000 covers the whole of Arkona
+ * (about 3,500 pages); a setting-pack plan beyond it (a rename, a split, a package) is refused plainly before it is
+ * submitted or proposed (`STEP_TOO_LARGE`, src/mcp/tools/write-job.ts), never with INVALID_PARAMS. A retag batch holds
+ * at most 100 pages, far below it.
+ */
+export const MAX_STEP_CHECKS = 5_000;
+
 // C2d: a whole set checks up to a hundred pages' rows and notes in one step (it was 50).
 export const expectParamsSchema = z
-  .object({ body: z.object({ checks: z.array(expectCheckSchema).min(1).max(400) }).strict() })
+  .object({ body: z.object({ checks: z.array(expectCheckSchema).min(1).max(MAX_STEP_CHECKS) }).strict() })
   .strict();
 
 const expectedProperty = z
@@ -371,6 +382,7 @@ const expectedProperty = z
     title: z.string().max(256),
     rows: z.array(rowState).max(256).optional(),
     collection: collectionState.optional(),
+    datedRowId: id.optional(),
   })
   .strict();
 
@@ -564,7 +576,7 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
 ]);
 
 export const verifyParamsSchema = z
-  .object({ body: z.object({ targets: z.array(verifyTargetSchema).min(1).max(400) }).strict() })
+  .object({ body: z.object({ targets: z.array(verifyTargetSchema).min(1).max(MAX_STEP_CHECKS) }).strict() })
   .strict();
 
 /** v2 C2c: `bridge.record`'s params: the action and what the handler needs (checked by the handler itself). */
@@ -767,6 +779,11 @@ export interface ExpectedProperty {
   readonly title: string;
   readonly rows?: readonly RowState[];
   readonly collection?: CollectionState;
+  /**
+   * CR-2026-11-R3 (R3-67): the Last Major Revision row a later step of the same job dates (`bridge.lmr`): its value is not
+   * judged by this read-back (that step set it, and Revert lays it over these rows), every other row is.
+   */
+  readonly datedRowId?: string;
 }
 
 export type VerifyTarget =
@@ -1081,7 +1098,7 @@ export interface TargetVerification {
 /** What the generic verify step may ignore, by target kind (listed in every verification). */
 export const SIDEBAR_IGNORED_FIELDS: readonly string[] = [
   'rank and text of a row (the order of the rows, and the runs, are compared)',
-  'name in a mention (read-only: the page’s current name)',
+  'a mention’s name and text (display fields LegendKeeper fills in: the page’s current name, its label): a mention is compared by its target (resourceId, documentId)',
   'runs normalised as LegendKeeper does on write (empty text runs dropped, neighbouring runs with the same marks merged)',
   'the id LegendKeeper gives a row or item the bridge created',
   'properties the plan did not name',

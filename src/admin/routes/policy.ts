@@ -7,26 +7,38 @@ import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } f
 
 const scope = z.enum(SCOPES);
 
-/** The order of the scopes, for telling a raise from a lowering. */
+/**
+ * The order of the scopes, for telling a raise from a lowering. ADR 0062 (the owner's rule, 19 November 2026): tightening
+ * is one click, loosening asks for the step-up.
+ */
 const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write: 2 };
 
 export const registerPolicy: Register = (api, ctx) => {
   const { policy } = ctx.deps.runtime;
   const { actions } = ctx;
   const cmd = policy.commands;
-  /**
-   * CR-2026-11-R2 (R2-50): a change that lets an agent's connection do more needs the owner's re-authentication within
-   * the last five minutes, as switching off a safety rail does (ADR 0055 decision C5; ADR 0028 decision 7): a raised
-   * scope, a connection moved to a higher scope or to a profile at scope `write` (whose rails may be weaker), and a new
-   * personal access token at scope `write`. Lowering a scope stays a one-click safety action.
-   */
-  const reauthToRaise = (req: FastifyRequest, from: Scope | undefined, to: Scope | undefined) => {
-    if (to === undefined) return;
-    if (to === 'write' || from === undefined || SCOPE_RANK[to] > SCOPE_RANK[from])
-      requireReauth(ctx.deps.services, req);
-  };
   const profileScope = (id: string): Scope | undefined =>
     cmd.listProfiles('owner').find((p) => p.id === id)?.scope;
+  /**
+   * ADR 0062: approving a proposal of the owner's guarded kinds (a delete, more than 10 pages, an asset delete or move)
+   * needs the step-up; judged on the proposal's own operations (`LivePolicyGate.guardedVerdict`).
+   */
+  const stepUpIfGuarded = (req: FastifyRequest, ids: readonly string[]) => {
+    for (const id of ids) {
+      const d = policy.proposals.detail(id);
+      if (!d) continue;
+      const items = d.ops.map((o) => ({
+        opId: o.op,
+        kind: o.opKind,
+        params: o.params ?? {},
+        options: o.options ?? {},
+      }));
+      if (policy.gate.guardedVerdict(d.projectId, items) !== null) {
+        requireReauth(ctx.deps.services, req);
+        return;
+      }
+    }
+  };
 
   // ---------------------------------------------------------------------------------------------- proposals
 
@@ -119,6 +131,7 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.post('/proposals/:id/approve', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    stepUpIfGuarded(req, [id]);
     const b = parseInput(itemsBody, req.body ?? {});
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     return { proposal: redactDeep(await actions.approve(project.id, id, b.items)) };
@@ -131,6 +144,7 @@ export const registerPolicy: Register = (api, ctx) => {
    */
   api.post('/proposals/:id/approve-as-canon', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    stepUpIfGuarded(req, [id]);
     const b = parseInput(itemsBody.extend({ confirm: z.literal(true) }), req.body);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     return { proposal: redactDeep(await actions.approveAsCanon(project.id, id, b.items)) };
@@ -170,6 +184,7 @@ export const registerPolicy: Register = (api, ctx) => {
       req.body,
     );
     const project = ctx.project(parseInput(projectQuery, req.query).project);
+    if (b.action !== 'reject') stepUpIfGuarded(req, b.ids);
     const results =
       b.action === 'approve'
         ? await actions.bulkApprove(project.id, b.ids)
@@ -200,6 +215,8 @@ export const registerPolicy: Register = (api, ctx) => {
       z.object({ label: z.string().min(1).max(64), kind: z.enum(PROFILE_KINDS), scope: scope.optional() }),
       req.body,
     );
+    // ADR 0062: a scope set is a scope change: the step-up first.
+    if (b.scope !== undefined) requireReauth(ctx.deps.services, req);
     return {
       profile: actions.createProfile({
         label: b.label,
@@ -212,8 +229,9 @@ export const registerPolicy: Register = (api, ctx) => {
   api.put('/clients/profiles/:id/scope', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
+    // R2-50, ADR 0062 (the owner's rule: tightening is one click, loosening asks): a raise needs the step-up; a lowering
+    // is one click.
     const current = profileScope(id);
-    // R2-50: only a raise needs the re-authentication (a profile already at write that stays there changes nothing).
     if (current !== undefined && SCOPE_RANK[b.scope] > SCOPE_RANK[current])
       requireReauth(ctx.deps.services, req);
     return { profile: actions.setScope(id, b.scope, b.confirmRaise) };
@@ -221,6 +239,7 @@ export const registerPolicy: Register = (api, ctx) => {
 
   /** v2 B2: whether the profile's connections are shown the low-level tools (hiding is cosmetic; policy is unchanged). */
   api.put('/clients/profiles/:id/low-level-tools', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a profile's settings
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ show: z.boolean() }), req.body);
     return { profile: actions.setShowLowLevelTools(id, b.show) };
@@ -256,7 +275,7 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.put('/clients/default-scope', (req) => {
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
-    // R2-50: new connections would start able to do more.
+    // R2-50, ADR 0062: new connections would start able to do more (a raise asks; a lowering is one click).
     if (SCOPE_RANK[b.scope] > SCOPE_RANK[cmd.getDefaultScope('owner')]) requireReauth(ctx.deps.services, req);
     return { defaultScope: actions.setDefaultScope(b.scope, b.confirmRaise) };
   });
@@ -264,8 +283,12 @@ export const registerPolicy: Register = (api, ctx) => {
   api.put('/clients/connections/:id/profile', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ profileId: idSchema }), req.body);
-    // R2-50: to a higher scope, or to a profile at write (its rails may be weaker than the connection's now).
-    reauthToRaise(req, policy.store.lookupPrincipal(id)?.scope, profileScope(b.profileId));
+    // R2-50, ADR 0062: to a higher scope, or to a profile at scope write (its rails may be weaker than the connection's
+    // now), asks for the step-up; moving it down (or sideways below write) is one click.
+    const from = policy.store.lookupPrincipal(id)?.scope;
+    const to = profileScope(b.profileId);
+    if (to !== undefined && (to === 'write' || from === undefined || SCOPE_RANK[to] > SCOPE_RANK[from]))
+      requireReauth(ctx.deps.services, req);
     return { connection: redactDeep(actions.setConnectionProfile(id, b.profileId)) };
   });
 
@@ -291,10 +314,12 @@ export const registerPolicy: Register = (api, ctx) => {
 
   const days = z.object({ days: z.number().int().min(0).max(3650) });
   api.put('/clients/settings/auto-remove-days', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(days, req.body);
     return { autoRemoveDays: actions.setAutoRemoveDays(b.days) };
   });
   api.put('/clients/settings/stale-after-days', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(days, req.body);
     return { staleAfterDays: actions.setStaleAfterDays(b.days) };
   });
@@ -309,8 +334,8 @@ export const registerPolicy: Register = (api, ctx) => {
       }),
       req.body,
     );
-    // R2-50: a new credential at scope write.
-    if (profileScope(b.profileId) === 'write') requireReauth(ctx.deps.services, req);
+    // R2-50, ADR 0062: a new credential (a key), at any scope.
+    requireReauth(ctx.deps.services, req);
     const created = actions.createPat({
       name: b.name,
       profileId: b.profileId,

@@ -12,6 +12,7 @@
  */
 import type { BatchSubmit, JobView, LifecycleMarker, StepSpec } from '../../jobs/index.js';
 import type { LmrMode } from '../../jobs/lmr-hook.js';
+import { EXPECT_STEP, MAX_STEP_CHECKS, VERIFY_STEP } from '../../jobs/internal-steps.js';
 import type { ProposalExtras } from '../../jobs/policy.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import { finish } from './repo.js';
@@ -78,6 +79,25 @@ export async function runWriteJob(
   tool: string,
   spec: WriteJobSpec,
 ): Promise<WriteJobOutcome> {
+  // CR-2026-11-R3 (R3-01): one check or read-back step holds at most MAX_STEP_CHECKS entries. A plan beyond it (a subject
+  // referred to on more pages than one job can check) is refused here, plainly, before anything is submitted or
+  // proposed, rather than with the engine's internal INVALID_PARAMS.
+  const largest = spec.steps.reduce((n, s) => {
+    const body: { checks?: unknown; targets?: unknown } | null = s.params?.body ?? null;
+    const list = s.op === EXPECT_STEP ? body?.checks : s.op === VERIFY_STEP ? body?.targets : null;
+    return Math.max(n, Array.isArray(list) ? list.length : 0);
+  }, 0);
+  if (largest > MAX_STEP_CHECKS) {
+    const body = {
+      error: {
+        code: 'STEP_TOO_LARGE',
+        message: `${tool}: this plan needs ${largest.toLocaleString('en-GB')} checks in one step, more than one job checks (${MAX_STEP_CHECKS.toLocaleString('en-GB')}). Nothing was written or proposed. Narrow it (fewer pages or items at once), or ask the owner.`,
+        checks: largest,
+        max: MAX_STEP_CHECKS,
+      },
+    };
+    return { result: errorResult(body.error, pd), body };
+  }
   let r;
   try {
     r = await pd.engine.submit({

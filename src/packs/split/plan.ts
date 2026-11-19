@@ -47,6 +47,7 @@ import { liveRead } from '../../mcp/tools/repo.js';
 import type { ProjectDeps } from '../../mcp/tools/shape.js';
 import { pageConverterContext } from '../../pages/index.js';
 import { cleanPrefixes } from '../../registry/names.js';
+import { blockIds, unwritableBlocks } from '../../snapshots/canonical.js';
 import type { TreeNode } from '../../tree/index.js';
 import { buildPackJob, PACK_CHECKS, shiftStep, type PackJob } from '../engine/job.js';
 import { itemizePackage } from '../engine/items.js';
@@ -66,6 +67,7 @@ import {
   outlineOf,
   PREAMBLE,
   textPrint,
+  contentPrint,
   type AppendInput,
   type OutlineHeading,
   type RouteInput,
@@ -228,6 +230,11 @@ export interface SplitPlan {
   readonly indexEntries: readonly { readonly index: string; readonly line: string }[];
   /** Block ids: how many moved blocks keep theirs, and those that cannot move (LegendKeeper cannot create them). */
   readonly ids: { readonly kept: number; readonly note: string };
+  /**
+   * CR-2026-11-R3 (R3-66): the source, a Compact Character Reference left at the head of several owners, upgraded to its
+   * Character Core in this proposal (null: no upgrade). Revert puts it back with the deletion of the pages the split made.
+   */
+  readonly upgrade: SplitUpgrade | null;
   readonly lmr: {
     readonly mode: LmrMode;
     readonly newPages: readonly string[];
@@ -238,6 +245,18 @@ export interface SplitPlan {
   readonly summary: string;
   readonly prefetched: { op: string; path: Record<string, string>; body: unknown }[];
   readonly operations: Obj[];
+}
+
+/** CR-2026-11-R3 (R3-66): a split's in-place upgrade of its Compact source to the Character Core (what Revert undoes). */
+export interface SplitUpgrade {
+  readonly resourceId: string;
+  /** Its name before (the Compact Character Reference's) and after (the Character Core's). */
+  readonly from: string;
+  readonly to: string;
+  /** The key-value property and its Reference Type before and after. */
+  readonly property: string;
+  readonly referenceType: { readonly before: string | null; readonly after: string };
+  readonly templates: { readonly compact: string | null; readonly core: string };
 }
 
 export interface SplitEnv {
@@ -850,18 +869,44 @@ export async function planSplit(
         { blocks: cannot },
       ),
     );
-  // Step 5, the visual audit: what interprets images goes to an Art or visual owner, or stays.
+  // CR-2026-11-R3 (R3-51): a block holding an inline icon (a run LegendKeeper's write format has no form for) cannot be
+  // written back, and the split writes the source back whole (each source edit) and the moved blocks to their
+  // destinations: refused before any page is made or anything copied, wherever the block goes.
+  const iconBlocks = unwritableBlocks(o.order.map((id) => o.byId.get(id)!)).filter(
+    (f) => f.what === 'inline-icon',
+  );
+  if (iconBlocks.length > 0) {
+    const tops = [
+      ...new Set(
+        o.order.filter((id) => {
+          const ids = blockIds([o.byId.get(id)!]);
+          return iconBlocks.some((f) => f.blockId !== null && ids.has(f.blockId));
+        }),
+      ),
+    ];
+    refusals.push(
+      issue(
+        'SPLIT_NOT_WRITABLE',
+        `${iconBlocks.length} block${iconBlocks.length === 1 ? ' holds' : 's hold'} an inline icon, which LegendKeeper's write format cannot write back; a split writes ${node.rawName} back whole, so it cannot be split while ${iconBlocks.length === 1 ? 'it is' : 'they are'} there (${tops.map((id) => `${titleOfTop(topOf(id))}: “${excerpt(id) || id}”`).join('; ')}). Remove the icon in LegendKeeper (or write that text without it), then plan the split again.`,
+        { blocks: iconBlocks.map((f) => f.blockId).filter((x): x is string => x !== null) },
+      ),
+    );
+  }
+  // Step 5, the visual audit: what interprets images goes to an Art or visual owner, or stays. CR-2026-11-R3 (R3-11): an
+  // image assigned as universal material is refused too: universal material is removed from the source (its application
+  // text takes its place), never moved, so the image would be on no page.
   const notVisual = o.order.filter((id) => {
     const to = toOf(id);
     if (to === STAYS || !holdsImage(o.byId.get(id)!)) return false;
     const r = dests.get(to);
-    return r !== undefined && r.d.kind !== 'universal' && !r.visual;
+    return r !== undefined && (r.d.kind === 'universal' || !r.visual);
   });
+  const universalOf = (id: string) => dests.get(toOf(id))?.d.kind === 'universal';
   if (notVisual.length > 0)
     refusals.push(
       issue(
         'SPLIT_VISUAL',
-        `Images go to an Art or visual owner (Character Architecture's visual audit), or stay: ${notVisual.map((id) => `${titleOfTop(topOf(id))} → ${toOf(id)}`).join('; ')}. Divide the section block by block: the images and their interpretation to the Art page, the rest where it belongs.`,
+        `Images go to an Art or visual owner (Character Architecture's visual audit), or stay: ${notVisual.map((id) => `${titleOfTop(topOf(id))} → ${toOf(id)}${universalOf(id) ? ' (universal material is removed, not moved: the image would be on no page)' : ''}`).join('; ')}. Divide the section block by block: the images and their interpretation to the Art page, the rest where it belongs.`,
         { blocks: notVisual.map((id) => ({ block: id, section: titleOfTop(topOf(id)), to: toOf(id) })) },
       ),
     );
@@ -978,16 +1023,73 @@ export async function planSplit(
         `${node.rawName} is ${subject}'s identity page: retiring it would leave the character with none. Keep it as the surviving owner (its identity stays; retire: false), or make it a Core first (arkona_create_character upgradeToCore).`,
       ),
     );
+  // A character with an index and several owners has a Character Core (Character Architecture). The split that leaves a
+  // Compact Character Reference at the head of several owners upgrades it in place, in this same proposal, when it is the
+  // surviving source (F3a's upgradeToCore: "<Name> - Character Core", Reference Type "Character Core", the Core
+  // template recorded; its id, documents, identity facts, links and text kept). Any other map that would leave such a
+  // character without a Core is refused.
+  const core = (() => {
+    if (!character || character.role !== 'compact') return null;
+    const head = ctx.tree.node(projectId, character.core.id).data;
+    const up = head?.parentId ? ctx.tree.node(projectId, head.parentId).data : null;
+    const set = up?.kind === 'index' ? ctx.types.characterOfPage(up.id) : null;
+    const index =
+      up && set?.ok && set.value.core.id === character.core.id && set.value.via === 'index' ? up : null;
+    // The owners the character keeps (a source to be retired leaves the set), and the new ones the split makes for it.
+    const others = index
+      ? ctx.tree
+          .children(projectId, index.id)
+          .data.filter(
+            (c) =>
+              (c.kind === 'bsrc' || c.kind === 'bwrk') &&
+              c.id !== character.core.id &&
+              !(retire && c.id === node.id),
+          ).length
+      : 0;
+    const made = [...dests.values()].filter((r) => r.isNew).length;
+    return { needed: others + made > 0, owners: 1 + others + made, index };
+  })();
+  const upgradeToCore = core?.needed === true && identity && !retire;
+  if (core?.needed === true && !identity && character)
+    refusals.push(
+      issue(
+        'SPLIT_CORE_REQUIRED',
+        `${subject} would have ${core.owners} owner pages in ${core.index?.rawName ?? 'an index'} and no Character Core: ${character.core.rawName} is a Compact Character Reference. A character with an index and several owners has a Character Core: upgrade it first (arkona_create_character with target “${character.core.rawName}” and upgradeToCore), then split.`,
+        { identity: { id: character.core.id, name: character.core.rawName }, owners: core.owners },
+      ),
+    );
   if (retire) {
     const staying = o.headings
       .filter((h) => h.top === h.id && h.blockIds.every((id) => toOf(id) === STAYS))
       .map((h) => h.title);
-    if (staying.length > 0)
+    // CR-2026-11-R3 (R3-41): and what stays of a divided section, and the blocks before the first heading.
+    const divided = o.headings
+      .filter((h) => h.top === h.id && !h.blockIds.every((id) => toOf(id) === STAYS))
+      .map((h) => ({ title: h.title, ids: h.blockIds.filter((id) => toOf(id) === STAYS) }))
+      .filter((h) => h.ids.length > 0);
+    const before = o.preamble.filter((id) => toOf(id) === STAYS);
+    const parts = [
+      ...(before.length > 0
+        ? [`${PREAMBLE}: ${before.length} block${before.length === 1 ? '' : 's'} (“${excerpt(before[0]!)}”)`]
+        : []),
+      ...staying.map((x) => `“${x}”`),
+      ...divided.map(
+        (h) =>
+          `part of “${h.title}”: ${h.ids.length} block${h.ids.length === 1 ? '' : 's'} (“${excerpt(h.ids[0]!)}”)`,
+      ),
+    ];
+    if (parts.length > 0)
       warnings.push(
         issue(
           'SPLIT_RETIRED_CONTENT',
-          `With retire, what stays is archived with the source (kept for provenance, no longer current): ${staying.map((x) => `“${x}”`).join(', ')}.`,
-          { sections: staying },
+          `With retire, what stays is archived with the source (kept for provenance, no longer current): ${parts.join(', ')}.`,
+          {
+            sections: staying,
+            ...(before.length > 0 ? { preamble: before } : {}),
+            ...(divided.length > 0
+              ? { divided: divided.map((h) => ({ section: h.title, blocks: h.ids })) }
+              : {}),
+          },
         ),
       );
   }
@@ -1127,10 +1229,11 @@ export async function planSplit(
   const universalHere = (key: string) =>
     [...dests.values()].filter((r) => r.d.kind === 'universal' && r.universalIn === key && r.universalOwner);
   const packPlans: { plan: PackPlan; env: PlanEnv; keys: Map<string, string> }[] = [];
+  let upgrade: SplitUpgrade | null = null;
   const lmrMode: LmrMode = input.lastMajorRevision ?? 'auto';
   const newDests = [...dests.values()].filter((r) => r.isNew);
   try {
-    if (newDests.length > 0 && character) {
+    if ((newDests.length > 0 || upgradeToCore) && character) {
       const e = characterEnv(pd, mctx, SPLIT_TOOL, basis, ctype.name, lmrMode);
       if (!e.ok) return { ok: false, result: e.result };
       const pages: PackagePage[] = newDests.map((r) => ({
@@ -1154,10 +1257,31 @@ export async function planSplit(
         identity: {},
         target: character.core.id,
         pages,
+        // The split moves the sections itself (each leaves an interface summary): no overlap to warn about.
+        ...(upgradeToCore ? { upgradeToCore: true, upgradeOverlap: false } : {}),
       });
       const keys = new Map<string, string>();
       newDests.forEach((r, i) => keys.set(`p${i}`, r.d.key));
       packPlans.push({ plan, env: e.env, keys });
+      const rn = plan.existing.find((c) => c.kind === 'rename' && c.page.id === node.id);
+      if (upgradeToCore && rn?.kind === 'rename') {
+        const compactRole = ctype.roles.find((x) => x.role === 'compact');
+        const coreRole = ctype.roles.find((x) => x.role === 'core');
+        upgrade = {
+          resourceId: node.id,
+          from: rn.from,
+          to: rn.to,
+          property: prop,
+          referenceType: {
+            before: sidebarValue(sidebar, prop, 'Reference Type'),
+            after: coreRole?.referenceType ?? 'Character Core',
+          },
+          templates: {
+            compact: compactRole ? (e.env.templates[compactRole.template] ?? null) : null,
+            core: rn.coreTemplateId,
+          },
+        };
+      }
     } else if (newDests.length > 0) {
       const base = envOf(pd, mctx, SPLIT_TOOL, basis, lmrMode);
       for (const r of newDests) {
@@ -1363,7 +1487,11 @@ export async function planSplit(
           ...it,
           id: itemIds.get(it.id) ?? it.id,
           group: it.id.startsWith('page:') ? SPLIT_GROUPS.index : SPLIT_GROUPS.existing,
-          dependsOn: it.dependsOn.map((x) => itemIds.get(x) ?? x),
+          dependsOn: it.dependsOn
+            .map((x) => itemIds.get(x) ?? x)
+            // The source upgraded to its Core: every new owner needs it, so it needs none of them. Its move's place
+            // beside a new page is re-anchored, and a link to one is dropped with it, when that page is left out.
+            .filter((x) => !(upgradeToCore && it.id === `existing:${node.id}` && x.startsWith('dest:'))),
         });
     const mapItems = (its: readonly string[] | undefined) =>
       its ? [...new Set(its.map((x) => itemIds.get(x) ?? x))] : undefined;
@@ -1429,8 +1557,13 @@ export async function planSplit(
       const extra = c.blocks.filter((b) => !c.moved.includes(str(b.id) ?? '') && b.kind !== 'heading');
       groups.set(first, [...(groups.get(first) ?? []), ...extra]);
     }
+    let nth = 0;
     for (const [under, moved] of groups) {
       keptIds += moved.length;
+      // CR-2026-11-R3 (R3-23): an item is never skipped part-way. Its first append may be skipped (after three conflicts
+      // nothing of the item is written yet, so its material stays in the source); a later one is core: once an earlier
+      // append has landed, the job stops there (resumable) instead of leaving that material in two places.
+      const later = nth++ > 0;
       const a: AppendInput = {
         item: r.d.item,
         under,
@@ -1447,7 +1580,7 @@ export async function planSplit(
         judgedInLock: true,
         verifyAfterWrite: true,
         items: [r.d.item],
-        rebase: { rebaser: SPLIT_REBASERS.append, input: a, always: true },
+        rebase: { rebaser: SPLIT_REBASERS.append, input: a, always: true, ...(later ? { core: true } : {}) },
         journalOperation: journal(
           r.page,
           `${moved.length} block(s) of ${node.rawName} appended under “${under}”`,
@@ -1475,6 +1608,7 @@ export async function planSplit(
       id,
       text: textPrint(o.byId.get(id)!),
       excerpt: excerpt(id),
+      content: contentPrint(o.byId.get(id)!),
     })),
   }));
   const newPages = receivers
@@ -1750,6 +1884,7 @@ export async function planSplit(
   // on both sides: what leaves the source and what an existing owner receives (new pages are always dated).
   const lmrKey = basis.lifecycle.fields.lastMajorRevision;
   const measured: string[] = [];
+  const dated = new Set<string>(); // the pages this job may date (their Last Major Revision step)
   const sidebars = new Map<string, readonly SidebarProperty[]>([[node.id, sidebar]]);
   if (lmrMode !== 'skip' && basis.lmrOnChanges) {
     for (const [pageId, after] of writes) {
@@ -1797,7 +1932,22 @@ export async function planSplit(
       });
       labels.push(`${lmrKey} of ${name}: today`);
       measured.push(name);
+      dated.add(pageId);
     }
+  }
+  // CR-2026-11-R3 (R3-67): a page this job may date whose read-back expects its rows exactly (the pack's facts write on
+  // a source the split upgrades to its Core, R3-66) leaves its Last Major Revision row to the job's own step: compared
+  // exactly, the date the split set read back as a difference, and the job was "not verified". Every other row is
+  // compared as before, and Revert still reads the rows the job left from this target.
+  for (const [i, t] of verifyTargets.entries()) {
+    if (t.kind !== 'sidebar' || !dated.has(t.resourceId)) continue;
+    verifyTargets[i] = {
+      ...t,
+      properties: t.properties.map((x) => {
+        const row = x.rows?.find((r) => r.id !== null && textKey(r.key) === textKey(lmrKey));
+        return row?.id ? { ...x, datedRowId: row.id } : x;
+      }),
+    };
   }
 
   // The new pages' own read-back (the pack's: place, rows, tags, links), then phase 1's verification.
@@ -1809,7 +1959,12 @@ export async function planSplit(
     });
     labels.push('verify the new pages and the remapped Dependencies');
   }
-  const original = o.order.map((id) => ({ id, text: textPrint(o.byId.get(id)!), excerpt: excerpt(id) }));
+  const original = o.order.map((id) => ({
+    id,
+    text: textPrint(o.byId.get(id)!),
+    excerpt: excerpt(id),
+    content: contentPrint(o.byId.get(id)!),
+  }));
   const contentMoves: {
     item: string;
     kind: 'move' | 'universal';
@@ -1909,6 +2064,15 @@ export async function planSplit(
       continue;
     }
     const kindWord = r.isNew ? 'New' : r.relationship ? 'Existing relationship owner' : 'Existing owner';
+    // CR-2026-11-R3 (R3-50): universal material whose application text comes here is removed from the source with this
+    // item (not migrated): the owner is shown its text, as for universal material whose text stays in the source.
+    const removedHere = [...dests.values()]
+      .filter((u) => u.d.kind === 'universal' && u.universalIn === r.d.key)
+      .map((u) => ({
+        owner: u.universalOwner?.name ?? u.d.owner ?? u.d.key,
+        text: (blocksTo.get(u.d.key) ?? []).map((id) => blockText(o.byId.get(id) ?? {})).join(' · '),
+      }))
+      .filter((u) => u.text !== '');
     destItems.push({
       id: r.d.item,
       kind: r.isNew ? 'split_new_owner' : 'split_existing_owner',
@@ -1921,7 +2085,14 @@ export async function planSplit(
           .map((b) => blockText(b))
           .join('\n')
           .slice(0, 8000),
-        context: leftOut,
+        context:
+          leftOut +
+          removedHere
+            .map(
+              (u) =>
+                ` With it, universal material is removed from ${node.rawName} (not migrated: ${u.owner}'s rule, its application text here instead): “${u.text.slice(0, 1500)}”.`,
+            )
+            .join(''),
       },
       dependsOn: [],
       selected: true,
@@ -1937,6 +2108,15 @@ export async function planSplit(
       const extra = it.dependsOn.map((x) => itemIds.get(x) ?? x).filter((x) => x !== id);
       destItems[k] = { ...destItems[k]!, dependsOn: [...new Set([...destItems[k]!.dependsOn, ...extra])] };
     }
+  // The source upgraded to its Character Core by this split: each new owner needs the upgrade, so a partial approval never
+  // leaves the character with several owners and no Core (unticking the upgrade drops the new owners with it).
+  if (upgradeToCore) {
+    const head = itemIds.get(`existing:${node.id}`) ?? `existing:${node.id}`;
+    if (packItems.some((p) => p.id === head))
+      for (const [k, d] of destItems.entries())
+        if ([...dests.values()].some((r) => r.isNew && r.d.item === d.id))
+          destItems[k] = { ...d, dependsOn: [...new Set([...d.dependsOn, head])] };
+  }
   let items: PlanItem[] = [
     ...destItems,
     ...packItems.filter((p) => !destItems.some((d) => d.id === p.id)),
@@ -2059,6 +2239,7 @@ export async function planSplit(
             .reduce((n, r) => n + (contents.get(r.d.key)?.moved.length ?? 0), 0),
         note: 'Every moved block keeps its id (and its children theirs) where LegendKeeper allows: always on a new page; on an existing owner unless that page already uses the id, when a derived id is used and the job says so.',
       },
+      upgrade,
       lmr: {
         mode: lmrMode,
         newPages: receivers.filter((r) => r.isNew).map((r) => r.page!.name),

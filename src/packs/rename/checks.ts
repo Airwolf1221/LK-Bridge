@@ -25,6 +25,8 @@
  * Rebasers (`StepOptions.rebase`, src/jobs/rebase.ts): `rename.block` (a block's restatements and routing lines),
  * `rename.row` (a chronology row), `rename.resource` (a page name, an alias, an identity tag) and `rename.factRow`.
  */
+import { NON_CURRENT_AREAS } from '../../appraisal/scope.js';
+import { nameKey as treeNameKey } from '../../tree/classify.js';
 import type { JobEngine } from '../../jobs/engine.js';
 import type {
   DocumentCheckContext,
@@ -66,14 +68,172 @@ export const RENAME_CHECKS = {
   asset: 'rename.asset',
   assetVerify: 'rename.asset.verify',
   pack: 'rename.pack',
+  /** CR-2026-11-R3 (R3-29): history judged again when the job runs (D2). */
+  history: 'rename.history',
 } as const;
+
+/** CR-2026-11-R3 (R3-29): the pages whose restatements the rename edits, each with its items. */
+export interface HistoryCheckInput {
+  /** The project's `[INDEX] Archived` (null: found by its name). */
+  readonly archiveIndexId: string | null;
+  readonly archiveIndexName?: string;
+  readonly pages: readonly {
+    readonly pageId: string;
+    readonly name: string;
+    readonly items: readonly string[];
+  }[];
+}
+
+/** What the history check needs of the repository tree (the bridge's own view, following its own writes). */
+export type TreeNodeOf = (
+  projectId: string,
+  pageId: string,
+) => {
+  readonly rawName: string;
+  readonly path: { readonly ids: readonly string[]; readonly names: readonly string[] };
+} | null;
+
+const AREA_NAMES = new Map(
+  NON_CURRENT_AREAS.flatMap((a) => a.names.map((n) => [treeNameKey(n), a.label] as [string, string])),
+);
+
+/**
+ * CR-2026-11-R3 (R3-29): D2 again when the job runs. History was decided when the plan was made; a page archived since
+ * (archive_page, which the owner may accept while the rename waits), or moved under the Legacy Canon Archive or the
+ * Design References, is history now: its items are skipped, never written. Judged on the repository tree (it follows
+ * the bridge's own archives and moves at once; one made in the app is seen at its next sweep). No LegendKeeper read.
+ */
+async function historyCheck(
+  tree: TreeNodeOf | undefined,
+  ctx: RegisteredCheckContext,
+): Promise<RegisteredCheckResult> {
+  const input = ctx.input as HistoryCheckInput;
+  const skipped: SkippedItem[] = [];
+  const area = (ids: readonly string[], names: readonly string[]): string | null => {
+    for (let i = 0; i < ids.length; i++) {
+      const name = names[i] ?? '';
+      if (
+        input.archiveIndexId
+          ? ids[i] === input.archiveIndexId
+          : treeNameKey(name) === treeNameKey(input.archiveIndexName ?? '[INDEX] Archived')
+      )
+        return 'it has been archived since the plan';
+      if (AREA_NAMES.has(treeNameKey(name)))
+        return `it has been filed under the ${AREA_NAMES.get(treeNameKey(name))!} since the plan`;
+    }
+    return null;
+  };
+  for (const p of input.pages) {
+    // The page as it is now (its name and parent: one read), its ancestors from the repository tree.
+    const r = await ctx.read('getResource', { path: { resourceId: p.pageId } });
+    let why: string | null = null;
+    if (!r.exists) why = 'its page is gone';
+    else {
+      const res = r.body as { name?: unknown; parentId?: unknown } | null;
+      const name = typeof res?.name === 'string' ? res.name : '';
+      if (/^\s*\[\s*barc\s*\]/i.test(name.normalize('NFKC'))) why = 'it has been archived since the plan';
+      else if (typeof res?.parentId === 'string') {
+        const parent = tree?.(ctx.projectId, res.parentId) ?? null;
+        if (parent) why = area(parent.path.ids, parent.path.names);
+      }
+    }
+    if (why)
+      for (const item of p.items)
+        skipped.push({
+          item,
+          reason: `changed meanwhile: ${why} (D2: history keeps its record)`,
+          where: p.name,
+        });
+  }
+  return { differences: [], ...(skipped.length > 0 ? { skipped } : {}) };
+}
 
 export const RENAME_REBASERS = {
   block: 'rename.block',
   row: 'rename.row',
   resource: 'rename.resource',
   factRow: 'rename.factRow',
+  /** CR-2026-11-R3 (R3-33): an asset's or folder's name, judged inside the write's lock. */
+  asset: 'rename.asset',
+  /** CR-2026-11-R3 (R3-34): a linked timeline event's name, judged inside the write's lock. */
+  event: 'rename.event',
+  /** CR-2026-11-R3 (R3-36): a page's re-placing move, judged inside the move's lock. */
+  place: 'rename.place',
 } as const;
+
+/**
+ * CR-2026-11-R3 (R3-33): an asset (or folder) renamed: on the asset as read inside the write's lock, its old name and
+ * planned folder (write), the new name already (nothing to send), or anything else: skipped, never overwritten (an
+ * asset renamed or moved in the app after the job's lock-free first check).
+ */
+function rebaseAsset(ctx: RebaseContext): RebaseResult {
+  const input = ctx.input as { names: [string, string]; folderId: string | null; item: string };
+  const a = (ctx.current.entity ?? ctx.current.body ?? null) as Obj | null;
+  const skip = (why: string): RebaseResult => ({
+    kind: 'skip',
+    skipped: [{ item: input.item, reason: `changed meanwhile: ${why}`, before: input.names[0], after: null }],
+  });
+  if (!ctx.current.exists || !a) return skip('the asset is gone');
+  const name = str(a.name) ?? '';
+  const folder = str(a.folderId) ?? str(a.parentId);
+  if (input.folderId !== undefined && folder !== input.folderId)
+    return skip('it was moved to another folder');
+  if (name === input.names[1]) return { kind: 'unchanged' };
+  if (name !== input.names[0]) return skip(`it is called “${name}” now`);
+  return { kind: 'retry', params: ctx.params };
+}
+
+/**
+ * CR-2026-11-R3 (R3-34): a linked event renamed with its row: on the event as read inside the write's lock, the name
+ * planned (write), the new one already (nothing to send), or anything else: skipped, never overwritten.
+ */
+function rebaseEvent(ctx: RebaseContext): RebaseResult {
+  const input = ctx.input as { before: string; after: string; item: string };
+  const e = (ctx.current.entity ?? ctx.current.body ?? null) as Obj | null;
+  if (!ctx.current.exists || !e)
+    return {
+      kind: 'skip',
+      skipped: [
+        {
+          item: input.item,
+          reason: 'changed meanwhile: the event is gone',
+          before: input.before,
+          after: null,
+        },
+      ],
+    };
+  const name = str(e.name) ?? '';
+  if (name === input.after) return { kind: 'unchanged' };
+  if (name !== input.before)
+    return {
+      kind: 'skip',
+      skipped: [
+        {
+          item: input.item,
+          reason: `changed meanwhile: the event is called “${name}” now`,
+          before: input.before,
+          after: name,
+        },
+      ],
+    };
+  return { kind: 'retry', params: ctx.params };
+}
+
+/**
+ * CR-2026-11-R3 (R3-36): a page's re-placing move after its rename: when the page is no longer under the parent the
+ * plan placed it in (the owner moved it), it is left where it is: never moved back. Its rename stands.
+ */
+function rebasePlace(ctx: RebaseContext): RebaseResult {
+  const input = ctx.input as { parentId: string };
+  const r = (ctx.current.entity ?? ctx.current.body ?? null) as Obj | null;
+  if (!ctx.current.exists || !r) return { kind: 'unchanged', note: { placement: 'the page is gone' } };
+  if ((str(r.parentId) ?? null) !== input.parentId)
+    return {
+      kind: 'unchanged',
+      note: { placement: 'moved by someone else since the plan: left where it is' },
+    };
+  return { kind: 'retry', params: ctx.params };
+}
 
 /** The input of a document check: the blocks it edits, each with its fingerprint and its edits. */
 export interface DocumentEditsInput {
@@ -84,6 +244,12 @@ export interface DocumentEditsInput {
     readonly blockId: string;
     readonly fingerprint: string;
     readonly edits: readonly PlannedEdit[];
+    /**
+     * CR-2026-11-R3 (R3-25): the sentence of EVERY occurrence of the old name in the block when planned, ticked or not
+     * (absent in a check planned before this release). An edit is found again by its sentence only when that sentence
+     * held the name once: a quotation repeating it, left out, is never renamed in its place.
+     */
+    readonly sentences?: readonly string[];
     /** Where it is, for the owner. */
     readonly where?: string;
   }[];
@@ -133,6 +299,7 @@ function documentCheck(ctx: DocumentCheckContext): DocumentCheckResult {
       edits: b.edits,
       oldName: input.oldName,
       newName: input.newName,
+      ...(b.sentences ? { sentences: b.sentences } : {}),
       ...(b.where ? { where: b.where } : {}),
     });
     skipped.push(...skippedOf(r.skipped));
@@ -425,10 +592,15 @@ function rebaseBlock(ctx: RebaseContext): RebaseResult {
     newName: string;
     fingerprint: string;
     edits: PlannedEdit[];
+    sentences?: string[];
     where?: string;
   };
   const block = ctx.current.exists ? blockOf(ctx.current.body) : null;
-  const r = rebaseEdits(block, input);
+  // CR-2026-11-R3 (R3-12): only the edits of the items this write may still apply (never one left out by the owner or
+  // skipped earlier in the job), so a conflict never widens the write.
+  const live = ctx.items ? new Set(ctx.items) : null;
+  const mine = live ? { ...input, edits: input.edits.filter((e) => live.has(e.item)) } : input;
+  const r = rebaseEdits(block, mine);
   if (r.edits.length === 0) {
     if (r.skipped.length === 0) return { kind: 'unchanged', note: { done: r.done } };
     return { kind: 'skip', skipped: skippedOf(r.skipped) };
@@ -437,7 +609,7 @@ function rebaseBlock(ctx: RebaseContext): RebaseResult {
   if (!next)
     return {
       kind: 'skip',
-      skipped: input.edits.map((e) => ({
+      skipped: mine.edits.map((e) => ({
         item: e.item,
         reason: 'changed meanwhile',
         before: e.sentence,
@@ -564,8 +736,11 @@ function rebaseFactRow(ctx: RebaseContext): RebaseResult {
 export function registerRenameChecks(
   engine: Pick<JobEngine, 'registerAsyncChecker' | 'registerChecker' | 'registerRebaser'>,
   packs: Pick<Packs, 'get' | 'store'>,
+  /** CR-2026-11-R3 (R3-29): the repository tree, for the history check (absent: history is not judged again). */
+  tree?: TreeNodeOf,
 ): () => void {
   const off = [
+    engine.registerAsyncChecker(RENAME_CHECKS.history, (ctx) => historyCheck(tree, ctx)),
     engine.registerAsyncChecker(RENAME_CHECKS.subject, subjectCheck),
     engine.registerAsyncChecker(RENAME_CHECKS.resource, resourceCheck),
     engine.registerChecker(RENAME_CHECKS.document, documentCheck),
@@ -579,6 +754,9 @@ export function registerRenameChecks(
     engine.registerRebaser(RENAME_REBASERS.row, rebaseRow),
     engine.registerRebaser(RENAME_REBASERS.resource, rebaseResource),
     engine.registerRebaser(RENAME_REBASERS.factRow, rebaseFactRow),
+    engine.registerRebaser(RENAME_REBASERS.asset, rebaseAsset),
+    engine.registerRebaser(RENAME_REBASERS.event, rebaseEvent),
+    engine.registerRebaser(RENAME_REBASERS.place, rebasePlace),
   ];
   return () => {
     for (const f of off) f();

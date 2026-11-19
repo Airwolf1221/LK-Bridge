@@ -15,6 +15,8 @@ export type JobsErrorCode =
   | 'CASCADE_CONFIRM_REQUIRED'
   | 'TEMPLATES_DESTINATION'
   | 'DRAINING'
+  /** CR-2026-11-R3 (fix A): the bridge is stopping for a restart and accepts no new work. */
+  | 'BRIDGE_RESTARTING'
   | 'UNSUPPORTED_BLOCK_LOSS'
   | 'VERSION_CONFLICT'
   | 'UNCERTAIN_OUTCOME'
@@ -218,10 +220,17 @@ export class CascadeConfirmationRequiredError extends JobsError {
 
 export class DrainingError extends JobsError {
   override readonly name = 'DrainingError';
-  constructor() {
+  /**
+   * CR-2026-11-R3 (fix A): `restarting` when the bridge is stopping (SIGTERM, a deploy): the code is then
+   * `BRIDGE_RESTARTING` and the message says to try again once it is back.
+   */
+  constructor(restarting = false) {
     super(
-      'DRAINING',
-      'The bridge is draining (finishing running jobs before a restart) and accepts no new jobs',
+      restarting ? 'BRIDGE_RESTARTING' : 'DRAINING',
+      restarting
+        ? 'The bridge is restarting and accepts no new work until it is back, in about a minute. Nothing was written: ' +
+            'make the same call again then. Work already accepted (jobs, proposals) is kept and continues by itself.'
+        : 'The bridge is draining (finishing running jobs before a restart) and accepts no new jobs',
     );
   }
 }

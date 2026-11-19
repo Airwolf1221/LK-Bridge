@@ -218,6 +218,9 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
   await probe.close();
 
   const sessionToken = services.owner.createSession('127.0.0.1', 'vitest');
+  // ADR 0062: the owner has just stepped up (settings and other sensitive changes need it within 10 minutes); a test of
+  // the step-up itself sets `reauth_at` back first.
+  services.store.setReauth(services.sessionHash(sessionToken), Math.floor(Date.now() / 1000));
   const cookie = `${services.owner.sessionCookie}=${sessionToken}`;
   const csrf = services.owner.csrfToken(sessionToken, ADMIN_CSRF_PURPOSE);
 

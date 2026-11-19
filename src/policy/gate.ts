@@ -26,7 +26,15 @@ import type {
   RailRequestItem,
 } from '../jobs/policy.js';
 import { isLiveApprovalToken } from './approval.js';
-import { isLowLevelTool, listsSent, railsVerdict } from './rails.js';
+import type { TextRemoval } from './text-removal.js';
+import {
+  DEFAULT_WRITE_RAILS,
+  isLowLevelTool,
+  listsSent,
+  railsVerdict,
+  type RailItem,
+  type RailVerdict,
+} from './rails.js';
 import type { PolicyStore } from './store.js';
 import type { ResolvedPrincipal, Scope } from './types.js';
 
@@ -63,6 +71,14 @@ export interface RailLookups {
    * null when it cannot be told.
    */
   readonly drops?: (projectId: string, item: RailRequestItem) => Promise<boolean | null>;
+  /**
+   * ADR 0061 part B decision 1 (R3-53): the pack pages a low-level request takes the split guard's words or more of text
+   * off, read live (src/policy/text-removal.ts).
+   */
+  readonly textRemoved?: (
+    projectId: string,
+    items: readonly RailRequestItem[],
+  ) => Promise<readonly TextRemoval[]>;
 }
 
 /** The pages whose descendants a request's rails count: a cascade delete's page, a copy's source (with its children). */
@@ -198,6 +214,21 @@ export class LivePolicyGate implements PolicyGate {
     }
   }
 
+  /**
+   * ADR 0062: whether approving these operations is one of the owner's guarded kinds (a delete, more than 10 pages, an
+   * asset delete or move): the dashboard then asks for the step-up. Judged by the rails' own rules at the owner's
+   * defaults (ADR 0055), whatever made the request a proposal; a restore's set is not read here, so a restore counts as
+   * more than 10 pages (fails closed, as the rails do when they cannot tell).
+   */
+  guardedVerdict(projectId: string, items: readonly RailItem[]): RailVerdict | null {
+    const l = this.railLookups;
+    return railsVerdict(DEFAULT_WRITE_RAILS, items, {
+      descendants: (rid) => l.descendants?.(projectId, rid) ?? null,
+      pageName: (rid) => l.pageName?.(projectId, rid) ?? null,
+      restored: () => null,
+    });
+  }
+
   /** v3 F3.4: the tree's answers the rails use (a cascade's pages, page names for the reason); merged with earlier ones. */
   setRailLookups(l: RailLookups): void {
     this.railLookups = { ...this.railLookups, ...l };
@@ -242,12 +273,19 @@ export class LivePolicyGate implements PolicyGate {
         if (!writes(it) || listsSent(it.opId, it.params.body).length === 0) continue;
         drops.set(i, l.drops ? await l.drops(ctx.project, it).catch(() => null) : null);
       }
+    // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool is a removal too (an error
+    // reading it refuses the request: no direct write).
+    const textRemoved =
+      r.rails.deletes && lowLevel && l.textRemoved
+        ? await l.textRemoved(ctx.project, items.filter(writes))
+        : [];
     const base = {
       ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
       ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
       restored: (id: string) => restored.get(id) ?? null,
       lowLevel,
       drops: (i: number) => drops.get(i) ?? null,
+      textRemoved: () => textRemoved,
     };
     const fromTree = (id: string) => l.descendants?.(ctx.project, id) ?? null;
     const verdict = railsVerdict(r.rails, items, { ...base, descendants: fromTree });

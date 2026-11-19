@@ -19,6 +19,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { C, O, P, PROJECT, S, splitWorld, zahraBody, type SplitWorld } from './split-world.js';
 import { ROOT } from '../discover/world.js';
+import { TPL } from './world.js';
 import { statutesSplit, zahraSplit } from './split-inputs.js';
 import {
   adminGet,
@@ -275,6 +276,10 @@ describe('arkona_split_owner: the checks before anything is proposed', () => {
       'GET /resources/tplgen01/',
       'GET /resources/tplart01/',
       'GET /resources/tplrel01/',
+      // CR-2026-11-R3 (R3-66): her Compact Character Reference becomes her Character Core in this proposal: the two
+      // templates' rows are compared first (an upgrade in place needs the same rows).
+      `GET /resources/${TPL.core}/`,
+      `GET /resources/${TPL.compact}/`,
       `GET /resources/${C.nadira}/`,
       `GET /resources/${P.nadiraBio}/`,
     ]);
@@ -298,7 +303,7 @@ describe('arkona_split_owner: the checks before anything is proposed', () => {
 });
 
 /** The plan's reads, measured (pinned: a change is a cost change to state). */
-const PLAN_READS = { zahra: 8 };
+const PLAN_READS = { zahra: 10 };
 
 describe('arkona_split_owner: phase 1 on a character monolith (the source survives)', () => {
   let w: SplitWorld;
@@ -470,8 +475,8 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 
   it('the costs, measured: the proposal’s capture and the job', () => {
     expect(cost).toEqual(COSTS.zahra);
-    // The preview's estimate: the job's writes exactly, its reads within about a tenth (171 estimated, 156 made).
-    expect(proposal.cost).toMatchObject({ planReads: 8, job: { reads: 171, writes: cost.writes } });
+    // The preview's estimate: the job's writes exactly, its reads within about a tenth (175 estimated, 159 made).
+    expect(proposal.cost).toMatchObject({ planReads: 10, job: { reads: 175, writes: cost.writes } });
   });
 
   it('Revert of phase 1: the moved content back in the source; the pages it made to ONE deletion proposal', async () => {
@@ -483,7 +488,7 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
     expect(detail.json.split).toMatchObject({ state: 'verified', retire: false });
     const pv = await w.stack.runtime.reverts.preview(PROJECT, jobId);
     expect(pv.eligible).toEqual({ ok: true });
-    expect(pv.split).toEqual({ pagesMade: Object.keys(pages).length + 1 });
+    expect(pv.split).toEqual({ pagesMade: Object.keys(pages).length + 1, wholeOnly: true });
     const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, jobId);
     expect(rv.status, JSON.stringify(rv)).toBe('submitted');
     if (rv.status !== 'submitted') return;
@@ -521,7 +526,8 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 
 /** The costs, measured (pinned: a change is a cost change to state). */
 const COSTS = {
-  zahra: { capture: 23, requests: 243, writes: 87 },
+  // CR-2026-11-R3 (R3-66): + the Core upgrade (her rename and Reference Type; the two templates read at the capture).
+  zahra: { capture: 26, requests: 248, writes: 89 },
   statutes: { capture: 12, requests: 84, writes: 22 },
 };
 

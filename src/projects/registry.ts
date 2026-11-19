@@ -811,6 +811,14 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
   }
 
   /** Stops every retry timer and closes every governor (saving its counts). */
+  /**
+   * CR-2026-11-R3 (fix A): a restart: every project's governor ends its waits at once and lets nothing new wait
+   * (`Governor.stopWaits`); requests in flight finish. `close()` follows at the end of the shutdown.
+   */
+  stopWaits(): void {
+    for (const e of this.entries.values()) e.client?.governor.stopWaits();
+  }
+
   close(): void {
     this.closed = true;
     for (const e of this.entries.values()) {

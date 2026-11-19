@@ -8,6 +8,7 @@
  * systemd's restart) or it has not written a heartbeat for `staleMs`; on another host, its heartbeat is older than
  * `staleMs`. The same process may take over its own row (a runtime rebuilt in tests).
  */
+import { loggedTask, type TaskLogger } from '../maintenance/task-log.js';
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import type { Db } from '../db/open.js';
@@ -33,6 +34,8 @@ export interface InstanceGuardOptions {
   readonly now?: () => number;
   /** How often the heartbeat is written (default 15 s). */
   readonly heartbeatMs?: number;
+  /** CR-2026-11-R3 (R3-65): background tasks' log (the heartbeat logs only when memory moved, task-log.ts). */
+  readonly taskLog?: TaskLogger;
   /** A heartbeat older than this means the holder is gone (default 60 s). */
   readonly staleMs?: number;
   /** Test seams. */
@@ -97,7 +100,10 @@ export class InstanceGuard {
       })
       .immediate();
     this.held = true;
-    this.timer = setInterval(() => this.beat(), this.o.heartbeatMs ?? 15_000);
+    this.timer = setInterval(
+      () => void loggedTask(this.o.taskLog, 'instance heartbeat', {}, () => this.beat(), { quiet: true }),
+      this.o.heartbeatMs ?? 15_000,
+    );
     this.timer.unref();
     return result;
   }

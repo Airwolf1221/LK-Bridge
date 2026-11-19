@@ -196,8 +196,10 @@ describe('health: refresh, invalid_grant, disconnect', () => {
 });
 
 describe('re-authentication and secrecy', () => {
-  it('every sensitive action needs a re-authentication within 5 minutes', async () => {
+  it('every sensitive action needs a re-authentication within 10 minutes (ADR 0062)', async () => {
+    stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = NULL').run();
     const sensitive: [string, string, unknown][] = [
+      ['PUT', '/offsite/settings', { settings: { bandwidthLimit: 'off' } }],
       ['PUT', '/offsite/client', { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET }],
       ['POST', '/offsite/connect', {}],
       ['POST', '/offsite/disconnect', { confirm: true }],
@@ -216,9 +218,9 @@ describe('re-authentication and secrecy', () => {
     expect((await api.get('/offsite')).status).toBe(200);
   });
 
-  it('a re-authentication older than 5 minutes no longer counts', async () => {
+  it('a re-authentication older than 10 minutes no longer counts', async () => {
     await reauth();
-    stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = reauth_at - 301').run();
+    stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = reauth_at - 601').run(); // ADR 0062: 10 minutes
     const r = await api.put('/offsite/client', { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
     expect(r.json.error.code).toBe('REAUTH_REQUIRED');
   });

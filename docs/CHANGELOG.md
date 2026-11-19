@@ -1,5 +1,150 @@
 # Changelog
 
+## Unreleased: ADR 0061 accepted, the third review's owner decisions built (19 November 2026)
+
+The owner confirmed all eleven choices of [ADR 0061](adr/0061-cr-2026-11-r3-decisions.md) part A and decided part B:
+1 (b), 2 (a), 3 (b), 4 (b), 5 (b), 6 (b). Built here; the five findings' tests (kept as `it.fails`) now pass, and four
+low findings stay open for the next slice (R3-56, R3-58, R3-59, R3-60). One migration, `3810_resume_decisions.sql`
+(`jobs.cancelled_by`, `job_stops.continued_as`); it runs at start.
+
+- **Text emptied through a low-level tool is a removal** (R3-53, decision 1 (b)). A request through `lk_api_write`,
+  `lk_api_batch` or `lk_op_*` whose `replaceDocumentBlocks`, `updateBlock` or `replaceBlock` writes take the pack's
+  `splits.guardWords` (120) words or more off a pack page is a proposal under the deletes rail, even with every block id
+  kept: `proposed because: text removal (… words off “…”, a page of a character’s set; the pack's threshold is 120)`.
+  Counted over the whole request, per page, on what LegendKeeper holds now; the split guard's own test says which pages.
+- **The split guard stays per edit** (R3-52, decision 2 (a)): it steers agents; each edit is on the Review page.
+- **A cancel stands** (R3-54, decision 3 (b)): the bridge records who cancelled a job (`owner`, `system`, or the agent),
+  and an agent's `bridge_job_resume` of a job it did not cancel itself is refused (`CANCELLED_BY_OWNER`).
+- **The rails at Resume** (R3-55, decision 4 (b)): an agent's Resume judges its profile's safety rails again, live, on
+  the steps left; when one now covers a step, nothing runs: the rest becomes one proposal for the owner
+  (`proposal_captured`, with `proposedBecause`), and the job is not resumed again while it stands (`REST_PROPOSED`).
+- **A retag revert leaves a page renamed or moved since** (R3-57, decision 5 (b)): "as the job left it" is the page's
+  tags, name and parent.
+- **Resume reads a differing write back again** (decision 6 (b)): before a stopped job continues, each write that read
+  back a difference (or could not be read back) is read again; one that now reads back as planned counts as verified,
+  marked `putRightSince` in the job's result. A split resumed after one verifies and proposes phase 2 as any other.
+
+## Unreleased: ADR 0062, dashboard sessions for 30 days and a step-up for sensitive actions (19 November 2026)
+
+The owner's request after the third review: the dashboard's session ended within the hour, where the previous bridge
+kept it for 30 days ([ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), accepted on 19 November 2026 with the
+owner's rule for the step-up: tightening is one click, loosening asks). No migration; deploy normally. Remove a lower
+`AUTH_SESSION_TTL_SECONDS` from the env file to get the 30 days.
+
+- **A sliding 30-day session.** A session lasts 30 days from its last use: each use of the dashboard or the consent page
+  moves its end 30 days on (at most once a minute) and renews the cookie; the live stream's periodic check is no use,
+  so an idle open tab does not keep it alive. `AUTH_SESSION_TTL_SECONDS` defaults to 2,592,000 (was 43,200, fixed from
+  sign-in); an explicit lower value still wins. Sessions stay on the server under the token's SHA-256, so
+  they survive a restart and can be revoked; the Account page shows how many are active.
+- **The cookie is `SameSite=Strict`** (was `Lax`), `HttpOnly`, `Secure`, `__Host-`. The three pages reached from
+  another site (Claude's consent page, Google Drive's return, a link to the dashboard) answer such a navigation, once,
+  with a small page of the bridge's own (no script) that opens the same address again from the bridge, so the cookie
+  comes with it (never twice in a row: a 30-second marker stops a loop).
+- **Sign out everywhere** (the Account page; `POST /api/admin/security/sessions/revoke-all`): every owner session ends,
+  this one included. No step-up (it only takes access away). Event `logout.everywhere`, audit `owner.sessions_revoked`.
+- **The step-up**: the authenticator code (or a recovery code) within the last **10 minutes** (was the password and the
+  code within 5), or the password when no authenticator is set up; with one set up, the password alone is refused.
+  Asked for keys and secrets (a personal access token at any scope too), a scope raised (a profile's or the default
+  scope, a connection moved up or to a profile at scope `write`), the settings (the bridge's, a project's, the budgets',
+  a maintenance job's switch, schedule and run size, every off-site setting, retention, the connections' clean-up, the
+  audits') and releasing a brake (read-only off, resuming writes, undraining, a project's included), pack approval, and
+  the guarded rails: approving a proposal that deletes, touches more than 10 pages or deletes or moves an asset (judged
+  on its operations, whoever proposed it), the owner's own retag batch of more than 10 pages, deleting a rehearsal's
+  root. Tightenings and brakes stay one click: lowering a scope, moving a connection down, read-only on, ChatGPT's file
+  source off, pausing writes and draining, Sign out everywhere, revoking a connection or a token, cancelling a job,
+  switching most jobs off, rejecting a proposal.
+- **The dashboard**: any change answered `REAUTH_REQUIRED` opens the step-up dialog (the code only, or the password),
+  once for changes refused together, then is sent again; a wrong code stays in the dialog (it used to send the owner to
+  the sign-in page, as did a wrong current password). When the live stream is refused, the dashboard checks its session
+  once and, signed out, goes to the sign-in page instead of reconnecting every three seconds.
+- **The owner's decisions** (ADR 0062, accepted): tightening is one click, loosening asks; so lowering a scope, moving
+  a connection down, switching ChatGPT's file source off and read-only on are one click (as ADR 0057 had them), every
+  off-site setting keeps the step-up, resuming writes and undraining ask; the step-up is the code alone.
+- Tests: `test/auth/sessions-r3.test.ts`, `test/ui/sessions.test.tsx`, `test/ui/live.test.tsx`; the tests of the old
+  rules now assert these (`test/admin/r2-scope-reauth.test.ts`, `test/auth/owner.test.ts` and others).
+
+## Unreleased: CR-2026-11-R3, the third independent review (19 November 2026)
+
+**Critical, fixed here: on the reviewed code an agent at scope `write` could get canon text the owner had left out of an
+approved rename rewritten** (R3-12, R3-25): an ordinary direct edit of the same page while the rename waited or ran made
+its rebase apply the edits of unticked items, quotations and history among them, reported verified. Three more critical
+findings needed the owner's own approval or Revert (a split losing a moved block, R3-18; a partial Revert of a split
+leaving its sections on no page, then deleting their only copy, R3-09, R3-10). Deploy this before the next approved
+rename or split. The review covers `88c640e` to `6eeff4c` (F3.5, R2.1, F3d, F3d.1, F3e, F3f; ADRs 0056 to 0060)
+([docs/reviews/CR-2026-11-R3.md](reviews/CR-2026-11-R3.md); decisions in
+[ADR 0061](adr/0061-cr-2026-11-r3-decisions.md), proposed). 66 findings (5 critical, 26 high, 21 medium, 14 low): 57
+fixed, each with a test that fails on the reviewed code; 9 open, their tests kept as `it.fails`. One migration
+(`3800_split_unverified.sql`, the split's new `unverified` state; it runs at start); deploy normally
+(`sudo systemctl daemon-reload`: the unit file changed). Nothing was run against a live system.
+
+- **A clean restart (the owner's fix A).** On SIGTERM the bridge answers 503 "the bridge is restarting"
+  (`BRIDGE_RESTARTING`), lets requests already sent to LegendKeeper finish (at most 10 s), stops each job at its next
+  step boundary (never part-way through a write) and records it queued to continue at the next start, ends every wait
+  for budget, pacing, a lock or a back-off at once, and exits (watchdog 25 s). `TimeoutStopSec=75`. Measured: 1.5 s with
+  a write in flight (20.2 s before).
+- **Memory (fix B).** Measured in the mock: a 700-page rename peaks at +337 MB RSS over the baseline and a split of
+  2,046 blocks at +201 MB, under the 400 MB ceiling; an opt-in test guards it (`LKB_MEASURE=1`). Before, the rename could
+  not run (R3-01, R3-02, R3-62), then peaked at +561 to +683 MB because a run of ~1,400 request-free steps never yielded
+  the event loop, blocking the bridge for ten seconds (now it yields every ten steps, and a Last Major Revision decision
+  reads only its own page's journal entries, R3-64). Building it found that a
+  700-page rename was refused with `INVALID_PARAMS` (one check step now holds 5,000 entries; beyond it `STEP_TOO_LARGE`,
+  R3-01), that a check meeting the budget was reported as "the page changed" (now parked, R3-02), and that a job whose
+  first check needs more reads than an hour's budget never finished (its checks' reads now wait for the budget in their
+  queue, and a large check runs again light after a wait, R3-62).
+- **Memory over time (R3-65, the owner's live report).** Each LegendKeeper request kept the whole MCP request that made
+  it (its server, transport and registered tools) reachable for 35 seconds after it ended: the LegendKeeper SDK arms a
+  35-second `AbortSignal.timeout` on every request, and on Node 24 a timer keeps the async context it was made in, which
+  held the governor's call. The governor's context is now emptied when a call ends. Two caches no longer grow without
+  bound: the snapshot store's recently put objects (kept two hours, was a day) and the appraisal's asset-library hashes
+  (the newest library of each project, was every version). Simulating hours of background work and agent traffic (change
+  snapshots, MCP connections, the scheduled audit, the tree's and the block-id sweeps), the heap is now flat (was +24 MB
+  over 60 rounds, climbing with the traffic); whole-repository runs come back to their level; the night's maintenance
+  peaks at +100 MB (full snapshot and index, 600 pages) and +69 MB (scheduled audit), and leaves nothing. The bridge now
+  logs its memory every 10 minutes (`"msg":"memory"`: resident set, V8 heap used and held, outside the heap, Buffers),
+  and every scheduled or background task logs its start and finish at info with `heapUsedMb` and `rssMb` (and how far
+  each moved): every maintenance job, change snapshots, the work after a full snapshot, the image service's timers, the
+  auth prune, the tree's re-reads owed; tasks that run every minute or more often only when memory moved or they
+  failed.
+- **Splits: the Character Core (R3-66, found by the owner on the test world).** A Compact Character Reference split
+  into several owners became the head of a multi-owner index as a Compact Reference. Now the same canonical proposal
+  upgrades it in place to the Character Core (F3a's `upgradeToCore`: name, Reference Type, template; id, text and
+  identity facts kept), every new owner needing that upgrade; any other map that would leave a multi-owner character
+  without a Core is refused (`SPLIT_CORE_REQUIRED`). Revert puts the Compact back in the deletion proposal of the pages
+  the split made (canon), after them.
+- **Splits: verified means the job's verification (R3-67, found by the owner on the test world).** A split job read its
+  own mentions back as differences (LegendKeeper fills in each mention's name and label), so the job said "not verified"
+  while the split said "verified" (it took that from the job having run to its end, and went on to propose retiring the
+  source). The generic verify now compares a mention by its target (`resourceId`, `documentId`), in page text and
+  sidebar rows; the split is verified only when its job's verification is, else `unverified` (nothing retired), and
+  `report` says the job's `verified`. A read-back leaves the Last Major Revision row a step of the same job dates to
+  that step (`datedRowId`). A split resumed after a write that read back a difference now stays `unverified` (phase 2
+  is the owner's; ADR 0061 B6).
+- **The retag read-back (fix C)** compares each page document's body by its version: "each page document's body at the
+  same version as before the write; other documents (board, map, timeline) compared by their metadata timestamps only,
+  not their content" (ADR 0060 departure 3 amended).
+- **Renames.** A rebase finds an edit again by its sentence only when no other occurrence shares it (R3-25), and never
+  re-applies an item left out (R3-12); another character's longer name is never renamed (R3-26); D1 (a) on every
+  occurrence of a fact or row and in quote blocks (R3-27, R3-28); history judged again when the job runs (R3-29);
+  assets, events, rows and re-placing moves judged inside their locks (R3-33 to R3-36); page names that keep the old
+  name are reported (R3-31); a follow-up's `from` must be a former name (`FROM_NOT_A_FORMER_NAME`, R3-32); a deleted
+  page skips its items (R3-39); an owner's index is steered (R3-48).
+- **Splits.** Revert of phase 1 is whole or not at all (`SPLIT_REVERT_NOT_WHOLE`), and the pages it made are proposed
+  for deletion only once the material is back (R3-09, R3-10); moved blocks found by their whole content (R3-17, R3-18);
+  a section deleted or moved after the plan is never made again (R3-19, R3-20); Resume re-runs the destinations check
+  (R3-22); later appends are core (R3-23); images never universal (R3-11); inline icons refused (`SPLIT_NOT_WRITABLE`,
+  R3-51); the guard counts rows (R3-42); the deletion re-checked when it runs (R3-21).
+- **Retagging.** The owner's classification, the page's name and place, and its facts are checked at apply and inside
+  the lock, Resume included (R3-03 to R3-05, `RETAG_STALE`); a second spelling of a status tag is a hold (R3-06, R3-07);
+  lifecycle settings in the digest (R3-08); reconciliations and suggestions (R3-46, R3-47).
+- **Selective approval and Resume.** "Propose these again" only once the approved part has run, one at a time, never for
+  a split or a retag batch (`REPROPOSE_REFUSED`), putting back the routing lines it left out (R3-14 to R3-16, R3-24,
+  R3-37, R3-43); Resume only while the proposal stands (`PROPOSAL_NOT_APPROVED`, R3-13); a reverted or half-reverted job
+  is never continued by Resume or a step Retry (`REVERT_STOPPED`, R3-45); skipped items stay reported (R3-44).
+- **Open, for the owner** (ADR 0061 part B): text emptied through a raw route (R3-53), the split guard per edit (R3-52),
+  whose cancel a Resume may undo (R3-54), the rails at Resume (R3-55), a retag revert of a page renamed or moved since
+  (R3-57); low findings for the next slice: R3-56, R3-58 to R3-60.
+- **New sandbox check** (written, not run): `test/sandbox/assumptions-r3.test.ts` (X1 to X8), for the owner.
+
 ## Unreleased: v3 F3f (retagging) (19 November 2026): `arkona_retag_audit`, `arkona_retag_apply`, owner classification, reconciliation
 
 [ADR 0060](adr/0060-v3-f3f-retag-audit-and-apply.md) (Proposed). Migration `3700_retag.sql` (runs at start). Pack version
