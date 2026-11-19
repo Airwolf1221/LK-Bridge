@@ -13,7 +13,6 @@
 import type { TreeNode } from '../../tree/types.js';
 import type { Packs } from '../service.js';
 import { textKey } from '../engine/text.js';
-import { blockText } from './blocks.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -23,10 +22,44 @@ export const USE_ARKONA_SPLIT = 'USE_ARKONA_SPLIT';
 export const ARKONA_SPLIT_HINT =
   'To split material out of an owner page, use arkona_split_appraisal { page } first (the split triggers, a draft destination map and the Anti-Fragmentation note), bring it to the owner, and then, only if the owner asks for the split, arkona_split_owner with the destination map: it moves every block verbatim to exactly one new or existing owner, keeps an interface summary with an exact link in the old page, remaps what depended on it and verifies all of it, as ONE proposal the owner approves. If this edit is not a split (the page’s own revision removes the material on purpose), pass plainEdit: { reason } and the reason is shown to the owner.';
 
+/** A list of runs (or a string) as the words it shows. */
+const runsText = (v: unknown): string =>
+  typeof v === 'string'
+    ? v
+    : Array.isArray(v)
+      ? (v as unknown[])
+          .map((r) =>
+            isObj(r)
+              ? typeof r.text === 'string'
+                ? r.text
+                : isObj(r.mention)
+                  ? typeof r.mention.text === 'string'
+                    ? r.mention.text
+                    : ''
+                  : ''
+              : '',
+          )
+          .join('')
+      : '';
+
+/**
+ * CR-2026-11-R3 (R3-42): every word a block shows, not its runs alone (`blockText`): a key-value or infobox block's rows
+ * (keys and values), a title (an expand, a key-value block, an image), an image's alt text, a code block's text, and its
+ * children's, so dropping a block of rows counts what it held.
+ */
+function shownText(b: Obj): string {
+  const parts: string[] = [runsText(b.content), runsText(b.text), runsText(b.title), runsText(b.alt)];
+  for (const r of Array.isArray(b.rows) ? (b.rows as unknown[]) : [])
+    if (isObj(r)) parts.push(runsText(r.key), runsText(r.content));
+  for (const c of Array.isArray(b.children) ? (b.children as unknown[]) : [])
+    if (isObj(c)) parts.push(shownText(c));
+  return parts.filter((x) => x !== '').join(' ');
+}
+
 const words = (blocks: readonly unknown[]): number =>
   blocks
     .filter(isObj)
-    .map((b) => blockText(b))
+    .map((b) => shownText(b))
     .join(' ')
     .split(/\s+/)
     .filter((w) => /[\p{L}\p{N}]/u.test(w)).length;

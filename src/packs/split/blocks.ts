@@ -14,6 +14,7 @@
  */
 import { createHash } from 'node:crypto';
 import { stableJson } from '../../jobs/sidebar-state.js';
+import { normaliseForCompare } from '../../jobs/verify-blocks.js';
 import { withoutVersions } from '../../pages/blockwise.js';
 import { textKey } from '../engine/text.js';
 
@@ -59,6 +60,48 @@ export const textPrint = (b: Obj): string =>
     .update(textKey(blockText(b)))
     .digest('hex')
     .slice(0, 24);
+
+/**
+ * CR-2026-11-R3 (R3-17): a block's whole content (every field and every child, block ids and versions aside), normalised
+ * as LegendKeeper stores runs (`compareStoredBlocks`'s rules): what "moved verbatim" means. The words alone (`textPrint`)
+ * let a block arrive with other rows, marks, levels or structure, or another block under the same id, pass as the moved
+ * block.
+ */
+export function contentPrint(b: Obj): string {
+  const strip = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(strip);
+    if (!isObj(v)) return v;
+    const block = typeof v.kind === 'string';
+    const out: Obj = {};
+    for (const [k, x] of Object.entries(v)) if (!(block && k === 'id')) out[k] = strip(x);
+    return out;
+  };
+  return createHash('sha256')
+    .update(stableJson(strip(normaliseForCompare(b))))
+    .digest('hex')
+    .slice(0, 32);
+}
+
+/**
+ * CR-2026-11-R3 (R3-17, R3-18): where a moved block landed on a page: under its own id or the id derived for it, and only
+ * a block whose content is the moved block's (`content` absent: an input planned before this release, judged by id as
+ * then). A page's own block that happens to share the id is never taken for it.
+ */
+export function findMoved(
+  item: string,
+  id: string,
+  content: string | undefined,
+  byId: ReadonlyMap<string, Obj>,
+): { block: Obj; id: string } | { mismatch: Obj; id: string } | null {
+  let mismatch: { mismatch: Obj; id: string } | null = null;
+  for (const cand of [id, altId(item, id)]) {
+    const b = byId.get(cand);
+    if (!b) continue;
+    if (content === undefined || contentPrint(b) === content) return { block: b, id: cand };
+    mismatch ??= { mismatch: b, id: cand };
+  }
+  return mismatch;
+}
 
 /** Every block id in a tree of blocks (top level and below). */
 export function idsIn(blocks: readonly unknown[], out = new Set<string>()): Set<string> {
@@ -284,19 +327,23 @@ export type AppendOutcome =
 
 /** The moved blocks as they land (their ids, or the derived ones where the page used them) on a page's blocks. */
 export function landedIds(item: string, planned: readonly Obj[], current: readonly Obj[]): string[] {
-  const ids = new Set(current.map((b) => str(b.id) ?? ''));
+  const byId = new Map(current.map((b) => [str(b.id) ?? '', b]));
   return planned.map((b) => {
     const id = str(b.id) ?? '';
-    return ids.has(id) ? id : altId(item, id);
+    // CR-2026-11-R3 (R3-18): the block under its own id only when it is the moved block (the page may use the id).
+    const hit = findMoved(item, id, contentPrint(b), byId);
+    return hit && 'block' in hit ? hit.id : byId.has(id) ? altId(item, id) : id;
   });
 }
 
 export function applyAppend(current: readonly Obj[], a: AppendInput): AppendOutcome {
-  const topIds = new Set(current.map((b) => str(b.id) ?? ''));
+  const byId = new Map(current.map((b) => [str(b.id) ?? '', b]));
   // Already there (a resumed job, or a write whose answer was lost): every moved block, by its id or its derived id.
+  // CR-2026-11-R3 (R3-18): and with the moved block's content: a block of the page's own that shares the id is not it
+  // (the page's divider under the moved key-value block's id made the append "done", and the rows were lost).
   const there = a.blocks.every((b) => {
-    const id = str(b.id) ?? '';
-    return topIds.has(id) || topIds.has(altId(a.item, id));
+    const hit = findMoved(a.item, str(b.id) ?? '', contentPrint(b), byId);
+    return hit !== null && 'block' in hit;
   });
   if (there && a.blocks.length > 0) return { state: 'done' };
   const taken = idsIn(current);
@@ -382,7 +429,13 @@ export function applyRoute(current: readonly Obj[], r: RouteInput): RouteOutcome
 export interface ContentCheckInput {
   readonly source: { readonly resourceId: string; readonly documentId: string; readonly name: string };
   /** Every original top-level block with its text print and an excerpt (shared: never trimmed). */
-  readonly original: readonly { readonly id: string; readonly text: string; readonly excerpt: string }[];
+  readonly original: readonly {
+    readonly id: string;
+    readonly text: string;
+    readonly excerpt: string;
+    /** CR-2026-11-R3 (R3-17): the block's content print (absent in a check planned before this release). */
+    readonly content?: string;
+  }[];
   /** Each item's moves (trimmed by the selection and by items skipped when the job ran). */
   readonly moves: readonly {
     readonly item: string;
@@ -430,7 +483,13 @@ export function contentProblems(
   for (const o of input.original) {
     const h = home.get(o.id)!;
     const ids = h.item ? [o.id, altId(h.item, o.id)] : [o.id];
-    const foundIn = [...index.entries()].filter(([, m]) => ids.some((id) => m.has(id))).map(([rid]) => rid);
+    // CR-2026-11-R3 (R3-17, R3-18): on a page other than the source, a block counts only when it is this block (its
+    // content), so a destination's own block that shares the id is neither "the moved block" nor a duplicate of it.
+    const holds = (rid: string, m: ReadonlyMap<string, Obj>): boolean =>
+      rid === input.source.resourceId || o.content === undefined
+        ? ids.some((id) => m.has(id))
+        : ids.some((id) => m.has(id) && contentPrint(m.get(id)!) === o.content);
+    const foundIn = [...index.entries()].filter(([rid, m]) => holds(rid, m)).map(([rid]) => rid);
     const label = excerptOf.get(o.id) ?? '';
     if (h.kind === 'universal') {
       for (const rid of foundIn)
@@ -444,12 +503,21 @@ export function contentProblems(
     }
     const want = h.kind === 'source' ? input.source.resourceId : h.dest!;
     if (!foundIn.includes(want)) {
-      out.push({ block: o.id, text: label, problem: 'missing', where: nameOf(want) });
+      // A block under its id (or the derived one) whose content is not this block's: changed on the way, not missing.
+      const other =
+        want !== input.source.resourceId ? ids.map((id) => index.get(want)?.get(id)).find((x) => x) : null;
+      out.push(
+        other
+          ? { block: o.id, text: blockText(other).slice(0, 200), problem: 'changed', where: nameOf(want) }
+          : { block: o.id, text: label, problem: 'missing', where: nameOf(want) },
+      );
       continue;
     }
     const m = index.get(want)!;
-    const b = ids.map((id) => m.get(id)).find((x) => x !== undefined)!;
-    if (textPrint(b) !== o.text)
+    // The block that is this one (the destination's own block may hold the plain id, the moved one the derived id).
+    const under = ids.map((id) => m.get(id)).filter((x): x is Obj => x !== undefined);
+    const b = under.find((x) => o.content !== undefined && contentPrint(x) === o.content) ?? under[0]!;
+    if (o.content !== undefined ? contentPrint(b) !== o.content : textPrint(b) !== o.text)
       out.push({ block: o.id, text: blockText(b).slice(0, 200), problem: 'changed', where: nameOf(want) });
     for (const rid of foundIn)
       if (rid !== want)

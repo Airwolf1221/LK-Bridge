@@ -45,8 +45,9 @@
 #      with the release's own copies (any difference stops the deploy, or --update-self installs them), and the env file
 #      with the release's env.template (env-sync --check: any difference stops the deploy, or --sync-env updates the
 #      file after the build; a missing secret always stops it with ACTION NEEDED). Nothing has changed yet.
-#   2. Drains and stops the service: `systemctl stop lk-bridge` (as lkbridge, through sudo). SIGTERM makes the bridge
-#      stop taking new work, give running jobs up to 20 s to finish, then exit; unit TimeoutStopSec=45 covers that.
+#   2. Stops the service: `systemctl stop lk-bridge` (as lkbridge, through sudo). SIGTERM stops the bridge for a
+#      restart (CR-2026-11-R3, fix A): no new requests, every job parked at its next step boundary (it continues at the
+#      next start), every wait ended; at most about 18 s (a watchdog exits at 25); unit TimeoutStopSec=75 is a cushion.
 #   3. Takes a `pre-deploy` database backup (backup.sh, as lkbridge).
 #   4. As lkbuild: git merge --ff-only, npm ci, npm run build; then checks nothing in the app is writable by lkbridge.
 #      With --sync-env, env-sync updates the env file. As lkbridge: the new build's configuration check on the env file

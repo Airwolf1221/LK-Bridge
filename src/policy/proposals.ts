@@ -54,6 +54,7 @@ import {
   type PlanItem,
 } from '../jobs/items.js';
 import type { ProposalMeta, ProposalSink, ProposedOp } from '../jobs/policy.js';
+import { routesBack } from '../jobs/route-back.js';
 import {
   TERMINAL_JOB_STATUSES,
   type JobOrigin,
@@ -108,6 +109,12 @@ import {
 } from './types.js';
 
 /** Finished states the `proposal-prune` job may delete. `pending`, `approved`, `executing` and `conflicted` never. */
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+/** CR-2026-11-R3 (R3-37, R3-43): the writes that make a page. */
+const CREATE_OPS_RAN: ReadonlySet<string> = new Set(['createResourceFromTemplate', 'createResource']);
+
 export const PRUNABLE_STATES = ['executed', 'rejected', 'expired', 'failed'] as const;
 const PRUNE_BATCH = 500;
 
@@ -339,6 +346,12 @@ export interface ProposalHooks {
   }): Promise<{ readonly waitFor?: WaitForShape } | null> | { readonly waitFor?: WaitForShape } | null;
   afterSubmit?(ctx: { readonly proposal: ProposalView; readonly jobId: string }): void;
   afterRepropose?(ctx: { readonly original: ProposalView; readonly proposalId: string }): void;
+  /**
+   * CR-2026-11-R3 (R3-15): why the items left out of this proposal must not be proposed again by "Propose these again"
+   * (a kind of work whose left-out part has to be planned afresh: a retag batch is audited again, a split planned
+   * again), or null. Asked before anything is captured.
+   */
+  refuseRepropose?(original: ProposalView): string | null;
 }
 
 /** The part of a high-level operation a list shows (never the Markdown or the page). */
@@ -1038,6 +1051,8 @@ export class ProposalService implements ProposalSink {
   }
 
   private readonly hooks: ProposalHooks[] = [];
+  /** CR-2026-11-R3 (R3-16): proposals whose left-out items are being proposed again now (in-process). */
+  private readonly reproposing = new Set<string>();
 
   /** v3 F3d (ADR 0058): adds hooks around approval (the setting packs'). Returns a remover. */
   addHooks(h: ProposalHooks): () => void {
@@ -1941,11 +1956,41 @@ export class ProposalService implements ProposalSink {
     const p = this.require(id);
     const set = this.itemsOf(id);
     if (!set) throw new PolicyError('NOT_ITEMIZED', `Proposal ${id} is not made of items`);
-    if (!['executing', 'executed', 'failed'].includes(p.state) || set.omitted === null)
+    // CR-2026-11-R3 (R3-14): only once the approved part has run to the end (executed). While it still runs, or after it
+    // failed part-way, what the left-out items need (the subject's new name, an approved token's pack version) may not
+    // be there yet, and the new proposal no longer says it depends on it: Resume (or Revert) the job first.
+    if (p.state !== 'executed' || set.omitted === null)
       throw new PolicyError(
         'INVALID_TRANSITION',
-        `Proposal ${id} is ${p.state}: its left-out items are proposed again once the approved part has run`,
+        p.state === 'executing' || p.state === 'failed'
+          ? `Proposal ${id} is ${p.state}: its left-out items are proposed again once the approved part has run to the end (Resume or Revert its job first)`
+          : `Proposal ${id} is ${p.state}: its left-out items are proposed again once the approved part has run`,
       );
+    for (const h of this.hooks) {
+      const why = h.refuseRepropose?.(p);
+      if (why) throw new PolicyError('REPROPOSE_REFUSED', why);
+    }
+    // CR-2026-11-R3 (R3-16): one "Propose these again" of a proposal at a time (two clicks made two proposals).
+    if (this.reproposing.has(id))
+      throw new PolicyError(
+        'REPROPOSE_RUNNING',
+        `The items left out of proposal ${id} are being proposed again now`,
+      );
+    this.reproposing.add(id);
+    try {
+      return await this.reproposeHeld(id, p, { items: set.items, omitted: set.omitted }, origin, engine);
+    } finally {
+      this.reproposing.delete(id);
+    }
+  }
+
+  private async reproposeHeld(
+    id: string,
+    p: ProposalView,
+    set: { readonly items: readonly PlanItem[]; readonly omitted: readonly string[] },
+    origin: JobOrigin,
+    engine: JobEngine,
+  ): Promise<{ readonly proposalId: string; readonly summary: string | null }> {
     // v3 F3d amendment (ADR 0058, A): the items the approved job SKIPPED when it ran (what they edit changed meanwhile)
     // are proposed again with those left out, once the job has ended.
     const skippedIds =
@@ -1969,12 +2014,46 @@ export class ProposalService implements ProposalSink {
       .filter((i) => omitted.has(i.id))
       .map((i) => ({ ...i, dependsOn: i.dependsOn.filter((d) => omitted.has(d)) }));
     const rows = this.opRows(id);
+    const full: StepSpec[] = rows.map((r) => ({
+      ...(r.options as StepOptions),
+      op: r.op,
+      params: r.params as OpParams,
+    }));
+    // CR-2026-11-R3 (R3-43): the pages the approved part made exist now: never "not made" for the re-proposal (their
+    // links, mentions and places were stripped from it, and its read-back expected other neighbours).
+    const records = p.jobId ? (engine.stepRecords(p.projectId, p.jobId) ?? []) : [];
+    const made = new Set(
+      records
+        .filter((r) => CREATE_OPS_RAN.has(r.opId) && r.status === 'succeeded' && isObj(r.params.body))
+        .map((r) => (r.params.body as { id?: unknown }).id)
+        .filter((x): x is string => typeof x === 'string'),
+    );
     let steps: StepSpec[];
     try {
-      steps = filterSteps(
-        rows.map((r) => ({ ...(r.options as StepOptions), op: r.op, params: r.params as OpParams })),
-        omitted,
-      ).steps;
+      steps = filterSteps(full, omitted, { made }).steps;
+      // CR-2026-11-R3 (R3-37): the routing lines the partial approval left out of the approved writes, put back now that
+      // the pages they name are made (each with the item that makes its page).
+      const approvedIds = set.items.map((i) => i.id).filter((x) => !set.omitted.includes(x));
+      const approved = filterSteps(full, approvedIds);
+      const sameJob =
+        records.length === approved.steps.length && records.every((r, k) => r.opId === approved.steps[k]!.op);
+      const makes = new Map<string, string>();
+      for (const s of steps) {
+        const b = isObj(s.params?.body) ? s.params.body : null;
+        if (CREATE_OPS_RAN.has(s.op) && typeof b?.id === 'string' && s.items?.[0])
+          makes.set(b.id, s.items[0]);
+      }
+      if (sameJob && makes.size > 0)
+        steps = [
+          ...steps,
+          ...routesBack(
+            full,
+            approved.from,
+            (n) => records[n - 1]?.params,
+            makes,
+            (rid) => this.pageName(p.projectId, rid) ?? rid,
+          ),
+        ];
     } catch (e) {
       throw new PolicyError(
         'REPROPOSE_FAILED',

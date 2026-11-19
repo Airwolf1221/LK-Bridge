@@ -1736,10 +1736,12 @@ state and that list, free.
 
 **Costs (measured against the mock).** Planning reads each page of the set and each document holding the name once, plus
 the pack's three governance reads: 22 reads for the test character (seven pages, six other pages naming her, two
-chronology rows); its approved job (the plan's ticks: 7 items left out) 177 requests, 47 of them writes, its check,
-read-back and change snapshot included (185 and 49 before the amendment, which no longer writes the two custom labels).
-The culture with six characters: 13 reads to plan, its job 93 requests, 20 of them writes (98 before: each character's
-tag is re-checked on the read its own write makes). `dryRun` states the plan's own estimate (`cost`).
+chronology rows); its approved job (the plan's ticks: 7 items left out) 185 requests, 47 of them writes, its check,
+read-back and change snapshot included (CR-2026-11-R3: history is judged again when the job runs, one read of each page
+with restatements; 177 before that, and 185 with 49 writes before the amendment, which no longer writes the two custom
+labels). The culture with six characters: 13 reads to plan, its job 95 requests, 20 of them writes (93 before R3; 98
+before the amendment). `dryRun` states the plan's own estimate (`cost`). A plan whose check or read-back would hold more
+than 5,000 entries in one step is refused before anything is proposed (`STEP_TOO_LARGE`).
 
 ### Selective approval (every proposal made of items)
 
@@ -1750,16 +1752,21 @@ selection: a selection must be **closed** (every item it keeps has what it needs
 before the owner confirms. The proposal records what was approved and what was left out, the job runs only the approved
 steps (each write named by its items; shared checks and the read-back trimmed to them; references to a page left out
 removed), and "propose these again" makes ONE new proposal of exactly the items left out (`reproposedAs`,
-`reproposalOf`). Agents cannot approve anything. An ordinary proposal is unchanged.
+`reproposalOf`), once the approved part has run to the end (CR-2026-11-R3: not while it runs or after it failed; one at a
+time, `REPROPOSE_RUNNING`), putting back the index routing lines the partial approval left out; a split's or a retag
+batch's are not proposed again (`REPROPOSE_REFUSED`: split what is left, or audit again). Agents cannot approve anything.
+An ordinary proposal is unchanged.
 
 ### Resume
 
 A package or a rename that stops part-way records where (its last verified step, the step it stopped at, why). The owner
 resumes it on the Jobs or Review page; an agent resumes its own direct job with `bridge_job_resume`. The job continues in
 place: its own check runs again first, no succeeded step runs again, nothing is made twice, and a step that is no longer
-safe is refused with its reason. Work the owner approved resumes without a new approval and is audited (`job.resume`). F2's
-"Finish" of a recreate uses the same mechanism (its new proposal of what is missing, as before). Revert (ADR 0055) stays
-the alternative for a direct job.
+safe is refused with its reason. Work the owner approved resumes without a new approval and is audited (`job.resume`),
+only while its proposal stands (`PROPOSAL_NOT_APPROVED` once the owner rejected it). A split re-runs its destinations check
+too. A job reverted, being reverted, or whose revert stopped part-way is never continued, by Resume or a step Retry
+(`REVERTED`, `REVERT_RUNNING`, `REVERT_STOPPED`; CR-2026-11-R3). F2's "Finish" of a recreate uses the same mechanism (its
+new proposal of what is missing, as before). Revert (ADR 0055) stays the alternative for a direct job.
 
 ## Setting packs: splits (v3 F3e)
 
@@ -1839,8 +1846,13 @@ page's text its Purpose and the moved blocks verbatim with their ids), the exist
 lock, rebased on a conflict), the destinations check (`split.destinations`, before anything leaves the source:
 `SPLIT_DESTINATIONS_UNVERIFIED`), the source's edits (a core rebase), universal material's Dependency, index lines,
 remapped Dependencies, Last Major Revision per page, the pack's read-back, and the verification (`split.verify`:
-`SPLIT_VERIFY_FAILED`). A stop is resumable (Resume) and revertible (Revert: the job puts back what it changed; the pages
-it made go to ONE deletion proposal, each only while it is as the split made it).
+`SPLIT_VERIFY_FAILED`). A stop is resumable (Resume, its destinations check run again first) and revertible (Revert: the
+job puts back what it changed, whole or not at all: a target that cannot go back refuses it, `SPLIT_REVERT_NOT_WHOLE`;
+the pages it made go to ONE deletion proposal once the material they took is back in the source, each only while it is
+exactly as the split made it, checked again when the deletion runs). CR-2026-11-R3: "moved verbatim" is checked on each
+block's whole content; an item's later appends to an existing owner are core (the job stops, resumable, rather than skip
+it part-way); a source holding an inline icon is refused (`SPLIT_NOT_WRITABLE`), and so is an image assigned as universal
+material (`SPLIT_VISUAL`).
 
 **Phase 2**: with `retire`, once phase 1 has verified and nothing was left out or skipped, the bridge proposes
 archiving the source with `archive_page`'s own plan (a separate canonical proposal, owner-forced). Never a delete.
@@ -1909,7 +1921,8 @@ another policy), `RUN_NOT_FOUND`. ONE proposal by the pack's switch ("always pro
 The job: the policy and its governance checked first (one read per source; changed: the whole job stops, "policy changed
 since the audit; audit again"); per page a fresh read (conflicted, held, already compliant or inaccessible pages are
 skipped and recorded), the write inside the page's lock (judged again there), and an independent read-back (the exact
-array in order; name, aliases, parentage, documents and sidebar unchanged). Each page's disposition is recorded:
+array in order; name, aliases, parentage and sidebar unchanged; each page document's body at the same version, read
+before and after the write; other documents compared by their metadata timestamps only: CR-2026-11-R3, fix C). Each page's disposition is recorded:
 `applied` (verified or not), `already_compliant`, `held`, `conflicted`, `inaccessible`. Last Major Revision is never set.
 Resume (owner, Jobs page) and Revert (the exact prior array, only where nothing changed since) work. With
 `reconciliation`: stale pages marked, what remains audited afresh (free), its next batch proposed (`status`: `proposed`,

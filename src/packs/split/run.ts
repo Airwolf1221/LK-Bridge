@@ -15,6 +15,7 @@ import { errorResult, render, type ProjectDeps } from '../../mcp/tools/shape.js'
 import { runWriteJob } from '../../mcp/tools/write-job.js';
 import { packBasis } from '../run.js';
 import { planSplit, SPLIT_TOOL, type Issue, type SplitInput, type SplitPlan } from './plan.js';
+import { SPLIT_CHECKS } from './checks.js';
 
 type Obj = Record<string, unknown>;
 
@@ -185,7 +186,9 @@ export async function runSplit(
         lifecycle: plan.marker,
         forceProposal: true,
         // ADR 0058 (Resume): a split that stops part-way resumes from where it stopped, its first check again first.
-        resumable: { kind: 'split', recheck: [1] },
+        // CR-2026-11-R3 (R3-22): and its destinations check (what left a destination while the job was stopped is never
+        // then taken out of the source).
+        resumable: { kind: 'split', recheck: [1], recheckCheckers: [SPLIT_CHECKS.destinations] },
         lastMajorRevision: plan.lmr.mode,
         proposal: {
           operations: plan.operations,

@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased: CR-2026-11-R3, the third independent review (19 November 2026)
+
+**Critical, fixed here: on the reviewed code an agent at scope `write` could get canon text the owner had left out of an
+approved rename rewritten** (R3-12, R3-25): an ordinary direct edit of the same page while the rename waited or ran made
+its rebase apply the edits of unticked items, quotations and history among them, reported verified. Three more critical
+findings needed the owner's own approval or Revert (a split losing a moved block, R3-18; a partial Revert of a split
+leaving its sections on no page, then deleting their only copy, R3-09, R3-10). Deploy this before the next approved
+rename or split. The review covers `88c640e` to `6eeff4c` (F3.5, R2.1, F3d, F3d.1, F3e, F3f; ADRs 0056 to 0060)
+([docs/reviews/CR-2026-11-R3.md](reviews/CR-2026-11-R3.md); decisions in
+[ADR 0061](adr/0061-cr-2026-11-r3-decisions.md), proposed). 61 findings (5 critical, 21 high, 21 medium, 14 low): 52
+fixed, each with a test that fails on the reviewed code; 9 open, their tests kept as `it.fails`. No migration; deploy
+normally (`sudo systemctl daemon-reload`: the unit file changed). Nothing was run against a live system.
+
+- **A clean restart (the owner's fix A).** On SIGTERM the bridge answers 503 "the bridge is restarting"
+  (`BRIDGE_RESTARTING`), lets requests already sent to LegendKeeper finish (at most 10 s), stops each job at its next
+  step boundary (never part-way through a write) and records it queued to continue at the next start, ends every wait
+  for budget, pacing, a lock or a back-off at once, and exits (watchdog 25 s). `TimeoutStopSec=75`. Measured: 1.5 s with
+  a write in flight (20.2 s before).
+- **Memory (fix B).** Measured in the mock: a 700-page rename and a split of more than 2,000 blocks stay far under the
+  400 MB ceiling (figures in the review, section 5); an opt-in test guards it (`LKB_MEASURE=1`). Building it found that a
+  700-page rename was refused with `INVALID_PARAMS` (one check step now holds 5,000 entries; beyond it `STEP_TOO_LARGE`,
+  R3-01) and that a check meeting the budget was reported as "the page changed" (now parked, R3-02).
+- **The retag read-back (fix C)** compares each document's version: "each document's body by version unchanged", or says
+  "bodies not compared" (ADR 0060 departure 3 amended).
+- **Renames.** A rebase finds an edit again by its sentence only when no other occurrence shares it (R3-25), and never
+  re-applies an item left out (R3-12); another character's longer name is never renamed (R3-26); D1 (a) on every
+  occurrence of a fact or row and in quote blocks (R3-27, R3-28); history judged again when the job runs (R3-29);
+  assets, events, rows and re-placing moves judged inside their locks (R3-33 to R3-36); page names that keep the old
+  name are reported (R3-31); a follow-up's `from` must be a former name (`FROM_NOT_A_FORMER_NAME`, R3-32); a deleted
+  page skips its items (R3-39); an owner's index is steered (R3-48).
+- **Splits.** Revert of phase 1 is whole or not at all (`SPLIT_REVERT_NOT_WHOLE`), and the pages it made are proposed
+  for deletion only once the material is back (R3-09, R3-10); moved blocks found by their whole content (R3-17, R3-18);
+  a section deleted or moved after the plan is never made again (R3-19, R3-20); Resume re-runs the destinations check
+  (R3-22); later appends are core (R3-23); images never universal (R3-11); inline icons refused (`SPLIT_NOT_WRITABLE`,
+  R3-51); the guard counts rows (R3-42); the deletion re-checked when it runs (R3-21).
+- **Retagging.** The owner's classification, the page's name and place, and its facts are checked at apply and inside
+  the lock, Resume included (R3-03 to R3-05, `RETAG_STALE`); a second spelling of a status tag is a hold (R3-06, R3-07);
+  lifecycle settings in the digest (R3-08); reconciliations and suggestions (R3-46, R3-47).
+- **Selective approval and Resume.** "Propose these again" only once the approved part has run, one at a time, never for
+  a split or a retag batch (`REPROPOSE_REFUSED`), putting back the routing lines it left out (R3-14 to R3-16, R3-24,
+  R3-37, R3-43); Resume only while the proposal stands (`PROPOSAL_NOT_APPROVED`, R3-13); a reverted or half-reverted job
+  is never continued by Resume or a step Retry (`REVERT_STOPPED`, R3-45); skipped items stay reported (R3-44).
+- **Open, for the owner** (ADR 0061 part B): text emptied through a raw route (R3-53), the split guard per edit (R3-52),
+  whose cancel a Resume may undo (R3-54), the rails at Resume (R3-55), a retag revert of a page renamed or moved since
+  (R3-57); low findings for the next slice: R3-56, R3-58 to R3-60.
+- **New sandbox check** (written, not run): `test/sandbox/assumptions-r3.test.ts` (X1 to X7), for the owner.
+
 ## Unreleased: v3 F3f (retagging) (19 November 2026): `arkona_retag_audit`, `arkona_retag_apply`, owner classification, reconciliation
 
 [ADR 0060](adr/0060-v3-f3f-retag-audit-and-apply.md) (Proposed). Migration `3700_retag.sql` (runs at start). Pack version

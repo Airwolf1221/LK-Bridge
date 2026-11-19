@@ -31,6 +31,7 @@ import { stableJson } from '../../jobs/sidebar-state.js';
 import { leadingProblem, sameTag, type LifecycleTagRules } from '../../lifecycle/tags.js';
 import { computeTags, statusTag } from '../engine/tags.js';
 import { textKey } from '../engine/text.js';
+import { factValueKey } from '../../facts/rules.js';
 import type { OwnerType, PackRules, RetagRules, RoleRule, TypeRules } from '../types.js';
 
 // ============================================================================================ types
@@ -98,6 +99,11 @@ export interface RetagPageInput {
   readonly templateId: string | null;
   readonly packRecord: ClassificationRecord | null;
   readonly owner: ClassificationRecord | null;
+  /**
+   * CR-2026-11-R3 (R3-04): the page's parent when audited. Recorded with the verdict (not in its basis, so the inputs
+   * hash is unchanged): the apply's check and its write compare it, so a page moved since is never written.
+   */
+  readonly parentId?: string | null;
 }
 
 export interface RetagContext {
@@ -148,6 +154,8 @@ export interface RetagVerdict {
   readonly inputs: Readonly<Record<string, string | null>>;
   /** What the hash covers besides the tags (so the hash a page will have once the proposed array is applied is known). */
   readonly basis: Readonly<Record<string, unknown>>;
+  /** CR-2026-11-R3 (R3-04): the page's parent when audited (absent in runs stored before). */
+  readonly parentId?: string | null;
 }
 
 /** The inputs hash of a page: its basis (facts, template, records, name) and its tags in order. */
@@ -324,6 +332,7 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
     inputsHash,
     basis,
     inputs,
+    ...(page.parentId !== undefined ? { parentId: page.parentId } : {}),
   };
   const excluded = (code: ExclusionCode, reason: string): RetagVerdict => ({
     ...base,
@@ -437,6 +446,8 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
   // ---- the status tag: never added or removed; a required one present is moved first
   const required = statusTag(rules, 'authoritative', isAu ? ct.value : (ct.value ?? null));
   const statusWords = STATUS_WORDS(ctx);
+  // CR-2026-11-R3 (R3-06, R3-07): every spelling of a status or lifecycle tag, as the facts fold reads it.
+  const statusKeys = new Set(statusWords.map(factValueKey));
   const statusPresent = dedupe(page.tags.filter((t) => statusWords.some((s) => sameTag(s, t))));
   const hasRequired = statusPresent.some((t) => sameTag(t, required));
   const wrongStatus = statusPresent.filter((t) => !sameTag(t, required));
@@ -591,6 +602,17 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
         continue;
       }
       const token = grammarToken(grammar, rules, map, cell.value!);
+      // CR-2026-11-R3 (R3-07): a token map that gives a status or lifecycle tag (or a spelling of one) is never used.
+      if (token !== null && statusKeys.has(factValueKey(token))) {
+        holds.push({
+          kind: 'identity',
+          slot,
+          reason: `the ${map} token map gives “${token}” for ${key} “${cell.value}”, which reads as a status or lifecycle tag: never added; the owner corrects the token map`,
+          value: cell.value,
+        });
+        slots.push({ slot, tag: null, source: `${key} “${cell.value}”`, held: 'its token is a status tag' });
+        continue;
+      }
       if (slot === 'race') raceToken = token;
       const dup = slot === 'culture' && raceToken !== null && token !== null && sameTag(token, raceToken);
       slots.push({
@@ -664,6 +686,24 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
     });
   }
   const proposed = dedupe([...statusLead, ...grammar, ...kept]);
+  // CR-2026-11-R3 (R3-06, R3-07): status and lifecycle tags are never added or removed, only moved first, whatever
+  // spelling they carry. Every tag that reads as one of them through the facts fold (case, width, invisible characters,
+  // Cyrillic, Greek, Cherokee and small-capital look-alikes) must be in the proposed array exactly as on the page, as
+  // many times; anything else (a "duplicate" spelling dropped, a token map or an Excluded Routine Tag naming one) is a
+  // status hold: the lifecycle tools' or the owner's, never a correction.
+  const statusLike = (tags: readonly string[]) =>
+    tags.filter((t) => statusKeys.has(factValueKey(t))).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const was = statusLike(page.tags);
+  const will = statusLike(proposed);
+  if (was.length !== will.length || was.some((t, i) => t !== will[i]))
+    holds.push({
+      kind: 'status',
+      slot: 'status',
+      reason:
+        `the correction would change the status or lifecycle tags (${was.join(', ') || 'none'} → ${will.join(', ') || 'none'}), ` +
+        'counting every spelling of them: retagging never adds or removes one (the lifecycle tools’ work, or the owner’s)',
+      value: was.join(', '),
+    });
   return finish({
     base,
     proposed,
@@ -676,7 +716,7 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
 }
 
 function finish(o: {
-  base: Pick<RetagVerdict, 'pageId' | 'name' | 'current' | 'inputsHash' | 'inputs' | 'basis'>;
+  base: Pick<RetagVerdict, 'pageId' | 'name' | 'current' | 'inputsHash' | 'inputs' | 'basis' | 'parentId'>;
   proposed: string[];
   slots: SlotRationale[];
   holds: Hold[];
@@ -932,10 +972,19 @@ export function policyOf(
       readonly sections?: readonly unknown[];
     }[];
   },
+  /** CR-2026-11-R3 (R3-08): the project's lifecycle settings a verdict depends on, folded into the digest. */
+  settings?: Readonly<Record<string, unknown>>,
 ): RetagPolicy {
   const sources = approved.sources.map((s) => ({ key: s.key, version: s.version }));
   const digest = createHash('sha256')
-    .update(stableJson({ version: approved.version, rules, sources: approved.sources }))
+    .update(
+      stableJson({
+        version: approved.version,
+        rules,
+        sources: approved.sources,
+        ...(settings !== undefined ? { settings } : {}),
+      }),
+    )
     .digest('hex');
   const label = pack.governance.find((g) => g.key === 'tagging-standard')?.label ?? null;
   return { packId: pack.id, version: approved.version, label, sources, digest };

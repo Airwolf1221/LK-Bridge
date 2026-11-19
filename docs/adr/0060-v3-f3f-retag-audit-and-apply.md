@@ -118,7 +118,8 @@ as `tag_grammar`, now a judgement naming the retag tools (there is no hand-made 
       and the write is overwritten.
    4. `retag.verify`: an independent read-back: the exact array in order, and the name, aliases, parent and place
       (`parentId`, `rank`), hidden and locked flags, documents (each document's id, name, type, rank and `updatedAt`) and
-      sidebar (its properties, links included, hashed) exactly as read before the write.
+      sidebar (its properties, links included, hashed) exactly as read before the write; each page document's body by
+      its version (CR-2026-11-R3, fix C: see Departure 3).
 4. **Dispositions** are recorded per page when the job ends (`retag_batches.dispositions`): applied (with whether the
    read-back verified), already compliant, held, conflicted or inaccessible. A page the owner left out of the selection
    gets none and remains.
@@ -200,7 +201,15 @@ to LegendKeeper; every apply is a proposal approved on the Proposals page.
    Arkona's governance index has another name, the owner changes the list with a new version.
 3. **Document versions are read from `getResource`.** The read-back compares each document's `updatedAt` (and id, name,
    type, rank) as `getResource` lists them, not each document's ETag (one `getDocument` per document): a tags write
-   changes neither.
+   changes neither. **Amended by CR-2026-11-R3 (fix C, the owner's request, 19 November 2026):** Arkona's Repository
+   Automation warns that "LK document metadata updatedAt can describe creation/metadata time rather than body version;
+   do not claim unchanged content without suitable current evidence". So each **page** document's body is now compared
+   by its real version: `retag.page` reads it (`getDocumentBlocks`, one read each) before the write and `retag.verify`
+   again after it; a body that cannot be read on either side is reported, never taken as unchanged. Board, map,
+   timeline and blank documents are still compared only by the metadata `getResource` lists, and the disposition says
+   so: "written and read back: the tags exactly as proposed; name, aliases, parentage and sidebar unchanged; each page
+   document's body at the same version as before the write; other documents (board, map, timeline) compared by their
+   metadata timestamps only, not their content". Cost: two reads more per page document of each page applied.
 4. **A split's new pages are not recorded** (decision 6): they get their tags from F3a's and F3b's planners inside the
    split's own job; their current tags are their evidence.
 5. **The routing-line finding has no fix** (decision 7), as the brief allowed.

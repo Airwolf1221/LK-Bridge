@@ -2601,8 +2601,11 @@ export interface RevertPreview {
   targets: RevertTarget[];
   ready: number;
   notReverted: number;
-  /** v3 F3e (ADR 0059): a split's phase 1: the pages it made go to ONE deletion proposal. */
-  split?: { pagesMade: number };
+  /**
+   * v3 F3e (ADR 0059): a split's phase 1: the pages it made go to ONE deletion proposal. CR-2026-11-R3 (R3-09): it is
+   * reverted whole or not at all (`wholeOnly`).
+   */
+  split?: { pagesMade: number; wholeOnly?: boolean };
 }
 
 /** v3 F3d amendment (ADR 0058, A): an item a job skipped when it ran, with why and a before and after excerpt. */

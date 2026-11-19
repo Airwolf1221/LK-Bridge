@@ -24,7 +24,8 @@ import type { RegisteredCheckContext, RegisteredCheckResult } from '../../jobs/i
 import type { RebaseContext, RebaseResult } from '../../jobs/rebase.js';
 import { textKey } from '../engine/text.js';
 import {
-  altId,
+  findMoved,
+  contentPrint,
   applyAppend,
   applyRoute,
   applySourceEdit,
@@ -46,7 +47,55 @@ export const SPLIT_CHECKS = {
   source: 'split.source',
   destinations: 'split.destinations',
   verify: 'split.verify',
+  /** CR-2026-11-R3 (R3-21): a page a split made, still exactly as it made it, checked before its deletion. */
+  made: 'split.made',
 } as const;
+
+/** CR-2026-11-R3 (R3-21): a page a split made, as it made it (its name, and its main document's blocks in order). */
+export interface MadeCheckInput {
+  readonly resourceId: string;
+  readonly name: string;
+  readonly documentId: string | null;
+  /** Each block's id and content print, in order (null: the page's text was not written by the split). */
+  readonly blocks: readonly { readonly id: string | null; readonly content: string }[] | null;
+}
+
+/**
+ * CR-2026-11-R3 (R3-21): the deletion proposal after a split's Revert deletes a page the split made only while it is
+ * still exactly as the split made it, judged again when the job runs (the owner may approve it days later): its name,
+ * and every block of its main document, whole (`contentPrint`), in order. Anything else refuses the deletion.
+ */
+export async function madeCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
+  const input = ctx.input as MadeCheckInput;
+  const refuse = (why: string): RegisteredCheckResult => ({
+    differences: [],
+    refusal: {
+      code: 'SPLIT_PAGE_CHANGED',
+      message: `${input.name} is not as the split made it any more (${why}): it is kept; nothing more is deleted. Delete it by hand if it should go.`,
+    },
+  });
+  const r = await ctx.read('getResource', { path: { resourceId: input.resourceId } });
+  if (!r.exists) return { differences: [], observed: { gone: true } };
+  const name = str((r.body as Obj | null)?.name);
+  if (name !== input.name) return refuse(`renamed to “${name ?? '?'}”`);
+  if (input.blocks === null) return { differences: [] };
+  const docId = input.documentId ?? mainDocumentOf(r.body);
+  if (!docId) return refuse('its main document is gone');
+  const d = await ctx.read('getDocumentBlocks', {
+    path: { resourceId: input.resourceId, documentId: docId },
+  });
+  if (!d.exists) return refuse('its main document is gone');
+  const live = blocksOf(d.body);
+  if (live.length !== input.blocks.length)
+    return refuse(`${live.length} blocks now, ${input.blocks.length} when made`);
+  const at = live.findIndex(
+    (b, i) =>
+      (input.blocks![i]!.id !== null && str(b.id) !== input.blocks![i]!.id) ||
+      contentPrint(b) !== input.blocks![i]!.content,
+  );
+  if (at >= 0) return refuse(`its text changed (block ${at + 1}: “${blockText(live[at]!).slice(0, 80)}”)`);
+  return { differences: [] };
+}
 
 export const SPLIT_REBASERS = {
   source: 'split.source',
@@ -76,7 +125,13 @@ export interface DestinationsCheckInput {
   readonly moves: readonly {
     readonly item: string;
     readonly dest: DestRef;
-    readonly blocks: readonly { readonly id: string; readonly text: string; readonly excerpt: string }[];
+    readonly blocks: readonly {
+      readonly id: string;
+      readonly text: string;
+      readonly excerpt: string;
+      /** CR-2026-11-R3 (R3-17): the block's content print (absent in a check planned before this release). */
+      readonly content?: string;
+    }[];
   }[];
   readonly newPages: readonly {
     readonly item: string;
@@ -178,8 +233,19 @@ const problemLine = (p: ContentProblem) =>
 
 // ============================================================================================ the checks
 
-/** The job's first check (see the module comment). */
-export async function sourceCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
+/**
+ * The job's first check (see the module comment).
+ *
+ * CR-2026-11-R3 (R3-19, R3-20): `made` is the items whose source edit THIS job has made (or may have sent): an item whose
+ * blocks are gone from the source is "done" only then. Blocks deleted from the source, or moved to another page by hand,
+ * after the plan are a change since the plan: the split would make them again from the plan's copy (re-creating what
+ * the owner deleted, or owning it twice). And every block that stays must still be there, so a deletion is caught here,
+ * before anything is written, not by the verification after every write. Absent (a direct call): judged as before.
+ */
+export async function sourceCheck(
+  ctx: RegisteredCheckContext,
+  made?: ReadonlySet<string>,
+): Promise<RegisteredCheckResult> {
   const input = ctx.input as SourceCheckInput;
   const r = await ctx.read('getResource', { path: { resourceId: input.resourceId } });
   const name = str((r.body as Obj | null)?.name);
@@ -217,6 +283,19 @@ export async function sourceCheck(ctx: RegisteredCheckContext): Promise<Register
     const o = applySourceEdit(blocks, m);
     states[m.item] = o.state === 'apply' ? 'to move' : o.state;
     if (o.state === 'changed') problems.push(`${m.where}: ${o.why}`);
+    if (o.state === 'done' && made !== undefined && !made.has(m.item))
+      problems.push(
+        `${m.where}: its ${m.remove.length} block${m.remove.length === 1 ? ' is' : 's are'} gone from the source since the plan (deleted, or moved by hand), and this job has not moved ${m.remove.length === 1 ? 'it' : 'them'}: the split would make ${m.remove.length === 1 ? 'it' : 'them'} again from the plan’s copy`,
+      );
+  }
+  if (made !== undefined) {
+    const leaving = new Set(input.moves.flatMap((m) => m.remove.map((r) => r.id)));
+    const present = new Set(blocks.map((b) => str(b.id) ?? ''));
+    const gone = input.known.filter((id) => !leaving.has(id) && !present.has(id));
+    if (gone.length > 0)
+      problems.push(
+        `${gone.length} block${gone.length === 1 ? '' : 's'} that ${gone.length === 1 ? 'stays' : 'stay'} in ${input.name} ${gone.length === 1 ? 'is' : 'are'} gone since the plan (${gone.slice(0, 5).join(', ')}): the split would verify only after every write`,
+      );
   }
   const ours = new Set([
     ...input.known,
@@ -260,9 +339,12 @@ export async function destinationsCheck(ctx: RegisteredCheckContext): Promise<Re
     }
     const byId = new Map(x.blocks.map((b) => [str(b.id) ?? '', b]));
     for (const b of m.blocks) {
-      const found = byId.get(b.id) ?? byId.get(altId(m.item, b.id));
-      if (!found) problems.push(`${m.dest.name} lacks “${b.excerpt}” (block ${b.id})`);
-      else if (textPrint(found) !== b.text)
+      // CR-2026-11-R3 (R3-17, R3-18): the block itself (its whole content), under its id or the derived one.
+      const hit = findMoved(m.item, b.id, b.content, byId);
+      if (!hit) problems.push(`${m.dest.name} lacks “${b.excerpt}” (block ${b.id})`);
+      else if ('mismatch' in hit)
+        problems.push(`${m.dest.name} holds “${b.excerpt}” changed (block ${b.id}): not verbatim`);
+      else if (b.content === undefined && textPrint(hit.block) !== b.text)
         problems.push(`${m.dest.name} holds “${b.excerpt}” changed (block ${b.id}): not verbatim`);
     }
   }
@@ -407,13 +489,32 @@ export function rebaseRoute(ctx: RebaseContext): RebaseResult {
   return { kind: 'retry', params: { ...ctx.params, body: { blocks: o.blocks } } };
 }
 
+/**
+ * CR-2026-11-R3 (R3-19): the items whose source edit a job has made (succeeded, or sent with its answer unknown), from
+ * its own step records.
+ */
+export function sourceEditsMade(records: readonly StepRecordLike[] | undefined): Set<string> {
+  const out = new Set<string>();
+  for (const s of records ?? []) {
+    if (s.opId !== 'replaceDocumentBlocks' || s.options.rebase?.rebaser !== SPLIT_REBASERS.source) continue;
+    if (s.status !== 'succeeded' && !s.maybeSent) continue;
+    for (const i of s.options.items ?? []) out.add(i);
+  }
+  return out;
+}
+
+type StepRecordLike = NonNullable<ReturnType<JobEngine['stepRecords']>>[number];
+
 export function registerSplitChecks(
-  engine: Pick<JobEngine, 'registerAsyncChecker' | 'registerRebaser'>,
+  engine: Pick<JobEngine, 'registerAsyncChecker' | 'registerRebaser' | 'stepRecords'>,
 ): () => void {
   const off = [
-    engine.registerAsyncChecker(SPLIT_CHECKS.source, sourceCheck),
+    engine.registerAsyncChecker(SPLIT_CHECKS.source, (ctx) =>
+      sourceCheck(ctx, sourceEditsMade(engine.stepRecords(ctx.projectId, ctx.jobId))),
+    ),
     engine.registerAsyncChecker(SPLIT_CHECKS.destinations, destinationsCheck),
     engine.registerAsyncChecker(SPLIT_CHECKS.verify, verifyCheck),
+    engine.registerAsyncChecker(SPLIT_CHECKS.made, madeCheck),
     engine.registerRebaser(SPLIT_REBASERS.source, rebaseSource),
     engine.registerRebaser(SPLIT_REBASERS.append, rebaseAppend),
     engine.registerRebaser(SPLIT_REBASERS.route, rebaseRoute),

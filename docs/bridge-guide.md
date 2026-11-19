@@ -803,7 +803,10 @@ writes the index lines and the remapped Dependencies, dates Last Major Revision 
 a direct re-read (every original block in exactly one place). If any of it fails, the job stops before phase 2: the
 owner resumes or reverts it on the dashboard. **Phase 2**, with `retire: true`, once phase 1 has verified and nothing was
 left out: the bridge proposes archiving the source with `archive_page`, a separate canonical proposal. The split never
-deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it.
+deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it. A
+destination the owner left out is not proposed again from the old plan: when the owner asks, split what is left as a
+new split, on the source as it is now. A source holding an inline icon cannot be split (`SPLIT_NOT_WRITABLE`: the split
+writes the source back whole); ask the owner to remove the icon first.
 
 **Cost**, measured on the test fixtures: a character monolith split into six new owners with one remapped Dependency
 costs 23 requests to propose and a job of 243 (87 writes); an owner split into one new and one existing owner, 12 to
@@ -840,7 +843,8 @@ most 25 pages. ONE proposal whatever your scope (each page an item the owner can
 owner approves, the job first checks the policy is still the audit's (otherwise it stops: "policy changed since the
 audit; audit again"), then for each page reads it fresh: a page whose tags changed since the audit is **conflicted** and
 skipped (never rebased), one whose facts changed is **held**, one already right is **already compliant**, one gone is
-**inaccessible**; the rest are written and read back exactly. Last Major Revision is never set.
+**inaccessible**; the rest are written and read back (the tags exactly; each page document's body by its version;
+other documents by their metadata timestamps only). Last Major Revision is never set.
 
 **Reconciliation**, for a long run of batches: `arkona_retag_audit { "reconciliation": "First pass", "all": true }`
 starts a named record (a first audit, free); `arkona_retag_apply { "reconciliation": "First pass" }` audits what remains

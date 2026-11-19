@@ -299,7 +299,8 @@ describe('arkona_rename: a character', () => {
     // amendment: the two custom labels (Tarim's mention, the index's routing line) are no longer written (185 → 177
     // requests, 49 → 47 writes; the capture reads the index's document no more: 28 → 27).
     expect(capture).toBe(27);
-    expect(job).toEqual({ requests: 177, writes: 47 });
+    // CR-2026-11-R3 (R3-29): history judged again when the job runs: one read of each page with restatements (8 more).
+    expect(job).toEqual({ requests: 185, writes: 47 });
   });
 
   it('plans exactly what is left as a follow-up (from: the old name)', async () => {
@@ -405,7 +406,8 @@ describe('arkona_rename: a culture', () => {
     const cost = { requests: w.requests().all - mid.all, writes: w.requests().writes - mid.writes };
     // ADR 0058 amendment: each character's tag is re-checked inside its own write's lock, on the read that write makes
     // anyway, instead of by the job's first check (98 → 93 requests).
-    expect(cost).toEqual({ requests: 93, writes: 20 });
+    // CR-2026-11-R3 (R3-29): one read more for each page with restatements (2 here).
+    expect(cost).toEqual({ requests: 95, writes: 20 });
   });
 });
 

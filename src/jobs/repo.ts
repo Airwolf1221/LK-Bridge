@@ -645,7 +645,14 @@ export class JobsRepo {
       )
       .all(jobId, beforeStep ?? Number.MAX_SAFE_INTEGER) as StepRow[];
     const out: SkippedItem[] = [];
-    for (const r of rows) out.push(...skippedIn(this.stepResult(toStep(r))));
+    // CR-2026-11-R3 (R3-44): an item once (its first record), as a step of skipped items now records them too.
+    const seen = new Set<string>();
+    for (const r of rows)
+      for (const x of skippedIn(this.stepResult(toStep(r))))
+        if (!seen.has(x.item)) {
+          seen.add(x.item);
+          out.push(x);
+        }
     return out;
   }
 

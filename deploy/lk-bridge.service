@@ -28,10 +28,13 @@ ExecStart=/opt/lk-bridge/runtime/node/bin/node dist/server.js
 
 Restart=on-failure
 RestartSec=5
-# SIGTERM makes the bridge stop taking new work, wait up to 20 s for running jobs (the engine's drain), close HTTP and
-# the database, and exit 0. 45 s leaves room for that and for a slow database close; only then does systemd send SIGKILL.
+# SIGTERM stops the bridge for a restart (CR-2026-11-R3, fix A): new requests are answered 503 "the bridge is
+# restarting", every running job stops at its next step boundary (requests in flight finish, at most 10 s) and continues
+# by itself at the next start, every budget or lock wait ends at once, then HTTP and the database close and it exits 0.
+# Every stage is bounded: it normally takes a second or two, at most about 18 s, and a watchdog exits at 25 s whatever
+# happens. 75 s is only a cushion; systemd sends SIGKILL after it.
 KillSignal=SIGTERM
-TimeoutStopSec=45
+TimeoutStopSec=75
 TimeoutStartSec=60
 
 # Resource limits. The bridge is one Node process plus SQLite. v2 D3 (ADR 0041): image conversion (sharp, libvips) uses

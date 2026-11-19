@@ -483,7 +483,7 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
     expect(detail.json.split).toMatchObject({ state: 'verified', retire: false });
     const pv = await w.stack.runtime.reverts.preview(PROJECT, jobId);
     expect(pv.eligible).toEqual({ ok: true });
-    expect(pv.split).toEqual({ pagesMade: Object.keys(pages).length + 1 });
+    expect(pv.split).toEqual({ pagesMade: Object.keys(pages).length + 1, wholeOnly: true });
     const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, jobId);
     expect(rv.status, JSON.stringify(rv)).toBe('submitted');
     if (rv.status !== 'submitted') return;

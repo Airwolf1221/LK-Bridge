@@ -90,7 +90,11 @@ export interface RevertPreview {
    * v3 F3e (ADR 0059): a split's phase 1: the pages it made, which go to ONE deletion proposal once the revert has run
    * (or at once, when nothing else needs putting back).
    */
-  readonly split?: { readonly pagesMade: number };
+  readonly split?: {
+    readonly pagesMade: number;
+    /** CR-2026-11-R3 (R3-09): a split's phase 1 is reverted whole or not at all (never a partial revert). */
+    readonly wholeOnly: true;
+  };
 }
 
 export type RevertResult =
@@ -149,6 +153,8 @@ export interface RevertDeps {
     isPhase1(projectId: string, jobId: string): boolean;
     /** Whether a split's phase 1 has been reverted (with or without a revert job). */
     isReverted?(projectId: string, jobId: string): boolean;
+    /** CR-2026-11-R3 (R3-09): whether phase 2 archived the source (its archive note changed the source's text). */
+    isRetired?(projectId: string, jobId: string): boolean;
     /** How many pages a split's phase 1 made (its deletion proposal's pages, at most). */
     pagesMade?(projectId: string, jobId: string): number;
     afterRevert(
@@ -398,7 +404,11 @@ export class RevertService {
       targets,
       ready: targets.filter((c) => c.state === 'ready').length,
       notReverted: targets.filter((c) => c.state !== 'ready' && c.state !== 'nothing_to_do').length,
-      ...(split ? { split: { pagesMade: this.d.splits?.pagesMade?.(projectId, jobId) ?? 0 } } : {}),
+      ...(split
+        ? {
+            split: { pagesMade: this.d.splits?.pagesMade?.(projectId, jobId) ?? 0, wholeOnly: true as const },
+          }
+        : {}),
     };
   }
 
@@ -492,6 +502,22 @@ export class RevertService {
       );
     }
     if (others.length > 0) {
+      // CR-2026-11-R3 (R3-09): a split's phase 1 moved material. The source's edit and each destination's write are
+      // two halves of one move, so it is reverted whole or not at all: a partial revert took the moved blocks off their
+      // destination while the source (changed since, by a later edit or phase 2's archive note) stayed without them,
+      // and the moved sections were on no live page.
+      if (this.d.splits?.isPhase1(projectId, jobId) === true) {
+        const retired = this.d.splits.isRetired?.(projectId, jobId) === true;
+        return refuse(
+          'SPLIT_REVERT_NOT_WHOLE',
+          `Job ${jobId} is a split’s phase 1: its source’s edit and each destination’s write are two halves of one move, so it is reverted whole or not at all. ${others.length} of the ${targets.length} things it changed cannot be put back (listed with why), so nothing was reverted: a partial revert could leave moved material on no page.` +
+            (retired
+              ? ' Phase 2 archived the source, and its archive note changed the source: unarchive it first (unarchive_page removes an unedited note), then look again.'
+              : ' Put those back as the split left them and look again, or take what you need from the journal (bridge_journal_lookup with jobId ' +
+                jobId +
+                ') or a snapshot.'),
+        );
+      }
       if (o.confirmPartial !== true) {
         this.remember(projectId, jobId, readyKeys);
         return refuse(

@@ -47,6 +47,7 @@ import { liveRead } from '../../mcp/tools/repo.js';
 import type { ProjectDeps } from '../../mcp/tools/shape.js';
 import { pageConverterContext } from '../../pages/index.js';
 import { cleanPrefixes } from '../../registry/names.js';
+import { blockIds, unwritableBlocks } from '../../snapshots/canonical.js';
 import type { TreeNode } from '../../tree/index.js';
 import { buildPackJob, PACK_CHECKS, shiftStep, type PackJob } from '../engine/job.js';
 import { itemizePackage } from '../engine/items.js';
@@ -66,6 +67,7 @@ import {
   outlineOf,
   PREAMBLE,
   textPrint,
+  contentPrint,
   type AppendInput,
   type OutlineHeading,
   type RouteInput,
@@ -850,18 +852,44 @@ export async function planSplit(
         { blocks: cannot },
       ),
     );
-  // Step 5, the visual audit: what interprets images goes to an Art or visual owner, or stays.
+  // CR-2026-11-R3 (R3-51): a block holding an inline icon (a run LegendKeeper's write format has no form for) cannot be
+  // written back, and the split writes the source back whole (each source edit) and the moved blocks to their
+  // destinations: refused before any page is made or anything copied, wherever the block goes.
+  const iconBlocks = unwritableBlocks(o.order.map((id) => o.byId.get(id)!)).filter(
+    (f) => f.what === 'inline-icon',
+  );
+  if (iconBlocks.length > 0) {
+    const tops = [
+      ...new Set(
+        o.order.filter((id) => {
+          const ids = blockIds([o.byId.get(id)!]);
+          return iconBlocks.some((f) => f.blockId !== null && ids.has(f.blockId));
+        }),
+      ),
+    ];
+    refusals.push(
+      issue(
+        'SPLIT_NOT_WRITABLE',
+        `${iconBlocks.length} block${iconBlocks.length === 1 ? ' holds' : 's hold'} an inline icon, which LegendKeeper's write format cannot write back; a split writes ${node.rawName} back whole, so it cannot be split while ${iconBlocks.length === 1 ? 'it is' : 'they are'} there (${tops.map((id) => `${titleOfTop(topOf(id))}: “${excerpt(id) || id}”`).join('; ')}). Remove the icon in LegendKeeper (or write that text without it), then plan the split again.`,
+        { blocks: iconBlocks.map((f) => f.blockId).filter((x): x is string => x !== null) },
+      ),
+    );
+  }
+  // Step 5, the visual audit: what interprets images goes to an Art or visual owner, or stays. CR-2026-11-R3 (R3-11): an
+  // image assigned as universal material is refused too: universal material is removed from the source (its application
+  // text takes its place), never moved, so the image would be on no page.
   const notVisual = o.order.filter((id) => {
     const to = toOf(id);
     if (to === STAYS || !holdsImage(o.byId.get(id)!)) return false;
     const r = dests.get(to);
-    return r !== undefined && r.d.kind !== 'universal' && !r.visual;
+    return r !== undefined && (r.d.kind === 'universal' || !r.visual);
   });
+  const universalOf = (id: string) => dests.get(toOf(id))?.d.kind === 'universal';
   if (notVisual.length > 0)
     refusals.push(
       issue(
         'SPLIT_VISUAL',
-        `Images go to an Art or visual owner (Character Architecture's visual audit), or stay: ${notVisual.map((id) => `${titleOfTop(topOf(id))} → ${toOf(id)}`).join('; ')}. Divide the section block by block: the images and their interpretation to the Art page, the rest where it belongs.`,
+        `Images go to an Art or visual owner (Character Architecture's visual audit), or stay: ${notVisual.map((id) => `${titleOfTop(topOf(id))} → ${toOf(id)}${universalOf(id) ? ' (universal material is removed, not moved: the image would be on no page)' : ''}`).join('; ')}. Divide the section block by block: the images and their interpretation to the Art page, the rest where it belongs.`,
         { blocks: notVisual.map((id) => ({ block: id, section: titleOfTop(topOf(id)), to: toOf(id) })) },
       ),
     );
@@ -982,12 +1010,34 @@ export async function planSplit(
     const staying = o.headings
       .filter((h) => h.top === h.id && h.blockIds.every((id) => toOf(id) === STAYS))
       .map((h) => h.title);
-    if (staying.length > 0)
+    // CR-2026-11-R3 (R3-41): and what stays of a divided section, and the blocks before the first heading.
+    const divided = o.headings
+      .filter((h) => h.top === h.id && !h.blockIds.every((id) => toOf(id) === STAYS))
+      .map((h) => ({ title: h.title, ids: h.blockIds.filter((id) => toOf(id) === STAYS) }))
+      .filter((h) => h.ids.length > 0);
+    const before = o.preamble.filter((id) => toOf(id) === STAYS);
+    const parts = [
+      ...(before.length > 0
+        ? [`${PREAMBLE}: ${before.length} block${before.length === 1 ? '' : 's'} (“${excerpt(before[0]!)}”)`]
+        : []),
+      ...staying.map((x) => `“${x}”`),
+      ...divided.map(
+        (h) =>
+          `part of “${h.title}”: ${h.ids.length} block${h.ids.length === 1 ? '' : 's'} (“${excerpt(h.ids[0]!)}”)`,
+      ),
+    ];
+    if (parts.length > 0)
       warnings.push(
         issue(
           'SPLIT_RETIRED_CONTENT',
-          `With retire, what stays is archived with the source (kept for provenance, no longer current): ${staying.map((x) => `“${x}”`).join(', ')}.`,
-          { sections: staying },
+          `With retire, what stays is archived with the source (kept for provenance, no longer current): ${parts.join(', ')}.`,
+          {
+            sections: staying,
+            ...(before.length > 0 ? { preamble: before } : {}),
+            ...(divided.length > 0
+              ? { divided: divided.map((h) => ({ section: h.title, blocks: h.ids })) }
+              : {}),
+          },
         ),
       );
   }
@@ -1429,8 +1479,13 @@ export async function planSplit(
       const extra = c.blocks.filter((b) => !c.moved.includes(str(b.id) ?? '') && b.kind !== 'heading');
       groups.set(first, [...(groups.get(first) ?? []), ...extra]);
     }
+    let nth = 0;
     for (const [under, moved] of groups) {
       keptIds += moved.length;
+      // CR-2026-11-R3 (R3-23): an item is never skipped part-way. Its first append may be skipped (after three conflicts
+      // nothing of the item is written yet, so its material stays in the source); a later one is core: once an earlier
+      // append has landed, the job stops there (resumable) instead of leaving that material in two places.
+      const later = nth++ > 0;
       const a: AppendInput = {
         item: r.d.item,
         under,
@@ -1447,7 +1502,7 @@ export async function planSplit(
         judgedInLock: true,
         verifyAfterWrite: true,
         items: [r.d.item],
-        rebase: { rebaser: SPLIT_REBASERS.append, input: a, always: true },
+        rebase: { rebaser: SPLIT_REBASERS.append, input: a, always: true, ...(later ? { core: true } : {}) },
         journalOperation: journal(
           r.page,
           `${moved.length} block(s) of ${node.rawName} appended under “${under}”`,
@@ -1475,6 +1530,7 @@ export async function planSplit(
       id,
       text: textPrint(o.byId.get(id)!),
       excerpt: excerpt(id),
+      content: contentPrint(o.byId.get(id)!),
     })),
   }));
   const newPages = receivers
@@ -1809,7 +1865,12 @@ export async function planSplit(
     });
     labels.push('verify the new pages and the remapped Dependencies');
   }
-  const original = o.order.map((id) => ({ id, text: textPrint(o.byId.get(id)!), excerpt: excerpt(id) }));
+  const original = o.order.map((id) => ({
+    id,
+    text: textPrint(o.byId.get(id)!),
+    excerpt: excerpt(id),
+    content: contentPrint(o.byId.get(id)!),
+  }));
   const contentMoves: {
     item: string;
     kind: 'move' | 'universal';
@@ -1909,6 +1970,15 @@ export async function planSplit(
       continue;
     }
     const kindWord = r.isNew ? 'New' : r.relationship ? 'Existing relationship owner' : 'Existing owner';
+    // CR-2026-11-R3 (R3-50): universal material whose application text comes here is removed from the source with this
+    // item (not migrated): the owner is shown its text, as for universal material whose text stays in the source.
+    const removedHere = [...dests.values()]
+      .filter((u) => u.d.kind === 'universal' && u.universalIn === r.d.key)
+      .map((u) => ({
+        owner: u.universalOwner?.name ?? u.d.owner ?? u.d.key,
+        text: (blocksTo.get(u.d.key) ?? []).map((id) => blockText(o.byId.get(id) ?? {})).join(' · '),
+      }))
+      .filter((u) => u.text !== '');
     destItems.push({
       id: r.d.item,
       kind: r.isNew ? 'split_new_owner' : 'split_existing_owner',
@@ -1921,7 +1991,14 @@ export async function planSplit(
           .map((b) => blockText(b))
           .join('\n')
           .slice(0, 8000),
-        context: leftOut,
+        context:
+          leftOut +
+          removedHere
+            .map(
+              (u) =>
+                ` With it, universal material is removed from ${node.rawName} (not migrated: ${u.owner}'s rule, its application text here instead): “${u.text.slice(0, 1500)}”.`,
+            )
+            .join(''),
       },
       dependsOn: [],
       selected: true,

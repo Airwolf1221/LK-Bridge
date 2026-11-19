@@ -6,7 +6,13 @@
 import { describe, expect, it } from 'vitest';
 import type { TextHit } from '../../src/appraisal/fts.js';
 import { REVIEW_CAP, reviewList, reviewParts } from '../../src/packs/rename/review.js';
-import { applyEdits, fingerprint, rebaseEdits, type PlannedEdit } from '../../src/packs/rename/text.js';
+import {
+  applyEdits,
+  fingerprint,
+  occurrencesWithSentences,
+  rebaseEdits,
+  type PlannedEdit,
+} from '../../src/packs/rename/text.js';
 
 const OLD = 'Azhar al-Nasir';
 const NEW = 'Mikhar al-Narif';
@@ -18,7 +24,16 @@ describe('rebaseEdits: the same change on the fresh content, never wider', () =>
     { kind: 'text', ordinal: 0, item: 'a', sentence: 'Azhar al-Nasir held the gate.' },
     { kind: 'text', ordinal: 1, item: 'b', sentence: 'Later, Azhar al-Nasir left.' },
   ];
-  const plan = { fingerprint: fingerprint(planned, OLD, NEW), edits, oldName: OLD, newName: NEW };
+  // CR-2026-11-R3 (R3-25): as the planner now makes it, with every occurrence's sentence when planned.
+  const plan = {
+    fingerprint: fingerprint(planned, OLD, NEW),
+    edits,
+    oldName: OLD,
+    newName: NEW,
+    sentences: occurrencesWithSentences(planned, OLD, NEW)
+      .filter((o) => o.isOld)
+      .map((o) => o.sentence),
+  };
 
   it('a block unchanged apart from the rename’s own edits keeps each edit’s number', () => {
     const r = rebaseEdits(para('Mikhar al-Narif held the gate. Later, Azhar al-Nasir left.'), plan);
@@ -64,7 +79,9 @@ describe('rebaseEdits: the same change on the fresh content, never wider', () =>
     expect(r.items).toEqual(['b']);
   });
 
-  it('an edit planned before the amendment (a mention label, no sentence) keeps its kind, or is skipped when moved', () => {
+  // CR-2026-11-R3 (R3-38): a mention label's edit planned before the amendment is never written (LegendKeeper's API
+  // cannot change a custom label, ADR 0058 amendment D): skipped, in place or moved (it was kept in place before).
+  it('an edit planned before the amendment (a mention label, no sentence) is skipped, in place or moved', () => {
     const block = {
       id: 'b2',
       kind: 'paragraph',
@@ -77,7 +94,8 @@ describe('rebaseEdits: the same change on the fresh content, never wider', () =>
       oldName: OLD,
       newName: NEW,
     });
-    expect(same).toMatchObject({ edits: [{ kind: 'mention', ordinal: 0 }], items: ['m'], skipped: [] });
+    expect(same).toMatchObject({ edits: [], items: [] });
+    expect(same.skipped.map((x) => x.item)).toEqual(['m']);
     const moved = { ...block, content: [{ text: 'Now kept by ' }, ...block.content.slice(1)] };
     const r = rebaseEdits(moved, {
       fingerprint: fingerprint(block, OLD, NEW),

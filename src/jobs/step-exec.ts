@@ -846,6 +846,9 @@ export class StepExecutor {
           });
         } catch (e) {
           if (e instanceof JobsError) throw e;
+          // CR-2026-11-R3 (R3-02): a read the check could not make for budget (or because the bridge is restarting) says
+          // nothing about the page: the step is parked and the check runs again, never judged "changed since planned".
+          if (e instanceof BudgetWaitError) throw e;
           throw new StateConflictError(
             EXPECT_STEP,
             c.label,
@@ -896,6 +899,12 @@ export class StepExecutor {
           stats,
         );
         if (!r.exists) {
+          // CR-2026-11-R3 (R3-39): a check that names the items it may skip skips them when its document is gone (a
+          // restatement's page deleted while the rename waited), and the job carries on; any other check still stops.
+          if (c.skipItems && c.skipItems.length > 0) {
+            skipFor(c.skipItems, c.label, [{ path: c.label, expected: 'present', actual: '(gone)' }]);
+            continue;
+          }
           throw new StateConflictError(
             EXPECT_STEP,
             c.label,
@@ -1831,6 +1840,8 @@ export class StepExecutor {
     ): { params: OpParams } | StepOutcome => {
       if (counted) conflicts++;
       const items = [...new Set([...(step.options.items ?? []), ...(rebase?.with ?? [])])];
+      // CR-2026-11-R3 (R3-12): the items skipped earlier in the job are never re-applied by a rebase.
+      const skippedEarlier = new Set(this.d.repo.skippedItems(job.id, step.stepNo).map((x) => x.item));
       const skipAll = (reason: string, before?: string | null, after?: string | null): StepOutcome => {
         if (rebase?.core) throw conflict;
         const list: SkippedItem[] = [
@@ -1857,6 +1868,7 @@ export class StepExecutor {
           opId: op.operationId,
           params,
           input: rebase!.input,
+          items: items.filter((i) => !skippedEarlier.has(i)),
           conflict: conflicts,
           current: {
             exists: cur.exists,

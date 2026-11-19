@@ -116,7 +116,7 @@ export class BridgeLkError extends Error {
  * resumes it then; MCP shapes it into "budget exhausted, retry at T" for interactive callers.
  */
 export class BudgetWaitError extends BridgeLkError {
-  override readonly name = 'BudgetWaitError';
+  override readonly name: string = 'BudgetWaitError';
   /** The documented tier, or a learned operation tier (`group:<name>`, v2 E5.5) that must wait. */
   readonly tier: BudgetTierId;
   readonly retryAtMs: number;
@@ -141,6 +141,32 @@ export class BudgetWaitError extends BridgeLkError {
     });
     this.tier = init.tier;
     this.retryAtMs = init.retryAtMs;
+  }
+}
+
+/** CR-2026-11-R3 (fix A): the tier a call refused by a restart names (no real tier: nothing was spent). */
+export const RESTART_TIER: BudgetTierId = 'group:restart';
+
+/**
+ * CR-2026-11-R3 (fix A, a clean shutdown): a call the bridge did not send because it is restarting (SIGTERM). It would
+ * have had to wait (for budget, pacing or a free in-flight slot), and a restart ends every wait at once
+ * (`Governor.stopWaits`). It is a `BudgetWaitError` on purpose: every caller already treats one as "parked, nothing
+ * lost": a job's step goes back to pending (a write that may have reached LegendKeeper keeps `maybeSent`, so it is
+ * verified before anything is re-sent), a check that reads rethrows it rather than judging a page it could not read,
+ * and an agent's direct call is answered "not sent, try again". The engine parks the job for the next start
+ * (`JobEngine.stopForRestart`).
+ */
+export class RestartWaitError extends BudgetWaitError {
+  override readonly name = 'RestartWaitError';
+  constructor(opId: string | undefined, nowMs: number) {
+    super({
+      tier: RESTART_TIER,
+      retryAtMs: nowMs,
+      opId,
+      message:
+        'The bridge is restarting: this LegendKeeper call was not sent (it would have had to wait). Work in progress ' +
+        'continues when the bridge is back, in about a minute; a direct call can be made again then.',
+    });
   }
 }
 

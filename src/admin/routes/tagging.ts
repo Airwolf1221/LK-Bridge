@@ -168,13 +168,13 @@ export const registerTagging: Register = (api, ctx) => {
     const r = retag();
     const run = q.run ? r.store.run(q.run) : r.store.latestRun(p.id);
     if (!run || run.projectId !== p.id) return { run: null, holds: [] };
-    const suggestions = r.store.suggestions(p.id);
     return {
       run,
       holds: r.store.verdicts(run.id, { disposition: 'hold' }).map((v) => ({
         ...verdictView(v, run.policy, true),
         uncertainCategory: v.holds.some((h) => h.kind === 'uncertain_category' || h.kind === 'specialist'),
-        suggestions: suggestions.filter((s) => s.pageId === v.pageId),
+        // CR-2026-11-R3 (R3-47): each page's own suggestions (not a project-wide list then filtered per page).
+        suggestions: r.store.suggestions(p.id, v.pageId),
         classification: r.store.classification(p.id, v.pageId),
       })),
     };

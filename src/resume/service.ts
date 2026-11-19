@@ -102,7 +102,7 @@ export type ResumeActor =
 
 export interface ResumeDeps {
   readonly db: Db;
-  readonly engine: Pick<JobEngine, 'events' | 'queries' | 'controls' | 'jobOptions'>;
+  readonly engine: Pick<JobEngine, 'events' | 'queries' | 'controls' | 'jobOptions' | 'recheckSteps'>;
   readonly audit: (
     actor: string,
     action: string,
@@ -126,7 +126,7 @@ export interface ResumeDeps {
     | { readonly status: 'proposal_captured'; readonly proposalId: string; readonly summary: string | null }
   >;
   /** Whether a job has been reverted (or a revert of it is running): it is never resumed then. */
-  readonly revertState?: (projectId: string, jobId: string) => 'submitted' | 'succeeded' | null;
+  readonly revertState?: (projectId: string, jobId: string) => 'submitted' | 'succeeded' | 'stopped' | null;
   /** A step's label for people (the job's own), when known. */
   readonly now: () => number;
   readonly log?: { warn(o: unknown, m: string): void };
@@ -319,16 +319,27 @@ export class ResumeService {
     const revert = this.d.revertState?.(projectId, jobId) ?? null;
     if (revert)
       return no(
-        revert === 'succeeded' ? 'REVERTED' : 'REVERT_RUNNING',
+        revert === 'succeeded' ? 'REVERTED' : revert === 'stopped' ? 'REVERT_STOPPED' : 'REVERT_RUNNING',
         revert === 'succeeded'
           ? `Job ${jobId} has been reverted: what it did was undone, so it is not resumed. Plan the work again.`
-          : `A revert of job ${jobId} is running: it is not resumed.`,
+          : revert === 'stopped'
+            ? // CR-2026-11-R3 (R3-45): a revert that failed or was cancelled may have put some of it back already.
+              `A revert of job ${jobId} stopped part-way, so some of what it did may be undone already: it is not resumed. Look at the revert on the Review page.`
+            : `A revert of job ${jobId} is running: it is not resumed.`,
       );
     const proposal = this.d.proposals.byJob(projectId, jobId);
     if (proposal && proposal.state === 'conflicted')
       return no(
         'PROPOSAL_CONFLICTED',
         `Proposal ${proposal.id} is conflicted: what it was planned on changed before anything was written. Reject it and plan again.`,
+      );
+    // CR-2026-11-R3 (R3-13): an approved job continues only while its approval stands: its proposal failed part-way (or
+    // is still executing). A proposal the owner rejected (a conflicted one, say), or one that expired, approves nothing
+    // any more: its job is never resumed under the old approval.
+    if (proposal && proposal.state !== 'failed' && proposal.state !== 'executing')
+      return no(
+        'PROPOSAL_NOT_APPROVED',
+        `Proposal ${proposal.id} is ${proposal.state}: its approval no longer stands, so its job is not resumed. Plan the work again.`,
       );
     const left =
       r.kind === 'recreate'
@@ -350,7 +361,9 @@ export class ResumeService {
       kind: r.kind,
       stop: this.stopOf(projectId, jobId),
       left,
-      recheck: r.kind === 'recreate' ? [] : (r.recheck ?? []).filter((n) => n < first),
+      // CR-2026-11-R3 (R3-22): what the resume runs again first, as the engine will (numbered, and named checkers).
+      recheck:
+        r.kind === 'recreate' ? [] : this.d.engine.recheckSteps(projectId, jobId).filter((n) => n < first),
       approvedBy: job.approvedBy,
     };
   }

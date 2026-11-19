@@ -35,7 +35,8 @@ export interface Maintenance {
   /** v3 F3.5 (ADR 0056): the block-id sweep (its card, dry run and settings), when the runtime built it. */
   readonly blockIds: BlockIdSweep | null;
   start(): void;
-  stop(): Promise<void>;
+  /** CR-2026-11-R3 (fix A): `waitMs` bounds the wait for runs in flight (a restart). */
+  stop(waitMs?: number): Promise<void>;
 }
 
 export interface CreateMaintenanceOptions {
@@ -127,9 +128,9 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
     commands: createMaintenanceCommands({ scheduler, store: o.policy.store }),
     blockIds: o.blockIds ?? null,
     start: () => scheduler.start(),
-    stop: async () => {
+    stop: async (waitMs?: number) => {
       offStop?.();
-      await scheduler.stop();
+      await scheduler.stop(waitMs);
     },
   };
 }

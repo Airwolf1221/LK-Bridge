@@ -564,9 +564,14 @@ start through `lkbridge`'s sudo rule. What it does, in order (it stops at the fi
 
    If there is nothing new it says so and exits (`--force` redeploys anyway).
 
-2. **Drains and stops** the service: `systemctl stop lk-bridge` (as `lkbridge`, through sudo). This is the drain. SIGTERM makes the bridge stop
-   taking new work and give running jobs up to 20 seconds to finish; the unit allows 45 seconds before killing it. A job
-   still unfinished then is picked up again by the engine's start-up recovery when the service starts. (The admin API could
+2. **Stops** the service: `systemctl stop lk-bridge` (as `lkbridge`, through sudo). SIGTERM stops the bridge for a
+   restart (CR-2026-11-R3, fix A): new requests are answered 503 "the bridge is restarting" (agents see it as a plain
+   error and try again later); every running job stops at its next step boundary, never part-way through a write
+   (requests already in flight get up to 10 seconds), and is left queued: it **continues by itself** when the service
+   starts, its checks run again before its first write. A job parked for budget keeps its time; one waiting for your
+   approval or a pack version keeps waiting. Every budget, lock and maintenance wait ends at once. It normally takes a
+   second or two, at most about 18 seconds (a watchdog exits at 25); the unit's `TimeoutStopSec=75` is only a cushion.
+   The journal shows `stopped for a restart` with the time it took and how many jobs were parked. (The admin API could
    drain without stopping, but it accepts only your browser session and a script has none; see ADR 0015. For a gentler
    hand-over, press _Drain_ on the dashboard's Writers page before you start.)
 3. Takes a **`pre-deploy` backup** of the database (kept: the newest 5), as `lkbridge`.

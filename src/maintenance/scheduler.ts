@@ -142,14 +142,26 @@ export class MaintenanceScheduler {
     this.arm();
   }
 
-  /** Stops the timer and waits for runs in flight. */
-  async stop(): Promise<void> {
+  /**
+   * Stops the timer and waits for runs in flight. CR-2026-11-R3 (fix A): `waitMs` bounds the wait (a restart must end
+   * within systemd's stop timeout). A run still going then is left as it is: its record keeps `runningSince`, so the
+   * next start records it as interrupted ("The bridge stopped while this was running"), as after a crash; the engine
+   * jobs it started are parked and continue by themselves.
+   */
+  async stop(waitMs?: number): Promise<void> {
     this.stopped = true;
     if (this.timer) this.o.clock.clearTimeout(this.timer);
     this.timer = undefined;
     for (const wake of this.waiters) wake();
     this.waiters.clear();
-    await Promise.allSettled([...this.active]);
+    const all = Promise.allSettled([...this.active]);
+    if (waitMs === undefined) {
+      await all;
+      return;
+    }
+    let t: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([all, new Promise<void>((r) => (t = setTimeout(r, Math.max(0, waitMs))))]);
+    clearTimeout(t);
   }
 
   /** Resolves when no run is in flight (tests). */

@@ -103,6 +103,14 @@ function normalise(v: unknown, depth = 0): unknown {
 }
 
 /**
+ * CR-2026-11-R3 (R3-17): a value normalised exactly as `compareStoredBlocks` compares it (block versions dropped, runs and
+ * mentions normalised as LegendKeeper stores them), for callers that compare blocks by a print (a split's moved blocks).
+ */
+export function normaliseForCompare(v: unknown): unknown {
+  return normalise(v);
+}
+
+/**
  * Drops the stored id of every block the plan sent without one (LegendKeeper gave it an id), walking both trees in
  * parallel by position.
  */

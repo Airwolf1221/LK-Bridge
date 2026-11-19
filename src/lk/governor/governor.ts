@@ -11,6 +11,7 @@ import type { GovernorSettings, PriorityClass } from '../../config/lk.js';
 import {
   BridgeLkError,
   BudgetWaitError,
+  RestartWaitError,
   fromLkResponse,
   toBridgeLkError,
   type LkErrorBody,
@@ -252,6 +253,10 @@ export class Governor {
   private pumping = false;
   private repump = false;
   private closed = false;
+  /** CR-2026-11-R3 (fix A): set by `stopWaits` (a restart): nothing waits any more. */
+  private waitsStopped = false;
+  /** Ends a retry's back-off when the waits stop. */
+  private readonly waitsAbort = new AbortController();
   private readonly persistence: GovernorPersistence | undefined;
   private saveTimer: TimerHandle | null = null;
   private readonly allowedOperations: ReadonlySet<string> | undefined;
@@ -383,9 +388,18 @@ export class Governor {
       switch (decision.action) {
         case 'retry':
           state = decision.state;
+          // CR-2026-11-R3 (fix A): a restart ends a retry's back-off at once. The step is parked as it stands (a write
+          // whose attempt may have reached LegendKeeper keeps `maybeSent`, so the next start verifies it first).
+          if (this.waitsStopped) throw new RestartWaitError(req.opId, this.clock.now());
           try {
-            await sleep(this.clock, decision.delayMs, req.signal);
+            await sleep(
+              this.clock,
+              decision.delayMs,
+              req.signal ? AbortSignal.any([req.signal, this.waitsAbort.signal]) : this.waitsAbort.signal,
+            );
           } catch (cause) {
+            if (this.waitsStopped && !req.signal?.aborted)
+              throw new RestartWaitError(req.opId, this.clock.now());
             throw this.abortedError(req.opId, cause);
           }
           continue;
@@ -535,6 +549,37 @@ export class Governor {
     return () => set.delete(cb);
   }
 
+  /**
+   * CR-2026-11-R3 (fix A, a clean shutdown within systemd's stop timeout): ends every wait at once, and lets nothing
+   * wait from now on. Each call queued for budget, pacing or a free in-flight slot is refused with `RestartWaitError`
+   * (it was never sent); a retry's back-off ends the same way; a new call is dispatched only if it can go at once (so a
+   * step already under way can finish its reads), else refused. Requests already in flight finish. `close()` still
+   * follows at the end of the shutdown. Idempotent.
+   */
+  stopWaits(): void {
+    if (this.waitsStopped || this.closed) return;
+    this.waitsStopped = true;
+    this.waitsAbort.abort();
+    const now = this.clock.now();
+    for (const cls of PRIORITY_CLASSES) {
+      for (const lane of this.lanes[cls].values()) {
+        for (const p of lane) {
+          p.cleanup();
+          p.reject(new RestartWaitError(p.req.opId, now));
+        }
+      }
+      this.lanes[cls].clear();
+    }
+    if (this.wakeTimer) this.clock.clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+    this.wakeAt = Number.POSITIVE_INFINITY;
+  }
+
+  /** True once `stopWaits` has run (a restart). */
+  get waitsHaveStopped(): boolean {
+    return this.waitsStopped;
+  }
+
   /** Rejects everything queued and stops the wake timer. In-flight calls finish. Saves the counters (if persisted). */
   close(): void {
     this.closed = true;
@@ -621,7 +666,18 @@ export class Governor {
         pending.cleanup = () => req.signal?.removeEventListener('abort', onAbort);
       }
       this.pump();
+      // CR-2026-11-R3 (fix A): while the bridge restarts, a call goes at once (pump dispatches synchronously) or not
+      // at all: one still queued would have to wait.
+      if (this.waitsStopped && this.isQueued(pending)) {
+        this.removePending(pending);
+        pending.cleanup();
+        reject(new RestartWaitError(req.opId, this.clock.now()));
+      }
     });
+  }
+
+  private isQueued(p: Pending): boolean {
+    return this.lanes[p.req.priority].get(p.lane)?.includes(p) === true;
   }
 
   private removePending(p: Pending): void {

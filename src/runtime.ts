@@ -45,6 +45,7 @@ import { RevertService } from './review/revert.js';
 import { ResumeService } from './resume/service.js';
 import { registerRenameChecks } from './packs/rename/checks.js';
 import { registerSplitChecks } from './packs/split/checks.js';
+import { ROUTE_BACK_REBASER, routeBackRebaser } from './jobs/route-back.js';
 import { SplitService } from './packs/split/service.js';
 import { RetagService } from './packs/retag/service.js';
 import { registerRetagChecks } from './packs/retag/checks.js';
@@ -180,6 +181,36 @@ export interface Runtime {
   readonly envConfig: Config;
   /** Drain (bounded), stop the engine, close the governor. Does not close the database. */
   shutdown(drainTimeoutMs?: number): Promise<void>;
+  /**
+   * CR-2026-11-R3 (fix A): the stop for a restart (SIGTERM; `server.ts` `stopForRestart`). Does not close the database.
+   * Every stage is bounded, so it ends well inside systemd's stop timeout.
+   */
+  stopForRestart(o?: RestartStopOptions): Promise<RestartStopReport>;
+  /** CR-2026-11-R3 (fix A): true from the moment a stop for a restart begins (the HTTP layer refuses new requests). */
+  readonly restarting: boolean;
+}
+
+/** CR-2026-11-R3 (fix A): how long a restart's stop may wait at each stage. */
+export interface RestartStopOptions {
+  /** How long running jobs have to reach their next step boundary (requests in flight finish). Default 10 s. */
+  readonly graceMs?: number;
+  /** How long background work (maintenance runs, passes) may take to stop, alongside the grace. Default 10 s. */
+  readonly backgroundMs?: number;
+  /** How long a job still in a request after the grace may take before it is left to the start-up recovery. 1 s. */
+  readonly engineStopMs?: number;
+  /** How long the tree's and the asset tree's final stop may take. Default 2 s. */
+  readonly treesMs?: number;
+}
+
+/** CR-2026-11-R3 (fix A): what a restart's stop did. */
+export interface RestartStopReport {
+  readonly ms: number;
+  /** Jobs parked at a step boundary for the next start. */
+  readonly parked: readonly string[];
+  /** Jobs still in a request when the grace ran out: the start-up recovery verifies their step before re-sending. */
+  readonly stillRunning: readonly string[];
+  /** Stages that ran out of time (the stop went on without them). */
+  readonly overran: readonly string[];
 }
 
 export interface RuntimeOptions {
@@ -908,6 +939,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits: {
       isPhase1: (projectId, jobId) => splitsRef.current?.isPhase1(projectId, jobId) ?? false,
       isReverted: (projectId, jobId) => splitsRef.current?.isReverted(projectId, jobId) ?? false,
+      isRetired: (projectId, jobId) => splitsRef.current?.isRetired(projectId, jobId) ?? false,
       pagesMade: (projectId, jobId) => splitsRef.current?.pagesMade(projectId, jobId) ?? 0,
       afterRevert: (projectId, jobId, revertJobId) =>
         splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
@@ -917,6 +949,29 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   const detachReverts = reverts.start();
   // v3 F3d (ADR 0058): resuming a package, a rename or a recreate that stopped part-way.
+  /**
+   * Whether a job has been reverted, is being, or was partly (CR-2026-11-R3, R3-45: a revert job that failed or was
+   * cancelled may have put some of it back): it is never continued then (Resume, or a step Retry).
+   */
+  const revertStateOf = (projectId: string, jobId: string): 'submitted' | 'succeeded' | 'stopped' | null => {
+    const row = o.db
+      .prepare(`SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
+      .get(projectId, jobId) as { state: string } | undefined;
+    if (row?.state === 'submitted' || row?.state === 'succeeded') return row.state;
+    if (row?.state === 'failed' || row?.state === 'cancelled') return 'stopped';
+    // v3 F3e (ADR 0059): a split's phase 1 reverted with no revert job (it stopped before anything left the source).
+    return splitsRef.current?.isReverted(projectId, jobId) ? 'succeeded' : null;
+  };
+  const unregisterContinueGuard = engine.setContinueGuard((projectId, jobId) => {
+    const r = revertStateOf(projectId, jobId);
+    return r === 'succeeded'
+      ? `Job ${jobId} has been reverted: what it did was undone, so it is not continued. Plan the work again.`
+      : r === 'submitted'
+        ? `A revert of job ${jobId} is running: it is not continued.`
+        : r === 'stopped'
+          ? `A revert of job ${jobId} stopped part-way, so some of what it did may be undone already: it is not continued. Look at the revert on the Review page.`
+          : null;
+  });
   const resume = new ResumeService({
     db: o.db,
     engine,
@@ -931,21 +986,18 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         ? { status: 'nothing_to_do' as const, summary: r.plan.summary }
         : { status: 'proposal_captured' as const, proposalId: r.proposalId, summary: r.summary };
     },
-    revertState: (projectId, jobId) => {
-      const row = o.db
-        .prepare(`SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
-        .get(projectId, jobId) as { state: string } | undefined;
-      if (row?.state === 'submitted' || row?.state === 'succeeded') return row.state;
-      // v3 F3e (ADR 0059): a split's phase 1 reverted with no revert job (it stopped before anything left the source).
-      return splitsRef.current?.isReverted(projectId, jobId) ? 'succeeded' : null;
-    },
+    revertState: (projectId, jobId) => revertStateOf(projectId, jobId),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachResume = resume.start();
   // v3 F3d (ADR 0058): `arkona_rename`: its in-job checks, its record, the token change's pack version (the job waits for
   // the owner to approve it) and what a rename left, from the full-text index.
-  const unregisterRenameChecks = registerRenameChecks(engine, packs);
+  const unregisterRenameChecks = registerRenameChecks(engine, packs, (projectId, pageId) => {
+    // CR-2026-11-R3 (R3-29): the tree's view of a page (its name and path), for the rename's history check.
+    const n = tree.queries.node(projectId, pageId).data;
+    return n ? { rawName: n.rawName, path: n.path } : null;
+  });
   const renames = new RenameService({
     db: o.db,
     engine,
@@ -972,6 +1024,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v3 F3e (ADR 0059): arkona_split_owner: its in-job checks and rebasers, its record, phase 2 (the source's archive,
   // proposed by the bridge once phase 1 has verified) and the deletion proposal after a revert of phase 1.
   const unregisterSplitChecks = registerSplitChecks(engine);
+  // CR-2026-11-R3 (R3-37): "Propose these again" puts back the routing lines a partial approval left out.
+  const unregisterRouteBack = engine.registerRebaser(ROUTE_BACK_REBASER, routeBackRebaser);
   const splits = new SplitService({
     db: o.db,
     engine,
@@ -1005,8 +1059,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const unregisterRetagChecks = registerRetagChecks(engine, {
-    policy: (packId) => retag.currentPolicy(packId),
+    policy: (packId, projectId) => retag.currentPolicy(packId, projectId),
     governance: (packId) => packs.governance(packId),
+    records: (projectId, pageId) => retag.recordsOf(projectId, pageId),
   });
   const detachRetag = retag.start();
   retagRef.current = retag;
@@ -1149,6 +1204,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }
   });
 
+  /** CR-2026-11-R3 (fix A): set when a stop for a restart begins. */
+  let restarting = false;
   return {
     projects,
     secrets,
@@ -1184,6 +1241,45 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     instructions: BRIDGE_INSTRUCTIONS,
     config,
     envConfig,
+    get restarting() {
+      return restarting;
+    },
+    async stopForRestart(o: RestartStopOptions = {}): Promise<RestartStopReport> {
+      const started = Date.now();
+      const overran: string[] = [];
+      const bounded = async (label: string, p: Promise<unknown>, ms: number): Promise<void> => {
+        if (!(await within(p, ms))) overran.push(label);
+      };
+      restarting = true;
+      // 1. Nothing new is accepted (the HTTP layer answers BRIDGE_RESTARTING; the engine refuses submissions); every
+      //    job stops at its next step boundary; every lock, slot, governor and budget wait ends at once.
+      const parking = engine.stopForRestart(o.graceMs ?? 10_000);
+      projects.stopWaits();
+      // 2. Background work stops alongside: a build resumes at the next start; a sweep or check in flight ends as
+      //    interrupted. The trees keep following writes while jobs reach their boundary.
+      const background = (async () => {
+        await Promise.allSettled([tree.stopPasses(), assets.stopPasses()]);
+        lifecycle.stop();
+        chronology.stop();
+        snapshots.stop();
+        images.stop();
+        await maintenance.stop(o.backgroundMs ?? 10_000);
+      })();
+      const { parked, stillRunning } = await parking;
+      await bounded(
+        'background work',
+        background,
+        Math.max(0, (o.backgroundMs ?? 10_000) - (Date.now() - started)),
+      );
+      // 3. The rest of the shutdown, each part bounded.
+      await windDown({ engineStopMs: o.engineStopMs ?? 1_000, treesMs: o.treesMs ?? 2_000, bounded });
+      return {
+        ms: Date.now() - started,
+        parked,
+        stillRunning,
+        overran,
+      };
+    },
     async shutdown(drainTimeoutMs = 20_000) {
       // A build resumes at the next start; a sweep or check in flight ends as interrupted. Writes are still followed
       // while the engine drains, so their re-reads are made (or owed) before the tree stops.
@@ -1202,35 +1298,68 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         }),
       ]);
       clearTimeout(timer);
-      detachPolicy();
-      await engine.stop();
-      unregisterPlanner();
-      unregisterGuard();
-      unregisterLmr();
-      detachLifecycle();
-      detachChronology();
-      for (const off of detachMaps) off();
-      for (const off of detachSnapshotCheckers) off();
-      for (const off of detachAuditCheckers) off();
-      detachBlockIds();
-      detachBlockwiseUndo();
-      detachReverts();
-      detachResume();
-      detachRenames();
-      unregisterRenameChecks();
-      detachSplits();
-      unregisterSplitChecks();
-      detachRetag();
-      unregisterRetagChecks();
-      detachReview();
-      detachRestores();
-      unregisterPackEngine();
-      detachPackTools();
-      await tree.stop();
-      detachRegistry();
-      await assets.stop();
-      projects.close(); // every governor saves its counts
-      guard?.release();
+      await windDown({});
     },
   };
+
+  /** The end of every shutdown: hooks detached, the engine stopped, the trees stopped, the governors closed. */
+  async function windDown(w: {
+    readonly engineStopMs?: number;
+    readonly treesMs?: number;
+    readonly bounded?: (label: string, p: Promise<unknown>, ms: number) => Promise<void>;
+  }): Promise<void> {
+    const run = (label: string, p: Promise<unknown>, ms: number | undefined) =>
+      ms === undefined || !w.bounded ? p : w.bounded(label, p, ms);
+    detachPolicy();
+    await run(
+      'the engine',
+      engine.stop(w.engineStopMs),
+      w.engineStopMs === undefined ? undefined : w.engineStopMs + 500,
+    );
+    unregisterPlanner();
+    unregisterGuard();
+    unregisterLmr();
+    detachLifecycle();
+    detachChronology();
+    for (const off of detachMaps) off();
+    for (const off of detachSnapshotCheckers) off();
+    for (const off of detachAuditCheckers) off();
+    detachBlockIds();
+    detachBlockwiseUndo();
+    detachReverts();
+    detachResume();
+    detachRenames();
+    unregisterRenameChecks();
+    detachSplits();
+    unregisterSplitChecks();
+    unregisterContinueGuard();
+    unregisterRouteBack();
+    detachRetag();
+    unregisterRetagChecks();
+    detachReview();
+    detachRestores();
+    unregisterPackEngine();
+    detachPackTools();
+    await run('the repository tree', tree.stop(), w.treesMs);
+    detachRegistry();
+    await run('the asset tree', assets.stop(), w.treesMs);
+    projects.close(); // every governor saves its counts
+    guard?.release();
+  }
+}
+
+/** CR-2026-11-R3 (fix A): true when `p` settled within `ms` (real time), false when the time ran out first. */
+async function within(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const done = await Promise.race([
+    p.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), Math.max(0, ms));
+    }),
+  ]);
+  clearTimeout(timer);
+  return done;
 }

@@ -9,7 +9,7 @@ import type { Db } from '../db/open.js';
 import type { LkClient } from '../lk/client.js';
 import type { ProjectsRuntime } from '../projects/registry.js';
 import type { ProjectScope } from '../projects/types.js';
-import { BridgeLkError, BudgetWaitError } from '../lk/errors.js';
+import { BridgeLkError, BudgetWaitError, RestartWaitError } from '../lk/errors.js';
 import { sleep, systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
 import type { BudgetSnapshot } from '../lk/governor/types.js';
 import { getOperation, operationInputSchema } from '../lk/registry.js';
@@ -162,6 +162,26 @@ const SETTING = {
 
 const silentLog: EngineLogger = { warn: () => {}, error: () => {} };
 
+/**
+ * CR-2026-11-R3 (fix A): waits for every promise to settle, or `ms` milliseconds at most (no bound when undefined).
+ * Real time, on purpose: a shutdown's limits are wall-clock limits whatever clock the engine runs on.
+ */
+async function settleWithin(all: readonly Promise<unknown>[], ms: number | undefined): Promise<void> {
+  const settled = Promise.allSettled(all);
+  if (ms === undefined) {
+    await settled;
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    settled,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, Math.max(0, ms));
+    }),
+  ]);
+  clearTimeout(timer);
+}
+
 interface Active {
   current: AbortController;
   readonly done: Promise<RunnerResult>;
@@ -243,6 +263,7 @@ export class JobEngine {
   /** v3 F2: the Last Major Revision planner (src/lmr/), asked about every caller's write request. */
   private lmrPlanner: LmrPlanner | undefined;
   private assetDeleteKeeper: AssetDeleteKeeper | undefined;
+  private continueGuard: ((projectId: string, jobId: string) => string | null) | undefined;
   /** v2 C2c: the lifecycle record's handler (`bridge.record` steps). */
   /** v2 C2c: the `bridge.record` handlers by store (`lifecycle`; v2 D1 `chronology`). */
   private readonly recordHandlers = new Map<string, RecordHandler>();
@@ -258,6 +279,13 @@ export class JobEngine {
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
+  /**
+   * CR-2026-11-R3 (fix A): the bridge is stopping for a restart (`stopForRestart`): no new work, every job parked at
+   * its next step boundary, every wait ended.
+   */
+  private restarting = false;
+  /** Ends every lock and writer-slot wait of every job when the bridge restarts (never a request in flight). */
+  private readonly restartAbort = new AbortController();
   private started = false;
   private stopped = false;
   private pumpQueued = false;
@@ -351,17 +379,63 @@ export class JobEngine {
 
   /**
    * Clean shutdown: stop starting steps, abort lock and slot waits, let in-flight calls finish, and leave every
-   * unfinished job `queued` (or `waiting_budget`) for the next start.
+   * unfinished job `queued` (or `waiting_budget`) for the next start. CR-2026-11-R3 (fix A): `waitMs` bounds the wait
+   * for running steps (a request in flight is left to the start-up recovery, which verifies before re-sending).
    */
-  async stop(): Promise<void> {
+  async stop(waitMs?: number): Promise<void> {
     this.stopped = true;
     this.offProjects();
     for (const t of this.resumeTimers.values()) this.clock.clearTimeout(t);
     this.resumeTimers.clear();
     for (const a of this.active.values()) a.current.abort(new CancelledError());
-    await Promise.allSettled([...this.active.values()].map((a) => a.done));
+    for (const release of [...this.jobWaiters]) release();
+    await settleWithin(
+      [...this.active.values()].map((a) => a.done),
+      waitMs,
+    );
     for (const release of [...this.jobWaiters]) release();
     this.started = false;
+  }
+
+  /**
+   * CR-2026-11-R3 (fix A, the owner's clean shutdown): the first half of a stop for a restart (SIGTERM). From now on
+   * nothing new is accepted (`BRIDGE_RESTARTING`); every running job stops at its next step boundary and is left
+   * `queued`, with `waitReason.restart`, for the next start (where it continues by itself, its checks run again before
+   * its first write as after any restart); lock and writer-slot waits end at once; a job parked for budget keeps its
+   * time; a job waiting for an approval or a pack version stays queued. Requests in flight finish: a step is never cut
+   * part-way by this. Resolves once no job runs, or after `graceMs` with the ids of the jobs still in a step (a request
+   * still in flight); `stop()` follows. The governors' waits are ended by the runtime (`ProjectRegistry.stopWaits`).
+   */
+  async stopForRestart(
+    graceMs: number,
+  ): Promise<{ readonly parked: readonly string[]; readonly stillRunning: readonly string[] }> {
+    const running = [...this.active.keys()];
+    this.restarting = true;
+    this.draining = true;
+    for (const t of this.resumeTimers.values()) this.clock.clearTimeout(t);
+    this.resumeTimers.clear();
+    this.restartAbort.abort(new CancelledError());
+    for (const release of [...this.jobWaiters]) release();
+    this.controlsChanged();
+    await settleWithin(
+      [...this.active.values()].map((a) => a.done),
+      graceMs,
+    );
+    const stillRunning = [...this.active.keys()];
+    return { parked: running.filter((id) => !stillRunning.includes(id)), stillRunning };
+  }
+
+  /** CR-2026-11-R3 (fix A): a job stopped by a restart, left queued for the next start. */
+  private parkForRestart(jobId: string, beforeStep: number | null): void {
+    this.repo.updateJob(jobId, {
+      status: 'queued',
+      currentStep: null,
+      waitReason: {
+        restart: 'stopped at a step boundary by a restart; it continues when the bridge starts',
+        ...(beforeStep !== null ? { beforeStep } : {}),
+      },
+    });
+    this.emitJob(jobId, 'updated');
   }
 
   // ============================================================================================ inline path
@@ -433,7 +507,7 @@ export class JobEngine {
     if (!isWriteOp(def) && !slow) {
       return this.runInlineRead(project, def, params, priority, origin, opts.signal);
     }
-    if (this.draining) throw new DrainingError();
+    if (this.draining) throw new DrainingError(this.restarting);
 
     const prepared = [
       this.prepare(def, params, runOptions),
@@ -599,6 +673,18 @@ export class JobEngine {
    * v2 D3 (ADR 0041): sets the keeper every `deleteAsset` runs first (the bytes kept before a delete). Returns an
    * unregister.
    */
+  /**
+   * CR-2026-11-R3 (R3-45): asked before a stopped job is continued in place (a step Retry, a Resume): a reason refuses it
+   * (a job reverted, being reverted, or whose revert stopped part-way: continuing it would write on top of the revert).
+   * Returns an unregister.
+   */
+  setContinueGuard(guard: (projectId: string, jobId: string) => string | null): () => void {
+    this.continueGuard = guard;
+    return () => {
+      if (this.continueGuard === guard) this.continueGuard = undefined;
+    };
+  }
+
   setAssetDeleteKeeper(keeper: AssetDeleteKeeper): () => void {
     this.assetDeleteKeeper = keeper;
     return () => {
@@ -926,7 +1012,7 @@ export class JobEngine {
 
   /** Queues a multi-step job: `batch_ops` (ordered registry calls) or `paginate_all` (every page of a list). */
   async submit(req: SubmitRequest): Promise<SubmitResult | ProposalCaptured> {
-    if (this.draining) throw new DrainingError();
+    if (this.draining) throw new DrainingError(this.restarting);
     if (req.kind === 'batch_ops') return this.submitBatch(req);
     if (req.kind === 'upload_image') return this.submitUpload(req);
     return this.submitPaginate(req);
@@ -1078,7 +1164,7 @@ export class JobEngine {
       req.stagedPlacement === true ? { stagedPlacement: true } : {},
     );
     if (proposal) return proposal;
-    if (this.draining) throw new DrainingError();
+    if (this.draining) throw new DrainingError(this.restarting);
     const guard = this.guardContext(project);
     for (const v of validated) if (v.def) checkSubmitGuards(v.def, v.params, v.options, guard);
     // v3 F3.4 (ADR 0055 decision E): see readBeforeSteps.
@@ -1155,7 +1241,7 @@ export class JobEngine {
       },
     });
     if (proposal) return proposal;
-    if (this.draining) throw new DrainingError();
+    if (this.draining) throw new DrainingError(this.restarting);
     const caps = this.settings.paginate;
     const query = { ...params.query };
     if (query.limit === undefined) query.limit = caps.pageSize;
@@ -1255,7 +1341,7 @@ export class JobEngine {
       },
     );
     if (proposal) return proposal;
-    if (this.draining) throw new DrainingError();
+    if (this.draining) throw new DrainingError(this.restarting);
     const guard = this.guardContext(project);
     for (const v of items) if (v.def) checkSubmitGuards(v.def, v.params, v.options, guard);
     const custom = (opId: string, params: OpParams): Pick<PreparedStep, 'step'> => ({
@@ -1599,7 +1685,8 @@ export class JobEngine {
     const items = step.options.items ?? [];
     if (items.length === 0 || step.status === 'running' || step.maybeSent || step.firstSentAt !== null)
       return false;
-    const skipped = new Set(this.repo.skippedItems(job.id, step.stepNo).map((x) => x.item));
+    const earlier = this.repo.skippedItems(job.id, step.stepNo);
+    const skipped = new Set(earlier.map((x) => x.item));
     if (skipped.size === 0 || !items.every((i) => skipped.has(i))) return false;
     const version = this.chainVersion(job, step);
     const now = this.clock.now();
@@ -1608,6 +1695,9 @@ export class JobEngine {
       resultSummary: {
         skipped: 'its items were skipped earlier in the job (changed meanwhile)',
         items: [...items],
+        // CR-2026-11-R3 (R3-44): the step keeps its own record of the items it did not write (with why), so a Resume
+        // whose first check runs again (and no longer skips them) still reports them: never neither applied nor listed.
+        skippedItems: items.map((i) => earlier.find((x) => x.item === i)!),
         ...(typeof version === 'string' && version !== '' ? { version } : {}),
       },
       startedAt: step.startedAt ?? now,
@@ -1818,6 +1908,35 @@ export class JobEngine {
   }
 
   /**
+   * v3 F3d (ADR 0058): the steps a resume runs again first (`resumable.recheck`, and CR-2026-11-R3 (R3-22) every
+   * succeeded check step before the step it stopped at that holds a checker `resumable.recheckCheckers` names), in order.
+   * Empty for a job that is not resumable in place, or of another project.
+   */
+  recheckSteps(projectId: string, jobId: string): number[] {
+    const job = this.repo.job(jobId);
+    if (!job || job.projectId !== projectId) return [];
+    const r = this.repo.jobOptions(jobId)[RESUMABLE_OPTION] as ResumableShape | undefined;
+    if (!r || r.kind === 'recreate') return [];
+    const steps = this.repo.steps(jobId);
+    const stopped = steps.find((s) => s.status !== 'succeeded');
+    if (!stopped) return [];
+    const named = new Set(r.recheckCheckers ?? []);
+    const out = new Set<number>();
+    for (const s of steps) {
+      if (s.stepNo >= stopped.stepNo || s.status !== 'succeeded' || !isInternalStep(s.opId)) continue;
+      if ((r.recheck ?? []).includes(s.stepNo)) {
+        out.add(s.stepNo);
+        continue;
+      }
+      if (named.size === 0 || s.opId !== EXPECT_STEP) continue;
+      const body = (this.repo.stepParams(s) as { body?: { checks?: unknown } }).body;
+      const checks = Array.isArray(body?.checks) ? (body.checks as { checker?: unknown }[]) : [];
+      if (checks.some((c) => typeof c.checker === 'string' && named.has(c.checker))) out.add(s.stepNo);
+    }
+    return [...out].sort((a, b) => a - b);
+  }
+
+  /**
    * v3 F3.4 (ADR 0055): every step of a job as the engine holds it (its params and its result in full, from their
    * artefacts when stored apart, and its options), for the review of direct writes and their revert. Undefined for a
    * job of another project. Read-only.
@@ -1975,6 +2094,9 @@ export class JobEngine {
       if (this.active.has(jobId) || !TERMINAL_JOB_STATUSES.has(job.status) || job.status === 'cancelled') {
         throw new InvalidControlError(`Job ${jobId} must have failed to retry a step`, { jobId, stepNo });
       }
+      // CR-2026-11-R3 (R3-45): a job that has been reverted (or is being, or was partly) is never continued.
+      const why = this.continueGuard?.(projectId, jobId) ?? null;
+      if (why) throw new InvalidControlError(why, { jobId, stepNo });
       const step = this.repo.step(jobId, stepNo);
       if (!step || (step.status !== 'failed' && step.status !== 'uncertain')) {
         throw new InvalidControlError(`Step ${stepNo} of ${jobId} has not failed`, { jobId, stepNo });
@@ -2035,6 +2157,8 @@ export class JobEngine {
           { jobId },
         );
       }
+      const why = this.continueGuard?.(projectId, jobId) ?? null;
+      if (why) throw new InvalidControlError(why, { jobId });
       const r = this.repo.jobOptions(jobId)[RESUMABLE_OPTION] as ResumableShape | undefined;
       if (!r || r.kind === 'recreate') {
         throw new InvalidControlError(`Job ${jobId} cannot be resumed in place`, { jobId });
@@ -2043,7 +2167,7 @@ export class JobEngine {
       const stopped = steps.find((s) => s.status !== 'succeeded');
       if (!stopped) throw new InvalidControlError(`Job ${jobId} has nothing left to run`, { jobId });
       const rechecked: number[] = [];
-      for (const n of r.recheck ?? []) {
+      for (const n of this.recheckSteps(projectId, jobId)) {
         const s = steps.find((x) => x.stepNo === n);
         if (!s || s.stepNo >= stopped.stepNo || s.status !== 'succeeded' || !isInternalStep(s.opId)) continue;
         this.repo.updateStep(jobId, n, {
@@ -2246,15 +2370,13 @@ export class JobEngine {
     const release = () => {
       for (const r of releases.splice(0).reverse()) r();
     };
+    // CR-2026-11-R3 (fix A): a restart ends this wait too.
+    const waitSignal = AbortSignal.any([entry.current.signal, this.restartAbort.signal]);
     try {
       for (const key of keys) {
         if (!this.locks.isFree(key)) this.setWaitingLock(jobId, 'lock', { lockKey: key, job: true });
         releases.push(
-          await this.locks.acquire(
-            key,
-            { jobId, stepNo: 0, principalId: job.principalId },
-            entry.current.signal,
-          ),
+          await this.locks.acquire(key, { jobId, stepNo: 0, principalId: job.principalId }, waitSignal),
         );
       }
       this.setWaitingLock(jobId, null);
@@ -2262,10 +2384,11 @@ export class JobEngine {
     } catch (e) {
       release();
       this.setWaitingLock(jobId, null);
-      if (!entry.current.signal.aborted) throw e;
+      if (!waitSignal.aborted) throw e;
       // Stopped, cancelled or paused while waiting for the lock: nothing ran.
       const now = this.requireJob(jobId);
-      if (this.stopped) this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
+      if (this.restarting && !this.stopped) this.parkForRestart(jobId, null);
+      else if (this.stopped) this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
       else if (now.cancelRequested) this.finishCancelled(jobId);
       else if (now.pauseRequested) {
         this.repo.updateJob(jobId, { status: 'paused', pauseRequested: false, currentStep: null });
@@ -2349,6 +2472,11 @@ export class JobEngine {
           this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
           return { last, values };
         }
+        // CR-2026-11-R3 (fix A): a restart stops every job here, between two steps, never part-way through one.
+        if (this.restarting) {
+          this.parkForRestart(jobId, step.stepNo);
+          return { last, values };
+        }
         // Chunk 8 (F-02): the gate decided when the work was accepted; ask again before each new step, so a revoked
         // connection or a lowered scope also stops work already queued. A step being recovered is still finished.
         const denied = await this.recheckPolicy(job, step);
@@ -2428,10 +2556,16 @@ export class JobEngine {
       step = this.repo.step(jobId, step.stepNo) ?? step;
       const writeInfo = this.writeInfo(job, step);
       this.notifyBeforeWrite(writeInfo);
-      const outcome = await this.executor.execute(job, step, entry.current.signal, {
-        storeResult: job.kind !== 'paginate_all',
-        heldLock,
-      });
+      // CR-2026-11-R3 (fix A): a restart ends the step's lock and writer-slot waits (never its request in flight).
+      const outcome = await this.executor.execute(
+        job,
+        step,
+        AbortSignal.any([entry.current.signal, this.restartAbort.signal]),
+        {
+          storeResult: job.kind !== 'paginate_all',
+          heldLock,
+        },
+      );
       // v2 A2: the repository tree re-reads what the write changed, in this job, before it moves on.
       await this.notifyAfterWrite(writeInfo, outcome, entry.current.signal);
       if (outcome.kind !== 'aborted' && outcome.kind !== 'held') last = outcome;
@@ -2473,6 +2607,12 @@ export class JobEngine {
           continue;
         }
         case 'budget':
+          // CR-2026-11-R3 (fix A): a call a restart did not let wait (`RestartWaitError`): parked for the next start, the
+          // step pending again (one that may have reached LegendKeeper is verified first, as after any restart).
+          if (outcome.error instanceof RestartWaitError || this.restarting) {
+            this.parkForRestart(jobId, step.stepNo);
+            return { last, values };
+          }
           this.repo.updateJob(jobId, {
             status: 'waiting_budget',
             resumeAt: outcome.retryAtMs,
@@ -2493,6 +2633,11 @@ export class JobEngine {
         case 'aborted':
           if (this.stopped) {
             this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
+            return { last, values };
+          }
+          // CR-2026-11-R3 (fix A): a lock or writer-slot wait a restart ended (nothing was sent).
+          if (this.restarting) {
+            this.parkForRestart(jobId, step.stepNo);
             return { last, values };
           }
           continue; // cancel or pause: the loop head decides
@@ -2709,7 +2854,8 @@ export class JobEngine {
 
   private scheduleResume(jobId: string, at: number | null): void {
     this.clearResume(jobId);
-    if (this.stopped) return;
+    // CR-2026-11-R3 (fix A): a restart keeps the job's time; the next start arms it again.
+    if (this.stopped || this.restarting) return;
     const delay = Math.max(0, (at ?? this.clock.now()) - this.clock.now());
     const t = this.clock.setTimeout(() => {
       this.resumeTimers.delete(jobId);
@@ -2982,6 +3128,7 @@ export class JobEngine {
     const base = {
       writesPaused: this.writesPaused,
       draining: this.draining,
+      ...(this.restarting ? { restarting: true as const } : {}),
       readOnly: this.readOnly(),
       readOnlyOverride: this.readOnlyOverride,
       writersMax: this.writers.max,
@@ -3420,9 +3567,13 @@ function resumableOf(r: BatchSubmit['resumable']): ResumableShape | undefined {
   )
     return undefined;
   const recheck = (r.recheck ?? []).filter((n) => Number.isInteger(n) && n >= 1);
+  const recheckCheckers = (Array.isArray(r.recheckCheckers) ? r.recheckCheckers : [])
+    .filter((c): c is string => typeof c === 'string' && c !== '')
+    .slice(0, 10);
   return {
     kind: r.kind,
     ...(recheck.length > 0 ? { recheck } : {}),
+    ...(recheckCheckers.length > 0 ? { recheckCheckers } : {}),
     ...(typeof r.ref === 'string' && r.ref !== '' ? { ref: r.ref.slice(0, 100) } : {}),
   };
 }
@@ -3481,7 +3632,11 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.decisionFrom && Number.isInteger(o.decisionFrom.step)
       ? { decisionFrom: { step: o.decisionFrom.step } }
       : {}),
-    ...(o.followUp === 'lmr_failed' || o.followUp === 'image_relink_failed' ? { followUp: o.followUp } : {}),
+    ...(o.followUp === 'lmr_failed' ||
+    o.followUp === 'image_relink_failed' ||
+    o.followUp === 'placement_failed'
+      ? { followUp: o.followUp }
+      : {}),
     ...(o.findOrCreate === true ? { findOrCreate: true } : {}),
     ...(o.onlyIfEmpty === true ? { onlyIfEmpty: true } : {}),
     // v2 D3: set by bridge code only.

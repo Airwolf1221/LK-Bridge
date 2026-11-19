@@ -20,8 +20,9 @@ import type { JobEngine } from '../../jobs/engine.js';
 import { SYSTEM_PRINCIPAL, type JobView, type StepSpec } from '../../jobs/types.js';
 import type { ProposalHooks } from '../../policy/proposals.js';
 import type { ProposalView } from '../../policy/types.js';
-import { blockText } from './blocks.js';
-import { mainDocumentOf } from './checks.js';
+import { contentPrint, textPrint } from './blocks.js';
+import { mainDocumentOf, SPLIT_CHECKS, type MadeCheckInput, type VerifyCheckInput } from './checks.js';
+import { EXPECT_STEP } from '../../jobs/internal-steps.js';
 import { SPLIT_TOOL } from './plan.js';
 
 type Obj = Record<string, unknown>;
@@ -179,6 +180,14 @@ export class SplitService {
       this.d.proposals.addHooks({
         afterSubmit: (ctx) => this.afterSubmit(ctx.proposal, ctx.jobId),
         afterRepropose: (ctx) => this.afterRepropose(ctx.original, ctx.proposalId),
+        // CR-2026-11-R3 (R3-15): a split's left-out destinations are planned again on the source as it is now, never
+        // re-proposed from the old plan (its source edits and verification name blocks the first job already moved).
+        refuseRepropose: (original) =>
+          this.byProposal(original.id)
+            ? 'A split’s left-out destinations are not proposed again from the old plan: the source has changed since ' +
+              '(the approved part moved its blocks). Ask the agent to split what is left (arkona_split_owner on the ' +
+              'source as it is now).'
+            : null,
       }),
       this.d.engine.events.on('job', (e: { type: string; job: JobView }) => {
         try {
@@ -388,7 +397,7 @@ export class SplitService {
       this.update(rec.id, {
         state: 'verified',
         phase2: {
-          reason: `${why}: the source still owns material, so it is not retired. Propose those items again, then retire it with archive_page when nothing is left.`,
+          reason: `${why}: the source still owns material, so it is not retired. Split what is left as a new split (arkona_split_owner on the source as it is now), then retire it with archive_page when nothing is left.`,
           at: this.d.now(),
         },
       });
@@ -466,6 +475,69 @@ export class SplitService {
     return this.byJob(projectId, jobId)?.state === 'reverted';
   }
 
+  /** CR-2026-11-R3 (R3-09): whether phase 2 archived the source (its archive note changed the source's text). */
+  isRetired(projectId: string, jobId: string): boolean {
+    return this.byJob(projectId, jobId)?.state === 'retired';
+  }
+
+  /**
+   * CR-2026-11-R3 (R3-10): which pages the split made still hold material that is not back in the source (read now):
+   * each moved block of the job's own verification, in the source under its id with its content. Gives, for a page, a
+   * short reason when something is not back (null when all of it is, or the page took nothing from the source).
+   */
+  private async notBackInSource(
+    projectId: string,
+    records: readonly { opId: string; params: { body?: unknown } }[],
+  ): Promise<(pageId: string) => string | null> {
+    const step = records.find((s) => {
+      const checks = isObj(s.params.body) ? s.params.body.checks : null;
+      return (
+        s.opId === EXPECT_STEP &&
+        Array.isArray(checks) &&
+        isObj(checks[0]) &&
+        checks[0].checker === SPLIT_CHECKS.verify
+      );
+    });
+    const input = step
+      ? ((step.params.body as { checks: { input: VerifyCheckInput }[] }).checks[0]!.input ?? null)
+      : null;
+    if (!input) return () => null;
+    const moved = new Map<string, string[]>();
+    for (const m of input.moves)
+      if (m.kind === 'move' && m.dest)
+        moved.set(m.dest.resourceId, [...(moved.get(m.dest.resourceId) ?? []), ...m.blocks]);
+    if (moved.size === 0) return () => null;
+    let blocks: Obj[] | null = null;
+    try {
+      const now = await this.d.engine.internalRead(
+        projectId,
+        'getDocumentBlocks',
+        { path: { resourceId: input.source.resourceId, documentId: input.source.documentId } },
+        { priority: 'P1', notFoundIsAnswer: true },
+      );
+      blocks = isObj(now) && Array.isArray(now.blocks) ? (now.blocks as unknown[]).filter(isObj) : [];
+    } catch {
+      blocks = null;
+    }
+    const byId = new Map((blocks ?? []).map((b) => [str(b.id) ?? '', b]));
+    const original = new Map(input.original.map((o) => [o.id, o]));
+    return (pageId) => {
+      const ids = moved.get(pageId);
+      if (!ids || ids.length === 0) return null;
+      if (blocks === null) return 'the source could not be read to confirm it';
+      const gone = ids.filter((id) => {
+        const o = original.get(id);
+        const b = byId.get(id);
+        if (!o || !b) return true;
+        return o.content !== undefined ? contentPrint(b) !== o.content : textPrint(b) !== o.text;
+      });
+      if (gone.length === 0) return null;
+      const first = original.get(gone[0]!);
+      const what = first?.excerpt ? `“${first.excerpt}”` : `block ${gone[0]}`;
+      return `${gone.length} block${gone.length === 1 ? '' : 's'}, ${what}${gone.length > 1 ? ' among them' : ''}`;
+    };
+  }
+
   /**
    * After a revert of phase 1 has succeeded: the pages it made go to ONE deletion proposal, children before their
    * parents, each only while it is exactly as phase 1 made it (its text as written, its name).
@@ -479,7 +551,12 @@ export class SplitService {
     if (!rec) return null;
     const records = this.d.engine.stepRecords(projectId, jobId) ?? [];
     const deleted: { id: string; name: string }[] = [];
+    // CR-2026-11-R3 (R3-21): how each page to delete was made (checked again when the deletion runs).
+    const made_: Map<string, MadeCheckInput> = new Map();
     const kept: { id: string; name: string; why: string }[] = [];
+    // CR-2026-11-R3 (R3-10): a page the split made is proposed for deletion only once the material it took is back in
+    // the source (read now, block by block, by content): never its only copy.
+    const notBack = await this.notBackInSource(projectId, records);
     // Every page the job made (a new index too), never one it did not make (left out, or the job stopped first).
     const made = records
       .filter(
@@ -498,6 +575,11 @@ export class SplitService {
         };
       });
     for (const p of made) {
+      const missing = notBack(p.id);
+      if (missing) {
+        kept.push({ ...p, why: `the material it took is not back in ${rec.sourceName} (${missing})` });
+        continue;
+      }
       const text = [...records]
         .reverse()
         .find(
@@ -529,14 +611,29 @@ export class SplitService {
           );
           const live = isObj(now) && Array.isArray(now.blocks) ? (now.blocks as unknown[]).filter(isObj) : [];
           const want = (sent as unknown[]).filter(isObj);
+          // CR-2026-11-R3 (R3-21): the whole of each block (its formatting, rows and structure), not its words alone.
           const same =
             live.length === want.length &&
-            live.every((b, i) => str(b.id) === str(want[i]!.id) && blockText(b) === blockText(want[i]!));
+            live.every(
+              (b, i) => str(b.id) === str(want[i]!.id) && contentPrint(b) === contentPrint(want[i]!),
+            );
           if (!same) {
             kept.push({ ...p, why: 'its text changed since the split made it' });
             continue;
           }
-        }
+          made_.set(p.id, {
+            resourceId: p.id,
+            name: str(res.name) ?? p.name,
+            documentId: doc,
+            blocks: want.map((b) => ({ id: str(b.id), content: contentPrint(b) })),
+          });
+        } else
+          made_.set(p.id, {
+            resourceId: p.id,
+            name: str(res.name) ?? p.name,
+            documentId: null,
+            blocks: null,
+          });
         deleted.push(p);
       } catch (e) {
         kept.push({ ...p, why: `it could not be read (${e instanceof Error ? e.message : String(e)})` });
@@ -559,16 +656,34 @@ export class SplitService {
     if (order.length > 0) {
       const summary = `Revert of split ${rec.id} (phase 1, job ${jobId}): delete the ${order.length} page${order.length === 1 ? '' : 's'} it made (${order.map((p) => p.name).join(', ')}); ${revertJobId ? `the moved material is back in ${rec.sourceName}` : `nothing had left ${rec.sourceName} yet`}`;
       try {
-        const steps: StepSpec[] = order.map((p) => ({
-          op: 'deleteResource',
-          params: { path: { resourceId: p.id } },
-          journalOperation: {
-            tool: SPLIT_TOOL,
-            split: rec.id,
-            revertOf: jobId,
-            write: `the page ${p.name} the split made`,
+        // CR-2026-11-R3 (R3-21): each page checked again just before its deletion, when the owner's approval runs.
+        const steps: StepSpec[] = order.flatMap((p): StepSpec[] => [
+          {
+            op: EXPECT_STEP,
+            params: {
+              body: {
+                checks: [
+                  {
+                    label: `${p.name}: as the split made it`,
+                    kind: 'registered',
+                    checker: SPLIT_CHECKS.made,
+                    input: made_.get(p.id)!,
+                  },
+                ],
+              },
+            },
           },
-        }));
+          {
+            op: 'deleteResource',
+            params: { path: { resourceId: p.id } },
+            journalOperation: {
+              tool: SPLIT_TOOL,
+              split: rec.id,
+              revertOf: jobId,
+              write: `the page ${p.name} the split made`,
+            },
+          },
+        ]);
         const r = await this.d.engine.submit({
           kind: 'batch_ops',
           project: projectId,
@@ -584,6 +699,7 @@ export class SplitService {
           },
           title: summary.slice(0, 300),
           forceProposal: true,
+          internal: true,
           proposal: { summary },
         });
         deletionProposalId = 'proposalId' in r && typeof r.proposalId === 'string' ? r.proposalId : null;

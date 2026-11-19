@@ -754,7 +754,11 @@ export class BlockIdSweep {
       };
       offs.push(
         this.d.engine.events.on('job', (e) => {
-          if (e.job.id === jobId && settled(e.job)) finish(e.job);
+          if (e.job.id !== jobId) return;
+          if (settled(e.job)) finish(e.job);
+          // CR-2026-11-R3 (fix A): a restart parks the job (queued again, for the next start): the run stops here.
+          else if (e.job.status === 'queued' && this.d.engine.queries.controls(projectId).draining)
+            finish(e.job);
         }),
         this.d.engine.events.on('controls', (c) => {
           const j = current();

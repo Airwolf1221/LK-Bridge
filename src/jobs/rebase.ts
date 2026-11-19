@@ -40,6 +40,11 @@ export interface RebaseContext {
   readonly params: OpParams;
   /** What the step stored for its rebaser (`options.rebase.input`). */
   readonly input: unknown;
+  /**
+   * CR-2026-11-R3 (R3-12): the step's items that may still be applied: its own items (and `rebase.with`), less those
+   * the job skipped earlier (changed meanwhile). A rebaser re-applies only these items' changes, never a skipped one's.
+   */
+  readonly items?: readonly string[];
   /** 1 for the first conflict, then 2. */
   readonly conflict: number;
   /** The target as read inside the lock now. */

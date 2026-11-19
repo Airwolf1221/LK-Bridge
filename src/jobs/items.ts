@@ -435,7 +435,17 @@ export interface FilteredSteps {
  * The steps of the kept items (see the module comment). `kept` must be a closed selection; a step of an item not
  * kept, and the parts of a shared step that belong only to such items, are left out.
  */
-export function filterSteps(steps: readonly StepSpec[], keptItems: Iterable<string>): FilteredSteps {
+export function filterSteps(
+  steps: readonly StepSpec[],
+  keptItems: Iterable<string>,
+  opts: {
+    /**
+     * CR-2026-11-R3 (R3-43): pages that exist already (made by the approved part, for "Propose these again"): a step
+     * left out that would make one does not make it "not made" (its links, mentions and places are kept).
+     */
+    readonly made?: ReadonlySet<string>;
+  } = {},
+): FilteredSteps {
   const kept = new Set(keptItems);
   // 1. The parts of each step (deepest arrays first, while every index still names the full plan's element).
   const partsDone: (StepSpec | null)[] = steps.map((s) => {
@@ -503,7 +513,7 @@ export function filterSteps(steps: readonly StepSpec[], keptItems: Iterable<stri
           });
       }
     if (keepStep[i]) return;
-    if (body && CREATE_OPS.has(s.op) && typeof body.id === 'string')
+    if (body && CREATE_OPS.has(s.op) && typeof body.id === 'string' && opts.made?.has(body.id) !== true)
       droppedSlots.set(body.id, {
         ...(typeof body.after === 'string' ? { after: body.after } : {}),
         ...(typeof body.before === 'string' ? { before: body.before } : {}),
@@ -552,6 +562,13 @@ export function filterSteps(steps: readonly StepSpec[], keptItems: Iterable<stri
     if (s.ifMatchFrom && !newNo.has(s.ifMatchFrom.step)) {
       const link = rechain(s.ifMatchFrom);
       const { ifMatchFrom: _drop, ...rest } = s;
+      // CR-2026-11-R3 (R3-30): a write whose chain's root went too keeps a version only when it names one itself;
+      // otherwise it would be sent on whatever version it met inside the lock: refused, as a plan whose items do not
+      // say what the write needs.
+      if (!link && rest.params?.ifMatch === undefined)
+        throw new ItemFilterError(
+          `Step ${i + 1} (${s.op}) is chained only through a write of an item left out (step ${s.ifMatchFrom.step}): it would have no version to send. Nothing was approved.`,
+        );
       s = link ? { ...rest, ifMatchFrom: link } : rest;
     }
     // A Last Major Revision step's row chain through a dropped write: it reads the rows itself instead.
@@ -585,6 +602,11 @@ export function filterSteps(steps: readonly StepSpec[], keptItems: Iterable<stri
       const gone = new Set(droppedSlots.keys());
       s = { ...s, params: withoutRefsTo(s.params, gone) as NonNullable<StepSpec['params']> };
     }
+    // CR-2026-11-R3 (R3-12, R3-24): a kept step names only the kept items, and its rebaser is given only their edits.
+    // A step shared by a kept and a left-out item (a block holding a ticked and an unticked restatement; a Last Major
+    // Revision step over both) kept every item before: its rebaser re-applied the left-out item's edit on a conflict,
+    // and "Propose these again" refused the step as naming an item it does not list.
+    s = keptItemsOnly(s, kept);
     // A read-back's expected neighbours: the next pages that are still made.
     const vbody = (s.params?.body ?? null) as Obj | null;
     if (s.op === VERIFY_STEP && vbody && Array.isArray(vbody.targets) && droppedSlots.size > 0) {
@@ -609,6 +631,27 @@ export function filterSteps(steps: readonly StepSpec[], keptItems: Iterable<stri
     from.push(i + 1);
   });
   return { steps: out, from, notCreated: [...droppedSlots.keys()] };
+}
+
+/**
+ * CR-2026-11-R3 (R3-12, R3-24): a kept step's own items, and the item-named entries of its rebaser's input (an `edits`
+ * list of `{ item }`, as a rename's block write carries), trimmed to the kept items.
+ */
+function keptItemsOnly(s: StepSpec, kept: ReadonlySet<string>): StepSpec {
+  let out = s;
+  if (out.items && out.items.length > 0) {
+    const its = out.items.filter((i) => kept.has(i));
+    if (its.length !== out.items.length) out = { ...out, items: its };
+  }
+  const input = out.rebase?.input;
+  if (out.rebase && isObj(input) && Array.isArray(input.edits)) {
+    const edits = (input.edits as unknown[]).filter(
+      (e) => !isObj(e) || typeof e.item !== 'string' || kept.has(e.item),
+    );
+    if (edits.length !== input.edits.length)
+      out = { ...out, rebase: { ...out.rebase, input: { ...input, edits } } };
+  }
+  return out;
 }
 
 // ============================================================================================ skipped when it ran

@@ -47,7 +47,13 @@ import {
 } from './mcp/server.js';
 import { mcpMaxBodyBytes, mcpTransportPlugin } from './mcp/transport.js';
 import { type Policy, createPolicy } from './policy/index.js';
-import { createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
+import {
+  createRuntime,
+  type RestartStopOptions,
+  type RestartStopReport,
+  type Runtime,
+  type RuntimeOptions,
+} from './runtime.js';
 import type { SecretStore } from './secrets/store.js';
 
 /**
@@ -86,6 +92,11 @@ export interface BuildServerOptions {
   readonly secrets?: SecretStore;
   /** v2 D3 (ADR 0041): the image pipeline; with it, the binary endpoint `POST /uploads/<upload_id>` exists. */
   readonly images?: ImageService;
+  /**
+   * CR-2026-11-R3 (fix A): true while the bridge stops for a restart. Every new request is then answered 503
+   * `BRIDGE_RESTARTING` (MCP calls as a JSON-RPC error), with `Retry-After`; requests already under way finish.
+   */
+  readonly restarting?: () => boolean;
   /** The dashboard and its admin API (chunk 5). Without it, `/ui` and `/api/admin` do not exist. */
   readonly admin?: {
     readonly runtime: AdminRuntime;
@@ -95,6 +106,13 @@ export interface BuildServerOptions {
     readonly version?: string;
   };
 }
+
+/** CR-2026-11-R3 (fix A): what every request is told while the bridge stops for a restart. */
+export const RESTARTING_MESSAGE =
+  'The bridge is restarting (a deploy or a stop) and takes no new requests until it is back, in about a minute. ' +
+  'Nothing was done with this request: make it again then. Work already accepted (jobs, proposals) is kept and ' +
+  'continues by itself.';
+const RESTART_RETRY_AFTER_S = 30;
 
 /** `ui/dist`, whether running from `src/` (tsx) or `dist/` (built): both sit next to `ui/`. */
 const DEFAULT_UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../ui/dist');
@@ -181,6 +199,38 @@ export async function buildServer(
   app.setNotFoundHandler((_req, reply) =>
     reply.code(404).type('application/json; charset=utf-8').send({ error: 'not_found' }),
   );
+
+  // CR-2026-11-R3 (fix A): while the bridge stops for a restart, no new request is taken. Added before every plugin, so
+  // it covers them all: an agent's MCP call and a dashboard action are told plainly, with Retry-After.
+  if (o.restarting) {
+    const restarting = o.restarting;
+    app.addHook('onRequest', (req, reply, done) => {
+      if (!restarting()) {
+        done();
+        return;
+      }
+      reply
+        .code(503)
+        .header('retry-after', String(RESTART_RETRY_AFTER_S))
+        .header('cache-control', 'no-store');
+      const path = pathOnly(req.url);
+      if (path === '/mcp' || path.startsWith('/mcp/')) {
+        void reply.type('application/json; charset=utf-8').send({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: RESTARTING_MESSAGE, data: { code: 'BRIDGE_RESTARTING' } },
+          id: null,
+        });
+      } else if (path === '/healthz') {
+        void reply
+          .type('application/json; charset=utf-8')
+          .send({ ok: false, restarting: true, version: BRIDGE_VERSION });
+      } else {
+        void reply
+          .type('application/json; charset=utf-8')
+          .send({ error: { code: 'BRIDGE_RESTARTING', message: RESTARTING_MESSAGE } });
+      }
+    });
+  }
 
   const policy = o.policy ?? createPolicy({ db: o.db, allowMemberAdmin: false });
   const services = createAuthServices({
@@ -313,6 +363,7 @@ export async function createBridge(
     toolCalls: runtime.toolCalls,
     secrets: runtime.secrets,
     images: runtime.images,
+    restarting: () => runtime.restarting,
     admin: {
       runtime,
       ...(o.adminSettings ? { settings: o.adminSettings } : {}),
@@ -321,6 +372,47 @@ export async function createBridge(
     },
   });
   return { app, services, runtime };
+}
+
+/** CR-2026-11-R3 (fix A): whatever happens, the process exits this long after SIGTERM (systemd allows 75 s). */
+const SHUTDOWN_WATCHDOG_MS = 25_000;
+
+/** CR-2026-11-R3 (fix A): what a stop for a restart did, end to end (`stopBridgeForRestart`). */
+export interface BridgeStopReport extends RestartStopReport {
+  /** True when HTTP had to cut connections still open after its own limit. */
+  readonly connectionsCut: boolean;
+}
+
+/**
+ * CR-2026-11-R3 (fix A, the owner's clean shutdown): what SIGTERM runs. The runtime's bounded stop (no new work, every
+ * job parked at its next step boundary, every wait ended; `Runtime.stopForRestart`), then HTTP (requests still open
+ * after `httpMs` are cut), then the database. Never throws for a stage that overruns: it reports it.
+ */
+export async function stopBridgeForRestart(
+  b: { readonly app: FastifyInstance; readonly runtime: Runtime; readonly db: Db },
+  o: RestartStopOptions & { readonly httpMs?: number } = {},
+): Promise<BridgeStopReport> {
+  const started = Date.now();
+  const report = await b.runtime.stopForRestart(o);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const closed = await Promise.race([
+    b.app.close().then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), o.httpMs ?? 2_000);
+    }),
+  ]);
+  clearTimeout(timer);
+  if (!closed) b.app.server.closeAllConnections();
+  b.db.close();
+  return {
+    ...report,
+    ms: Date.now() - started,
+    connectionsCut: !closed,
+    overran: closed ? report.overran : [...report.overran, 'HTTP'],
+  };
 }
 
 async function main(): Promise<void> {
@@ -379,17 +471,52 @@ async function main(): Promise<void> {
     throw err;
   }
   const { app, runtime } = created;
-  // SIGTERM: stop new work and let running jobs finish (drain), then stop HTTP, then close the database.
+  // CR-2026-11-R3 (fix A): SIGTERM (a deploy, `systemctl stop`) stops the bridge for a restart, every stage bounded,
+  // well inside systemd's stop timeout: no new requests (503 BRIDGE_RESTARTING), every job parked at its next step
+  // boundary for the next start (requests in flight finish), every wait ended, HTTP and the database closed. A watchdog
+  // makes sure of the exit whatever happens.
+  let stopping = false;
   const shutdown = (signal: string) => {
+    if (stopping) return;
+    stopping = true;
     app.log.info({ signal }, 'shutting down');
-    runtime
-      .shutdown()
-      .then(() => app.close())
-      .then(() => db.close())
-      .then(
-        () => process.exit(0),
-        () => process.exit(1),
+    const watchdog = setTimeout(() => {
+      app.log.error(
+        { signal, afterMs: SHUTDOWN_WATCHDOG_MS },
+        'the stop did not finish in time: exiting now',
       );
+      try {
+        db.close();
+      } catch {
+        // already closed, or busy: the WAL is replayed at the next open
+      }
+      process.exit(1);
+    }, SHUTDOWN_WATCHDOG_MS);
+    watchdog.unref();
+    stopBridgeForRestart({ app, runtime, db }).then(
+      (r) => {
+        app.log.info(
+          {
+            signal,
+            ms: r.ms,
+            parked: r.parked.length,
+            stillRunning: r.stillRunning,
+            ...(r.overran.length > 0 ? { overran: r.overran } : {}),
+          },
+          'stopped for a restart',
+        );
+        process.exit(0);
+      },
+      (err: unknown) => {
+        app.log.error({ err, signal }, 'the stop failed');
+        try {
+          db.close();
+        } catch {
+          // already closed
+        }
+        process.exit(1);
+      },
+    );
   };
   process.once('SIGTERM', () => shutdown('SIGTERM'));
   process.once('SIGINT', () => shutdown('SIGINT'));

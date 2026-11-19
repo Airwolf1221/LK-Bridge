@@ -34,10 +34,27 @@ export const useToast = () => useContext(ToastContext);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const next = useRef(1);
+  // CR-2026-11-R3: the timers that hide toasts are cleared when the provider goes away, so none fires afterwards (a
+  // state update on an unmounted tree; in the UI tests, after the page's environment is gone).
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const live = timers.current;
+    return () => {
+      for (const t of live) clearTimeout(t);
+      live.clear();
+    };
+  }, []);
   const push = useCallback((kind: Toast['kind'], text: string) => {
     const id = next.current++;
     setToasts((t) => [...t.slice(-3), { id, kind, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 9000 : 4000);
+    const timer = setTimeout(
+      () => {
+        timers.current.delete(timer);
+        setToasts((t) => t.filter((x) => x.id !== id));
+      },
+      kind === 'error' ? 9000 : 4000,
+    );
+    timers.current.add(timer);
   }, []);
   return (
     <ToastContext.Provider value={push}>
