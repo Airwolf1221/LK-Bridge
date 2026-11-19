@@ -401,6 +401,15 @@ export interface BatchSubmit {
    */
   readonly forceProposal?: boolean;
   /**
+   * CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4), bridge code only, with `forceProposal`: why the proposal was made,
+   * from the safety rails the bridge judged itself (an agent's Resume of a job whose steps left a rail now covers). The
+   * proposal shows it as its `proposedBecause`.
+   */
+  readonly proposedBecause?: {
+    readonly reason: string;
+    readonly hits: readonly { rail: string; text: string }[];
+  };
+  /**
    * v3 F2 (ADR 0049 decision 10), bridge code only: the batch places an image staged on the bridge's server (it uploads
    * it into its final folder). At scope `propose` the policy gate makes it a proposal, where any other upload is refused.
    */
@@ -583,6 +592,11 @@ export interface JobView {
   readonly waitReason: Record<string, unknown> | null;
   readonly pauseRequested: boolean;
   readonly cancelRequested: boolean;
+  /**
+   * CR-2026-11-R3, R3-54 (ADR 0061 part B decision 3): who asked the job to stop: 'owner' (the dashboard), 'system', or
+   * the principal id of the agent that cancelled its own job; null when no cancel was asked (or before it was recorded).
+   */
+  readonly cancelledBy?: string | null;
   /** Set when a step ended `uncertain`: the UI flags the job for a person to check. */
   readonly uncertain: boolean;
   readonly lastError: JobError | null;

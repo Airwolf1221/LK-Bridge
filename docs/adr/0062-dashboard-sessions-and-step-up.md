@@ -1,14 +1,15 @@
 # ADR 0062: Dashboard sessions for 30 days, Strict cookies, and a step-up for sensitive actions
 
-Status: **Proposed** (19 November 2026), built for the owner to confirm. The owner's request after the third review
-(CR-2026-11-R3): the dashboard's session ended in well under an hour, where the previous bridge kept it for 30 days.
+Status: **Accepted** (the owner, 19 November 2026), with the owner's rule for the step-up: **tightening is one click,
+loosening asks** (decisions 5 and 6, as decided). The owner's request after the third review (CR-2026-11-R3): the
+dashboard's session ended in well under an hour, where the previous bridge kept it for 30 days.
 
 - Amends: [ADR 0028](0028-secrets-on-the-dashboard.md) and OPS2's re-authentication (docs/auth.md: the password and
-  the authenticator code within five minutes); [ADR 0057](0057-cr-2026-11-r2-owner-decisions.md) decision 1 (the
-  re-authentication of scope raises, now of every scope change) and decision 7 (switching ChatGPT's file source off,
-  one click, now a setting like the others); [ADR 0046](0046-e4-owner-decisions.md) decision 3 for the off-site
-  settings (only a weakening asked for it; now every change); chunk 8's F-08 choice of a SameSite=Lax session cookie
-  (docs/auth.md, `src/admin/guard.ts`); the default session lifetime (`AUTH_SESSION_TTL_SECONDS`, 12 hours, fixed).
+  the authenticator code within five minutes); [ADR 0057](0057-cr-2026-11-r2-owner-decisions.md) decision 1 (a raise
+  still asks and a lowering is still one click; the step-up is now the code within 10 minutes, and every new personal
+  access token asks, at any scope); [ADR 0046](0046-e4-owner-decisions.md) decision 3 for the off-site settings (only a
+  weakening asked; now every change); chunk 8's F-08 choice of a SameSite=Lax session cookie (docs/auth.md,
+  `src/admin/guard.ts`); the default session lifetime (`AUTH_SESSION_TTL_SECONDS`, 12 hours, fixed).
 
 ## Context
 
@@ -52,13 +53,15 @@ authenticator code within five minutes, but only some of them did.
    - **keys and secrets**: a project's API key (add, replace, check, remove), a personal access token (at any scope),
      the off-site copy's keys and Google client, the owner's password and authenticator (unchanged; the password change
      still asks for the current password too);
-   - **scope changes**: a profile's scope (any change, a lowering too), its low-level tools and safety rails, a new
-     profile given a scope, a connection moved to another profile (up, sideways or down), the default scope;
-   - **settings**: the bridge's settings (read-only, per-operation tools, member administration, contact, journal
-     retention, LegendKeeper's limits), a project's settings (every key, ChatGPT's file source included), its read-only
-     and draining switches, the reserve floors and the writer limit, a maintenance job's switch, schedule and the
-     block-id sweep's run size, the off-site settings (every change), the tool-call log's retention, the connections'
-     clean-up settings, the audits' configuration, the lifecycle and canon settings;
+   - **a scope raised**: a profile's scope or the default scope raised, a connection moved to a higher scope or to a
+     profile at scope `write` (its rails may be weaker), a profile's low-level tools shown or hidden, a safety rail
+     switched off (as before; switching one on is one click), a new profile given a scope;
+   - **settings**: the bridge's settings (per-operation tools, member administration, contact, journal retention,
+     LegendKeeper's limits; read-only switched off), a project's settings (every key, but ChatGPT's file source switched
+     off; read-only switched off; undraining), the reserve floors and the writer limit, a maintenance job's switch,
+     schedule and the block-id sweep's run size, the off-site settings (every change), the tool-call log's retention,
+     the connections' clean-up settings, the audits' configuration, the lifecycle and canon settings; and the bridge's
+     write controls released: resuming writes and undraining;
    - **pack approval** (unchanged: approving a version, its sections, tool switches and tokens);
    - **the guarded rails**: approving a proposal that deletes anything, touches more than 10 pages, or deletes or moves
      an asset, judged by the rails' own rules at their defaults on the proposal's operations, however it came to be
@@ -66,10 +69,12 @@ authenticator code within five minutes, but only some of them did.
      restore counts as more than 10 pages, its set not being read there, so approving one asks too); the owner's own
      bulk changes from the dashboard (a retag batch of more than 10 pages, a reconciliation's next batch); deleting a
      restore rehearsal's throwaway root; allowing a staged image's delete (unchanged); and Revert (unchanged).
-6. **What stays one click** (they take access or work away, and are the owner's brakes): Sign out everywhere; revoking a
-   connection or a token and removing inactive ones; the bridge's write controls (pause, resume, drain, undrain);
-   cancelling or pausing a job; switching a maintenance job off (except the backups' jobs, unchanged); rejecting a
-   proposal; discarding a staged image that was never placed. Reads, dry runs and "Run now" need none.
+6. **What stays one click: the tightenings and the brakes** (the owner's rule): lowering a profile's scope or the
+   default scope, moving a connection down (or sideways below scope `write`), switching read-only on (the bridge's or a
+   project's), switching ChatGPT's file source off, pausing writes and draining (the bridge's or a project's), Sign out
+   everywhere, revoking a connection or a token and removing inactive ones, cancelling or pausing a job, switching a
+   maintenance job off (except the backups' jobs, unchanged), rejecting a proposal, discarding a staged image that was
+   never placed. Reads, dry runs and "Run now" need none.
 7. **A failed step-up keeps the owner where they are.** The bridge answers a wrong code or password with
    `401 REAUTH_FAILED` (and a wrong current password with `401 WRONG_PASSWORD`); the dashboard treated every 401 as a
    session that had ended and sent the owner to the sign-in page, losing the change. Those two codes now stay in the
@@ -79,16 +84,17 @@ authenticator code within five minutes, but only some of them did.
    "unauthenticated" event does the same. Signed in (a proxy error, a restart), it opens the stream again three seconds
    later, as before.
 
-## For the owner to confirm
+## The owner's decisions (19 November 2026)
 
-- **Lowering is asked for too.** Your list said "scope changes" and "settings", so lowering a scope, moving a connection
-  down, switching ChatGPT's file source off, switching read-only on and every off-site setting now ask for the code,
-  where ADR 0057 decisions 1 and 7 and ADR 0046 decision 3 had kept them one click as safety actions. The immediate
-  brakes (pause writes, revoke a connection, Sign out everywhere) stay one click. If you want the lowerings one click
-  again, say so: it is one condition per route.
-- **Resuming writes and undraining stay one click** (operational controls, not settings).
-- **The code alone.** With the authenticator set up, the step-up is its code (or a recovery code), without the
-  password, as you asked; without an authenticator it is the password.
+The rule: **tightening is one click, loosening asks**.
+
+1. Lowering a scope, moving a connection down, switching ChatGPT's file source off and switching read-only on are one
+   click again (as ADR 0057 decisions 1 and 7 had them); every off-site setting keeps the step-up.
+2. Resuming writes and undraining now ask for the step-up (they release a brake); pausing and draining stay one click.
+   The same rule is applied to a project's own switches: its read-only on and its draining are one click, switching
+   them off asks.
+3. The code alone, as built: with the authenticator set up, the step-up is its code (or a recovery code), without the
+   password; without an authenticator it is the password.
 
 ## Alternatives
 

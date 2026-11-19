@@ -7,6 +7,12 @@ import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } f
 
 const scope = z.enum(SCOPES);
 
+/**
+ * The order of the scopes, for telling a raise from a lowering. ADR 0062 (the owner's rule, 19 November 2026): tightening
+ * is one click, loosening asks for the step-up.
+ */
+const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write: 2 };
+
 export const registerPolicy: Register = (api, ctx) => {
   const { policy } = ctx.deps.runtime;
   const { actions } = ctx;
@@ -223,9 +229,11 @@ export const registerPolicy: Register = (api, ctx) => {
   api.put('/clients/profiles/:id/scope', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
-    // ADR 0062: every scope change needs the step-up (R2-50 asked it of a raise only; revoking a connection and pausing
-    // writes stay one click, the emergency brakes).
-    if (profileScope(id) !== b.scope) requireReauth(ctx.deps.services, req);
+    // R2-50, ADR 0062 (the owner's rule: tightening is one click, loosening asks): a raise needs the step-up; a lowering
+    // is one click.
+    const current = profileScope(id);
+    if (current !== undefined && SCOPE_RANK[b.scope] > SCOPE_RANK[current])
+      requireReauth(ctx.deps.services, req);
     return { profile: actions.setScope(id, b.scope, b.confirmRaise) };
   });
 
@@ -267,16 +275,20 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.put('/clients/default-scope', (req) => {
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
-    // R2-50, ADR 0062: every change of the scope new connections start at.
-    if (b.scope !== cmd.getDefaultScope('owner')) requireReauth(ctx.deps.services, req);
+    // R2-50, ADR 0062: new connections would start able to do more (a raise asks; a lowering is one click).
+    if (SCOPE_RANK[b.scope] > SCOPE_RANK[cmd.getDefaultScope('owner')]) requireReauth(ctx.deps.services, req);
     return { defaultScope: actions.setDefaultScope(b.scope, b.confirmRaise) };
   });
 
   api.put('/clients/connections/:id/profile', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ profileId: idSchema }), req.body);
-    // R2-50, ADR 0062: a connection moved to another profile changes what it may do: the step-up first.
-    requireReauth(ctx.deps.services, req);
+    // R2-50, ADR 0062: to a higher scope, or to a profile at scope write (its rails may be weaker than the connection's
+    // now), asks for the step-up; moving it down (or sideways below write) is one click.
+    const from = policy.store.lookupPrincipal(id)?.scope;
+    const to = profileScope(b.profileId);
+    if (to !== undefined && (to === 'write' || from === undefined || SCOPE_RANK[to] > SCOPE_RANK[from]))
+      requireReauth(ctx.deps.services, req);
     return { connection: redactDeep(actions.setConnectionProfile(id, b.profileId)) };
   });
 

@@ -41,7 +41,7 @@ export function AccountPage() {
         Signed in as <strong>{d.username}</strong>.{' '}
         {until
           ? `You confirmed it is you for sensitive changes until ${fmtTime(until)}.`
-          : `Sensitive changes (keys, scopes, settings, pack approvals, deletes and bulk changes) ask for ${d.totp.enabled ? 'an authenticator code' : 'your password'} again.`}
+          : `Sensitive changes (keys, raising a scope, settings, pack approvals, deletes and bulk changes) ask for ${d.totp.enabled ? 'an authenticator code' : 'your password'} again.`}
       </p>
       <SessionsCard info={d} />
       {!d.totp.enabled && (

@@ -49,6 +49,7 @@ import {
   planMove,
   planResource,
   planText,
+  placeDiffs,
   resourceDiffs,
   REVERT_BLOCKS_CHECKER,
   REVERT_CHECKER,
@@ -59,7 +60,7 @@ import {
   type TargetPlan,
 } from './revert-plan.js';
 import type { ReviewService } from './service.js';
-import type { BlockTarget, Target } from './targets.js';
+import type { BlockTarget, ResourceTarget, Target } from './targets.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -333,7 +334,12 @@ export class RevertService {
     const el = this.eligibility(projectId, jobId);
     if (!el.ok)
       return { eligible: { ok: false, code: el.code, message: el.message }, plans: [], targets: [] };
-    const targets = this.d.review.targets(projectId, jobId) ?? [];
+    // R3-57 (ADR 0061 part B decision 5): a retag batch's page is put back only while its name and parent are as the job
+    // left them too.
+    const targets =
+      this.d.review.targets(projectId, jobId, {
+        placeAsLeft: this.d.approvedRevertible?.(projectId, jobId) === true,
+      }) ?? [];
     const io = this.io(projectId, jobId);
     const plans: TargetPlan[] = [];
     const blocksByDoc = new Map<string, BlockTarget[]>();
@@ -937,7 +943,9 @@ const revertChecker: RegisteredChecker = async (ctx) => {
   if (input.kind === 'resource' && input.resourceId) {
     const r = await ctx.read('getResource', { path: { resourceId: input.resourceId } });
     if (!r.exists) return { differences: [{ path: ctx.label, expected: 'present', actual: '(gone)' }] };
-    return { differences: resourceDiffs(input.fields ?? {}, isObj(r.body) ? r.body : {}) };
+    const live = isObj(r.body) ? r.body : {};
+    const place = (ctx.input as { place?: ResourceTarget['place'] }).place;
+    return { differences: [...resourceDiffs(input.fields ?? {}, live), ...placeDiffs(place, live)] };
   }
   if (input.kind === 'asset' && input.assetId) {
     const r = await ctx.read('getAsset', { path: { assetId: input.assetId } });

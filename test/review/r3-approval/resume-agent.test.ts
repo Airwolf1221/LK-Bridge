@@ -57,14 +57,15 @@ const jobByTitle = (w: RenameWorld, title: string): string | undefined =>
 const TAGS = (x: string) => ['CANON', 'Character', x];
 
 describe('bridge_job_resume: whose job, and when', () => {
-  // CR-2026-11-R3 (R3-54): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: owner decision 3 (ADR 0061): whose cancel an agent's Resume may undo.
-  it.fails('AP-30 a direct job the OWNER cancelled part-way is not resumed by the agent', async () => {
+  // CR-2026-11-R3 (R3-54), decided (ADR 0061 part B decision 3, the owner's (b)): the bridge records who cancelled, and
+  // an agent's Resume of a job the owner (or the bridge) cancelled is refused (CANCELLED_BY_OWNER).
+  it('AP-30 a direct job the OWNER cancelled part-way is not resumed by the agent', async () => {
     const w = (open = await renameWorld());
     const a = w.stack.newToken('ap30-agent', 'write');
     const title = 'ap30: three tag edits';
     // The owner cancels (Jobs page, Cancel) while the second edit is in flight: the third is never sent.
     intercept(w, 'PATCH', /\/resources\/nadirart$/, (n) => {
-      if (n === 0) w.stack.runtime.engine.controls.cancel(PROJECT, jobByTitle(w, title)!);
+      if (n === 0) w.stack.runtime.engine.controls.cancel(PROJECT, jobByTitle(w, title)!, 'owner');
       return undefined;
     });
     const jobId = await directJob(
@@ -88,6 +89,35 @@ describe('bridge_job_resume: whose job, and when', () => {
       { refused: r.isError === true, third: w.repo.live(R.archiveNotes)!.tags.includes('Three') },
       `the agent resumed the job the owner cancelled: ${r.text.slice(0, 300)}`,
     ).toEqual({ refused: true, third: false });
+    expect((r.body.error as { code?: string } | undefined)?.code).toBe('CANCELLED_BY_OWNER');
+    expect(w.stack.runtime.engine.queries.getJob(PROJECT, jobId)?.cancelledBy).toBe('owner');
+  });
+
+  it('AP-30b a job the agent cancelled itself (bridge_job_cancel) it may resume', async () => {
+    const w = (open = await renameWorld());
+    const a = w.stack.newToken('ap30b-agent', 'write');
+    const ca = await w.stack.connect(a.token);
+    // Writes paused: the job waits, so the agent's cancel lands before any step runs.
+    w.stack.runtime.engine.controls.pauseWrites();
+    const jobId = await directJob(
+      w,
+      a,
+      [
+        { id: P.nadiraBio, body: { tags: TAGS('One') } },
+        { id: P.nadiraArt, body: { tags: TAGS('Two') } },
+        { id: R.archiveNotes, body: { tags: TAGS('Three') } },
+      ],
+      'ap30b: three tag edits',
+    );
+    const c = await w.stack.call(ca, 'bridge_job_cancel', { jobId });
+    expect(c.isError, c.text.slice(0, 300)).not.toBe(true);
+    w.stack.runtime.engine.controls.resumeWrites();
+    expect((await settle(w, jobId)).status).toBe('cancelled');
+    expect(w.stack.runtime.engine.queries.getJob(PROJECT, jobId)?.cancelledBy).toBe(a.patId);
+    const r = await w.stack.call(ca, 'bridge_job_resume', { jobId });
+    expect(r.isError, r.text.slice(0, 300)).not.toBe(true);
+    await settle(w, jobId);
+    expect(w.repo.live(R.archiveNotes)!.tags).toContain('Three');
   });
 
   it('AP-31 a connection moved to scope propose cannot resume (SCOPE), and read cannot see the tool', async () => {
@@ -114,38 +144,50 @@ describe('bridge_job_resume: whose job, and when', () => {
     expect(w.repo.live(P.nadiraArt)!.tags).not.toContain('Two');
   });
 
-  // CR-2026-11-R3 (R3-55): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: owner decision 4 (ADR 0061): whether an agent's Resume re-judges the safety rails (ADR 0055 C3 judges them at entry).
-  it.fails(
-    'AP-32 after the renames-and-moves rail is switched on, the agent’s resume renames nothing',
-    async () => {
-      const w = (open = await renameWorld());
-      const a = w.stack.newToken('ap32-agent', 'write');
-      // Rails as a new profile has them: renames and moves OFF, so the job ran directly.
-      w.failNext('PATCH', /\/resources\/hollowwk$/, 0);
-      // Two Working pages (not canon): their renames run directly at scope write while the rail is off.
-      const jobId = await directJob(
-        w,
-        a,
-        [
-          { id: C.draft, body: { name: '[BWRK] Draft Notes (old)' } },
-          { id: P.hollowWorking, body: { name: '[BWRK] Hollow Court Draft (old)' } },
-        ],
-        'ap32',
-      );
-      expect((await settle(w, jobId)).status).toBe('failed');
-      expect(w.repo.live(C.draft)!.name).toBe('[BWRK] Draft Notes (old)');
-      // The owner now wants every rename by this agent to be a proposal.
-      w.stack.runtime.policy.commands.setRails('owner', a.profileId, { renamesMoves: true });
-      const ca = await w.stack.connect(a.token);
-      const r = await w.stack.call(ca, 'bridge_job_resume', { jobId });
-      await settle(w, jobId);
-      // SAFE: the rename the rail now covers does not run directly (refused, or proposed).
-      expect(
-        w.repo.live(P.hollowWorking)!.name,
-        `the rail switched on before the resume was not applied: ${r.text.slice(0, 200)}`,
-      ).toBe('[BWRK] Hollow Court Draft');
-    },
-  );
+  // CR-2026-11-R3 (R3-55), decided (ADR 0061 part B decision 4, the owner's (b)): an agent's Resume judges the rails
+  // again on the steps left; a step one now covers makes the rest a proposal.
+  it('AP-32 after the renames-and-moves rail is switched on, the agent’s resume renames nothing: the rest is proposed', async () => {
+    const w = (open = await renameWorld());
+    const a = w.stack.newToken('ap32-agent', 'write');
+    // Rails as a new profile has them: renames and moves OFF, so the job ran directly.
+    w.failNext('PATCH', /\/resources\/hollowwk$/, 0);
+    // Two Working pages (not canon): their renames run directly at scope write while the rail is off.
+    const jobId = await directJob(
+      w,
+      a,
+      [
+        { id: C.draft, body: { name: '[BWRK] Draft Notes (old)' } },
+        { id: P.hollowWorking, body: { name: '[BWRK] Hollow Court Draft (old)' } },
+      ],
+      'ap32',
+    );
+    expect((await settle(w, jobId)).status).toBe('failed');
+    expect(w.repo.live(C.draft)!.name).toBe('[BWRK] Draft Notes (old)');
+    // The owner now wants every rename by this agent to be a proposal.
+    w.stack.runtime.policy.commands.setRails('owner', a.profileId, { renamesMoves: true });
+    const ca = await w.stack.connect(a.token);
+    const r = await w.stack.call(ca, 'bridge_job_resume', { jobId });
+    await settle(w, jobId);
+    // SAFE: the rename the rail now covers does not run directly (refused, or proposed).
+    expect(
+      w.repo.live(P.hollowWorking)!.name,
+      `the rail switched on before the resume was not applied: ${r.text.slice(0, 200)}`,
+    ).toBe('[BWRK] Hollow Court Draft');
+    // The rest is one proposal, saying which rail sent it; the job is not resumed again while it stands.
+    expect(r.body.status, r.text.slice(0, 300)).toBe('proposal_captured');
+    const proposalId = r.body.proposalId as string;
+    const p = w.stack.runtime.policy.proposals.get(proposalId)!;
+    expect(p.state).toBe('pending');
+    expect(JSON.stringify(p)).toMatch(/proposed because: .*rename/i);
+    const again = await w.stack.call(ca, 'bridge_job_resume', { jobId });
+    expect((again.body.error as { code?: string } | undefined)?.code, again.text.slice(0, 300)).toBe(
+      'REST_PROPOSED',
+    );
+    // The owner approves it: the rest runs, as the owner's work.
+    const done = await approve(w, proposalId);
+    expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
+    expect(w.repo.live(P.hollowWorking)!.name).toBe('[BWRK] Hollow Court Draft (old)');
+  });
 
   it('AP-33 another agent’s job, the owner-approved rename, and a revoked connection are refused', async () => {
     const w = (open = await renameWorld());

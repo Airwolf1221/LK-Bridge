@@ -173,8 +173,16 @@ export const registerBudgets: Register = (api, ctx) => {
     );
     return { controls: actions.setWritersMax(b.value) };
   });
+  // ADR 0062 (the owner's rule: tightening is one click, loosening asks): pausing and draining are one click (the
+  // brakes); resuming writes and undraining release a brake, so they ask for the step-up.
   api.post('/writes/pause', () => ({ controls: actions.pauseWrites() }));
-  api.post('/writes/resume', () => ({ controls: actions.resumeWrites() }));
+  api.post('/writes/resume', (req) => {
+    requireReauth(ctx.deps.services, req);
+    return { controls: actions.resumeWrites() };
+  });
   api.post('/writes/drain', () => ({ controls: actions.drain() }));
-  api.post('/writes/undrain', () => ({ controls: actions.undrain() }));
+  api.post('/writes/undrain', (req) => {
+    requireReauth(ctx.deps.services, req);
+    return { controls: actions.undrain() };
+  });
 };

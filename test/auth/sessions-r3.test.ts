@@ -293,7 +293,8 @@ describe('the step-up (ADR 0062 decision 5)', () => {
     expect(late.json.error.message).toMatch(/10 minutes/);
   });
 
-  it('settings, keys and scopes need it; the brakes (pause writes, revoke a connection, a job’s cancel) do not', async () => {
+  // The owner's rule (ADR 0062, accepted 19 November 2026): tightening is one click, loosening asks.
+  it('loosening asks (settings, keys, a raise, read-only off, resuming writes); tightening is one click', async () => {
     s = await startAdminStack();
     const stack = s;
     await stack.runtime.ready;
@@ -301,37 +302,73 @@ describe('the step-up (ADR 0062 decision 5)', () => {
     const profile = stack.policy.commands.createProfile('owner', {
       label: 'r3 brakes',
       kind: 'other',
-      scope: 'read',
+      scope: 'propose',
     });
     const conn = stack.services.pats.create({ name: 'r3 brakes', profileId: profile.id });
-    const needs: [string, string, unknown][] = [
-      ['PUT', '/settings/read-only', { value: true }],
-      ['PUT', '/settings/tier-limits', { value: null, confirm: true }],
-      ['PUT', '/budgets/reserve-floors', { reset: true, confirm: true }],
-      ['PUT', '/writers/max', { value: 2, confirm: true }],
-      ['POST', '/maintenance/snapshot-full/enable', {}],
-      ['PUT', '/maintenance/snapshot-full/schedule', { schedule: null }],
-      ['PUT', '/tool-calls/retention', { days: 30 }],
-      ['PUT', '/clients/settings/stale-after-days', { days: 30 }],
-      ['PUT', `/clients/profiles/${profile.id}/scope`, { scope: 'propose' }],
-      ['PUT', `/clients/profiles/${profile.id}/low-level-tools`, { show: true }],
-      ['POST', '/clients/pats', { name: 'r3 key', profileId: profile.id }],
-    ];
-    for (const [method, path, body] of needs) {
-      const r = await stack.call(method, `/api/admin${path}`, { body });
+    const step = (method: string, path: string, body: unknown = {}) =>
+      stack.call(method, `/api/admin${path}`, { body });
+    const asks = async (method: string, path: string, body: unknown = {}) => {
+      const r = await step(method, path, body);
       expect(r.status, `${method} ${path}: ${r.text}`).toBe(403);
       expect(r.json.error.code, `${method} ${path}`).toBe('REAUTH_REQUIRED');
-    }
-    expect(stack.policy.store.getProfile(profile.id)?.scope).toBe('read');
-    const brakes: [string, string, unknown][] = [
-      ['POST', '/writes/pause', {}],
-      ['POST', '/writes/resume', {}],
-      ['POST', `/clients/connections/${conn.pat.id}/revoke`, {}],
-    ];
-    for (const [method, path, body] of brakes) {
-      const r = await stack.call(method, `/api/admin${path}`, { body });
+    };
+    const oneClick = async (method: string, path: string, body: unknown = {}) => {
+      const r = await step(method, path, body);
       expect(r.status, `${method} ${path}: ${r.text}`).toBe(200);
-    }
+    };
+    // Settings and keys ask, both ways.
+    await asks('PUT', '/settings/tier-limits', { value: null, confirm: true });
+    await asks('PUT', '/budgets/reserve-floors', { reset: true, confirm: true });
+    await asks('PUT', '/writers/max', { value: 2, confirm: true });
+    await asks('POST', '/maintenance/snapshot-full/enable');
+    await asks('PUT', '/maintenance/snapshot-full/schedule', { schedule: null });
+    await asks('PUT', '/tool-calls/retention', { days: 30 });
+    await asks('PUT', '/clients/settings/stale-after-days', { days: 30 });
+    await asks('PUT', `/clients/profiles/${profile.id}/low-level-tools`, { show: true });
+    await asks('POST', '/clients/pats', { name: 'r3 key', profileId: profile.id });
+    // A raise asks; a lowering is one click.
+    await asks('PUT', `/clients/profiles/${profile.id}/scope`, { scope: 'write', confirmRaise: true });
+    expect(stack.policy.store.getProfile(profile.id)?.scope).toBe('propose');
+    await oneClick('PUT', `/clients/profiles/${profile.id}/scope`, { scope: 'read' });
+    expect(stack.policy.store.getProfile(profile.id)?.scope).toBe('read');
+    // Read-only on is one click; off asks.
+    await oneClick('PUT', '/settings/read-only', { value: true, confirm: true });
+    expect(stack.runtime.engine.queries.controls().readOnly).toBe(true);
+    await asks('PUT', '/settings/read-only', { value: false, confirm: true });
+    expect(stack.runtime.engine.queries.controls().readOnly).toBe(true);
+    // Pausing and draining are one click; resuming and undraining release a brake, so they ask.
+    await oneClick('POST', '/writes/pause');
+    await asks('POST', '/writes/resume');
+    expect(stack.runtime.engine.queries.controls().writesPaused).toBe(true);
+    await oneClick('POST', '/writes/drain');
+    await asks('POST', '/writes/undrain');
+    // Revoking a connection is one click.
+    await oneClick('POST', `/clients/connections/${conn.pat.id}/revoke`);
+    // With the step-up, the loosenings go through.
+    setReauth(stack, Math.floor(Date.now() / 1000));
+    await oneClick('PUT', '/settings/read-only', { value: false, confirm: true });
+    await oneClick('POST', '/writes/resume');
+    await oneClick('POST', '/writes/undrain');
+    expect(stack.runtime.engine.queries.controls()).toMatchObject({ readOnly: false, writesPaused: false });
+  });
+
+  it('a project: read-only on and draining are one click; off and resuming ask', async () => {
+    s = await startAdminStack();
+    const stack = s;
+    await stack.runtime.ready;
+    const name = stack.runtime.projects.defaultProject().name;
+    setReauth(stack, null);
+    const put = (path: string, body: unknown) => stack.put(`/api/admin/projects/${name}${path}`, body);
+    expect((await put('/read-only', { value: true, confirm: true })).status).toBe(200);
+    const off = await put('/read-only', { value: false, confirm: true });
+    expect(off.status, off.text).toBe(403);
+    expect(off.json.error.code).toBe('REAUTH_REQUIRED');
+    expect((await put('/draining', { value: true })).status).toBe(200);
+    const undrain = await put('/draining', { value: false });
+    expect(undrain.status, undrain.text).toBe(403);
+    setReauth(stack, Math.floor(Date.now() / 1000));
+    expect((await put('/read-only', { value: false, confirm: true })).status).toBe(200);
+    expect((await put('/draining', { value: false })).status).toBe(200);
   });
 });
 

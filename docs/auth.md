@@ -164,23 +164,25 @@ The dashboard's **Account** page ([ADR 0028](adr/0028-secrets-on-the-dashboard.m
   (a wrong or missing master key) is **not** replaced by the env file's: sign-in fails closed and the sign-in page says
   why (`login.unavailable` in the log). `npm run secrets -- reset-owner --yes` (as the service user; audited) clears the
   stored owner credentials so the env file's `OWNER_PASSWORD_HASH` applies again.
-- **Re-authentication: the step-up** ([ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), the owner's request after
-  CR-2026-11-R3). Sensitive actions need a step-up on the session **within the last ten minutes**
-  (`POST /api/admin/security/reauth`; the time is `auth_owner_sessions.reauth_at`), even when signed in: the
-  **authenticator code** (or a recovery code) when the authenticator is set up, and then the password alone is refused;
-  the **password** when it is not. They are: keys and secrets (a project's API key, a personal access token at any
-  scope, the off-site copy's keys and Google client, the password, the authenticator and its recovery codes); every
-  scope change (a profile's scope either way, its low-level tools and rails, a connection moved to another profile, the
-  default scope); the settings (the bridge's, a project's, the budgets' floors and writer limit, a maintenance job's
-  switch, schedule and run size, the off-site copy's, the retention of the tool-call log, the connections' clean-up, the
-  audits', the canon and lifecycle settings); pack approval; and the guarded rails (approving a proposal that deletes,
-  touches more than 10 pages, or deletes or moves an asset; the owner's own retag batch of more than 10 pages; a
-  rehearsal's root deleted; a staged image's delete allowed; Revert). The brakes stay one click: Sign out everywhere,
-  revoking a connection or a token, pausing or resuming writes, cancelling a job, switching most maintenance jobs off,
-  rejecting a proposal. Otherwise the answer is `403 REAUTH_REQUIRED`, and the dashboard asks in a dialog (once for
-  changes refused together), then sends the change again; a wrong code (`401 REAUTH_FAILED`) stays in the dialog. Every
-  such request also passes the Origin, CSRF and `Sec-Fetch-Site` checks of every admin change. Step-up attempts count
-  against the **same limits as sign-in** (5 per address and 30 in all per 15 minutes), in both directions. Log events:
+- **Re-authentication: the step-up** ([ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), accepted on 19 November
+  2026 with the owner's rule: **tightening is one click, loosening asks**). Sensitive actions need a step-up on the
+  session **within the last ten minutes** (`POST /api/admin/security/reauth`; the time is
+  `auth_owner_sessions.reauth_at`), even when signed in: the **authenticator code** (or a recovery code) when the
+  authenticator is set up, and then the password alone is refused; the **password** when it is not. They are: keys and
+  secrets (a project's API key, a personal access token at any scope, the off-site copy's keys and Google client, the
+  password, the authenticator and its recovery codes); a scope raised (a profile's or the default scope, a connection
+  moved up or to a profile at scope `write`); the settings (the bridge's, a project's, the budgets' floors and writer
+  limit, a maintenance job's switch, schedule and run size, the off-site copy's (every change), the retention of the
+  tool-call log, the connections' clean-up, the audits', the canon and lifecycle settings) and releasing a brake
+  (read-only switched off, resuming writes, undraining); pack approval; and the guarded rails (approving a proposal that
+  deletes, touches more than 10 pages, or deletes or moves an asset; the owner's own retag batch of more than 10 pages;
+  a rehearsal's root deleted; a staged image's delete allowed; Revert). Tightenings and brakes stay one click: lowering a
+  scope, moving a connection down, read-only on, ChatGPT's file source off, pausing writes and draining, Sign out
+  everywhere, revoking a connection or a token, cancelling a job, switching most maintenance jobs off, rejecting a
+  proposal. Otherwise the answer is `403 REAUTH_REQUIRED`, and the dashboard asks in a dialog (once for changes refused
+  together), then sends the change again; a wrong code (`401 REAUTH_FAILED`) stays in the dialog. Every such request
+  also passes the Origin, CSRF and `Sec-Fetch-Site` checks of every admin change. Step-up attempts count against the
+  **same limits as sign-in** (5 per address and 30 in all per 15 minutes), in both directions. Log events:
   `reauth.succeeded`, `reauth.failed`, `reauth.rate_limited`; audit: `owner.reauth` (success and failure). (OPS2 asked
   for the password and the code within five minutes, and of fewer actions.)
 - **Sessions** (ADR 0062). A session lasts **30 days from its last use** (`AUTH_SESSION_TTL_SECONDS`, default 2,592,000;

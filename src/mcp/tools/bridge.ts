@@ -513,7 +513,8 @@ function jobTools(deps: ToolDeps) {
             );
           }
           try {
-            const job = deps.engine.controls.cancel(pd.project.id, id);
+            // R3-54: the agent's own cancel, recorded as its own (it may resume what it cancelled itself).
+            const job = deps.engine.controls.cancel(pd.project.id, id, own.principalId);
             return render(jobBody(deps.engine.queries.getJob(pd.project.id, job.id) ?? job, 'summary'), pd);
           } catch (e) {
             return errorFromThrown(e, pd);
@@ -527,7 +528,7 @@ function jobTools(deps: ToolDeps) {
       access: 'write',
       description:
         'Resumes one of your own jobs that stopped part-way: a setting-pack package (or a rename) that failed or was cancelled after doing some of its work. It continues where it stopped, in the same job: its own checks run again first (inside its locks), every step that is left re-reads its page and checks it as it would have, a step that succeeded is never repeated, and no page or document is ever made twice. A step that is no longer safe (its page changed since) is refused with its reason: then read the pages and tell the user; never work around it. ' +
-        'Only at scope write, and only for your own direct jobs: a job the owner approved (a proposal, a rename) is the owner’s to resume, on the dashboard. bridge_job_status shows where a job stopped (stoppedAt). Cost: the job’s remaining steps, nothing more.',
+        'Only at scope write, and only for your own direct jobs: a job the owner approved (a proposal, a rename) is the owner’s to resume, on the dashboard, and so is a job the owner cancelled (CANCELLED_BY_OWNER: the cancel stands; tell the person). Your connection’s safety rails are judged again on the steps left: when one now covers a step, the rest becomes ONE proposal for the owner (proposal_captured: never resume or redo it; follow it with bridge_proposal_status). bridge_job_status shows where a job stopped (stoppedAt). Cost: the job’s remaining steps, nothing more.',
       inputSchema: z.object({ jobId, project: projectArg }),
       annotations: {
         readOnlyHint: false,

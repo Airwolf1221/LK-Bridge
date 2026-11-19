@@ -7,11 +7,13 @@
  * for splits; ADR 0057 decision 4's deletes rail makes a low-level removal a proposal. Both are tried.
  *
  * - SP-28: write_page `replace` of the whole page without two sections.
- * - SP-29: the same material taken off in edits of under 120 words each.
+ * - SP-29: the same material taken off in edits of under 120 words each (the owner's decision, ADR 0061 part B
+ *   decision 2 (a): the guard is per edit, so this one asserts that each edit is written and on the Review page).
  * - SP-30: a key-value block holding ~300 words dropped with write_page (`dropRegions`).
  * - SP-31: lk_api_write replaceDocumentBlocks without the Biography's blocks.
- * - SP-32: lk_api_write replaceDocumentBlocks with every id kept and the Biography's text emptied.
- * - SP-33: lk_api_batch updateBlock on each Biography paragraph (its text emptied).
+ * - SP-32: lk_api_write replaceDocumentBlocks with every id kept and the Biography's text emptied (a proposal since
+ *   ADR 0061 part B decision 1 (b): the deletes rail counts text taken off a pack page).
+ * - SP-33: lk_api_batch updateBlock on each Biography paragraph (its text emptied; the same).
  * - SP-34: lk_api_write deleteBlock on a Biography paragraph.
  * - SP-43: update_document on a pack page's page document.
  *
@@ -76,40 +78,45 @@ describe('USE_ARKONA_SPLIT on every route', () => {
     });
   });
 
-  // CR-2026-11-R3 (R3-52): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: owner decision 2 (ADR 0061): the guard is per edit; a cumulative count per page is a design change.
-  it.fails(
-    'SP-29 the same material taken off in edits of under 120 words each is still refused',
-    async () => {
-      // A statute of ~260 words, cut by 100 words per edit (each edit under the threshold).
-      const law = (statutesBody() as Obj[]).filter((b) =>
-        ['sh3', 'sl1', 'sl2', 'sl3', 'sl4', 'sl5', 'sl6'].includes(b.id as string),
-      );
-      const sl1 = textOfBlock(law[1]!).split(' ');
-      const before = pageWords(w, S.statutes);
-      const outcomes: string[] = [];
-      for (const keep of [sl1.length - 100, sl1.length - 200]) {
-        const md = [
-          '## Law and Courts',
-          sl1.slice(0, keep).join(' '),
-          ...law.slice(2).map((b) => textOfBlock(b)),
-        ].join('\n\n');
-        const r = await call('write_page', {
-          page: S.statutes,
-          mode: 'replace_section',
-          section: 'Law and Courts',
-          markdown: `${md}\n`,
-          baseVersion: await version(S.statutes),
-        });
-        await after(r);
-        outcomes.push(String((r.body as any).error?.code ?? (r.body as any).status));
-      }
-      const lost = before - pageWords(w, S.statutes);
-      // SAFE: no more than the threshold's worth of words leaves a pack page without the split tool or plainEdit.
-      expect({ lost: lost >= 120 }, `edits: ${outcomes.join(', ')}; ${lost} words taken off`).toEqual({
-        lost: false,
+  // CR-2026-11-R3 (R3-52), decided (ADR 0061 part B decision 2, the owner's (a)): the guard is per edit. It steers agents
+  // away from a split by hand and is not a security boundary: edits under the threshold are each written, and each is on
+  // the Review page, where the owner sees it and can revert it (ADR 0055).
+  it('SP-29 edits of under 120 words each are each written (the guard is per edit), each on the Review page', async () => {
+    // A statute of ~260 words, cut by 100 words per edit (each edit under the threshold).
+    const law = (statutesBody() as Obj[]).filter((b) =>
+      ['sh3', 'sl1', 'sl2', 'sl3', 'sl4', 'sl5', 'sl6'].includes(b.id as string),
+    );
+    const sl1 = textOfBlock(law[1]!).split(' ');
+    const before = pageWords(w, S.statutes);
+    const jobs: string[] = [];
+    for (const keep of [sl1.length - 100, sl1.length - 200]) {
+      const md = [
+        '## Law and Courts',
+        sl1.slice(0, keep).join(' '),
+        ...law.slice(2).map((b) => textOfBlock(b)),
+      ].join('\n\n');
+      const r = await call('write_page', {
+        page: S.statutes,
+        mode: 'replace_section',
+        section: 'Law and Courts',
+        markdown: `${md}\n`,
+        baseVersion: await version(S.statutes),
       });
-    },
-  );
+      await after(r);
+      expect((r.body as any).error?.code ?? null, r.text.slice(0, 300)).toBeNull();
+      expect(typeof (r.body as any).jobId, r.text.slice(0, 300)).toBe('string');
+      jobs.push((r.body as any).jobId as string);
+    }
+    // Each edit was under the threshold, so each went through; together they took about 200 words off.
+    expect(before - pageWords(w, S.statutes)).toBeGreaterThanOrEqual(190);
+    const review = w.stack.runtime.review.list(PROJECT, { state: 'all' });
+    for (const jobId of jobs) {
+      const item = review.find((i) => i.jobId === jobId);
+      expect(item, `job ${jobId} on the Review page`).toBeDefined();
+      expect(item!.tool).toBe('write_page');
+      expect(item!.pages.map((p) => p.id)).toContain(S.statutes);
+    }
+  });
 
   it('SP-30 a key-value block of ~300 words dropped with write_page is refused (USE_ARKONA_SPLIT)', async () => {
     const rows = Array.from({ length: 10 }, (_, i) => ({
@@ -174,68 +181,74 @@ describe('USE_ARKONA_SPLIT on every route', () => {
     });
   });
 
-  // CR-2026-11-R3 (R3-53): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: owner decision 1 (ADR 0061): whether the deletes rail counts text emptied through a raw route.
-  it.fails(
-    'SP-32 lk_api_write replaceDocumentBlocks keeping every id but emptying the Biography is never a direct write',
-    async () => {
-      setBody(
-        w,
-        S.zahra,
-        zahraBody((id) => `https://assets.test:${w.port}/a/${id}.webp`),
-      );
-      const doc = w.repo.blocks.get(w.mainOf(S.zahra))!;
-      const before = pageWords(w, S.zahra);
-      const blocks = (doc.blocks as Obj[]).map((b) =>
-        BIO.includes(b.id as string) ? { ...b, content: [{ text: '.' }] } : b,
-      );
-      const r = await call('lk_api_write', {
-        operationId: 'replaceDocumentBlocks',
-        params: {
-          path: { resourceId: S.zahra, documentId: w.mainOf(S.zahra) },
-          ifMatch: `v${doc.version}`,
-          body: { blocks },
-        },
-      });
-      await after(r);
-      const lost = before - pageWords(w, S.zahra);
-      expect(
-        { lost },
-        `${String((r.body as any).status ?? (r.body as any).error?.code)}: ${lost} words taken off directly`,
-      ).toEqual({
-        lost: 0,
-      });
-    },
-  );
+  // CR-2026-11-R3 (R3-53), decided (ADR 0061 part B decision 1, the owner's (b)): the deletes rail counts a low-level write
+  // that takes the pack's guardWords words or more off a pack page as a removal, so this is a proposal.
+  it('SP-32 lk_api_write replaceDocumentBlocks keeping every id but emptying the Biography is never a direct write', async () => {
+    setBody(
+      w,
+      S.zahra,
+      zahraBody((id) => `https://assets.test:${w.port}/a/${id}.webp`),
+    );
+    const doc = w.repo.blocks.get(w.mainOf(S.zahra))!;
+    const before = pageWords(w, S.zahra);
+    const blocks = (doc.blocks as Obj[]).map((b) =>
+      BIO.includes(b.id as string) ? { ...b, content: [{ text: '.' }] } : b,
+    );
+    const r = await call('lk_api_write', {
+      operationId: 'replaceDocumentBlocks',
+      params: {
+        path: { resourceId: S.zahra, documentId: w.mainOf(S.zahra) },
+        ifMatch: `v${doc.version}`,
+        body: { blocks },
+      },
+    });
+    await after(r);
+    const lost = before - pageWords(w, S.zahra);
+    expect(
+      { lost },
+      `${String((r.body as any).status ?? (r.body as any).error?.code)}: ${lost} words taken off directly`,
+    ).toEqual({
+      lost: 0,
+    });
+    // Held as a proposal by the deletes rail, which says why.
+    expect((r.body as any).status, r.text.slice(0, 400)).toBe('proposal_captured');
+    expect(r.text).toMatch(
+      /text removal \(\d+ words off “[^”]+”, a page of a character’s set; the pack's threshold is 120\)/,
+    );
+  });
 
-  // CR-2026-11-R3 (R3-53): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: owner decision 1 (ADR 0061): whether the deletes rail counts text emptied through a raw route.
-  it.fails(
-    'SP-33 lk_api_batch updateBlock emptying each Biography paragraph is never a direct write',
-    async () => {
-      setBody(
-        w,
-        S.zahra,
-        zahraBody((id) => `https://assets.test:${w.port}/a/${id}.webp`),
-      );
-      const before = pageWords(w, S.zahra);
-      const r = await call('lk_api_batch', {
-        calls: BIO.map((id) => ({
-          operationId: 'updateBlock',
-          params: {
-            path: { resourceId: S.zahra, documentId: w.mainOf(S.zahra), blockId: id },
-            body: { content: [{ text: '.' }] },
-          },
-        })),
-      });
-      await after(r);
-      const lost = before - pageWords(w, S.zahra);
-      expect(
-        { lost },
-        `${String((r.body as any).status ?? (r.body as any).error?.code)}: ${lost} words taken off directly`,
-      ).toEqual({
-        lost: 0,
-      });
-    },
-  );
+  // CR-2026-11-R3 (R3-53), decided (ADR 0061 part B decision 1, the owner's (b)): the deletes rail counts a low-level write
+  // that takes the pack's guardWords words or more off a pack page as a removal, so this is a proposal.
+  it('SP-33 lk_api_batch updateBlock emptying each Biography paragraph is never a direct write', async () => {
+    setBody(
+      w,
+      S.zahra,
+      zahraBody((id) => `https://assets.test:${w.port}/a/${id}.webp`),
+    );
+    const before = pageWords(w, S.zahra);
+    const r = await call('lk_api_batch', {
+      calls: BIO.map((id) => ({
+        operationId: 'updateBlock',
+        params: {
+          path: { resourceId: S.zahra, documentId: w.mainOf(S.zahra), blockId: id },
+          body: { content: [{ text: '.' }] },
+        },
+      })),
+    });
+    await after(r);
+    const lost = before - pageWords(w, S.zahra);
+    expect(
+      { lost },
+      `${String((r.body as any).status ?? (r.body as any).error?.code)}: ${lost} words taken off directly`,
+    ).toEqual({
+      lost: 0,
+    });
+    // Held as a proposal by the deletes rail, which says why.
+    expect((r.body as any).status, r.text.slice(0, 400)).toBe('proposal_captured');
+    expect(r.text).toMatch(
+      /text removal \(\d+ words off “[^”]+”, a page of a character’s set; the pack's threshold is 120\)/,
+    );
+  });
 
   it('SP-34 lk_api_write deleteBlock on a Biography paragraph is never a direct write', async () => {
     setBody(

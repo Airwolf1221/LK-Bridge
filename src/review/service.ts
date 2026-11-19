@@ -181,7 +181,8 @@ export class ReviewService {
     return { job, steps, journal, chronology };
   }
 
-  targets(projectId: string, jobId: string): Target[] | null {
+  /** `o.placeAsLeft`: R3-57 (ADR 0061 part B decision 5), a retag batch's pages keep their name and parent too. */
+  targets(projectId: string, jobId: string, o: { readonly placeAsLeft?: boolean } = {}): Target[] | null {
     const rec = this.record(projectId, jobId);
     if (!rec) return null;
     const images = this.d.images;
@@ -207,6 +208,7 @@ export class ReviewService {
         : {}),
       laterLmr: (resourceId, date) => this.laterLmr(projectId, rec.job, resourceId, date),
       laterWrites: () => this.laterWrites(projectId, jobId),
+      ...(o.placeAsLeft === true ? { placeAsLeft: true } : {}),
     });
   }
 

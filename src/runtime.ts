@@ -1,6 +1,7 @@
 import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
+import { textRemovalReader } from './policy/text-removal.js';
 import { registerPackEngine } from './packs/engine/checks.js';
 import { PACK_CHECKS } from './packs/engine/job.js';
 import { addPackTaxonomyEntry, renamePackTaxonomyEntry } from './packs/taxonomy.js';
@@ -548,6 +549,31 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     drops: listDropsReader((projectId, opId, params) =>
       engine.internalRead(projectId, opId, params, { priority: 'P1' }),
     ),
+    // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool is a removal.
+    textRemoved: textRemovalReader({
+      packs,
+      node: treeNode,
+      characterOf: (projectId, id) => {
+        try {
+          return registry.forProject(projectId).characterOfPage(id).ok;
+        } catch {
+          return false;
+        }
+      },
+      factKeys: (projectId, id) => {
+        try {
+          const sb = tree.queries.sidebars(projectId, [id]).data.get(id) ?? null;
+          return sb
+            ? (sb as readonly { kind?: string; rows?: readonly { key: string }[] }[])
+                .filter((x) => x.kind === 'keyValue')
+                .flatMap((x) => (x.rows ?? []).map((r) => r.key))
+            : null;
+        } catch {
+          return null;
+        }
+      },
+      read: (projectId, opId, params) => engine.internalRead(projectId, opId, params, { priority: 'P1' }),
+    }),
   });
   const lifecycleGuard = new LifecycleGuard({
     settings: (projectId) => projectStore.byId(projectId)?.settings,
@@ -990,7 +1016,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     proposals: {
       byJob: (projectId, jobId) => policy.proposals.byJob(projectId, jobId),
       jobResumed: (projectId, jobId) => policy.proposals.jobResumed(projectId, jobId),
+      stateOf: (proposalId) => policy.proposals.get(proposalId)?.state ?? null,
     },
+    // CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4): an agent's Resume meets its profile's rails again.
+    rails: (projectId, principalId, items, tool) =>
+      policy.gate.rails({ principalId, profile: '', label: '' }, items, {
+        project: projectId,
+        jobKind: 'batch_ops',
+        ...(tool !== undefined ? { tool } : {}),
+      }),
     finishRecreate: async (projectId, restoreId, origin, by) => {
       const r = await restores.finish(projectId, restoreId, origin, by);
       return r.status === 'nothing_to_do'

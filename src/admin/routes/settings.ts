@@ -72,8 +72,10 @@ export const registerSettings: Register = (api, ctx) => {
   api.get('/settings', () => ({ settings: view() }));
 
   api.put('/settings/read-only', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(nullableBool, req.body);
+    // ADR 0062 (the owner's rule): switching read-only on is one click (a brake); switching it off asks for the step-up.
+    if (engine.queries.controls().readOnly && !(b.value ?? envConfig.lk.readOnly))
+      requireReauth(ctx.deps.services, req);
     actions.setReadOnly(b.value);
     return { settings: view() };
   });

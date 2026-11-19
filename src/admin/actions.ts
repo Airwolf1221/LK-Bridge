@@ -201,7 +201,7 @@ export function createAdminActions(d: AdminDeps) {
     // Every job and error action names its project (v2 A1); a job of another project is "not found".
     cancelJob(projectId: string, id: string): JobView {
       const before = job(projectId, id);
-      const after = engine.controls.cancel(projectId, id);
+      const after = engine.controls.cancel(projectId, id, 'owner');
       audit('job.cancel', id, before ? brief(before) : undefined, { project: projectId, ...brief(after) });
       return after;
     },

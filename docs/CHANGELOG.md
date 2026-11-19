@@ -1,10 +1,35 @@
 # Changelog
 
+## Unreleased: ADR 0061 accepted, the third review's owner decisions built (19 November 2026)
+
+The owner confirmed all eleven choices of [ADR 0061](adr/0061-cr-2026-11-r3-decisions.md) part A and decided part B:
+1 (b), 2 (a), 3 (b), 4 (b), 5 (b), 6 (b). Built here; the five findings' tests (kept as `it.fails`) now pass, and four
+low findings stay open for the next slice (R3-56, R3-58, R3-59, R3-60). One migration, `3810_resume_decisions.sql`
+(`jobs.cancelled_by`, `job_stops.continued_as`); it runs at start.
+
+- **Text emptied through a low-level tool is a removal** (R3-53, decision 1 (b)). A request through `lk_api_write`,
+  `lk_api_batch` or `lk_op_*` whose `replaceDocumentBlocks`, `updateBlock` or `replaceBlock` writes take the pack's
+  `splits.guardWords` (120) words or more off a pack page is a proposal under the deletes rail, even with every block id
+  kept: `proposed because: text removal (… words off “…”, a page of a character’s set; the pack's threshold is 120)`.
+  Counted over the whole request, per page, on what LegendKeeper holds now; the split guard's own test says which pages.
+- **The split guard stays per edit** (R3-52, decision 2 (a)): it steers agents; each edit is on the Review page.
+- **A cancel stands** (R3-54, decision 3 (b)): the bridge records who cancelled a job (`owner`, `system`, or the agent),
+  and an agent's `bridge_job_resume` of a job it did not cancel itself is refused (`CANCELLED_BY_OWNER`).
+- **The rails at Resume** (R3-55, decision 4 (b)): an agent's Resume judges its profile's safety rails again, live, on
+  the steps left; when one now covers a step, nothing runs: the rest becomes one proposal for the owner
+  (`proposal_captured`, with `proposedBecause`), and the job is not resumed again while it stands (`REST_PROPOSED`).
+- **A retag revert leaves a page renamed or moved since** (R3-57, decision 5 (b)): "as the job left it" is the page's
+  tags, name and parent.
+- **Resume reads a differing write back again** (decision 6 (b)): before a stopped job continues, each write that read
+  back a difference (or could not be read back) is read again; one that now reads back as planned counts as verified,
+  marked `putRightSince` in the job's result. A split resumed after one verifies and proposes phase 2 as any other.
+
 ## Unreleased: ADR 0062, dashboard sessions for 30 days and a step-up for sensitive actions (19 November 2026)
 
 The owner's request after the third review: the dashboard's session ended within the hour, where the previous bridge
-kept it for 30 days ([ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), proposed; built for the owner to confirm).
-No migration; deploy normally. Remove a lower `AUTH_SESSION_TTL_SECONDS` from the env file to get the 30 days.
+kept it for 30 days ([ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), accepted on 19 November 2026 with the
+owner's rule for the step-up: tightening is one click, loosening asks). No migration; deploy normally. Remove a lower
+`AUTH_SESSION_TTL_SECONDS` from the env file to get the 30 days.
 
 - **A sliding 30-day session.** A session lasts 30 days from its last use: each use of the dashboard or the consent page
   moves its end 30 days on (at most once a minute) and renews the cookie; the live stream's periodic check is no use,
@@ -19,20 +44,22 @@ No migration; deploy normally. Remove a lower `AUTH_SESSION_TTL_SECONDS` from th
   this one included. No step-up (it only takes access away). Event `logout.everywhere`, audit `owner.sessions_revoked`.
 - **The step-up**: the authenticator code (or a recovery code) within the last **10 minutes** (was the password and the
   code within 5), or the password when no authenticator is set up; with one set up, the password alone is refused.
-  Asked for keys and secrets (a personal access token at any scope too), every scope change (a lowering too), every
-  setting (the bridge's, a project's, the budgets', a maintenance job's switch, schedule and run size, the off-site
-  copy's, retention, the connections' clean-up, the audits'), pack approval, and the guarded rails: approving a proposal
-  that deletes, touches more than 10 pages or deletes or moves an asset (judged on its operations, whoever proposed it),
-  the owner's own retag batch of more than 10 pages, deleting a rehearsal's root. The brakes stay one click: Sign out
-  everywhere, revoking a connection or a token, pausing or resuming writes, cancelling a job, switching most jobs off,
-  rejecting a proposal.
+  Asked for keys and secrets (a personal access token at any scope too), a scope raised (a profile's or the default
+  scope, a connection moved up or to a profile at scope `write`), the settings (the bridge's, a project's, the budgets',
+  a maintenance job's switch, schedule and run size, every off-site setting, retention, the connections' clean-up, the
+  audits') and releasing a brake (read-only off, resuming writes, undraining, a project's included), pack approval, and
+  the guarded rails: approving a proposal that deletes, touches more than 10 pages or deletes or moves an asset (judged
+  on its operations, whoever proposed it), the owner's own retag batch of more than 10 pages, deleting a rehearsal's
+  root. Tightenings and brakes stay one click: lowering a scope, moving a connection down, read-only on, ChatGPT's file
+  source off, pausing writes and draining, Sign out everywhere, revoking a connection or a token, cancelling a job,
+  switching most jobs off, rejecting a proposal.
 - **The dashboard**: any change answered `REAUTH_REQUIRED` opens the step-up dialog (the code only, or the password),
   once for changes refused together, then is sent again; a wrong code stays in the dialog (it used to send the owner to
   the sign-in page, as did a wrong current password). When the live stream is refused, the dashboard checks its session
   once and, signed out, goes to the sign-in page instead of reconnecting every three seconds.
-- **For the owner to confirm** (ADR 0062): lowering a scope, moving a connection down, switching ChatGPT's file source
-  off, read-only on and the off-site settings now ask for the code too (ADR 0057 decisions 1 and 7 and ADR 0046 decision
-  3 kept them one click); resuming writes stays one click.
+- **The owner's decisions** (ADR 0062, accepted): tightening is one click, loosening asks; so lowering a scope, moving
+  a connection down, switching ChatGPT's file source off and read-only on are one click (as ADR 0057 had them), every
+  off-site setting keeps the step-up, resuming writes and undraining ask; the step-up is the code alone.
 - Tests: `test/auth/sessions-r3.test.ts`, `test/ui/sessions.test.tsx`, `test/ui/live.test.tsx`; the tests of the old
   rules now assert these (`test/admin/r2-scope-reauth.test.ts`, `test/auth/owner.test.ts` and others).
 

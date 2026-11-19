@@ -76,6 +76,7 @@ interface JobRow {
   wait_reason: string | null;
   pause_requested: number;
   cancel_requested: number;
+  cancelled_by: string | null;
   uncertain: number;
   last_error: string | null;
   result: string | null;
@@ -146,6 +147,7 @@ function toJob(r: JobRow): JobView {
     waitReason: parse<Record<string, unknown> | null>(r.wait_reason, null),
     pauseRequested: r.pause_requested === 1,
     cancelRequested: r.cancel_requested === 1,
+    cancelledBy: r.cancelled_by ?? null,
     uncertain: r.uncertain === 1,
     lastError: parse<JobError | null>(r.last_error, null),
     result: parse<Record<string, unknown> | null>(r.result, null),
@@ -236,6 +238,8 @@ export interface JobPatch {
   waitReason?: Record<string, unknown> | null;
   pauseRequested?: boolean;
   cancelRequested?: boolean;
+  /** R3-54: who asked the job to stop ('owner', 'system', or the agent's principal id). */
+  cancelledBy?: string | null;
   uncertain?: boolean;
   lastError?: Record<string, unknown> | null;
   result?: Record<string, unknown> | null;
@@ -559,6 +563,7 @@ export class JobsRepo {
     if (p.waitReason !== undefined) add('wait_reason', p.waitReason === null ? null : json(p.waitReason));
     if (p.pauseRequested !== undefined) add('pause_requested', p.pauseRequested ? 1 : 0);
     if (p.cancelRequested !== undefined) add('cancel_requested', p.cancelRequested ? 1 : 0);
+    if (p.cancelledBy !== undefined) add('cancelled_by', p.cancelledBy);
     if (p.uncertain !== undefined) add('uncertain', p.uncertain ? 1 : 0);
     if (p.lastError !== undefined) add('last_error', p.lastError === null ? null : json(p.lastError));
     if (p.result !== undefined) add('result', p.result === null ? null : json(p.result));

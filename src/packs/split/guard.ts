@@ -56,7 +56,8 @@ function shownText(b: Obj): string {
   return parts.filter((x) => x !== '').join(' ');
 }
 
-const words = (blocks: readonly unknown[]): number =>
+/** The words a document's blocks show (every block's text, rows, titles, alt text and children's). */
+export const shownWords = (blocks: readonly unknown[]): number =>
   blocks
     .filter(isObj)
     .map((b) => shownText(b))
@@ -74,6 +75,37 @@ export interface ManualSplitContext {
   readonly factKeys: readonly string[] | null;
 }
 
+/**
+ * The words the guard counts on this project: the smallest `splits.guardWords` of its APPROVED packs with split rules,
+ * or null when none has them (the guard is off).
+ */
+export function splitGuardWords(
+  packs: Pick<Packs, 'forProject'> | undefined,
+  projectId: string,
+): number | null {
+  const ps = packs?.forProject(projectId).filter((p) => p.approved !== null && p.rules.splits) ?? [];
+  return ps.length === 0 ? null : Math.min(...ps.map((p) => p.rules.splits!.guardWords));
+}
+
+/**
+ * Why `node` is a pack page the guard keeps (a page of a character's set, a page with a Subject fact, a pack owner), or
+ * null when it is not one (an index never is).
+ */
+export function packPageReason(c: Omit<ManualSplitContext, 'before' | 'after'>): string | null {
+  const packs = c.packs?.forProject(c.projectId).filter((p) => p.approved !== null && p.rules.splits) ?? [];
+  if (packs.length === 0 || c.node.kind === 'index') return null;
+  const primaries = new Set(
+    packs.flatMap((p) => (p.rules.owners?.types ?? []).map((t) => textKey(t.primary))),
+  );
+  return c.characterOf(c.node.id)
+    ? 'a page of a character’s set'
+    : (c.factKeys ?? []).some((k) => textKey(k) === 'subject')
+      ? 'a page with a Subject fact'
+      : c.node.tags.some((t) => primaries.has(textKey(t)))
+        ? 'a pack owner'
+        : null;
+}
+
 /** The refusal body when an edit takes substantial material off a pack page, else null. */
 export function manualSplitRefusal(c: ManualSplitContext): {
   readonly code: string;
@@ -81,21 +113,11 @@ export function manualSplitRefusal(c: ManualSplitContext): {
   readonly hint: string;
   readonly [k: string]: unknown;
 } | null {
-  const packs = c.packs?.forProject(c.projectId).filter((p) => p.approved !== null && p.rules.splits) ?? [];
-  if (packs.length === 0 || c.node.kind === 'index') return null;
-  const limit = Math.min(...packs.map((p) => p.rules.splits!.guardWords));
-  const removed = words(c.before) - words(c.after);
+  const limit = splitGuardWords(c.packs, c.projectId);
+  if (limit === null || c.node.kind === 'index') return null;
+  const removed = shownWords(c.before) - shownWords(c.after);
   if (removed < limit) return null;
-  const primaries = new Set(
-    packs.flatMap((p) => (p.rules.owners?.types ?? []).map((t) => textKey(t.primary))),
-  );
-  const why = c.characterOf(c.node.id)
-    ? 'a page of a character’s set'
-    : (c.factKeys ?? []).some((k) => textKey(k) === 'subject')
-      ? 'a page with a Subject fact'
-      : c.node.tags.some((t) => primaries.has(textKey(t)))
-        ? 'a pack owner'
-        : null;
+  const why = packPageReason(c);
   if (why === null) return null;
   return {
     code: USE_ARKONA_SPLIT,

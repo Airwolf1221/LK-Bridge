@@ -1,15 +1,19 @@
 # ADR 0061: Decisions from the third review (CR-2026-11-R3)
 
-Status: **Proposed** (19 November 2026). Part A records what this review's fixes chose where an earlier ADR said
-otherwise or said nothing: built, for the owner to confirm or reverse. Part B asks the owner to decide what the review
-leaves open. The findings are in [docs/reviews/CR-2026-11-R3.md](../reviews/CR-2026-11-R3.md).
+Status: **Accepted** (the owner, 19 November 2026): part A confirmed, all eleven, as built; part B decided 1 (b),
+2 (a), 3 (b), 4 (b), 5 (b) and 6 (b), and built the same day (see "As decided and built" under each). Part A records
+what this review's fixes chose where an earlier ADR said otherwise or said nothing. The findings are in
+[docs/reviews/CR-2026-11-R3.md](../reviews/CR-2026-11-R3.md).
 
 - Amends: [ADR 0055](0055-write-scope-review-revert-rails.md) decision B (a confirmed partial revert is not offered for a
   split's phase 1); [ADR 0058](0058-v3-f3d-renames-selective-approval-resume.md) decisions 2.5 ("Propose these again")
   and 3 (Resume); [ADR 0059](0059-v3-f3e-splits.md) decisions 2.1, 3, 4, 5 and 6.2 (the new owners, appends, the
   verification, phase 2, the visual audit, Revert) and its
   departure 10 (what "verbatim" is checked by); [ADR 0060](0060-v3-f3f-retag-audit-and-apply.md) decisions 1.6 and 3
-  (status-tag spellings, suggestions) and departure 3 (the read-back, as amended by fix C).
+  (status-tag spellings, suggestions) and departure 3 (the read-back, as amended by fix C). Part B: ADR 0057 decision 4
+  (the deletes rail also counts text taken off a pack page through a low-level tool), ADR 0059 departure 9
+  (`lk_api_write` now meets the split guard's count through the deletes rail), ADR 0055 C3 and ADR 0058 decision 3
+  (Resume: who cancelled, and the rails judged again) and ADR 0060 decision 3.6 (a retag revert: name and parent too).
 
 ## Context
 
@@ -19,7 +23,7 @@ a clean shutdown on SIGTERM (A), the memory of the largest jobs (B) and an hones
 review's fixes make an existing rule hold on every route. These go further than a rule as written, or leave a choice
 that is the owner's.
 
-## Part A: chosen by this review's fixes (built; the owner confirms or reverses)
+## Part A: chosen by this review's fixes (built; confirmed by the owner, 19 November 2026)
 
 1. **A split's phase 1 is reverted whole or not at all** (R3-09, R3-10). The source's edit and each destination's write
    are the two halves of one move. A confirmed partial revert took the moved blocks off the destination while the
@@ -87,34 +91,52 @@ that is the owner's.
     the Last Major Revision row a step of the same job dates (`datedRowId`), which that step judges. A split resumed
     after a write that read back a difference stays `unverified` (part B, decision 6).
 
-## Part B: the owner's decisions (open findings; their tests are kept as `it.fails`)
+## Part B: the owner's decisions (decided 19 November 2026, built the same day; their tests pass)
 
 1. **Text emptied through a raw route** (R3-53: `lk_api_write` `replaceDocumentBlocks` keeping every id, or
    `lk_api_batch` `updateBlock`, emptied a pack page's text directly; `write_page` refuses the same with
    `USE_ARKONA_SPLIT`). The deletes rail compares block ids only (ADR 0057 decision 4). Options: (a) leave it: the write
    is direct, journalled, on the Review page and revertible; (b) the deletes rail counts a low-level write that takes
    the pack's `guardWords` words or more off a pack page as a removal (a proposal); (c) as (b) on any page.
-   Recommended: (b).
+   Recommended: (b). **As decided and built: (b).** A request through `lk_api_write`, `lk_api_batch` or `lk_op_*`
+   whose `replaceDocumentBlocks`, `updateBlock` or `replaceBlock` writes take the guard's words or more off a pack page
+   (the split guard's own test of a pack page), counted over the whole request per page on what LegendKeeper holds now
+   (a document that cannot be read counts), is a proposal under the deletes rail, which says so: `proposed because:
+text removal (… words off “…”, …; the pack's threshold is 120)` (`src/policy/text-removal.ts`). Tests: SP-32, SP-33.
 2. **The split guard counts per edit** (R3-52: two `write_page` edits of 100 words each took 200 words off one page).
    Options: (a) leave it (the guard steers agents; it is not a security boundary, and the edits are on the Review page);
    (b) count the words a connection takes off one page over a day. Recommended: (a), with Part B decision 1 (b).
+   **As decided: (a).** The guard stays per edit; SP-29 asserts that each edit is written and on the Review page.
 3. **Whose cancel a Resume may undo** (R3-54: the owner cancelled an agent's direct job part-way; the agent resumed it
    with `bridge_job_resume`). Options: (a) leave it; (b) record who cancelled, and refuse an agent's Resume of a job the
-   owner (or the system) cancelled. Recommended: (b).
+   owner (or the system) cancelled. Recommended: (b). **As decided and built: (b).** `jobs.cancelled_by` (migration 3810) holds who asked first: `owner` (the dashboard), `system`, or the agent's principal (`bridge_job_cancel`, or its
+   request ended); an agent resumes a cancelled job only when it cancelled it itself, else `CANCELLED_BY_OWNER` (a
+   cancel recorded before the migration counts as not the agent's). Tests: AP-30, AP-30b.
 4. **The rails at Resume** (R3-55: a job stopped, the owner switched "renames and moves" to always propose, the agent
    resumed and the rename ran directly). ADR 0055 C3 judges the rails when a request arrives. Options: (a) leave it
    (lowering the scope is the brake, ADR 0057 decision 6); (b) an agent's Resume judges the rails again on the steps
-   left, and a step they now cover makes the rest a proposal. Recommended: (b).
+   left, and a step they now cover makes the rest a proposal. Recommended: (b). **As decided and built: (b).** An
+   agent's Resume judges its profile's rails, read live, on what the resume would run (the checks it runs again and
+   every step left, `engine.restOf`); when one applies, nothing runs: the rest is ONE proposal for the owner, with the
+   same steps and holds and the job's own origin, its `proposedBecause` the rail's reason, and the job is not resumed
+   again while it stands (`REST_PROPOSED`; `job_stops.continued_as`, migration 3810). The owner's approval runs the rest
+   as the owner's work. A rail that cannot be judged fails closed (a proposal). Test: AP-32.
 5. **Revert of a retag batch, a page renamed or moved since** (R3-57: its tags as the job left them, so it was
    reverted). ADR 0060 decision 3.6 says "only where the page is as the job left it". Options: (a) the tags are what the
-   job left (as built); (b) also its name and parent. Recommended: (b).
+   job left (as built); (b) also its name and parent. Recommended: (b). **As decided and built: (b).** A retag batch's
+   page is put back only while its tags, name and parent are as the job left them, planned and checked again inside the
+   revert job's lock (`ResourceTarget.place`). Test: RT-83.
 
 6. **A resumed job's verification** (from R3-67's fix: a split is verified only when its job is). A job stopped by a
    write that read back a difference keeps that difference in its verification after Resume, even once it is put right
    by hand: a split resumed so ends `unverified`, and phase 2 is the owner's (`archive_page`); before R3-67 the split
    said "verified" and proposed it. Options: (a) as built; (b) Resume reads each such write back again before it
    continues, and one that now reads back as planned counts as verified ("put right since", said in the job's result).
-   Recommended: (b).
+   Recommended: (b). **As decided and built: (b).** Before a stopped job continues, each page write before the stop
+   whose read-back differed (or could not be made) is read back again (`engine.reverifyStopped`, read only), and each
+   generic verify step that differed runs again first, inside the job; one that now reads back as planned is verified,
+   marked `putRightSince` (the earlier status kept), and the job's result lists them (`putRightSince`). A split resumed
+   after one so verifies and proposes phase 2 as any other. Test: `test/packs/split-recovery.test.ts`.
 
 Left open as low findings for the next slice, not decisions: R3-56 (a rename's re-placing moves are not re-anchored for
 names left out, and are computed against a simulated order), R3-58 (`lk_api_write`'s rename steering reads the tree's
@@ -123,8 +145,10 @@ stored sidebar; unknown, it does not read the page), R3-59 (`arkona_appraisal_fi
 
 ## Consequences
 
-One migration (`3800_split_unverified.sql`: the split state `unverified`). Every part A change has a regression test
+Two migrations: `3800_split_unverified.sql` (the split state `unverified`) and, for part B, `3810_resume_decisions.sql`
+(`jobs.cancelled_by`, `job_stops.continued_as`). Every part A change has a regression test
 that fails on the reviewed code. Agents see new codes: `SPLIT_CORE_REQUIRED`, `SPLIT_REVERT_NOT_WHOLE` (the owner's, on
 the dashboard), `SPLIT_NOT_WRITABLE`, `STEP_TOO_LARGE`, `REPROPOSE_REFUSED`,
 `REPROPOSE_RUNNING`, `REVERT_STOPPED`, `PROPOSAL_NOT_APPROVED`, `FROM_NOT_A_FORMER_NAME`, `RETAG_STALE` and
-`BRIDGE_RESTARTING` (503 while the bridge restarts).
+`BRIDGE_RESTARTING` (503 while the bridge restarts); from part B, `CANCELLED_BY_OWNER` and `REST_PROPOSED` (Resume), a
+proposal from Resume (`proposal_captured`), and the deletes rail's `text removal` reason.

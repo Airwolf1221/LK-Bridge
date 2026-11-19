@@ -26,6 +26,7 @@ import type {
   RailRequestItem,
 } from '../jobs/policy.js';
 import { isLiveApprovalToken } from './approval.js';
+import type { TextRemoval } from './text-removal.js';
 import {
   DEFAULT_WRITE_RAILS,
   isLowLevelTool,
@@ -70,6 +71,14 @@ export interface RailLookups {
    * null when it cannot be told.
    */
   readonly drops?: (projectId: string, item: RailRequestItem) => Promise<boolean | null>;
+  /**
+   * ADR 0061 part B decision 1 (R3-53): the pack pages a low-level request takes the split guard's words or more of text
+   * off, read live (src/policy/text-removal.ts).
+   */
+  readonly textRemoved?: (
+    projectId: string,
+    items: readonly RailRequestItem[],
+  ) => Promise<readonly TextRemoval[]>;
 }
 
 /** The pages whose descendants a request's rails count: a cascade delete's page, a copy's source (with its children). */
@@ -264,12 +273,19 @@ export class LivePolicyGate implements PolicyGate {
         if (!writes(it) || listsSent(it.opId, it.params.body).length === 0) continue;
         drops.set(i, l.drops ? await l.drops(ctx.project, it).catch(() => null) : null);
       }
+    // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool is a removal too (an error
+    // reading it refuses the request: no direct write).
+    const textRemoved =
+      r.rails.deletes && lowLevel && l.textRemoved
+        ? await l.textRemoved(ctx.project, items.filter(writes))
+        : [];
     const base = {
       ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
       ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
       restored: (id: string) => restored.get(id) ?? null,
       lowLevel,
       drops: (i: number) => drops.get(i) ?? null,
+      textRemoved: () => textRemoved,
     };
     const fromTree = (id: string) => l.descendants?.(ctx.project, id) ?? null;
     const verdict = railsVerdict(r.rails, items, { ...base, descendants: fromTree });

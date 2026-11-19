@@ -61,14 +61,16 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   owner command layer (`policy.commands`), an engine control, or the runtime settings functions
   (`src/admin/runtime-settings.ts`). Each leaves an `audit_log` row (actor `owner`) and a `policy` event on the stream.
   No route touches the database or the engine itself.
-- **The step-up (OPS2, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md)).** Keys and secrets, every scope change
-  (a lowering too), every setting, pack approval and the guarded rails (approving a proposal that deletes, touches more
-  than 10 pages, or deletes or moves an asset; the owner's own bulk retag) need a step-up on the session within the last
-  ten minutes: the authenticator code (or a recovery code), or the password when no authenticator is set up. Otherwise
-  the answer is `403 REAUTH_REQUIRED`; the dashboard asks in one dialog and sends the change again
-  ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). A wrong code stays in the dialog. The brakes
-  stay one click: Sign out everywhere, revoking a connection or a token, pausing or resuming writes, cancelling a job,
-  switching most maintenance jobs off, rejecting a proposal.
+- **The step-up (OPS2, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), accepted with the owner's rule:
+  tightening is one click, loosening asks).** Keys and secrets, a scope raised, the settings (every off-site setting
+  among them) and releasing a brake (read-only off, resuming writes, undraining), pack approval and the guarded rails
+  (approving a proposal that deletes, touches more than 10 pages, or deletes or moves an asset; the owner's own bulk
+  retag) need a step-up on the session within the last ten minutes: the authenticator code (or a recovery code), or the
+  password when no authenticator is set up. Otherwise the answer is `403 REAUTH_REQUIRED`; the dashboard asks in one
+  dialog and sends the change again ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). A wrong code
+  stays in the dialog. Tightenings and brakes stay one click: lowering a scope, moving a connection down, read-only on,
+  ChatGPT's file source off, pausing writes and draining, Sign out everywhere, revoking a connection or a token,
+  cancelling a job, switching most maintenance jobs off, rejecting a proposal.
 - **Sessions (ADR 0062).** A session lasts 30 days from its last use (each use renews it and its cookie), survives a
   restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included), at a
   password change (the other sessions) or after 30 days unused. A link to the dashboard, Claude's consent page and

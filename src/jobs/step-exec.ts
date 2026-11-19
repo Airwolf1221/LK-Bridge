@@ -2439,6 +2439,16 @@ export class StepExecutor {
   }
 
   /**
+   * CR-2026-11-R3 (ADR 0061 part B decision 6, the owner's (b)): a page write's read-back, made again before its stopped
+   * job is resumed: the stored blocks compared with the blocks it sent, exactly as after the write (`verifyWrite`). Read
+   * only; outside the job's locks (nothing is written on its strength but the step's own record).
+   */
+  async reverifyWrite(job: JobView, step: StepView): Promise<WriteVerification> {
+    const op = requireOperation(step.opId);
+    return this.verifyWrite(job, step, op, opMeta(op.operationId), this.d.repo.stepParams(step), undefined);
+  }
+
+  /**
    * v2 C1: the read after a page write, still inside the lock and the writer slot, so only an edit from outside the
    * bridge can come between the write and this read. Compares the stored blocks with the blocks sent. Never throws and
    * never retries: a read that cannot be made (budget, LegendKeeper) leaves the write unverified, and says why.

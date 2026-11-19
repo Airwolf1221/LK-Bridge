@@ -130,6 +130,16 @@ export interface RailContext {
    */
   readonly drops?: (index: number) => boolean | null;
   /**
+   * ADR 0061 part B decision 1 (R3-53, the owner's (b)): the pack pages a low-level request takes the split guard's words
+   * or more of text off (counted on what LegendKeeper holds now); each is a removal for the `deletes` rail.
+   */
+  readonly textRemoved?: () => readonly {
+    readonly name: string;
+    readonly words: number | null;
+    readonly limit: number;
+    readonly why: string;
+  }[];
+  /**
    * The request places a staged image (set by bridge code only, never from an agent's input: `BatchSubmit.stagedPlacement`).
    * Moving the staged asset out of the staging folder is the placement itself, not a reorganisation of the library, so
    * the asset rail does not count its `updateAsset` (an asset delete still counts).
@@ -372,6 +382,17 @@ export function railsVerdict(
         text: total === 1 ? `delete (${parts[0]}${only ? ` ${only}` : ''})` : `deletes (${parts.join(', ')})`,
       });
     }
+    // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool, as the split guard counts
+    // it for write_page (USE_ARKONA_SPLIT), is a removal.
+    if (ctx.lowLevel === true)
+      for (const t of ctx.textRemoved?.() ?? [])
+        hits.push({
+          rail: 'deletes',
+          text:
+            t.words === null
+              ? `text removal (“${t.name}”, ${t.why}: its text could not be read to count what this takes off)`
+              : `text removal (${t.words} words off “${t.name}”, ${t.why}; the pack's threshold is ${t.limit})`,
+        });
   }
 
   if (rails.bulk) {

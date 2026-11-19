@@ -454,6 +454,10 @@ describe('migration 0600 on a v1.0.2 database', () => {
         let stripped = without(now, 'project_id');
         for (const c of [...added, 'requires_canonical']) stripped = without(stripped, c);
         expect(stripped, t).toEqual(rows);
+      } else if (t === 'jobs') {
+        // CR-2026-11-R3 (3810, ADR 0061 part B decision 3) adds `cancelled_by`, NULL on every row written before it.
+        for (const r of now) expect(r.cancelled_by, t).toBeNull();
+        expect(without(without(now, 'project_id'), 'cancelled_by'), t).toEqual(rows);
       } else {
         expect(without(now, 'project_id'), t).toEqual(rows);
       }

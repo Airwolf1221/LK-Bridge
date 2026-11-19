@@ -49,6 +49,7 @@ import {
   isInternalStep,
   LMR_STEP,
   RECORD_STEP,
+  VERIFY_STEP,
   type DocumentChecker,
   type Filler,
   type MapChecker,
@@ -233,6 +234,14 @@ const HELD_MORE = 'heldMore';
 export const LIFECYCLE_OPTION = 'lifecycle';
 /** v3 F3d (ADR 0058): a job that can be resumed after it stops part-way (`BatchSubmit.resumable`), in its options. */
 export const RESUMABLE_OPTION = 'resumable';
+/** B6 (ADR 0061 part B decision 6): the verify steps a Resume read again (job option). */
+const REVERIFIED_OPTION = 'reverified';
+
+/** A verify step's recorded verification status (`verified`, `mismatch`, `not_checked`), or null. */
+function verificationStatus(s: StepView): string | null {
+  const v = (s.resultSummary as { verification?: { status?: unknown } } | null)?.verification;
+  return typeof v?.status === 'string' ? v.status : null;
+}
 /** v3 F3d (ADR 0058): what a job waits for before its first step (`BatchSubmit.waitFor`), in its options. */
 export const WAIT_FOR_OPTION = 'waitFor';
 
@@ -565,7 +574,8 @@ export class JobEngine {
       'running',
       reviewOptions,
     );
-    const onAbort = () => this.cancelJob(job.id);
+    // The request that started it ended (its caller cancelled): its own principal's cancel (R3-54).
+    const onAbort = () => this.cancelJob(job.id, job.principalId);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     let result: RunnerResult;
     try {
@@ -1171,7 +1181,10 @@ export class JobEngine {
       },
       req.lifecycle,
       req.forceProposal === true,
-      req.stagedPlacement === true ? { stagedPlacement: true } : {},
+      {
+        ...(req.stagedPlacement === true ? { stagedPlacement: true } : {}),
+        ...(req.forceProposal === true && req.proposedBecause ? { forcedBecause: req.proposedBecause } : {}),
+      },
     );
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError(this.restarting);
@@ -1938,12 +1951,86 @@ export class JobEngine {
         out.add(s.stepNo);
         continue;
       }
+      // CR-2026-11-R3 (ADR 0061 part B decision 6, the owner's (b)): a verification that read back a difference is read
+      // again before the job continues; one that now reads back as planned counts as verified ("put right since").
+      if (s.opId === VERIFY_STEP && verificationStatus(s) !== 'verified') {
+        out.add(s.stepNo);
+        continue;
+      }
       if (named.size === 0 || s.opId !== EXPECT_STEP) continue;
       const body = (this.repo.stepParams(s) as { body?: { checks?: unknown } }).body;
       const checks = Array.isArray(body?.checks) ? (body.checks as { checker?: unknown }[]) : [];
       if (checks.some((c) => typeof c.checker === 'string' && named.has(c.checker))) out.add(s.stepNo);
     }
     return [...out].sort((a, b) => a - b);
+  }
+
+  /**
+   * CR-2026-11-R3 (ADR 0061 part B decision 6, the owner's (b)): before a stopped job is resumed, each page write before
+   * the stop whose read-back differed from its plan (or could not be made) is read back again; one that now reads back as
+   * planned has its verification replaced, marked "put right since" (`putRightSince`, the earlier difference kept as
+   * `earlier`), so the job's result counts it as verified. Read only. Returns the steps put right since.
+   */
+  async reverifyStopped(projectId: string, jobId: string): Promise<number[]> {
+    const job = this.requireJob(jobId, projectId);
+    const steps = this.repo.steps(jobId);
+    const stopped = steps.find((s) => s.status !== 'succeeded');
+    if (!stopped) return [];
+    const put: number[] = [];
+    for (const s of steps) {
+      if (s.stepNo >= stopped.stepNo || s.status !== 'succeeded') continue;
+      if (s.options.verifyAfterWrite !== true || s.opId !== 'replaceDocumentBlocks') continue;
+      const summary = (s.resultSummary ?? {}) as { verification?: { status?: unknown }; truncated?: unknown };
+      const whole = (
+        summary.verification === undefined && summary.truncated === true
+          ? (this.repo.stepResult(s) ?? {})
+          : summary
+      ) as Record<string, unknown> & { verification?: { status?: unknown } };
+      const before = whole.verification;
+      if (!before || before.status === 'verified') continue;
+      const again = await this.executor.reverifyWrite(job, s);
+      if (again.status !== 'verified') continue;
+      this.repo.updateStep(jobId, s.stepNo, {
+        resultSummary: {
+          ...whole,
+          truncated: undefined,
+          verification: {
+            ...again,
+            putRightSince: true,
+            note: 'read back again at Resume: put right since the job stopped',
+            earlier: { status: before.status },
+          },
+        },
+      });
+      put.push(s.stepNo);
+    }
+    if (put.length > 0) {
+      const opts = this.repo.jobOptions(jobId) as { reverified?: number[] };
+      this.repo.setJobOptions(jobId, {
+        ...opts,
+        [REVERIFIED_OPTION]: [...new Set([...(opts.reverified ?? []), ...put])],
+      });
+    }
+    return put;
+  }
+
+  /**
+   * CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4): what a resume of a stopped job would run, as step specs with their
+   * full parameters: the checks it runs again first (`recheckSteps`), then every step from the stop on that has not
+   * succeeded, in order. Empty for a job that is not resumable in place, or of another project. Nothing is changed.
+   */
+  restOf(projectId: string, jobId: string): StepSpec[] {
+    const job = this.repo.job(jobId);
+    if (!job || job.projectId !== projectId) return [];
+    const r = this.repo.jobOptions(jobId)[RESUMABLE_OPTION] as ResumableShape | undefined;
+    if (!r || r.kind === 'recreate') return [];
+    const steps = this.repo.steps(jobId);
+    const stopped = steps.find((s) => s.status !== 'succeeded');
+    if (!stopped) return [];
+    const recheck = new Set(this.recheckSteps(projectId, jobId));
+    return steps
+      .filter((s) => recheck.has(s.stepNo) || (s.stepNo >= stopped.stepNo && s.status !== 'succeeded'))
+      .map((s) => ({ ...s.options, op: s.opId, params: this.repo.stepParams(s) }));
   }
 
   /**
@@ -2053,11 +2140,12 @@ export class JobEngine {
     },
     /**
      * Cancels a job of `projectId`: an in-flight step completes, then it stops; nothing further is sent. Every job
-     * control names the project; a job of another project is not found (v2 A1).
+     * control names the project; a job of another project is not found (v2 A1). `by` is who asked (R3-54, ADR 0061 part
+     * B decision 3): 'owner', 'system' (the default) or an agent's principal id; the first to ask is the one recorded.
      */
-    cancel: (projectId: string, jobId: string): JobView => {
+    cancel: (projectId: string, jobId: string, by: string = 'system'): JobView => {
       this.requireJob(jobId, projectId);
-      return this.cancelJob(jobId);
+      return this.cancelJob(jobId, by);
     },
     /** Pauses a job after its in-flight step. */
     pauseJob: (projectId: string, jobId: string): JobView => {
@@ -2177,6 +2265,18 @@ export class JobEngine {
       const stopped = steps.find((s) => s.status !== 'succeeded');
       if (!stopped) throw new InvalidControlError(`Job ${jobId} has nothing left to run`, { jobId });
       const rechecked: number[] = [];
+      // B6: the verifications read again, so the job's result can say which were put right since it stopped.
+      const reverified = steps
+        .filter((x) => x.stepNo < stopped.stepNo && x.opId === VERIFY_STEP && x.status === 'succeeded')
+        .filter((x) => verificationStatus(x) !== 'verified')
+        .map((x) => x.stepNo);
+      if (reverified.length > 0) {
+        const opts = this.repo.jobOptions(jobId) as { reverified?: number[] };
+        this.repo.setJobOptions(jobId, {
+          ...opts,
+          [REVERIFIED_OPTION]: [...new Set([...(opts.reverified ?? []), ...reverified])],
+        });
+      }
       for (const n of this.recheckSteps(projectId, jobId)) {
         const s = steps.find((x) => x.stepNo === n);
         if (!s || s.stepNo >= stopped.stepNo || s.status !== 'succeeded' || !isInternalStep(s.opId)) continue;
@@ -2850,10 +2950,23 @@ export class JobEngine {
           ...(s.verification as Record<string, unknown>),
         }));
       if (verifications.length > 0) {
+        // B6 (ADR 0061 part B decision 6): a verification read again at Resume that now reads back as planned says so.
+        const again = new Set((this.repo.jobOptions(jobId)[REVERIFIED_OPTION] as number[] | undefined) ?? []);
+        const marked = verifications.map((v) =>
+          again.has(v.stepNo as number) && v.status === 'verified'
+            ? {
+                ...v,
+                putRightSince: true,
+                note: 'read back again at Resume: put right since the job stopped',
+              }
+            : v,
+        );
+        const putRight = marked.filter((v) => v.putRightSince === true).map((v) => v.stepNo as number);
         result = {
           ...result,
-          verification: verifications.length === 1 ? verifications[0] : verifications,
-          verified: verifications.every((v) => v.status === 'verified'),
+          verification: marked.length === 1 ? marked[0] : marked,
+          verified: marked.every((v) => v.status === 'verified'),
+          ...(putRight.length > 0 ? { putRightSince: putRight } : {}),
         };
       }
     }
@@ -2882,10 +2995,14 @@ export class JobEngine {
     this.emitJob(jobId, 'updated');
   }
 
-  private cancelJob(jobId: string): JobView {
+  private cancelJob(jobId: string, by: string): JobView {
     const job = this.requireJob(jobId);
     if (TERMINAL_JOB_STATUSES.has(job.status)) return job;
-    this.repo.updateJob(jobId, { cancelRequested: true });
+    // R3-54: the first to ask is recorded (an agent's later cancel does not take over the owner's).
+    this.repo.updateJob(jobId, {
+      cancelRequested: true,
+      ...(job.cancelRequested ? {} : { cancelledBy: by }),
+    });
     const active = this.active.get(jobId);
     if (active) {
       active.current.abort(new CancelledError({ jobId }));
@@ -3270,7 +3387,12 @@ export class JobEngine {
     meta: Omit<ProposalMeta, 'kind' | 'origin' | 'project'>,
     lifecycle?: LifecycleMarker,
     forceProposal = false,
-    extra: { readonly staging?: boolean; readonly stagedPlacement?: boolean } = {},
+    extra: {
+      readonly staging?: boolean;
+      readonly stagedPlacement?: boolean;
+      /** R3-55: a forced proposal's reason, from a rail the bridge judged itself (an agent's Resume). */
+      readonly forcedBecause?: RailDecision;
+    } = {},
   ): Promise<ProposalCaptured | null> {
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     const batch = jobKind === 'batch_ops';
@@ -3352,7 +3474,7 @@ export class JobEngine {
     // (deletes, bulk changes, renames and moves, asset deletes and moves). A rail only ever ADDS a proposal: it is not
     // asked about a request already proposed, approved work or the bridge's own; a rail that cannot be judged fails
     // closed (a proposal).
-    let rail: RailDecision | null = null;
+    let rail: RailDecision | null = propose && extra.forcedBecause ? extra.forcedBecause : null;
     if (
       !propose &&
       this.policyGate.rails &&

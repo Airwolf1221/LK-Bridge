@@ -760,7 +760,8 @@ Splitting an owner page (a character monolith, a polity page covering its law an
 owner-approved decision**: "do not split merely because a character has many facts". Two tools, used in order, and
 **never by hand**: `write_page` refuses an edit that takes a section's worth of text off a pack page
 (`USE_ARKONA_SPLIT`); a page's own revision that removes material on purpose passes `plainEdit: { "reason": "…" }`, and
-the reason is shown to the owner.
+the reason is shown to the owner. The low-level tools are no way round it: the same amount of text taken off a pack page
+through `lk_api_write` or `lk_api_batch` is a proposal for the owner (`proposed because: text removal …`).
 
 **1. Appraise: `arkona_split_appraisal { "page": "…" }`** (or `under` for a branch). Read-only and free (the snapshots;
 `live: true` re-reads each page, 2 reads a page). It measures Character Architecture's Split Triggers with the pack's own
@@ -1186,7 +1187,10 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
   shows where it stopped (`stoppedAt`: its last verified step, the step it stopped at, why). A job **you** ran at scope
   `write` (one the owner did not approve) can be resumed with `bridge_job_resume { "jobId": "…" }`: its own check runs
   again first, no step that succeeded runs again, and a step that is no longer safe is refused with its reason. Work the
-  owner approved is resumed by the owner only. Resume once, then follow the job; never loop on a refusal.
+  owner approved is resumed by the owner only, and so is a job the owner cancelled (`CANCELLED_BY_OWNER`: the cancel
+  stands; tell the person). Your safety rails are judged again on the steps left: if one now covers a step, the rest
+  becomes one proposal for the owner (`proposal_captured`): follow it with `bridge_proposal_status`, never resume or
+  redo it. Resume once, then follow the job; never loop on a refusal.
 - You cannot approve your own proposals, change your scope, or see other connections' jobs.
 
 ## Canon and approval

@@ -128,7 +128,9 @@ as `tag_grammar`, now a judgement naming the retag tools (there is no hand-made 
 6. **Resume** (ADR 0058): `resumable: { kind: 'retag', recheck: [1] }`; the policy check runs again first, no write that
    succeeded is sent again. **Revert** (ADR 0055, amended): a retag batch's job is revertible although the owner approved
    it (`approvedRevertible`); Revert restores each page's exact prior array from the journal's pre-image, only where
-   the page is as the job left it (otherwise it asks before a partial revert, as for any job).
+   the page is as the job left it (otherwise it asks before a partial revert, as for any job). Amended by
+   [ADR 0061](0061-cr-2026-11-r3-decisions.md) part B decision 5 (the owner's, 19 November 2026; R3-57): "as the job
+   left it" is the page's tags, name and parent: a page renamed or moved since is not touched.
 
 ## Decision 4: the owner's classification
 

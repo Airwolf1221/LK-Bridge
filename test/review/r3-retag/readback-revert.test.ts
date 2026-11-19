@@ -155,8 +155,9 @@ describe('Revert of a retag batch', () => {
     expect(tagsOf(w, P.revTags)).toEqual(['CANON', 'Polity', 'Harbour']);
   });
 
-  // CR-2026-11-R3 (R3-57): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: owner decision 5 (ADR 0061): whether "as the job left it" covers a page's name and place, not only its tags.
-  it.fails('RT-83: a page renamed or moved since (tags as the job left them) is not touched', () => {
+  // CR-2026-11-R3 (R3-57), decided (ADR 0061 part B decision 5, the owner's (b)): "as the job left it" is the page's tags,
+  // name and parent: a page renamed or moved since is not touched.
+  it('RT-83: a page renamed or moved since (tags as the job left them) is not touched', () => {
     // SAFE per the claim ("never touches a page changed since"; ADR 0060: "only where the page is as the job left it").
     const seen = { renamed: tagsOf(w, P.revRenamed), moved: tagsOf(w, P.revMoved) };
     expect(seen, JSON.stringify(seen)).toEqual({ renamed: ['CANON', 'Polity'], moved: ['CANON', 'Polity'] });
