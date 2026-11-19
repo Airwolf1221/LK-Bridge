@@ -105,7 +105,10 @@ export interface AppraisalDeps {
     after?: unknown,
   ) => void;
   readonly now: () => number;
-  readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
+  readonly log?: {
+    warn(obj: Record<string, unknown>, msg: string): void;
+    info?(obj: Record<string, unknown>, msg: string): void;
+  };
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -1004,7 +1007,8 @@ export class Appraisal {
     );
     // The library piece's hashes (the snapshot store holds the bytes): one read of the piece, from the store.
     const shaById = new Map<string, string | null>();
-    const lib = state.librarySha ? this.libraryCache.get(state.librarySha) : undefined;
+    const held = this.libraryCache.get(projectId);
+    const lib = state.librarySha && held?.sha === state.librarySha ? held.assets : undefined;
     if (lib) for (const [k, v] of lib) shaById.set(k, v);
     const rows = db
       .prepare(
@@ -1023,17 +1027,21 @@ export class Appraisal {
     }));
   }
 
-  private readonly libraryCache = new Map<string, Map<string, string | null>>();
+  /**
+   * The newest snapshot library's asset hashes, one per project. CR-2026-11-R3 (R3-65): it was keyed by the library's hash
+   * and never emptied, so every version of the asset library a snapshot took stayed in memory.
+   */
+  private readonly libraryCache = new Map<string, { sha: string; assets: Map<string, string | null> }>();
 
   /** Loads the snapshot library's asset hashes into the cache (called before A5 reads them). */
   async loadLibrary(projectId: string): Promise<void> {
     const st = this.index.state(projectId);
-    if (!st?.librarySha || this.libraryCache.has(st.librarySha)) return;
+    if (!st?.librarySha || this.libraryCache.get(projectId)?.sha === st.librarySha) return;
     const piece = await this.d.snapshots.store.getJson<{ assets?: Obj[] }>(st.librarySha);
     const m = new Map<string, string | null>();
     for (const a of piece?.assets ?? [])
       if (typeof a.id === 'string') m.set(a.id, typeof a.sha256 === 'string' ? a.sha256 : null);
-    this.libraryCache.set(st.librarySha, m);
+    this.libraryCache.set(projectId, { sha: st.librarySha, assets: m });
   }
 
   // ============================================================================================ F: propose a fix

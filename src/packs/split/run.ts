@@ -16,6 +16,7 @@ import { runWriteJob } from '../../mcp/tools/write-job.js';
 import { packBasis } from '../run.js';
 import { planSplit, SPLIT_TOOL, type Issue, type SplitInput, type SplitPlan } from './plan.js';
 import { SPLIT_CHECKS } from './checks.js';
+import { jobVerified } from './service.js';
 
 type Obj = Record<string, unknown>;
 
@@ -236,6 +237,7 @@ export async function runSplit(
             items: plan.items.map((i) => i.id),
             newPages: plan.destinations.filter((d) => d.isNew && d.page).map((d) => d.page!),
             unmapped: plan.dependencies.unmapped,
+            upgrade: plan.upgrade,
           },
         });
       return { kind: 'job', head, labels: plan.labels, ...out };
@@ -258,10 +260,14 @@ export function splitReport(pd: ProjectDeps, mctx: McpToolContext, ref: string):
       pd,
     );
   void mctx;
+  // CR-2026-11-R3 (R3-67): whether phase 1 verified is the job's own verification, never the split's.
+  const job = rec.jobId ? pd.engine.queries.getJob(pd.project.id, rec.jobId) : null;
+  const verified = job && ['succeeded', 'failed', 'cancelled'].includes(job.status) ? jobVerified(job) : null;
   return render(
     {
       split: rec.id,
       state: rec.state,
+      verified,
       source: { id: rec.sourceId, name: rec.sourceName },
       retire: rec.retire,
       proposalId: rec.proposalId,

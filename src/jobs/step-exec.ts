@@ -54,6 +54,7 @@ import {
   compareSidebarStates,
   factsVersionOf,
   normaliseContent,
+  sameContent,
   rowsState,
   sidebarState,
   stableJson,
@@ -1658,7 +1659,18 @@ export class StepExecutor {
                 continue;
               }
               // getResource gives rows in stored order: compared in rank order, by id (sidebar-state.ts).
-              if (p.rows) compareRows(label, p.rows, rowsState(actual.rows), diffs);
+              if (p.rows) {
+                const got = rowsState(actual.rows);
+                // CR-2026-11-R3 (R3-67): the row a step of this job dated is judged by that step, not here.
+                const want = p.datedRowId
+                  ? p.rows.map((r) =>
+                      r.id === p.datedRowId
+                        ? { ...r, content: got.find((a) => a.id === r.id)?.content ?? r.content }
+                        : r,
+                    )
+                  : p.rows;
+                compareRows(label, want, got, diffs);
+              }
               if (p.collection) compareCollection(label, p.collection, collectionState(actual), diffs);
             }
           } else {
@@ -3023,7 +3035,7 @@ export function matchCopy(
       }
       want.forEach((w, i) => {
         const g = got[i]!;
-        if (g.key !== w.key || stableJson(g.content) !== stableJson(w.content)) {
+        if (g.key !== w.key || !sameContent(g.content, w.content)) {
           differences.push({
             path: `${where} rows[${i}]`,
             expected: w,
@@ -3067,7 +3079,7 @@ function compareFacts(t: Extract<VerifyTarget, { kind: 'facts' }>, res: Obj, dif
       for (let i = 0; i < n; i++) {
         const g = got[i];
         const w = want[i];
-        if (!g || !w || g.key !== w.key || stableJson(g.content) !== stableJson(w.content)) {
+        if (!g || !w || g.key !== w.key || !sameContent(g.content, w.content)) {
           diffs.push({
             path: `${t.label} ${t.property.title} rows[${i}]${w ? ` “${w.key}”` : ''}`,
             expected: w ?? '(no row)',

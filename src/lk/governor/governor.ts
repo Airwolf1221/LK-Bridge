@@ -236,7 +236,14 @@ export class Governor {
   private readonly clock: Clock;
   private readonly transport: Transport;
   private readonly random: () => number;
-  private readonly als = new AsyncLocalStorage<AttemptContext>();
+  /**
+   * The call in flight, for `fetch` and `currentResponse` (they run inside `execute`'s `run`). CR-2026-11-R3 (R3-65): a
+   * holder emptied when the attempt ends. On Node 24 every timer and promise made during a call keeps the async context
+   * it was made in, and the LegendKeeper SDK makes a 35-second `AbortSignal.timeout` timer on every request: holding the
+   * attempt itself, that timer kept the caller's whole request (an MCP request's server, its transport and every tool it
+   * registered) for 35 seconds after the call had ended.
+   */
+  private readonly als = new AsyncLocalStorage<{ ctx: AttemptContext | null }>();
   private readonly tiers: Record<TierId, TierState>;
   private readonly lanes: Record<PriorityClass, Map<string, Pending[]>> = {
     P0: new Map(),
@@ -420,7 +427,7 @@ export class Governor {
    * `execute`'s `run`; any other use throws `GOVERNOR_BYPASS`.
    */
   readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
-    const ctx = this.als.getStore();
+    const ctx = this.als.getStore()?.ctx;
     // A released ticket means this is a straggler (e.g. a background task spawned by an earlier `run`).
     if (!ctx || ctx.governor !== this || ctx.ticket.released) {
       throw new BridgeLkError({
@@ -480,7 +487,7 @@ export class Governor {
    * undefined outside one or before the response: the `ETag` of a write (v2 D1.1, ADR 0039).
    */
   currentResponse(): CapturedResponse | undefined {
-    const ctx = this.als.getStore();
+    const ctx = this.als.getStore()?.ctx;
     return ctx && ctx.governor === this ? ctx.captured : undefined;
   }
 
@@ -874,8 +881,9 @@ export class Governor {
       controller.abort(reason);
       rejectAbort(reason);
     }, req.timeoutMs ?? this.settings.requestTimeoutMs);
+    const holder: { ctx: AttemptContext | null } = { ctx };
     try {
-      const result = await Promise.race([this.als.run(ctx, () => req.run(controller.signal)), aborted]);
+      const result = await Promise.race([this.als.run(holder, () => req.run(controller.signal)), aborted]);
       if (result instanceof Response) {
         if (!result.ok) {
           throw fromLkResponse({
@@ -890,6 +898,9 @@ export class Governor {
       }
       return result;
     } finally {
+      // A straggler of this call (a task its `run` left behind) now finds no call in flight (GOVERNOR_BYPASS, as a
+      // released ticket did), and what the call's timers keep is an empty holder.
+      holder.ctx = null;
       this.clock.clearTimeout(timer);
       req.signal?.removeEventListener('abort', onCallerAbort);
     }

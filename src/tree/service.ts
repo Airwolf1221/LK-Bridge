@@ -14,6 +14,7 @@
  *
  * All LegendKeeper requests go through the job engine's governed `internalRead` (the project's governor).
  */
+import { loggedTask } from '../maintenance/task-log.js';
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import {
@@ -1373,7 +1374,16 @@ export class TreeService {
     this.retryTimer = this.o.clock.setTimeout(
       () => {
         this.retryTimer = null;
-        this.track(this.processPending());
+        // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory.
+        const log = this.o.log;
+        this.track(
+          loggedTask(
+            log?.info ? { info: (obj, msg) => log.info!(obj, msg) } : undefined,
+            'repository tree re-reads owed',
+            {},
+            () => this.processPending(),
+          ),
+        );
       },
       Math.max(0, at - now),
     );

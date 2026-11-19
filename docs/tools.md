@@ -1819,6 +1819,8 @@ rail.
 `SPLIT_UNIVERSAL_OWNER_REQUIRED`, `SPLIT_UNIVERSAL_OWNER_NOT_FOUND`, `SPLIT_UNIVERSAL_OWNER_NOT_UNIVERSAL`,
 `SPLIT_UNIVERSAL_IN`, `SPLIT_SUMMARY_REQUIRED` (`missing`), `SPLIT_DEPENDENCIES_UNMAPPED` (`unmapped`),
 `SPLIT_DEPENDENCY_NOT_INCOMING`, `SPLIT_DEPENDENCY_TO`, `SPLIT_DEPENDENCY_KEEPS_RETIRED`, `SPLIT_RETIRE_IDENTITY`,
+`SPLIT_CORE_REQUIRED` (the character would have an index and several owners and no Character Core: upgrade its
+Compact Character Reference first, `arkona_create_character` with `target` and `upgradeToCore`; `identity`, `owners`),
 `SPLIT_SECTION_NOT_FOUND` (`headings`), `SPLIT_SECTION_AMBIGUOUS`, `SPLIT_BLOCK_NOT_IN_SECTION`, `SPLIT_MAP_ENTRY`,
 `SPLIT_DESTINATION_KEY`, `SPLIT_DESTINATION_UNKNOWN`, `SPLIT_DESTINATION_EMPTY`, `SPLIT_DESTINATION_PAGE`,
 `SPLIT_DESTINATION_SOURCE`, `SPLIT_DESTINATION_NOT_OWNER`, `SPLIT_LIFECYCLE_MISMATCH`, `SPLIT_UNDER_REQUIRED`,
@@ -1835,10 +1837,20 @@ item, page, sections, blocks, words, images), `interfaceSummaries`, `indexEntrie
 `unmapped`, `chronologyRows`), `items` (each with `ifLeftOut`: what leaving it out means), `blockIds`,
 `lastMajorRevision`, `warnings`, `notes` and `cost` (`planReads` as made; the job's estimate).
 
+**The Character Core** (CR-2026-11-R3, R3-66). A character with an index and several owners has a Character Core: a
+Compact Character Reference that the split leaves at the head of several owners (new ones the split makes, or ones its
+index already holds) is upgraded in place in the same proposal, as F3a's `upgradeToCore` does: renamed
+`<Name> - Character Core`, Reference Type `Character Core`, the Core template recorded; its id, documents, text,
+identity facts and links kept. Every new owner of the split needs that upgrade (its item), so a partial approval never
+makes the character several owners without a Core. Revert leaves the upgrade to the deletion proposal of the pages the
+split made (renaming an Authoritative page is canon): once the owner approves it as canon, the pages go first, then the
+Core is the Compact Character Reference again (only when every page the split made is deleted).
+
 **Items.** `dest:<key>` (a destination and its own source edit), `universal:<key>` (universal material whose text stays
 in the source), `index:<id>` (a new character index), `existing:<id>` (an existing page's changes from F3a or F3b, such
-as a relationship's links), `route:<id>` (a new page's line in an existing index), `dep:<id>` (a remapped Dependency).
-A destination left out keeps its sections in the source; what needs it is left out with it.
+as a relationship's links, or the source's move under a new index and its upgrade to the Core), `route:<id>` (a new
+page's line in an existing index), `dep:<id>` (a remapped Dependency). A destination left out keeps its sections in the
+source; what needs it is left out with it.
 
 **Phase 1** (one job): the first check (`split.source`: governance, the new names still free, the source as planned:
 `SPLIT_SOURCE_GONE`, `SPLIT_SOURCE_ARCHIVED`, `SPLIT_SOURCE_CHANGED`), the new owners (F3a's and F3b's steps; each
@@ -1854,6 +1866,13 @@ block's whole content; an item's later appends to an existing owner are core (th
 it part-way); a source holding an inline icon is refused (`SPLIT_NOT_WRITABLE`), and so is an image assigned as universal
 material (`SPLIT_VISUAL`).
 
+**Verified** (CR-2026-11-R3, R3-67) is the job's own verification, never the split's: every read-back of the job's
+writes and its final verification (a mention compared by its target, `resourceId` and `documentId`; the name and label
+LegendKeeper fills in are display fields). A job that ran to its end but read back a difference makes the split
+`unverified`: nothing is retired, and `report` says `verified: false` with the job to look at. So does a split resumed
+after a write that read back a difference, even once that is put right by hand (its job's verification keeps it): the
+owner retires the source with `archive_page` once satisfied.
+
 **Phase 2**: with `retire`, once phase 1 has verified and nothing was left out or skipped, the bridge proposes
 archiving the source with `archive_page`'s own plan (a separate canonical proposal, owner-forced). Never a delete.
 `{ report }` (a split's id, proposal or job) answers its state, its destinations and phase 2 (or why there is none), free.
@@ -1866,16 +1885,16 @@ proposal. `arkona_create_character`'s `split` is refused with the same code.
 
 ### Costs (measured against the mock)
 
-| Call                                                                   | Requests                                                                          | Writes |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------ |
-| `arkona_split_appraisal`                                               | 0 (`live: true`: 2 a page, at most 25)                                            | 0      |
-| `arkona_split_owner`, a character monolith: plan (dry run)             | 11 (8 the plan's own, 3 the pack's governance)                                    | 0      |
-| the same, proposed                                                     | 23                                                                                | 0      |
-| its job (six new owners and a new index, one remapped Dependency)      | 243 (estimated 171 reads)                                                         | 87     |
-| `arkona_split_owner`, an owner with two domains: proposed              | 12                                                                                | 0      |
-| its job (one new owner, one existing owner, two remapped Dependencies) | 84 (estimated 58 reads)                                                           | 22     |
-| phase 2                                                                | `archive_page`'s own (about 6 reads to propose, then about 15 reads and 8 writes) | 8      |
-| a conflict on an existing owner's append (LegendKeeper answers 412)    | one more read, and the write again                                                | 1      |
+| Call                                                                                | Requests                                                                          | Writes |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------ |
+| `arkona_split_appraisal`                                                            | 0 (`live: true`: 2 a page, at most 25)                                            | 0      |
+| `arkona_split_owner`, a character monolith: plan (dry run)                          | 13 (10 the plan's own, 3 the pack's governance)                                   | 0      |
+| the same, proposed                                                                  | 26                                                                                | 0      |
+| its job (six new owners and a new index, the Core upgrade, one remapped Dependency) | 248 (estimated 175 reads)                                                         | 89     |
+| `arkona_split_owner`, an owner with two domains: proposed                           | 12                                                                                | 0      |
+| its job (one new owner, one existing owner, two remapped Dependencies)              | 84 (estimated 58 reads)                                                           | 22     |
+| phase 2                                                                             | `archive_page`'s own (about 6 reads to propose, then about 15 reads and 8 writes) | 8      |
+| a conflict on an existing owner's append (LegendKeeper answers 412)                 | one more read, and the write again                                                | 1      |
 
 ## Setting packs: retagging (v3 F3f)
 

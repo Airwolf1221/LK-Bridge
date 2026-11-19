@@ -1,3 +1,4 @@
+import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
 import { registerPackEngine } from './packs/engine/checks.js';
@@ -109,6 +110,9 @@ import {
  * MCP endpoint), then the MCP tools. `src/server.ts` builds the HTTP side around it. The policy layer (chunk 2b) is
  * built first: its live gate and proposal sink go into the engine, and it is attached once the engine has started.
  */
+
+/** CR-2026-11-R3 (R3-65): how often the process's memory is logged ("memory"). */
+const MEMORY_LOG_MS = 10 * 60_000;
 export interface Runtime {
   /**
    * The projects this bridge serves (v2 A1), each with its own governor and key; which are served now, and why not.
@@ -263,6 +267,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const config = applyStoredSettings(envConfig, o.db);
   const logOptions = { level: o.logLevel ?? config.logLevel, base: { component: 'engine' } };
   const log = o.logStream ? pino(logOptions, o.logStream) : pino(logOptions);
+  // CR-2026-11-R3 (R3-65): what background tasks log their start and finish with (task-log.ts).
+  const taskLog: TaskLogger = { info: (obj, msg) => log.info(obj, msg) };
   // Signed upload URLs are on another host: the transport sends LegendKeeper's host through the platform fetch
   // and every other host through the SSRF guard. Both stay under the governor.
   // The SSRF guard for every non-LegendKeeper fetch of the tool layer (the signed-URL PUT and an image source URL):
@@ -287,7 +293,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     else log.warn({}, w);
   }
   // ADR 0023: exactly one bridge process serves a database (and so its projects). Refuses a second one.
-  const guard = o.instanceGuard === false ? null : new InstanceGuard({ db: o.db });
+  const guard = o.instanceGuard === false ? null : new InstanceGuard({ db: o.db, taskLog });
   const took = guard?.acquire();
   if (took?.tookOver) {
     log.warn(
@@ -716,7 +722,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
     afterFull: async (projectId) => {
-      await offsite.afterFullSnapshot();
+      // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory.
+      await loggedTask(taskLog, 'off-site copy after the full snapshot', { project: projectId }, () =>
+        offsite.afterFullSnapshot(),
+      );
       // v2 E2: an audit of the snapshot just completed (in the background; it reads no LegendKeeper).
       audits?.afterFullSnapshot(projectId);
       // v3 F3c (ADR 0054): the appraisal's overlay and full-text index rebuilt from it (likewise).
@@ -739,7 +748,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
-    log: { warn: (obj, msg) => log.warn(obj, msg) },
+    log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
     // v3 F2 (ADR 0049 decision 9): duplicate asset folders, from the bridge's asset tree (no LegendKeeper read).
     assetLibrary: (projectId) => assetLibraryOf(assets, projectId),
     // v3 F3d (ADR 0053): where the lifecycle tag goes and the AU ruling, from the project's approved pack.
@@ -774,7 +783,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     assetHosts: imageSettings.assetHosts,
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
-    log: { warn: (obj, msg) => log.warn(obj, msg) },
+    log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
   });
   // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation. Its candidates come from the appraisal's
   // snapshot overlay (no LegendKeeper read); each document is one P3 job with its own check and verify (two checkers).
@@ -942,6 +951,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       isReverted: (projectId, jobId) => splitsRef.current?.isReverted(projectId, jobId) ?? false,
       isRetired: (projectId, jobId) => splitsRef.current?.isRetired(projectId, jobId) ?? false,
       pagesMade: (projectId, jobId) => splitsRef.current?.pagesMade(projectId, jobId) ?? 0,
+      coreUpgrade: (projectId, jobId) => splitsRef.current?.coreUpgrade(projectId, jobId) ?? null,
       afterRevert: (projectId, jobId, revertJobId) =>
         splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
     },
@@ -1082,7 +1092,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     settings: maintenanceSettings,
     expirySweepMs: policySettings.expirySweepMs,
     proposalRetentionMs: policySettings.proposalRetentionMs,
-    log: { warn: (obj, msg) => log.warn(obj, msg) },
+    log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
     tree,
     assets,
     links: lifecycle,
@@ -1092,6 +1102,27 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     blockIds,
   });
   maintenance.start();
+  // CR-2026-11-R3 (R3-65): the process's memory in the log every 10 minutes (and once at start), so a long run shows which
+  // part grows: the V8 heap (used, and what V8 holds for it), memory outside it (Buffers, native), or the resident set.
+  const logMemory = () => {
+    const m = process.memoryUsage();
+    const mb = (n: number) => Math.round(n / 1048576);
+    log.info(
+      {
+        memory: {
+          rssMb: mb(m.rss),
+          heapUsedMb: mb(m.heapUsed),
+          heapTotalMb: mb(m.heapTotal),
+          externalMb: mb(m.external),
+          arrayBuffersMb: mb(m.arrayBuffers),
+        },
+      },
+      'memory',
+    );
+  };
+  logMemory();
+  const memoryTimer = setInterval(logMemory, MEMORY_LOG_MS);
+  memoryTimer.unref();
   const mappings = createMappings({
     db: o.db,
     engine,
@@ -1330,6 +1361,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     for (const off of detachSnapshotCheckers) off();
     for (const off of detachAuditCheckers) off();
     detachBlockIds();
+    clearInterval(memoryTimer);
     detachBlockwiseUndo();
     detachReverts();
     detachResume();

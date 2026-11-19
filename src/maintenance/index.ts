@@ -51,7 +51,10 @@ export interface CreateMaintenanceOptions {
   readonly expirySweepMs: number;
   /** POLICY_PROPOSAL_RETENTION_DAYS in milliseconds: what `proposal-prune` keeps. Default 90 days. */
   readonly proposalRetentionMs?: number;
-  readonly log?: { warn(o: Record<string, unknown>, m: string): void };
+  readonly log?: {
+    warn(o: Record<string, unknown>, m: string): void;
+    info?(o: Record<string, unknown>, m: string): void;
+  };
   /** v2 A2: the repository tree, for the `tree-sweep` and `tree-check` jobs. */
   readonly tree?: TreeMaintenance;
   /** v2 A4: the asset tree, for the `asset-refresh` and `asset-check` jobs. */

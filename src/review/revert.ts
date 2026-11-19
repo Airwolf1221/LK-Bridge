@@ -26,7 +26,7 @@ import {
   type DocumentChecker,
   type RegisteredChecker,
 } from '../jobs/internal-steps.js';
-import { rowsContentHash, rowsState, stableJson } from '../jobs/sidebar-state.js';
+import { rowsContentHash, rowsState, stableJson, type RowState } from '../jobs/sidebar-state.js';
 import {
   SYSTEM_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
@@ -157,6 +157,15 @@ export interface RevertDeps {
     isRetired?(projectId: string, jobId: string): boolean;
     /** How many pages a split's phase 1 made (its deletion proposal's pages, at most). */
     pagesMade?(projectId: string, jobId: string): number;
+    /**
+     * CR-2026-11-R3 (R3-66): the source a split's phase 1 upgraded from its Compact Character Reference to its Character
+     * Core (renaming an Authoritative page is canon, ADR 0057 decision 5, which the bridge never does on its own): its name
+     * and Reference Type are put back by the deletion proposal of the pages the split made, not by the revert job.
+     */
+    coreUpgrade?(
+      projectId: string,
+      jobId: string,
+    ): { readonly resourceId: string; readonly from: string; readonly to: string } | null;
     afterRevert(
       projectId: string,
       jobId: string,
@@ -329,6 +338,7 @@ export class RevertService {
     const plans: TargetPlan[] = [];
     const blocksByDoc = new Map<string, BlockTarget[]>();
     const split = this.d.splits?.isPhase1(projectId, jobId) === true;
+    const upgrade = split ? (this.d.splits?.coreUpgrade?.(projectId, jobId) ?? null) : null;
     for (const t of targets) {
       if (t.kind === 'block') {
         blocksByDoc.set(t.documentId, [...(blocksByDoc.get(t.documentId) ?? []), t]);
@@ -349,7 +359,21 @@ export class RevertService {
         });
         continue;
       }
-      plans.push(await this.planOne(t, io, projectId));
+      const t2 = upgrade?.resourceId === resourceOf(t) ? withoutUpgrade(t, upgrade) : t;
+      if (t2 === null) {
+        plans.push({
+          check: {
+            key: t.key,
+            kind: t.kind,
+            page: t.page,
+            what: t.what,
+            state: 'nothing_to_do',
+            detail: `${t.what}: ${upgrade!.from} became ${upgrade!.to} with the split; it is put back (with its Reference Type) by the deletion proposal of the pages the split made, which the owner approves as canon`,
+          },
+        });
+        continue;
+      }
+      plans.push(await this.planOne(t2, io, projectId));
     }
     for (const ts of blocksByDoc.values()) plans.push(...(await planBlocks(ts, io)));
     return { eligible: { ok: true }, plans, targets };
@@ -981,3 +1005,32 @@ const blocksChecker: DocumentChecker = (ctx) => {
   }
   return { differences };
 };
+
+const resourceOf = (t: Target): string | null =>
+  'resourceId' in t && typeof t.resourceId === 'string' ? t.resourceId : null;
+
+/**
+ * CR-2026-11-R3 (R3-66): a target of the source a split upgraded to its Character Core, without the upgrade (its new name,
+ * its Reference Type row), which the deletion proposal puts back; null when nothing else of it is left to revert.
+ */
+function withoutUpgrade(t: Target, u: { readonly from: string; readonly to: string }): Target | null {
+  if (t.kind === 'resource') {
+    const before = { ...t.before } as Record<string, unknown>;
+    const left = { ...t.left } as Record<string, unknown>;
+    if (before.name !== u.from || left.name !== u.to) return t;
+    delete before.name;
+    delete left.name;
+    return Object.keys(left).length === 0 ? null : { ...t, before, left };
+  }
+  if (t.kind === 'facts' && t.rowsBefore && t.rowsLeft) {
+    const rt = (rows: readonly RowState[]) =>
+      rows.find((r) => r.key.trim().toLowerCase() === 'reference type');
+    const left = rt(t.rowsLeft);
+    if (!left) return t;
+    const rowsBefore = t.rowsBefore.map((r) => (r.id === left.id ? left : r));
+    const same = stableJson(rowsBefore) === stableJson(t.rowsLeft);
+    if (same && t.collections.length === 0 && !t.lmr) return null;
+    return { ...t, rowsBefore: same ? t.rowsLeft : rowsBefore };
+  }
+  return t;
+}

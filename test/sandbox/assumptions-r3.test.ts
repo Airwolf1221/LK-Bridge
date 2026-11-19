@@ -26,17 +26,21 @@
  *   versions and says "documents' metadata … unchanged" of `updatedAt`.
  * - **X7** a NESTED block with an id a top-level block of the same document already has: refused, or kept twice
  *   (NOTED; the split assumes a refusal, its report's "suspected, not reproduced" 1).
+ * - **X8** a plain mention (no label) reads back with its page, and the generic verify finds the document as written:
+ *   LegendKeeper fills in display fields on read-back (the owner saw `name` and `text`, NOTED), which the verify ignores,
+ *   comparing a mention by its target (CR-2026-11-R3, R3-67: a split's job read its own mentions back as differences).
  *
  * Everything runs in the sandbox runtime's own temporary database, through the job engine and the governor (never a raw
  * request; each document write carries If-Match from the engine's read). The same guard as the other sandbox tests: a
  * registered sandbox project with its own key, refused otherwise before any request. What it makes: two throwaway pages
  * `lk-bridge r3 check A|B <time>` (B with a second page document) and one asset folder `lk-bridge r3 X1 <time>`; plain
  * names, no prefix, no status tag. All are deleted at the end, even after a failure; the report names any to delete by
- * hand. Cost: about 25 writes and 25 reads.
+ * hand. Cost: about 26 writes and 26 reads.
  */
 import { describe, expect, it } from 'vitest';
 import { mintClientId, type OpParams, type StepOptions } from '../../src/jobs/index.js';
 import { stableJson } from '../../src/jobs/sidebar-state.js';
+import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
 import { createSoakRuntime, type SoakRuntime } from './soak.js';
 import { resolveSandboxTarget } from './target.js';
 
@@ -309,6 +313,37 @@ async function runCheck(sb: SoakRuntime): Promise<Item[]> {
         );
       }
     });
+
+    await check(
+      'X8',
+      'a plain mention reads back with its page, and the generic verify finds it as written',
+      async () => {
+        const sent = [
+          {
+            id: mintClientId(),
+            kind: 'paragraph',
+            content: [{ text: 'See ' }, { mention: { resourceId: B.resourceId } }, { text: '.' }],
+          },
+        ];
+        await write(A, sent);
+        const back = await read(A);
+        const m = ((back.blocks[0]?.content ?? []) as Obj[]).find((r) => r.mention)?.mention as
+          Obj | undefined;
+        const cmp = compareStoredBlocks(sent, back.blocks);
+        const filled = m
+          ? Object.keys(m)
+              .filter((k) => k !== 'resourceId')
+              .map((k) => `${k} ${JSON.stringify(m[k])}`)
+              .join(', ') || 'nothing'
+          : 'no mention';
+        record(
+          'X8',
+          'a plain mention reads back with its page, and the generic verify finds it as written',
+          m?.resourceId === B.resourceId && cmp.ok ? 'pass' : 'fail',
+          `resourceId ${m?.resourceId === B.resourceId ? 'kept' : `changed (${String(m?.resourceId)})`}; filled in on read-back (NOTED): ${filled}; the verify: ${cmp.ok ? 'the document as written' : `${cmp.count} difference(s): ${stableJson(cmp.differences).slice(0, 300)}`}`,
+        );
+      },
+    );
   } finally {
     for (const id of folders.reverse()) {
       try {
@@ -342,7 +377,7 @@ async function runCheck(sb: SoakRuntime): Promise<Item[]> {
   return items;
 }
 
-describe.skipIf(!projectName)('LegendKeeper sandbox: what the third review assumes (X1–X7)', () => {
+describe.skipIf(!projectName)('LegendKeeper sandbox: what the third review assumes (X1–X8)', () => {
   it('confirms each assumption on the real API, and cleans up', async () => {
     // Refuses (throws) before any request unless the project is a registered sandbox with a key.
     const target = resolveSandboxTarget(projectName);
@@ -357,7 +392,7 @@ describe.skipIf(!projectName)('LegendKeeper sandbox: what the third review assum
       process.stdout.write(
         [
           '',
-          'LK-Bridge sandbox: what the third review (CR-2026-11-R3) assumes of LegendKeeper (X1–X7)',
+          'LK-Bridge sandbox: what the third review (CR-2026-11-R3) assumes of LegendKeeper (X1–X8)',
           '==========================================================================================',
           ...items.map((i) => `[${mark[i.verdict]}] (${i.id}) ${i.title}\n        ${i.detail}`),
           '',

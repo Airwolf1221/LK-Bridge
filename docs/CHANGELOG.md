@@ -9,9 +9,10 @@ findings needed the owner's own approval or Revert (a split losing a moved block
 leaving its sections on no page, then deleting their only copy, R3-09, R3-10). Deploy this before the next approved
 rename or split. The review covers `88c640e` to `6eeff4c` (F3.5, R2.1, F3d, F3d.1, F3e, F3f; ADRs 0056 to 0060)
 ([docs/reviews/CR-2026-11-R3.md](reviews/CR-2026-11-R3.md); decisions in
-[ADR 0061](adr/0061-cr-2026-11-r3-decisions.md), proposed). 63 findings (5 critical, 23 high, 21 medium, 14 low): 54
-fixed, each with a test that fails on the reviewed code; 9 open, their tests kept as `it.fails`. No migration; deploy
-normally (`sudo systemctl daemon-reload`: the unit file changed). Nothing was run against a live system.
+[ADR 0061](adr/0061-cr-2026-11-r3-decisions.md), proposed). 66 findings (5 critical, 26 high, 21 medium, 14 low): 57
+fixed, each with a test that fails on the reviewed code; 9 open, their tests kept as `it.fails`. One migration
+(`3800_split_unverified.sql`, the split's new `unverified` state; it runs at start); deploy normally
+(`sudo systemctl daemon-reload`: the unit file changed). Nothing was run against a live system.
 
 - **A clean restart (the owner's fix A).** On SIGTERM the bridge answers 503 "the bridge is restarting"
   (`BRIDGE_RESTARTING`), lets requests already sent to LegendKeeper finish (at most 10 s), stops each job at its next
@@ -27,6 +28,34 @@ normally (`sudo systemctl daemon-reload`: the unit file changed). Nothing was ru
   R3-01), that a check meeting the budget was reported as "the page changed" (now parked, R3-02), and that a job whose
   first check needs more reads than an hour's budget never finished (its checks' reads now wait for the budget in their
   queue, and a large check runs again light after a wait, R3-62).
+- **Memory over time (R3-65, the owner's live report).** Each LegendKeeper request kept the whole MCP request that made
+  it (its server, transport and registered tools) reachable for 35 seconds after it ended: the LegendKeeper SDK arms a
+  35-second `AbortSignal.timeout` on every request, and on Node 24 a timer keeps the async context it was made in, which
+  held the governor's call. The governor's context is now emptied when a call ends. Two caches no longer grow without
+  bound: the snapshot store's recently put objects (kept two hours, was a day) and the appraisal's asset-library hashes
+  (the newest library of each project, was every version). Simulating hours of background work and agent traffic (change
+  snapshots, MCP connections, the scheduled audit, the tree's and the block-id sweeps), the heap is now flat (was +24 MB
+  over 60 rounds, climbing with the traffic); whole-repository runs come back to their level; the night's maintenance
+  peaks at +100 MB (full snapshot and index, 600 pages) and +69 MB (scheduled audit), and leaves nothing. The bridge now
+  logs its memory every 10 minutes (`"msg":"memory"`: resident set, V8 heap used and held, outside the heap, Buffers),
+  and every scheduled or background task logs its start and finish at info with `heapUsedMb` and `rssMb` (and how far
+  each moved): every maintenance job, change snapshots, the work after a full snapshot, the image service's timers, the
+  auth prune, the tree's re-reads owed; tasks that run every minute or more often only when memory moved or they
+  failed.
+- **Splits: the Character Core (R3-66, found by the owner on the test world).** A Compact Character Reference split
+  into several owners became the head of a multi-owner index as a Compact Reference. Now the same canonical proposal
+  upgrades it in place to the Character Core (F3a's `upgradeToCore`: name, Reference Type, template; id, text and
+  identity facts kept), every new owner needing that upgrade; any other map that would leave a multi-owner character
+  without a Core is refused (`SPLIT_CORE_REQUIRED`). Revert puts the Compact back in the deletion proposal of the pages
+  the split made (canon), after them.
+- **Splits: verified means the job's verification (R3-67, found by the owner on the test world).** A split job read its
+  own mentions back as differences (LegendKeeper fills in each mention's name and label), so the job said "not verified"
+  while the split said "verified" (it took that from the job having run to its end, and went on to propose retiring the
+  source). The generic verify now compares a mention by its target (`resourceId`, `documentId`), in page text and
+  sidebar rows; the split is verified only when its job's verification is, else `unverified` (nothing retired), and
+  `report` says the job's `verified`. A read-back leaves the Last Major Revision row a step of the same job dates to
+  that step (`datedRowId`). A split resumed after a write that read back a difference now stays `unverified` (phase 2
+  is the owner's; ADR 0061 B6).
 - **The retag read-back (fix C)** compares each page document's body by its version: "each page document's body at the
   same version as before the write; other documents (board, map, timeline) compared by their metadata timestamps only,
   not their content" (ADR 0060 departure 3 amended).
@@ -51,7 +80,7 @@ normally (`sudo systemctl daemon-reload`: the unit file changed). Nothing was ru
 - **Open, for the owner** (ADR 0061 part B): text emptied through a raw route (R3-53), the split guard per edit (R3-52),
   whose cancel a Resume may undo (R3-54), the rails at Resume (R3-55), a retag revert of a page renamed or moved since
   (R3-57); low findings for the next slice: R3-56, R3-58 to R3-60.
-- **New sandbox check** (written, not run): `test/sandbox/assumptions-r3.test.ts` (X1 to X7), for the owner.
+- **New sandbox check** (written, not run): `test/sandbox/assumptions-r3.test.ts` (X1 to X8), for the owner.
 
 ## Unreleased: v3 F3f (retagging) (19 November 2026): `arkona_retag_audit`, `arkona_retag_apply`, owner classification, reconciliation
 

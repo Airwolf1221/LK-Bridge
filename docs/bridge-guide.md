@@ -790,8 +790,11 @@ never a decision.
 **Refused before anything is proposed, with lists:** a block unassigned or assigned twice (`SPLIT_COVERAGE`), a section
 listed twice (`SPLIT_DUPLICATED_AUTHORITY`), images going to a page that is not an Art or visual owner (`SPLIT_VISUAL`),
 content LegendKeeper cannot create (it can only stay), a missing summary (`SPLIT_SUMMARY_REQUIRED`), an unmapped
-Dependency of a source to be retired (`SPLIT_DEPENDENCIES_UNMAPPED`), a character's identity page to be retired, and
-whatever the pack's own rules refuse for a new page (its name, template, tags, home). **Warnings** for the owner: a
+Dependency of a source to be retired (`SPLIT_DEPENDENCIES_UNMAPPED`), a character's identity page to be retired, a map
+that would leave a character with an index and several owners but no Character Core (`SPLIT_CORE_REQUIRED`: upgrade its
+Compact Character Reference first with `arkona_create_character`, `target` and `upgradeToCore`), and whatever the pack's
+own rules refuse for a new page (its name, template, tags, home). A Compact Character Reference you split into several
+owners becomes the character's Character Core in the same proposal (its id, text and identity facts kept). **Warnings** for the owner: a
 section about one other character not going to a relationship owner, and a block citing a universal owner moving into
 a character's page.
 
@@ -803,14 +806,17 @@ writes the index lines and the remapped Dependencies, dates Last Major Revision 
 a direct re-read (every original block in exactly one place). If any of it fails, the job stops before phase 2: the
 owner resumes or reverts it on the dashboard. **Phase 2**, with `retire: true`, once phase 1 has verified and nothing was
 left out: the bridge proposes archiving the source with `archive_page`, a separate canonical proposal. The split never
-deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it. A
+deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it, and
+its `verified` is the job's own verification: a job that ran to its end but read back a difference leaves the split
+`unverified` (nothing is retired; tell the owner, who looks at the job's differences). A
 destination the owner left out is not proposed again from the old plan: when the owner asks, split what is left as a
 new split, on the source as it is now. A source holding an inline icon cannot be split (`SPLIT_NOT_WRITABLE`: the split
 writes the source back whole); ask the owner to remove the icon first.
 
-**Cost**, measured on the test fixtures: a character monolith split into six new owners with one remapped Dependency
-costs 23 requests to propose and a job of 243 (87 writes); an owner split into one new and one existing owner, 12 to
-propose and 84 (22 writes). The dry run states the plan's reads and the job's estimate.
+**Cost**, measured on the test fixtures: a character monolith (a Compact Character Reference, upgraded to its Character
+Core in the same proposal) split into six new owners with one remapped Dependency costs 26 requests to propose and a job
+of 248 (89 writes); an owner split into one new and one existing owner, 12 to propose and 84 (22 writes). The dry run
+states the plan's reads and the job's estimate.
 
 ### Arkona retagging
 

@@ -100,6 +100,11 @@ export interface PackageInput {
   readonly index?: { readonly markdown: string } | undefined;
   readonly target?: string | undefined;
   readonly upgradeToCore?: boolean | undefined;
+  /**
+   * With upgradeToCore: warn about the Reference's sections a new page now owns (default true). A split (F3e) moves those
+   * sections itself, each leaving an interface summary, so it passes false (and the Reference is not read for it).
+   */
+  readonly upgradeOverlap?: boolean | undefined;
   readonly split?: unknown;
   /**
    * v3 F3b (ADR 0052): the names a relationship's page takes for its two participants, exactly as their indexes give
@@ -1517,8 +1522,8 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
           facts.push({ key: 'Reference Type', value: coreRule.referenceType ?? 'Character Core' });
           why.push(`Reference Type: ${compactRule.referenceType} → ${coreRule.referenceType}`);
           // The Reference's body is kept; sections the new pages now own are warned about.
-          const overlap = await overlapWarnings(env, target.identity, pages);
-          warnings.push(...overlap);
+          if (input.upgradeOverlap !== false)
+            warnings.push(...(await overlapWarnings(env, target.identity, pages)));
         }
       }
     }

@@ -382,6 +382,7 @@ const expectedProperty = z
     title: z.string().max(256),
     rows: z.array(rowState).max(256).optional(),
     collection: collectionState.optional(),
+    datedRowId: id.optional(),
   })
   .strict();
 
@@ -778,6 +779,11 @@ export interface ExpectedProperty {
   readonly title: string;
   readonly rows?: readonly RowState[];
   readonly collection?: CollectionState;
+  /**
+   * CR-2026-11-R3 (R3-67): the Last Major Revision row a later step of the same job dates (`bridge.lmr`): its value is not
+   * judged by this read-back (that step set it, and Revert lays it over these rows), every other row is.
+   */
+  readonly datedRowId?: string;
 }
 
 export type VerifyTarget =
@@ -1092,7 +1098,7 @@ export interface TargetVerification {
 /** What the generic verify step may ignore, by target kind (listed in every verification). */
 export const SIDEBAR_IGNORED_FIELDS: readonly string[] = [
   'rank and text of a row (the order of the rows, and the runs, are compared)',
-  'name in a mention (read-only: the page’s current name)',
+  'a mention’s name and text (display fields LegendKeeper fills in: the page’s current name, its label): a mention is compared by its target (resourceId, documentId)',
   'runs normalised as LegendKeeper does on write (empty text runs dropped, neighbouring runs with the same marks merged)',
   'the id LegendKeeper gives a row or item the bridge created',
   'properties the plan did not name',

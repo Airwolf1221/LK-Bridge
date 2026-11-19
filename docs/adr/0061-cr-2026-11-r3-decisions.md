@@ -6,7 +6,8 @@ leaves open. The findings are in [docs/reviews/CR-2026-11-R3.md](../reviews/CR-2
 
 - Amends: [ADR 0055](0055-write-scope-review-revert-rails.md) decision B (a confirmed partial revert is not offered for a
   split's phase 1); [ADR 0058](0058-v3-f3d-renames-selective-approval-resume.md) decisions 2.5 ("Propose these again")
-  and 3 (Resume); [ADR 0059](0059-v3-f3e-splits.md) decisions 3, 5 and 6.2 (appends, the visual audit, Revert) and its
+  and 3 (Resume); [ADR 0059](0059-v3-f3e-splits.md) decisions 2.1, 3, 4, 5 and 6.2 (the new owners, appends, the
+  verification, phase 2, the visual audit, Revert) and its
   departure 10 (what "verbatim" is checked by); [ADR 0060](0060-v3-f3f-retag-audit-and-apply.md) decisions 1.6 and 3
   (status-tag spellings, suggestions) and departure 3 (the read-back, as amended by fix C).
 
@@ -71,6 +72,21 @@ that is the owner's.
    than about a third of an hour's budget (a 700-page rename could then not run at all); (c) split large checks into
    steps (a planner change for every pack tool).
 
+10. **A split never leaves a multi-owner character without a Character Core** (R3-66, the owner's report; amends ADR
+    0059 decisions 2.1 and 3.2, the new owners by F3a's rules, and 6.2, Revert). A Compact Character Reference the split leaves at the head of several owners is
+    upgraded in place in the same canonical proposal (F3a's `upgradeToCore`), every new owner needing that upgrade;
+    any other such map is refused (`SPLIT_CORE_REQUIRED`). Revert of such a split leaves the Core rename to the deletion
+    proposal of the pages it made (canon, approved as canon), after them, and only when every page the split made goes.
+    Alternative: refuse every such split until the owner upgrades the Reference first (more steps for the same result).
+11. **A split is verified only by its job's verification** (R3-67, the owner's report; amends ADR 0059 decisions 3.10
+    and 4, the verification and what triggers phase 2), and the generic verify compares a mention by its target (`resourceId`, `documentId`), its `name`
+    and `text` being display fields LegendKeeper fills in (amends the ignored fields of ADR 0031 and ADR 0032's generic
+    verify). A job that ran to its end but read back a difference leaves the split `unverified` (new state, migration
+    3800): nothing is retired. Consequence: a mention's custom label is no longer compared by the verify (LegendKeeper's
+    API cannot change a label anyway; the appraisal still reports labelled routing lines). A read-back's property names
+    the Last Major Revision row a step of the same job dates (`datedRowId`), which that step judges. A split resumed
+    after a write that read back a difference stays `unverified` (part B, decision 6).
+
 ## Part B: the owner's decisions (open findings; their tests are kept as `it.fails`)
 
 1. **Text emptied through a raw route** (R3-53: `lk_api_write` `replaceDocumentBlocks` keeping every id, or
@@ -93,6 +109,13 @@ that is the owner's.
    reverted). ADR 0060 decision 3.6 says "only where the page is as the job left it". Options: (a) the tags are what the
    job left (as built); (b) also its name and parent. Recommended: (b).
 
+6. **A resumed job's verification** (from R3-67's fix: a split is verified only when its job is). A job stopped by a
+   write that read back a difference keeps that difference in its verification after Resume, even once it is put right
+   by hand: a split resumed so ends `unverified`, and phase 2 is the owner's (`archive_page`); before R3-67 the split
+   said "verified" and proposed it. Options: (a) as built; (b) Resume reads each such write back again before it
+   continues, and one that now reads back as planned counts as verified ("put right since", said in the job's result).
+   Recommended: (b).
+
 Left open as low findings for the next slice, not decisions: R3-56 (a rename's re-placing moves are not re-anchored for
 names left out, and are computed against a simulated order), R3-58 (`lk_api_write`'s rename steering reads the tree's
 stored sidebar; unknown, it does not read the page), R3-59 (`arkona_appraisal_fix`'s name fix is not steered) and R3-60
@@ -100,7 +123,8 @@ stored sidebar; unknown, it does not read the page), R3-59 (`arkona_appraisal_fi
 
 ## Consequences
 
-No migration. Every part A change has a regression test that fails on the reviewed code. Agents see new codes:
-`SPLIT_REVERT_NOT_WHOLE` (the owner's, on the dashboard), `SPLIT_NOT_WRITABLE`, `STEP_TOO_LARGE`, `REPROPOSE_REFUSED`,
+One migration (`3800_split_unverified.sql`: the split state `unverified`). Every part A change has a regression test
+that fails on the reviewed code. Agents see new codes: `SPLIT_CORE_REQUIRED`, `SPLIT_REVERT_NOT_WHOLE` (the owner's, on
+the dashboard), `SPLIT_NOT_WRITABLE`, `STEP_TOO_LARGE`, `REPROPOSE_REFUSED`,
 `REPROPOSE_RUNNING`, `REVERT_STOPPED`, `PROPOSAL_NOT_APPROVED`, `FROM_NOT_A_FORMER_NAME`, `RETAG_STALE` and
 `BRIDGE_RESTARTING` (503 while the bridge restarts).

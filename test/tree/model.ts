@@ -103,6 +103,12 @@ export class TreeModel {
   nameFilter: (name: string) => string = (n) => n;
   /** Resources a listing leaves out (as a listing paged during changes can skip one); reads still find them. */
   readonly hiddenFromListing = new Set<string>();
+  /**
+   * CR-2026-11-R3 (R3-67): answer a document's mention runs as LegendKeeper does on read-back, each with the mentioned
+   * page's current name filled in (`name`, and `text` when the run has no label of its own). Off by default (the
+   * fixtures compare blocks as written).
+   */
+  fillMentions = false;
 
   constructor(private readonly now: () => number) {}
 
@@ -170,6 +176,25 @@ export class TreeModel {
     this.docs.set(d.id, d);
     r.docs.push(d.id);
     return d;
+  }
+
+  /** Every mention run, at any depth, with its page's current name (as LegendKeeper answers it). */
+  private withMentionNames(v: unknown[]): unknown[] {
+    const walk = (x: unknown): void => {
+      if (Array.isArray(x)) for (const y of x) walk(y);
+      else if (x && typeof x === 'object') {
+        const o = x as Record<string, unknown>;
+        const m = o.mention as Record<string, unknown> | undefined;
+        if (m && typeof m === 'object' && typeof m.resourceId === 'string') {
+          const name = this.res.get(m.resourceId)?.name;
+          if (name !== undefined)
+            o.mention = { ...m, name, text: typeof m.text === 'string' ? m.text : name };
+        }
+        for (const y of Object.values(o)) if (y !== o.mention) walk(y);
+      }
+    };
+    walk(v);
+    return v;
   }
 
   // ============================================================================================ reading the model
@@ -563,7 +588,9 @@ export class TreeModel {
         version: `v${b.version}`,
         schema: 1,
         text: '',
-        blocks: structuredClone(b.blocks),
+        blocks: this.fillMentions
+          ? this.withMentionNames(structuredClone(b.blocks))
+          : structuredClone(b.blocks),
       });
       if (M === 'GET') return { status: 200, body: view() };
       if (M === 'PUT') {

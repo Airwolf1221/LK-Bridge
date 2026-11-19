@@ -1000,6 +1000,29 @@ If `MemoryPeak` over a busy week (with images converted) stays well below 1 GB, 
 it approaches 1400 MB, look for a cause before raising anything; lowering `IMAGE_MAX_PIXELS` (for example to 50000000)
 lowers a conversion's peak in proportion.
 
+The bridge logs its own memory every 10 minutes, and once at start (CR-2026-11-R3, R3-65): the resident set, the V8 heap
+used and what V8 holds for it, and the memory outside the heap (Buffers among it). Over a day it says which part grows:
+
+```bash
+sudo journalctl -u lk-bridge --since today -o cat | grep '"msg":"memory"' | tail -20
+```
+
+`rssMb` climbing while `heapUsedMb` stays level is growth outside the V8 heap (native memory, `externalMb`,
+`arrayBuffersMb`); `heapUsedMb` climbing is the heap's (which the 700 MB ceiling bounds). Check first that the unit
+running is this one (`systemctl cat lk-bridge`: the ceiling and the limits above) and that the env file has no
+`NODE_OPTIONS` line, which would replace the ceiling.
+
+Every scheduled or background task logs its start and finish at info with the memory (`"msg":"task started"` and
+`"task finished"`: `task`, `heapUsedMb`, `rssMb`, and on finish `outcome`, `ms` and how far each moved, `delta`), so a
+step in the memory line can be matched to the task that ran then:
+
+```bash
+sudo journalctl -u lk-bridge --since "17:00" --until "17:30" -o cat | grep -E '"msg":"(task started|task finished|memory)"'
+```
+
+A task that runs every minute or more often (the budget sampler, the image sweep, the instance heartbeat) logs only when
+memory moved by 1 MB or more, or it failed.
+
 ## Images (v2 D3)
 
 [ADR 0041](adr/0041-image-pipeline.md); tools in [tools.md](tools.md#images-v2-d3); the Staging page in

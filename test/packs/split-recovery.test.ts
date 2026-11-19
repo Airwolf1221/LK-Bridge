@@ -3,8 +3,9 @@
  * v3 F3e (ADR 0059): what happens when a split does not go as planned, against the mock LegendKeeper (never a real one):
  *
  * - a verification failure (the mock drops a moved block): phase 1 stops BEFORE anything leaves the source and before
- *   phase 2; Resume (once it is put right) continues it, and phase 2 is proposed then; Revert puts back what it did and
- *   proposes deleting the pages it made (with nothing to put back, only that proposal);
+ *   phase 2; Resume (once it is put right) continues it to its end, and (CR-2026-11-R3, R3-67) the split stays
+ *   `unverified`, its job's verification keeping the write that did not land as planned: phase 2 is the owner's; Revert
+ *   puts back what it did and proposes deleting the pages it made (with nothing to put back, only that proposal);
  * - selective approval (D6): a destination left out keeps its sections in the source, coverage holds, phase 2 is
  *   withheld; a selection that is not closed is refused;
  * - rebase on conflict (F3d.1): an outside edit to an existing owner just as the append is sent (LegendKeeper answers
@@ -88,11 +89,17 @@ describe('a verification failure: phase 1 stops before phase 2; Resume continues
     expect(ids(bodyOf(w, lawId))).toEqual(expect.arrayContaining(['sl1', 'sl2', 'sl3', 'sl4', 'sl5', 'sl6']));
     // The append made before it stopped was not made twice.
     expect(ids(bodyOf(w, S.sunRite)).filter((x) => x === 'sf1')).toEqual(['sf1']);
-    // Verified now: phase 2 is proposed.
-    const after = await recordOf(w, done.jobId, (x) => x.state === 'retiring');
-    expect(w.stack.runtime.policy.proposals.get(after.phase2.proposalId)!.requiresCanonicalApproval).toBe(
-      true,
-    );
+    // CR-2026-11-R3 (R3-67): the split is verified only when its job's verification is, and the job's keeps the write
+    // that did not land as planned (the Law page read back without sl3, put right by hand since): `unverified`, and
+    // phase 2 is not proposed by itself (the owner retires the source with archive_page once satisfied). On the code
+    // before R3-67: "verified", phase 2 proposed.
+    const job2 = w.stack.runtime.engine.queries.getJob(PROJECT, done.jobId)!;
+    expect((job2.result as any).verified).toBe(false);
+    const after = await recordOf(w, done.jobId, (x) => x.state === 'unverified');
+    expect(after.phase2.proposalId).toBeUndefined();
+    expect(after.phase2.reason).toContain('its verification found differences');
+    const rep = await split(w, { report: after.id });
+    expect(rep.body).toMatchObject({ state: 'unverified', verified: false });
   });
 });
 
