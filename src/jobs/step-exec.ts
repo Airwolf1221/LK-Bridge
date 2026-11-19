@@ -198,6 +198,9 @@ export interface VerifiedWriteValue {
   readonly replanned?: Readonly<Record<string, unknown>>;
   /** The re-plan found nothing to change; nothing was sent. */
   readonly unchanged?: boolean;
+  /** v3 F3e: the write was rebased on a conflict (F3d.1), and the items it left out, if any. */
+  readonly rebased?: Readonly<Record<string, unknown>>;
+  readonly skippedItems?: readonly unknown[];
 }
 
 interface Current {
@@ -2273,6 +2276,9 @@ export class StepExecutor {
               document: { id: sent.id ?? params.path?.documentId ?? null, version: sent.version ?? null },
               verification,
               ...(replanned ? { replanned } : {}),
+              // v3 F3e (ADR 0059): a split's append rebased on a conflict says so, as any other rebased write does.
+              ...(conflicts > 0 ? { rebased: { conflicts, ...(rebaseNote ?? {}) } } : {}),
+              ...(conflicts > 0 && skipped.length > 0 ? { skippedItems: [...skipped] } : {}),
             };
             return this.succeed(job, step, stats, out, false, store);
           }

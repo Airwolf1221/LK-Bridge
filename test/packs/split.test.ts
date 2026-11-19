@@ -25,6 +25,7 @@ import {
   approveSplit,
   bodyOf,
   ids,
+  intercept,
   linksOf,
   mentionsIn,
   named,
@@ -538,7 +539,17 @@ describe('arkona_split_owner: phase 2 on an owner with two domains (the source r
     expect(proposal.phase2).toContain('once phase 1 verifies');
     const p = w.stack.runtime.policy.proposals.get(String(proposal.proposalId))!;
     expect(p.requiresCanonicalApproval).toBe(true);
+    const riteReads = intercept(
+      w,
+      'GET',
+      new RegExp(`/resources/${S.sunRite}/docs/[^/]+/blocks$`),
+      () => undefined,
+    );
     const done = await approveMeasured(w, p.id);
+    riteReads.off();
+    // The existing owner's document: read inside the append's lock, read back after the write, by the destinations
+    // check and by the verification (test/packs/split-recovery.test.ts pins one more after a conflict).
+    expect(riteReads.count()).toBe(4);
     expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
     cost.requests = done.cost.requests;
     cost.writes = done.cost.writes;
