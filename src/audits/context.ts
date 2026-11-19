@@ -15,6 +15,7 @@ import type { AuditModel } from './reader.js';
 import { SnapshotTree } from './snapshot-tree.js';
 import type { FindingDraft, FindingSource } from './types.js';
 import type { AssetLibrary } from './checks/assets.js';
+import type { ClassificationRecord, RetagContext } from '../packs/retag/engine.js';
 
 /** A lifecycle record or set record that stopped part-way (the audit reports it with its pages). */
 export interface IncompleteRecord {
@@ -69,6 +70,20 @@ export interface AuditContext {
   readonly snapshotTree: SnapshotTree;
   /** v3 F2: the asset library as the bridge's asset tree holds it (null when it is not built). */
   readonly assetLibrary?: AssetLibrary | null;
+  /**
+   * v3 F3f (ADR 0060): the retag engine, when the project's approved pack has retag rules: the tag findings then come
+   * from it (the same verdicts as `arkona_retag_audit`), never from the tag-definition document.
+   */
+  readonly retag?: RetagAuditHook | null;
+}
+
+/** v3 F3f: what the audits need of the retag engine (src/packs/retag): its context and each page's records. */
+export interface RetagAuditHook {
+  readonly context: RetagContext;
+  readonly policy: { readonly version: number; readonly digest: string };
+  readonly packRecord: (pageId: string) => ClassificationRecord | null;
+  readonly owner: (pageId: string) => ClassificationRecord | null;
+  readonly templateOf: (pageId: string) => string | null;
 }
 
 export function makeContext(o: Omit<AuditContext, 'tree' | 'snapshotTree'>): AuditContext {

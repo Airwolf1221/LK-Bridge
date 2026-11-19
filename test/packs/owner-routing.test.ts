@@ -70,7 +70,8 @@ describe('a routing line in the home index (as F3a does for characters)', () => 
     expect(line).toMatchObject({ change: 'How to Use This Index: +1 line(s)' });
     expect(line.lines).toHaveLength(1);
     expect(line.lines[0]).toMatch(
-      /^- \[\\\[BSRC\\\] Kingdom of Saba - Historical Polity Reference\]\(lk:\/\/resources\/[a-z0-9]+\): A highland kingdom$/,
+      // v3 F3f (ADR 0060, D): a plain mention, which always shows the page's current name.
+      /^- \[\]\(lk:\/\/resources\/[a-z0-9]+\): A highland kingdom$/,
     );
     // ADR 0051's rule decides the index's Last Major Revision from the line's words (the job measures the routing write
     // as F3a's); nothing forces it. This fixture's index has no such row, so it is left out of the decision.
@@ -127,7 +128,10 @@ describe('promoteNation: the Polities index’s line for the nation points to it
     const dry = await call({ ...institution, dryRun: true });
     expect(dry.isError, dry.text).toBe(false);
     const nationIndex = dry.body.pages.find((x: { name: string }) => x.name === '[INDEX] Sultanate of Tarim');
-    expect(nationIndex.indexText).toContain('Sultanate of Tarim - Historical Polity Reference');
+    // v3 F3f (ADR 0060, D): a plain mention (the page's current name, never a custom label).
+    expect(nationIndex.indexText).toContain(
+      '- [](lk://resources/tarimref): A coastal sultanate of eastern Salahad',
+    );
     expect(dry.body.existing).toContainEqual(
       expect.objectContaining({
         page: '[INDEX] Salahad Polities',
@@ -150,7 +154,11 @@ describe('promoteNation: the Polities index’s line for the nation points to it
     const items = list.children!.map((li) => JSON.stringify(li.children![0]!.content));
     const tarimLine = items.find((x) => x.includes('A pearl sultanate'))!;
     expect(tarimLine).toContain(index.id);
-    expect(tarimLine).toContain('[INDEX] Sultanate of Tarim');
+    // v3 F3f (ADR 0060, D): a plain mention (no custom label): it shows the new index's current name.
+    const mention = (JSON.parse(tarimLine) as { mention?: { resourceId: string; text?: string } }[]).find(
+      (r) => r.mention,
+    )!.mention!;
+    expect(mention).toEqual({ resourceId: index.id });
     expect(tarimLine).not.toContain(O.tarim);
     // The other lines are untouched.
     expect(items.some((x) => x.includes(O.qasr))).toBe(true);

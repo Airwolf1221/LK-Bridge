@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased: v3 F3f (retagging) (19 November 2026): `arkona_retag_audit`, `arkona_retag_apply`, owner classification, reconciliation
+
+[ADR 0060](adr/0060-v3-f3f-retag-audit-and-apply.md) (Proposed). Migration `3700_retag.sql` (runs at start). Pack version
+`arkona-2026-11-19-f3f`, offered at start for the owner's approval. Nothing was run against a live system: mocks and
+fixtures only.
+
+- **`arkona_retag_audit`** (new read tool): the Controlled Native Tagging Standard's read-only policy audit, free (the
+  snapshots; `live: true` re-reads, one read a page). Each current Authoritative Main CANON or AU page: its resource ID,
+  current and proposed arrays, a rationale per slot, the policy version and digest, and its disposition (compliant,
+  deterministic correction, hold, exception). Working and Archived pages: the lifecycle grammar only; the Legacy Canon
+  Archive, Design References, indexes and repository governance excluded. The category only from deterministic evidence
+  (the owner's classification, the page's pack record, one valid primary tag its Reference Type does not contradict);
+  identity tokens typed and de-duplicated; no unknown token ever generated. Runs are stored; `suggest` records an
+  agent's suggested classification for the owner; `reconciliation` starts or re-audits a named reconciliation.
+- **`arkona_retag_apply`** (new write tool): deterministic corrections of a stored run only, at most 25 pages, ONE
+  proposal (each page an item; "always propose" by the pack's switch). The job checks the policy and its governance
+  first (changed: it stops, "policy changed since the audit; audit again"), reads each page fresh (conflicted, held,
+  already compliant or inaccessible pages skipped and recorded; never rebased), writes inside the page's lock and reads
+  back the exact array with everything else unchanged. Dispositions recorded per page. Last Major Revision never set.
+  Resume and Revert (the exact prior array) work. `reconciliation` resumes a reconciliation: a fresh audit of what
+  remains, then its next batch.
+- **The tags audit from the same engine.** On a project whose approved pack has retag rules, the audits' tag findings
+  come from the retag engine (codes kept; new `tags_out_of_order` and `tags_held`); the appraisal's `tag_grammar` now
+  names the retag tools.
+- **Owner classification and reconciliation** on the new **Tagging** page (Repository group): Audit, Holds (classify from
+  the closed list: re-authenticated, audited `retag.classify`), Batches and Reconciliation (stale pages marked when the
+  snapshots show their inputs changed). The Packs page's token-map editor takes the Excluded Routine Tags.
+- **Pack records**: a package records the pages it makes with their category (`pack_page_records`).
+- **Routing lines are plain mentions**: F3a's, F3b's and F3e's routing-line writers omit the custom label. The appraisal
+  reports a labelled routing mention as optional polish, follow-up `none` ("change it in the app": LegendKeeper's API
+  cannot change a custom label).
+- **Revert** applies to a retag batch although the owner approved it; Resume learns the `retag` kind of job.
+- Tools: 72 in a `propose` or `write` profile, 32 in a `read` profile (while the pack is attached).
+
 ## Unreleased: v3 F3e (splits) (19 November 2026): `arkona_split_appraisal` and `arkona_split_owner`
 
 [ADR 0059](adr/0059-v3-f3e-splits.md) (Proposed), the owner-approved design [design/F3e-splits.md](design/F3e-splits.md)

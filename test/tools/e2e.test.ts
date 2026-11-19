@@ -75,6 +75,9 @@ describe('the MCP surface with the official client', () => {
         // v3 F3e (ADR 0059): the split tools.
         'arkona_split_appraisal',
         'arkona_split_owner',
+        // v3 F3f (ADR 0060): the retag tools.
+        'arkona_retag_audit',
+        'arkona_retag_apply',
         'bridge_job_resume',
         'create_document',
         'create_index',

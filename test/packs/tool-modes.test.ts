@@ -13,10 +13,11 @@ import { PROJECT } from '../tools/helpers.js';
 import { approve, compactPackage, packWorld, type PackWorld } from './world.js';
 import { fixture } from '../images/world.js';
 
-describe('the seed (arkona-2026-11-18-f3e, superseding F3.4’s arkona-2026-11-17-f3-4)', () => {
+describe('the seed (arkona-2026-11-19-f3f, superseding F3.4’s arkona-2026-11-17-f3-4)', () => {
   it('supersedes F3.3’s seed (labelled f3d) and F3.4’s', () => {
-    // v3 F3e (ADR 0059): the split appraisal's data made a new seed; F3.4's switches are unchanged in it.
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-18-f3e');
+    // v3 F3e (ADR 0059) and F3f (ADR 0060) made new seeds; F3.4's switches are unchanged in them.
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-19-f3f');
+    expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-18-f3e');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-17-f3d');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-17-f3-4');
   });
@@ -28,6 +29,8 @@ describe('the seed (arkona-2026-11-18-f3e, superseding F3.4’s arkona-2026-11-1
     expect(packToolMode(r, 'arkona_create_relationship')).toBe('propose');
     expect(packToolMode(r, 'arkona_add_character_art')).toBe('scope');
     expect(packToolMode(r, 'arkona_appraisal_fix')).toBe('scope');
+    // v3 F3f (ADR 0060): the retag apply is a separately approved apply.
+    expect(packToolMode(r, 'arkona_retag_apply')).toBe('propose');
     // A tool no switch names follows alwaysPropose (on in the seed).
     expect(packToolMode(r, 'arkona_create_polity')).toBe('propose');
     expect(packToolMode({ settings: { alwaysPropose: false } }, 'arkona_create_polity')).toBe('scope');

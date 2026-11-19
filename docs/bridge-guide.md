@@ -74,8 +74,8 @@ loosely when the match is clear; each miss costs a call):
 - `Edit a page's text`
 - `Change facts and links`
 - `Create a page or a character (Working first)`
-- `Setting packs (Arkona)` (the Arkona pack's thirteen tools), and under it `Arkona characters`, `Arkona owners`,
-  `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`
+- `Setting packs (Arkona)`, and under it `Arkona characters`, `Arkona owners`,
+  `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`, `Arkona retagging`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -322,7 +322,7 @@ whose answer was lost: it may have been made, so read the pages before anything 
 A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates, homes and tags,
 taken from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list
 only when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`,
-naming the projects they work on). The Arkona pack has thirteen tools. Ask for the part you need:
+naming the projects they work on). The Arkona pack has fifteen tools. Ask for the part you need:
 
 | You want                                           | Use                          | Part to ask for                           |
 | -------------------------------------------------- | ---------------------------- | ----------------------------------------- |
@@ -339,6 +339,8 @@ naming the projects they work on). The Arkona pack has thirteen tools. Ask for t
 | Rename a character or owner everywhere it is named | `arkona_rename`              | `Arkona renames`                          |
 | See whether an owner page should be split (free)   | `arkona_split_appraisal`     | `Arkona splits`                           |
 | Split an owner page into owners                    | `arkona_split_owner`         | `Arkona splits`                           |
+| Audit pages' native tags (free)                    | `arkona_retag_audit`         | `Arkona retagging`                        |
+| Apply deterministic tag corrections (a proposal)   | `arkona_retag_apply`         | `Arkona retagging`                        |
 
 **What every pack tool that makes pages does the same way** (the appraisal tools only read: see `Arkona appraisal`).
 
@@ -806,6 +808,44 @@ deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>
 **Cost**, measured on the test fixtures: a character monolith split into six new owners with one remapped Dependency
 costs 23 requests to propose and a job of 243 (87 writes); an owner split into one new and one existing owner, 12 to
 propose and 84 (22 writes). The dry run states the plan's reads and the job's estimate.
+
+### Arkona retagging
+
+The Controlled Native Tagging Standard is the policy; the pack holds a derived translation of it, approved by the
+owner. Three rules: **audit first; holds go to the owner; the apply is always a proposal.** Never retag a page by hand
+with `update_resource` (and never add or remove `CANON`, `AU`, `Working` or `Archived`: those are the lifecycle tools').
+
+**1. Audit: `arkona_retag_audit { "under": "…" }`** (or `page`, or `all: true`). Read-only and free (the snapshots;
+`live: true` re-reads each page, one read each, at most 50). Each current Authoritative page (Main CANON, or AU under the
+owner's ruling) comes back with its resource ID, its **current** and **proposed** arrays, a **rationale** for each slot
+(the fact or record it comes from), the policy version and digest, and its **disposition**:
+
+- `compliant`; `correction` (deterministic: a wrong order, a missing culture token, an Excluded Routine Tag to remove);
+- `hold`: something only the owner can settle: an **uncertain category** (no pack record and two primary categories, or a
+  Reference Type that contradicts the tags), a specialist, an identity value that is missing, `Unestablished`, unmapped
+  or given twice, or a missing status tag;
+- `exception`: an existing tag outside the grammar that the Standard does not list as routine: the owner's judgement.
+
+Working and Archived pages are checked for the lifecycle grammar only (`lifecycle_tag_not_leading`, the audits'); the
+Legacy Canon Archive, Design References, indexes and repository governance are never retagged. The category is never
+taken from a name, a parent or the body, and no tag outside the closed list is ever proposed. Read a stored run again a
+page at a time with `runId` and `filter`.
+
+**Holds go to the owner.** Tell them which pages are held and why. You may suggest a classification with your reason:
+`arkona_retag_audit { "suggest": { "page": "…", "primary": "Culture", "specialist": "Language", "reason": "…" } }`. It is
+only a suggestion: the owner classifies on the dashboard's Tagging page, and the next audit uses it.
+
+**2. Apply: `arkona_retag_apply { "runId": "rtg_…", "pages": ["…"] }`**: deterministic corrections of that run only, at
+most 25 pages. ONE proposal whatever your scope (each page an item the owner can leave out); never resubmit it. When the
+owner approves, the job first checks the policy is still the audit's (otherwise it stops: "policy changed since the
+audit; audit again"), then for each page reads it fresh: a page whose tags changed since the audit is **conflicted** and
+skipped (never rebased), one whose facts changed is **held**, one already right is **already compliant**, one gone is
+**inaccessible**; the rest are written and read back exactly. Last Major Revision is never set.
+
+**Reconciliation**, for a long run of batches: `arkona_retag_audit { "reconciliation": "First pass", "all": true }`
+starts a named record (a first audit, free); `arkona_retag_apply { "reconciliation": "First pass" }` audits what remains
+afresh and proposes its next batch. A page whose facts, Reference Type or template changed since its verdict is marked
+stale and audited again: an earlier audit is never current truth.
 
 ## Rename, move, delete and restore
 

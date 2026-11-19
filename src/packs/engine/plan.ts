@@ -1770,10 +1770,8 @@ export function draftIndexText(
   children: readonly { id: string; name: string; scope: string | null }[],
   emptyRouting = '- (no pages yet)',
 ): string {
-  const lines = children.map((c) => {
-    const label = c.name.replace(/\[/g, '\\[').replace(/\]/g, '\\]');
-    return `- [${label}](lk://resources/${c.id})${c.scope ? `: ${c.scope}` : ''}`;
-  });
+  // v3 F3f (ADR 0060, part D): a plain mention (no custom label), which always shows the page's current name.
+  const lines = children.map((c) => `- [](lk://resources/${c.id})${c.scope ? `: ${c.scope}` : ''}`);
   return [
     `## Purpose`,
     '',
@@ -1986,8 +1984,11 @@ export type RoutingEnv = Pick<PlanEnv, 'pd' | 'mctx' | 'tool' | 'ctx'> & {
 };
 
 /**
- * One routing line, F3a's pattern: `- [<page name>](lk://resources/<id>): <Scope>`. CR-2026-11-R2 (R2-37): ONE line:
- * any line break in the name or Scope is collapsed to a space, so a Scope can never add a heading or a paragraph.
+ * One routing line, F3a's pattern with a PLAIN mention: `- [](lk://resources/<id>): <Scope>`. v3 F3f (ADR 0060, part D):
+ * the mention carries no custom label, so it always shows the page's current name (LegendKeeper's API cannot change a
+ * custom label, so a rename would leave a labelled one behind). CR-2026-11-R2 (R2-37): ONE line: any line break in the
+ * Scope is collapsed to a space, so a Scope can never add a heading or a paragraph. `rawName` is kept for callers'
+ * summaries; the line itself no longer holds it.
  */
 export const routingLine = (c: {
   readonly rawName: string;
@@ -1995,7 +1996,7 @@ export const routingLine = (c: {
   readonly scope: string | null;
 }) => {
   const scope = c.scope ? oneLine(c.scope) : '';
-  return `- [${oneLine(c.rawName).replace(/\[/g, '\\[').replace(/\]/g, '\\]')}](lk://resources/${c.id})${scope ? `: ${scope}` : ''}`;
+  return `- [](lk://resources/${c.id})${scope ? `: ${scope}` : ''}`;
 };
 
 /** An index's routing section as read now: its document, version, blocks and the section, or why not (said). */
@@ -2088,9 +2089,9 @@ export async function repointRoutingLine(
     );
     return null;
   }
-  const label = to.rawName.replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+  // v3 F3f (ADR 0060, part D): the repointed link is a plain mention (the new index's current name, always).
   const before = lines[hits[0]!]!;
-  const after = before.replace(link, `[${label}](lk://resources/${to.id})`);
+  const after = before.replace(link, `[](lk://resources/${to.id})`);
   lines[hits[0]!] = after;
   const markdown = lines.join('\n');
   let planned: LkBlock[];

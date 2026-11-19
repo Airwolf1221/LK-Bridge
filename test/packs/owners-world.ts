@@ -140,7 +140,12 @@ export const PINNED = {
     'Approved Hierarchy and Standardised Navigation',
     'Active Template Suite and Sidebar Collections',
   ],
-  tagging: ['Exact Tag Grammar', 'Closed Primary Categories and Specialist Functions'],
+  // v3 F3f (ADR 0060): the retag tools also pin the Tagging Standard's Excluded Routine Tags.
+  tagging: [
+    'Exact Tag Grammar',
+    'Closed Primary Categories and Specialist Functions',
+    'Excluded Routine Tags',
+  ],
 } as const;
 
 const heading = (id: string, level: number, text: string) => ({

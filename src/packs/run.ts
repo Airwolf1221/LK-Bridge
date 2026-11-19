@@ -333,6 +333,21 @@ export async function finishPackage(
         head,
         preview: () => ({ pages: plan.pages.length, summary: j.summary }),
       });
+      // v3 F3f (ADR 0060): the pack's own record of the pages it makes, the retag's first evidence of their category.
+      if (pd.services?.retag && (out.proposalId || out.jobId))
+        try {
+          pd.services.retag.recordPackage(pd.project.id, {
+            packId: pack.id,
+            tool: o.tool,
+            type: type.name,
+            rules: pack.rules,
+            pages: plan.pages.map((p) => ({ id: p.id, role: p.role, tags: p.tags ?? [] })),
+            proposalId: out.proposalId ?? null,
+            jobId: out.jobId ?? null,
+          });
+        } catch {
+          // A record is evidence for a later audit only; the package stands without it.
+        }
       // The staged images: the job (or proposal) that places them, and where each one's asset step is.
       const images = pd.services?.images;
       let result = out.result;

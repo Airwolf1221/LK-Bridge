@@ -166,3 +166,31 @@ row the template audit reports is the audit's, not a second appraisal finding).
 - **Who asked is recorded**: the audits' fix now takes the caller's origin, so a fix an agent hands over through
   `arkona_appraisal_fix` is the agent's proposal (its connection and tool), and one from the Appraisal page the
   owner's, as one from the Audits page always was.
+
+## Tags from the retag engine (v3 F3f)
+
+[ADR 0060](adr/0060-v3-f3f-retag-audit-and-apply.md). On a project whose approved pack has retag rules (Arkona with
+`arkona-2026-11-19-f3f`), the tags audit asks the same engine as `arkona_retag_audit`, so the two cannot disagree; the
+tag-definition document is not consulted there (a project without retag rules keeps it exactly as before). For every
+current Authoritative page (Main CANON, or AU) the engine's verdict becomes:
+
+- `missing_required_tags` (Tags, warning): a tag the proposed array holds that the page lacks, with the slot's rationale.
+  No "Propose a fix" here: the guarded apply is `arkona_retag_apply`.
+- `tags_outside_definition` (Tags, warning): a tag outside the grammar (an Excluded Routine Tag the apply removes, or an
+  owner exception the apply keeps), each with its reason.
+- `duplicate_tags` (Tags, info): the same tag twice.
+- `tags_out_of_order` (Tags, warning; new): the same tags in another order than the grammar's (the status tag first).
+- `tags_held` (Tags, info; new): the engine holds the page (an uncertain category, a specialist, an identity value, a
+  status tag), with each reason. The owner classifies on the Tagging page.
+
+Each finding's evidence names the disposition, the current and proposed arrays and the policy (version and digest).
+Working and Archived pages stay the lifecycle check's (`lifecycle_tag_not_leading`); excluded pages (indexes, the Legacy
+Canon Archive, Design References, repository governance) get no tag finding. The appraisal gathers these as
+`tag_grammar`, a judgement naming the retag tools.
+
+## Routing lines use plain mentions (`routing_labelled_mention`, appraisal; v3 F3f)
+
+A mention with a custom label in an index's routing section ("How to Use This Index") keeps that label when the page is
+renamed; a plain mention always shows the page's current name. The bridge's own routing-line writers emit plain mentions
+since v3 F3f. `arkona_appraise_owner` reports a labelled one as **optional polish** with follow-up `none`: "change it in
+the app". LegendKeeper's API cannot change a mention's custom label (ADR 0058 amendment, D), so no fix is offered.

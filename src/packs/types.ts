@@ -392,6 +392,37 @@ export const splitsRulesSchema = z
   .strict();
 export type SplitsRules = z.infer<typeof splitsRulesSchema>;
 
+// ============================================================================================ v3 F3f: retagging
+
+/**
+ * v3 F3f (ADR 0060): the retag tools' data, a derived translation of the Controlled Native Tagging Standard's
+ * "Classification and Manual Implementation Procedure" and "Bridge and Audit Interface" (never a competing source).
+ * Absent (an older pack): no retag tools.
+ */
+export const retagRulesSchema = z
+  .object({
+    /** The most pages one `arkona_retag_apply` proposal takes (the Standard's bounded batches; each page an item). */
+    batchSize: z.number().int().min(1).max(100),
+    /**
+     * Reference Types whose pages carry the identity tokens (race, then culture): the Character Core, the Compact
+     * Character Reference and any other reference the Standard makes eligible. Together with the Reference Types of the
+     * roles whose grammar names `$race` or `$culture`.
+     */
+    identityReferenceTypes: z.array(text(200)).max(20),
+    /**
+     * The Standard's "Excluded Routine Tags" (a pinned section): tags confirmed incidental, so proposing their removal
+     * is a deterministic correction. Any other tag outside the grammar is an owner exception (never removed by itself).
+     */
+    excludedRoutineTags: z.array(text(100)).max(100),
+    /**
+     * Indexes (by name, prefix aside) whose pages are never retagged by inference: the Legacy Canon Archive, the Design
+     * References, repository governance. Navigation indexes and the governance sources' own pages are always excluded.
+     */
+    excludedAreas: z.array(text(200)).max(20),
+  })
+  .strict();
+export type RetagRules = z.infer<typeof retagRulesSchema>;
+
 /** An owner's ruling the pack follows that its governance pages do not record yet (design 1.5: the AU tag). */
 export const rulingSchema = z
   .object({
@@ -473,6 +504,8 @@ export const packRulesSchema = z
     lifecycleTagPosition: z.record(text(200), z.enum(['lead', 'append'])).optional(),
     /** v3 F3e (ADR 0059): the split appraisal's triggers and the split tool's audits (absent: no split tools). */
     splits: splitsRulesSchema.optional(),
+    /** v3 F3f (ADR 0060): the retag audit and apply (absent: no retag tools). */
+    retag: retagRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {

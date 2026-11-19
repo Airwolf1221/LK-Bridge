@@ -157,6 +157,11 @@ export interface RevertDeps {
       revertJobId: string | null,
     ): Promise<{ readonly deletionProposalId: string | null; readonly problem?: string } | null>;
   };
+  /**
+   * v3 F3f (ADR 0060): other owner-approved jobs Revert applies to (a retag apply batch: its tags restored exactly, each
+   * page only while it is as the job left it).
+   */
+  readonly approvedRevertible?: (projectId: string, jobId: string) => boolean;
   readonly log?: { warn(o: unknown, m: string): void };
 }
 
@@ -229,7 +234,8 @@ export class RevertService {
         message: `Job ${jobId} is a revert, and a revert is never itself reverted. The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold every target as it was before it.`,
       };
     const split = this.d.splits?.isPhase1(projectId, jobId) === true;
-    if (!this.d.review.store.get(projectId, jobId) && !split) {
+    const approvedRevertible = this.d.approvedRevertible?.(projectId, jobId) === true;
+    if (!this.d.review.store.get(projectId, jobId) && !split && !approvedRevertible) {
       if (job.approvedBy !== null)
         return {
           ok: false,

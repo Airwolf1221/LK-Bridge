@@ -26,6 +26,7 @@ import { registerRegistry } from './routes/registry.js';
 import { registerLifecycle } from './routes/lifecycle.js';
 import { registerAudits } from './routes/audits.js';
 import { registerAppraisal } from './routes/appraisal.js';
+import { registerTagging } from './routes/tagging.js';
 import { registerToolCalls } from './routes/toolcalls.js';
 import { registerEvaluation } from './routes/evaluation.js';
 import { registerChronology } from './routes/chronology.js';
@@ -118,6 +119,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerEvaluation(api, ctx); // v2 E3: the Evaluation helper
       registerPacks(api, ctx); // v3 F3a: setting packs
       registerAppraisal(api, ctx); // v3 F3c: the appraisal tools (read-only; fixes are proposals)
+      registerTagging(api, ctx); // v3 F3f: the retag audit, holds, batches and reconciliations
       registerReview(api, ctx); // v3 F3.4: the Review page and Revert (ADR 0055)
 
       /** The one live stream (docs/dashboard.md › Stream). */

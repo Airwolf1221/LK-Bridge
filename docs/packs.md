@@ -457,6 +457,53 @@ remapped, dated, verified); phase 2, for a source to be retired, is a separate c
 bridge makes once phase 1 has verified and nothing was left out. The split never deletes. A stopped phase 1 is resumed
 or reverted by the owner; a reverted one proposes deleting the pages it made.
 
+## Retagging (v3 F3f)
+
+[ADR 0060](adr/0060-v3-f3f-retag-audit-and-apply.md). The tools: [tools.md](tools.md#setting-packs-retagging-v3-f3f).
+The Controlled Native Tagging Standard asks the Bridge for "dry-run preview, read-only policy audit, separately approved
+guarded apply, and resumable reconciliation", using a versioned machine-readable translation "explicitly identified as
+derived and never a competing source". The translation is this pack's data, approved by the owner like every rule.
+
+**The retag rules** (`rules.retag`, new in `arkona-2026-11-19-f3f`, which also pins the Tagging Standard's "Excluded
+Routine Tags" and switches `arkona_retag_apply` to "always propose"):
+
+| Key                      | Arkona's value                                                                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `batchSize`              | 25 (pages in one apply proposal)                                                                                                                        |
+| `identityReferenceTypes` | Character Core, Compact Character Reference (the pages that carry the identity tokens; with the roles whose grammar names `$race` or `$culture`)        |
+| `excludedRoutineTags`    | none yet: the owner lists them from the Standard's pinned section (the Packs page's token-map editor); until then every tag outside the grammar is kept |
+| `excludedAreas`          | Legacy Canon Archive, Design References, Repository Governance (index names; the governance sources' own pages are always excluded)                     |
+
+**The engine** (src/packs/retag/engine.ts) gives each page's verdict from the approved version's rules through F3a's
+tag engine (`computeTags`): the scope (current Authoritative Main CANON owners, and AU owners under the 16 November
+ruling; Working and Archived pages for the lifecycle grammar only); the primary category from deterministic evidence only
+(the owner's classification, the page's own pack record, or exactly one valid primary tag its Reference Type does not
+contradict: otherwise a hold); the specialist from the closed list backed the same way; the identity tokens typed (race
+through the race map, culture through the culture map, kept once when the same: the Otheiralth example); no other tag
+ever proposed; status and lifecycle tags never added or removed. Its disposition: compliant, deterministic correction,
+hold or exception. The policy it states: the approved version, its governance versions and a digest of both.
+
+**Pack records.** Since v3 F3f a package records each page it makes with its category (`pack_page_records`: the tool,
+type, role, primary and specialist), the retag's first evidence after the owner's own classification. Pages made before
+v3 F3f have none; their current tags are their evidence.
+
+**Owner classification.** An "uncertain category" hold is the owner's: on the Tagging page they choose the category (and
+the specialist) from the closed list, with a reason; re-authenticated, audited (`retag.classify`), stored, and used by
+every later audit. Agents suggest (`arkona_retag_audit { suggest }`), never classify.
+
+**Apply.** Deterministic corrections of a stored run, at most 25, as ONE proposal (each page an item). The job compares
+the policy first (changed: it stops), then per page reads it fresh (a page whose tags changed is conflicted and skipped,
+never rebased; one whose facts changed is held), writes inside its lock and reads back the exact array and everything
+else unchanged. Each page's disposition is recorded (applied, already compliant, held, conflicted, inaccessible). Last
+Major Revision is never set. Resume and Revert work.
+
+**Reconciliation.** A named record across batches: what was audited, proposed, applied, held and conflicted, and what
+remains. Resume audits what remains afresh and proposes the next batch. A page whose facts, Reference Type or template
+changed in the snapshots since its verdict is marked stale and audited again: a completed run is never current truth.
+
+**Routing lines** (part D): the pack's routing-line writers (F3a's drafted index text and appended lines, F3b's
+repointed line, F3e's index lines) emit plain mentions, which always show the page's current name.
+
 ## Types as data, and what F3b extends
 
 The engine never assumes it is making a character: a type's rules say what it makes, and a hook (`src/packs/hooks.ts`)

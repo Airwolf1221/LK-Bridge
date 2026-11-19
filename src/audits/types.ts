@@ -187,6 +187,17 @@ export const CODES = {
   },
   tags_outside_definition: { category: 'tags', severity: 'warning', title: 'Tags outside the allowed list' },
   duplicate_tags: { category: 'tags', severity: 'info', title: 'The same tag twice' },
+  // v3 F3f (ADR 0060): on a project whose approved pack has retag rules, from the retag engine.
+  tags_out_of_order: {
+    category: 'tags',
+    severity: 'warning',
+    title: 'Tags out of the grammar’s order (the status tag first)',
+  },
+  tags_held: {
+    category: 'tags',
+    severity: 'info',
+    title: 'Tags held for the owner (an uncertain category, specialist, identity or status slot)',
+  },
   // ---- tags (new)
   tag_definition_invalid: {
     category: 'tags',

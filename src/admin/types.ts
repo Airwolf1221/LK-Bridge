@@ -29,6 +29,7 @@ import type { RevertService } from '../review/revert.js';
  */
 import type { ResumeService } from '../resume/service.js';
 import type { SplitService } from '../packs/split/service.js';
+import type { RetagService } from '../packs/retag/service.js';
 
 export interface AdminRuntime {
   readonly engine: JobEngine;
@@ -77,6 +78,8 @@ export interface AdminRuntime {
   readonly resume?: ResumeService;
   /** v3 F3e (ADR 0059): the splits' records (a split's phase 1 can be reverted); optional for tests. */
   readonly splits?: Pick<SplitService, 'byJob'>;
+  /** v3 F3f (ADR 0060): the retag audit, holds, batches and reconciliations (the Tagging page); optional for tests. */
+  readonly retag?: RetagService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

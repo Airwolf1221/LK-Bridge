@@ -398,6 +398,10 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
   const { run, busy } = useAction();
   const [race, setRace] = useState<Row[]>(() => toRows(pack.rules.tags.race));
   const [culture, setCulture] = useState<Row[]>(() => toRows(pack.rules.tags.culture));
+  // v3 F3f (ADR 0060): the Tagging Standard's Excluded Routine Tags (one per line).
+  const [routine, setRoutine] = useState<string>(() =>
+    (pack.rules.retag?.excludedRoutineTags ?? []).join('\n'),
+  );
   const save = () =>
     void confirm({
       title: 'Save the token maps?',
@@ -416,6 +420,14 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
             api.put(`/packs/${pack.id}/tokens`, {
               race: toMap(race),
               culture: toMap(culture),
+              ...(pack.rules.retag
+                ? {
+                    excludedRoutineTags: routine
+                      .split('\n')
+                      .map((x) => x.trim())
+                      .filter((x) => x !== ''),
+                  }
+                : {}),
               confirm: true,
             }),
           ),
@@ -434,6 +446,18 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
         <TokenTable title="Race / Species" rows={race} onChange={setRace} />
         <TokenTable title="Naming Culture" rows={culture} onChange={setCulture} />
       </div>
+      {pack.rules.retag && (
+        <label className="small-text">
+          Excluded Routine Tags (one per line; from the Tagging Standard’s section: the only tags outside the
+          grammar the retag removes by itself)
+          <textarea
+            aria-label="Excluded Routine Tags"
+            rows={3}
+            value={routine}
+            onChange={(e) => setRoutine(e.target.value)}
+          />
+        </label>
+      )}
       <Button busy={busy} onClick={save}>
         Save token maps
       </Button>

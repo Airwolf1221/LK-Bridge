@@ -206,6 +206,15 @@ export const CHECKS = {
         'what the index routes to and why a reader opens it (set_facts for Index Scope; the Subpages collection is the template’s)',
     },
   },
+  // v3 F3f (ADR 0060, part D): a routing line's mention with a custom label. LegendKeeper's API cannot change a
+  // mention's custom label (ADR 0058 amendment, D), so no fix is offered: the owner changes it in the app.
+  routing_labelled_mention: {
+    title: 'A routing line uses a labelled mention (a custom label a rename would leave behind)',
+    group: 'polish',
+    evidence: 'Confirmed deterministic defect',
+    rule: { ...INDEXES, rule: 'routing lines: plain mentions show the current name' },
+    none: 'change it in the app: LegendKeeper’s API cannot change a mention’s custom label',
+  },
   sibling_order: {
     title: 'Out of order among its siblings (INDEX pages first, then the rest, each alphabetical)',
     group: 'required',
@@ -218,10 +227,11 @@ export const CHECKS = {
     group: 'required',
     evidence: 'Confirmed deterministic defect',
     rule: TAGS,
+    // v3 F3f (ADR 0060): the retag engine gives the proposed array; a tag is never fixed by hand.
     judgement: {
-      tool: 'update_resource',
+      tool: 'arkona_retag_audit, then arkona_retag_apply',
       decide:
-        'which tags the closed grammar allows here (a lifecycle tag only through the lifecycle tools, never by hand)',
+        'the retag audit gives the proposed array and its disposition; holds go to the owner (a lifecycle tag only through the lifecycle tools, never by hand)',
     },
   },
   // v3 F3e (ADR 0059): the split appraisal's (A6) measurable Split Triggers, each an architectural candidate. A2 gathers

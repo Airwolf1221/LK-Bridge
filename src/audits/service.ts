@@ -28,6 +28,7 @@ import {
   type AuditContext,
   type Check,
   type IncompleteRecord,
+  type RetagAuditHook,
 } from './context.js';
 import { AuditError } from './errors.js';
 import { proposeFix as proposeFixVia, type FixResult } from './fixes.js';
@@ -92,6 +93,8 @@ export interface AuditDeps {
   readonly assetLibrary?: (projectId: string) => AssetLibrary | null;
   /** v3 F3d (ADR 0053): a project's lifecycle tag rules (`Packs.lifecycleRules`); absent: the defaults. */
   readonly lifecycleTags?: (projectId: string) => LifecycleTagRules;
+  /** v3 F3f (ADR 0060): the retag engine's hook for a project (null: its approved pack has no retag rules). */
+  readonly retag?: (projectId: string) => RetagAuditHook | null;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -622,6 +625,17 @@ export class Audits {
       treeSettings,
       lifecycle: lifecycleFrom(settings),
       ...(this.d.lifecycleTags ? { lifecycleTags: this.d.lifecycleTags(projectId) } : {}),
+      ...(this.d.retag
+        ? {
+            retag: (() => {
+              try {
+                return this.d.retag(projectId);
+              } catch {
+                return null;
+              }
+            })(),
+          }
+        : {}),
       types,
       entries: (typeId) => registry.entries(typeId),
       rules: effectiveRules(cfg, types),

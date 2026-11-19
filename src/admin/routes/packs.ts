@@ -8,7 +8,8 @@
  * - `GET /packs`: every pack, as stored (no LegendKeeper request).
  * - `GET /packs/:id/governance`: the governance sources read now (one read each), with drift recorded.
  * - `POST /packs/:id/approve` `{ confirm: true }` (re-authenticated).
- * - `PUT /packs/:id/tokens` `{ race?, culture?, confirm: true }` (re-authenticated).
+ * - `PUT /packs/:id/tokens` `{ race?, culture?, excludedRoutineTags?, confirm: true }` (re-authenticated; v3 F3f adds
+ *   the Tagging Standard's Excluded Routine Tags).
  * - `POST /packs/:id/sections` `{ source, from, to, confirm: true }` (re-authenticated; ADR 0052 amendment): re-maps a
  *   pinned heading of a governance source to one of the document's actual headings. A new version, waiting for approval.
  */
@@ -22,7 +23,13 @@ import { parseInput, type Register } from './util.js';
 const idParam = z.object({ id: z.string().min(1).max(64) });
 const tokenMap = z.record(z.string().max(200), z.string().max(100));
 const tokensBody = z
-  .object({ race: tokenMap.optional(), culture: tokenMap.optional(), confirm: z.literal(true) })
+  .object({
+    race: tokenMap.optional(),
+    culture: tokenMap.optional(),
+    // v3 F3f (ADR 0060): the Tagging Standard's Excluded Routine Tags.
+    excludedRoutineTags: z.array(z.string().max(100)).max(100).optional(),
+    confirm: z.literal(true),
+  })
   .strict();
 
 const remapBody = z
@@ -131,6 +138,7 @@ export const registerPacks: Register = (api, ctx) => {
       packs(ctx).commands.setTokens('owner', id, {
         ...(b.race !== undefined ? { race: b.race } : {}),
         ...(b.culture !== undefined ? { culture: b.culture } : {}),
+        ...(b.excludedRoutineTags !== undefined ? { excludedRoutineTags: b.excludedRoutineTags } : {}),
       });
       return { pack: packs(ctx).view(id) };
     });

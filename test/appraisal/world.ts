@@ -124,7 +124,16 @@ export interface AppraisalWorld extends OwnersWorld {
   callRead(name: string, args: Record<string, unknown>): Promise<ToolCall>;
 }
 
-export async function appraisalWorld(o: Parameters<typeof ownersWorld>[0] = {}): Promise<AppraisalWorld> {
+export async function appraisalWorld(
+  o: Parameters<typeof ownersWorld>[0] & {
+    /**
+     * v3 F3f (ADR 0060): keep the seed's retag rules in the approved version (the retag world). Without it, the world
+     * approves a version without them, so the tests written before F3f keep testing the tag-definition document's audit
+     * path (a project whose pack has no retag rules).
+     */
+    readonly retag?: boolean;
+  } = {},
+): Promise<AppraisalWorld> {
   const w = (await ownersWorld({
     ...o,
     tools: {
@@ -734,6 +743,20 @@ export async function appraisalWorld(o: Parameters<typeof ownersWorld>[0] = {}):
   });
 
   const client = await w.stack.connect();
+  if (o.retag !== true) {
+    const packs = w.stack.runtime.packs;
+    const pack = packs.get('arkona');
+    if (pack?.approved && pack.rules.retag) {
+      const { retag: _retag, ...rest } = pack.rules;
+      const v = packs.store.newVersion('arkona', rest, 'test: a version without retag rules (before F3f)');
+      packs.store.approve('arkona', {
+        version: v.version,
+        at: Date.now(),
+        by: 'owner',
+        sources: pack.approved.sources,
+      });
+    }
+  }
   const reader = w.stack.newToken('appraisal-reader', 'read');
   const readClient = await w.stack.connect(reader.token);
   void client;

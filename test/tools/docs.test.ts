@@ -21,9 +21,9 @@ describe('docs/tools.md', () => {
     // (the policy layer adds its two proposal tools on the server), and v3 F3a's arkona_create_character and v3 F3b's
     // arkona_create_owner, arkona_create_relationship, arkona_add_character_art and arkona_character_brief (a setting pack's),
     // and v3 F3c's five appraisal tools (the same pack's), and v3 F3d's bridge_job_resume and arkona_rename, and v3 F3e's
-    // arkona_split_appraisal and arkona_split_owner.
-    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(76);
-    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(76 + 89);
-    expect(docs).toContain('165 tools');
+    // arkona_split_appraisal and arkona_split_owner, and v3 F3f's arkona_retag_audit and arkona_retag_apply.
+    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(78);
+    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(78 + 89);
+    expect(docs).toContain('167 tools');
   });
 });

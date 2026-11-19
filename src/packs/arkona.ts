@@ -42,6 +42,8 @@ const rules: PackRules = packRulesSchema.parse({
       arkona_create_relationship: 'propose',
       arkona_add_character_art: 'scope',
       arkona_appraisal_fix: 'scope',
+      // v3 F3f (ADR 0060): the Tagging Standard calls for a separately approved apply, so every batch is a proposal.
+      arkona_retag_apply: 'propose',
     },
   },
   tags: {
@@ -643,6 +645,16 @@ const rules: PackRules = packRulesSchema.parse({
     ],
     guardWords: 120,
   },
+  // v3 F3f (ADR 0060): the retag audit and apply, a derived translation of the Controlled Native Tagging Standard's
+  // classification procedure. Batches of at most 25 pages; the identity tokens on the Core and the Compact Reference;
+  // the Excluded Routine Tags the owner lists from the pinned section (none until then: every tag outside the grammar is
+  // an owner exception); the areas never retagged by inference.
+  retag: {
+    batchSize: 25,
+    identityReferenceTypes: ['Character Core', 'Compact Character Reference'],
+    excludedRoutineTags: [],
+    excludedAreas: ['Legacy Canon Archive', 'Design References', 'Repository Governance'],
+  },
   rulings: [
     {
       key: 'au-status-tag',
@@ -662,9 +674,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // version. `-f3b1` (ADR 0052 amendment, 16 November 2026): the pinned headings exactly as the pages have them, and a
   // Working owner keeps its specialist tag. `-f3d` (ADR 0053, 17 November 2026; session F3.3): the lifecycle tag leads on
   // Arkona. `-f3-4` (ADR 0055, 17 November 2026; session F3.4): the per-tool "always propose" switches. `-f3e` (ADR 0059,
-  // 18 November 2026; session F3e): the split appraisal's triggers and the split tool's audits (`splits`, D4).
-  seed: 'arkona-2026-11-18-f3e',
+  // 18 November 2026; session F3e): the split appraisal's triggers and the split tool's audits (`splits`, D4). `-f3f`
+  // (ADR 0060, 19 November 2026; session F3f): the retag rules (`retag`), the retag apply's switch, and the Tagging
+  // Standard's "Excluded Routine Tags" pinned.
+  seed: 'arkona-2026-11-19-f3f',
   supersedes: [
+    'arkona-2026-11-18-f3e',
     'arkona-2026-11-16',
     'arkona-2026-11-16-f3b',
     'arkona-2026-11-16-f3b1',
@@ -702,7 +717,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
       documentId: 'bfrv43jr',
       name: 'Controlled Native Tagging Standard',
       label: 'v1.8',
-      sections: ['Exact Tag Grammar', 'Closed Primary Categories and Specialist Functions'],
+      // v3 F3f (ADR 0060): the retag tools also read the Excluded Routine Tags (the derived list is `retag`).
+      sections: [
+        'Exact Tag Grammar',
+        'Closed Primary Categories and Specialist Functions',
+        'Excluded Routine Tags',
+      ],
     },
   ],
   // v3 F3b: the four templates the owner types add, by name (their ids are worked out in each project, Arkona included).

@@ -2314,6 +2314,13 @@ export interface PackRules {
   rulings?: { key: string; date: string; by: string; summary: string }[];
   /** v3 F3d (ADR 0053): where the lifecycle tools put the lifecycle tag, per project name (absent: append). */
   lifecycleTagPosition?: Record<string, 'lead' | 'append'>;
+  /** v3 F3f (ADR 0060): the retag rules (absent: no retag tools). */
+  retag?: {
+    batchSize: number;
+    identityReferenceTypes: string[];
+    excludedRoutineTags: string[];
+    excludedAreas: string[];
+  };
 }
 
 export interface PackSourceStatus {

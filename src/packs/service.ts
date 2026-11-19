@@ -173,6 +173,8 @@ export interface Packs {
       maps: {
         readonly race?: Readonly<Record<string, string>>;
         readonly culture?: Readonly<Record<string, string>>;
+        /** v3 F3f (ADR 0060): the Tagging Standard's Excluded Routine Tags, as the owner lists them. */
+        readonly excludedRoutineTags?: readonly string[];
       },
     ): Pack;
     /** Attaches a pack to a project (bridge code and tests; the dashboard does not offer it in F3a). Audited. */
@@ -818,19 +820,50 @@ export function createPacks(d: PacksDeps): Packs {
           if (never.has(v.toLowerCase()))
             throw new PackError('INVALID_TOKEN', `“${k}” maps to “${v}”, which is never a tag.`);
         }
+        // v3 F3f (ADR 0060): the Excluded Routine Tags (the retag's only removable tags outside the grammar).
+        const routineBefore = pack.rules.retag?.excludedRoutineTags ?? [];
+        let routine: string[] = [...routineBefore];
+        if (maps.excludedRoutineTags !== undefined) {
+          if (!pack.rules.retag)
+            throw new PackError(
+              'INVALID_INPUT',
+              'This pack version has no retag rules, so it has no Excluded Routine Tags.',
+            );
+          routine = [];
+          for (const t of maps.excludedRoutineTags) {
+            const v = t.trim();
+            if (v === '' || v.length > 100) throw new PackError('INVALID_TOKEN', `“${t}” is not a tag.`);
+            if (!routine.some((x) => x.toLowerCase() === v.toLowerCase())) routine.push(v);
+          }
+        }
         if (
           stableJson(race) === stableJson(pack.rules.tags.race) &&
-          stableJson(culture) === stableJson(pack.rules.tags.culture)
+          stableJson(culture) === stableJson(pack.rules.tags.culture) &&
+          stableJson(routine) === stableJson(routineBefore)
         )
           return pack;
-        const rules = packRulesSchema.parse({ ...pack.rules, tags: { ...pack.rules.tags, race, culture } });
+        const rules = packRulesSchema.parse({
+          ...pack.rules,
+          tags: { ...pack.rules.tags, race, culture },
+          ...(pack.rules.retag ? { retag: { ...pack.rules.retag, excludedRoutineTags: routine } } : {}),
+        });
         const after = store.newVersion(pack.id, rules, 'token maps edited on the Packs page');
         d.audit(
           actor,
           'pack.set_tokens',
           pack.id,
-          { version: pack.version, race: pack.rules.tags.race, culture: pack.rules.tags.culture },
-          { version: after.version, race, culture },
+          {
+            version: pack.version,
+            race: pack.rules.tags.race,
+            culture: pack.rules.tags.culture,
+            ...(pack.rules.retag ? { excludedRoutineTags: routineBefore } : {}),
+          },
+          {
+            version: after.version,
+            race,
+            culture,
+            ...(pack.rules.retag ? { excludedRoutineTags: routine } : {}),
+          },
         );
         changed();
         return after;
