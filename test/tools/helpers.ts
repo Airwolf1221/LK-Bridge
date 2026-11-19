@@ -26,13 +26,22 @@ export const PROJECT = 'proj_mock';
 
 /**
  * CR-2026-11-R3 (fix B): the opt-in memory measurement (`LKB_MEASURE=1`, test/review/r3-fixes/memory.test.ts) measures
- * memory, not LegendKeeper's hourly budget: a 700-page rename reads more than the 6,000 an hour the mock (and the
- * governor) allow, and would wait for the hour. Only then, the mock and the bridge are given hourly and daily tiers large
- * enough; the per-minute tiers are LegendKeeper's own. Never set in the ordinary suite.
+ * memory, not LegendKeeper's budget: a 700-page rename makes about 8,000 requests, which at LegendKeeper's 300 a minute
+ * and 6,000 an hour (the mock's, and the governor's) take most of an hour. Only then, the mock and the bridge are given
+ * tiers large enough to run it at once. Never set in the ordinary suite.
  */
 const MEASURE_LIMITS =
   process.env.LKB_MEASURE === '1'
-    ? { 'key-hour': 1_000_000, 'project-hour': 1_000_000, 'key-day': 10_000_000, 'write-hour': 1_000_000 }
+    ? {
+        'key-min': 1_000_000,
+        'key-hour': 1_000_000,
+        'key-day': 10_000_000,
+        'project-hour': 1_000_000,
+        'write-min': 1_000_000,
+        'write-hour': 1_000_000,
+        'items-min': 1_000_000,
+        'items-hour': 1_000_000,
+      }
     : undefined;
 export const PUBLIC_URL = 'https://lk.example.test';
 
@@ -104,7 +113,11 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     clock: systemClock,
     apiKey: API_KEY,
     ...(o.respond ? { respond: o.respond } : {}),
-    ...(o.limits ? { limits: o.limits } : MEASURE_LIMITS ? { limits: MEASURE_LIMITS } : {}),
+    ...(MEASURE_LIMITS
+      ? { limits: { ...o.limits, ...MEASURE_LIMITS } }
+      : o.limits
+        ? { limits: o.limits }
+        : {}),
     ...(o.opTiers ? { opTiers: o.opTiers } : {}),
   });
   const lkUrl = await mock.start();
