@@ -263,7 +263,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Session     | `GET /session` (user, CSRF token, version)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Overview †  | `GET /overview` (every project's status, health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                                                                                                                                                                                                                                                                                                                                                               |
+| Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice; where it stopped and Resume; v3 F3e: `split`, the split whose phase 1 it is), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                                                                                                                                                                                                                                                                                  |
 | Errors †    | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Budgets †   | `GET /budgets` (one project's snapshot with its learned operation limits, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -543,6 +543,29 @@ is as it should be, or revert). Work you approved resumes without a new approval
 with where it stopped and who approved the work). A recreate is finished as before (F2's Finish: a new proposal of what
 is still missing). Revert (Review page, ADR 0055) stays the other way out for a direct job: it undoes the completed steps.
 
+## Splits (v3 F3e)
+
+[ADR 0059](adr/0059-v3-f3e-splits.md); the owner-approved design: [design/F3e-splits.md](design/F3e-splits.md).
+
+- **Packs**: the new pack version `arkona-2026-11-18-f3e` (its split rules) waits for your approval like any other; until
+  then neither split tool computes anything.
+- **Appraisal**: the tool list has **Split appraisal (A6)**. On a page or a branch it shows the Split Triggers that fire,
+  each with its evidence, the page's **draft destination map** (each section, its domain and where it might go), its
+  **Anti-Fragmentation note** (what should stay together) and the **questions** the bridge cannot measure (Independent
+  Retrieval, Independent Maintenance, Downstream Dependency). Owner appraisal (A2) lists the same candidates in its
+  Architectural candidates group. Free, and only ever a suggestion.
+- **Proposals**: a split is ONE canonical proposal (**Approve and accept as canon**, whatever the agent's scope). Its Items
+  card has a group per kind (Destinations, Universal material, Character index, Changes to existing pages, Index lines,
+  Dependencies). Each destination says what **leaving it out** means ("If left out, “Appearance” stays in [BSRC] … (nothing
+  is lost)"), on the item when you untick it and again in the confirmation, before you approve; coverage holds whatever
+  you untick. Phase 2 (archiving the source, for a split that retires it) is a SEPARATE canonical proposal the bridge makes
+  only once phase 1 has verified and nothing was left out or skipped: an ordinary `archive_page` proposal. The split never
+  deletes.
+- **Jobs**: a stopped phase 1 shows the **Stopped part-way** card (Resume, as for a package). Its job page offers
+  **Revert…** although you approved it: the confirmation lists what will be put back and says that the pages the split made
+  then go to ONE deletion proposal (each only while it is exactly as the split made it). When nothing had left the source
+  yet, Revert only proposes deleting those pages.
+
 ## Archive and lifecycle (v2 C2c)
 
 The **Archive and lifecycle** page (navigation: Repository) lists the selected project's lifecycle record,
@@ -820,7 +843,8 @@ off).
   snapshot, and which non-current areas were found (the Legacy Canon Archive and the Design References, each by its
   index's name, or "not found"). It is built after each nightly full snapshot and brought up to date at every search
   and report; **Rebuild the index now** builds it again from the snapshot store (free).
-- **Run**: the tool (Owner appraisal (A2), Change impact (A3), Working digest (A4), Visual hygiene (A5)), the scope (a
+- **Run**: the tool (Owner appraisal (A2), Change impact (A3), Working digest (A4), Visual hygiene (A5), Split appraisal
+  (A6, v3 F3e: [below](#splits-v3-f3e))), the scope (a
   page, a branch or everything; a page name, a path or an id), and each tool's own fields: the non-current areas to
   include (A2), a planned new name or a pending proposal (A3), a window in days (A4).
 - **The report**: what it inspected, how fresh its data was, what it could not check, and its findings in their groups

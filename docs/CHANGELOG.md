@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased: v3 F3e (splits) (19 November 2026): `arkona_split_appraisal` and `arkona_split_owner`
+
+[ADR 0059](adr/0059-v3-f3e-splits.md) (Proposed), the owner-approved design [design/F3e-splits.md](design/F3e-splits.md)
+(D1 to D7). Migration `3600_splits.sql` (runs at start). Pack version `arkona-2026-11-18-f3e`. Nothing was run against a
+live system: mocks and fixtures only; the new sandbox check (`test/sandbox/split-ids.test.ts`) is for the owner to run.
+
+- **`arkona_split_appraisal`** (new read tool, A6): the measurable Split Triggers on a page or a branch (Scope Overload,
+  Retrieval Cost, Asset Ownership, Shared Ownership, Distinct Unresolved Material, Distinct Dependencies), each an
+  architectural candidate with its evidence, a draft destination map and the Anti-Fragmentation note; the triggers it
+  cannot measure come back as questions. Free (the snapshots; `live: true` re-reads). Length alone never counts. The
+  thresholds are pack data (D4). `arkona_appraise_owner`'s architectural group and the Appraisal page show the candidates.
+- **`arkona_split_owner`** (new write tool, C2): carries out a split the owner asked for, from the agent's destination map
+  (new, existing, relationship, stays, universal; by section, block by block inside a section where needed). Refused with
+  lists before anything is proposed: a block unassigned or twice (`SPLIT_COVERAGE`), a section twice
+  (`SPLIT_DUPLICATED_AUTHORITY`), images to a non-visual page (`SPLIT_VISUAL`), a missing interface summary, universal
+  material without its application text or owner, an unmapped Dependency of a source to be retired, and the pack's own
+  rules for new pages; the relationship audit warns. ONE canonical proposal at every scope, each destination an item
+  (left out, its sections stay in the source). Phase 1, one job: the owners made and extended with every block moved
+  verbatim with its id, checked before anything leaves the source, the interface summaries, index lines and remapped
+  Dependencies written, Last Major Revision per page, a verification by direct re-read. Phase 2: for a source to be
+  retired, a separate canonical `archive_page` proposal by the bridge once phase 1 has verified. Never a delete.
+  `report` says what became of a split (free).
+- **Resume and Revert of a split's phase 1**: Resume as for a package; Revert (although the owner approved it) puts back
+  what the job changed, and the pages it made go to ONE deletion proposal (each only while it is as the split made it).
+  The job page offers Revert for it.
+- **`USE_ARKONA_SPLIT`.** On a pack project, `write_page` refuses an edit that takes 120 words or more (pack data) off a
+  pack page, with a hint to the split tools; `plainEdit: { reason }` (new argument) lets a page's own revision through
+  with its reason shown. The bridge guide has an "Arkona splits" section and the line "Split an owner →
+  `arkona_split_appraisal`, then `arkona_split_owner` (never by hand)" in "How to decide".
+- **Proposals page**: an item's "If left out, … stays in …" is shown on the item and in the confirmation.
+- **Revert in general**: a row write after another write of the same revert job on the same page's sidebar is judged
+  inside its lock (rows as the check read them; the version read there), where it used to fail on a stale version.
+- **Engine**: a verified page write that was rebased on a conflict now records the rebase in its result.
+- **Tool counts**: 70 tools for `propose` or `write` (31 for `read`); 165 with the per-operation tools.
+- **Costs** (measured against the mock): a character monolith split into six owners: 23 requests to propose, 243 for
+  the job (87 writes); an owner split into a new and an existing owner: 12 and 84 (22 writes); a conflict on an append,
+  one read and the write again.
+- **After deploying**: (1) approve the new pack version on the Packs page; (2) run the split appraisal on one developed
+  character on the test world; (3) split one test-world monolith, using the selective approval, and approve its phase 2;
+  (4) then use it on Arkona. The owner's sandbox check: `sandbox-test.sh --project test -- split-ids`.
+
 ## Unreleased: v3 F3d (renames), the amendment after the live test (18 November 2026)
 
 [ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md), its new

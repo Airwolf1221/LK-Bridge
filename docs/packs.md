@@ -119,9 +119,10 @@ packages cannot both create it).
 
 1. **Seeded once.** At start the bridge stores each pack it knows (`src/packs/arkona.ts`, data) if it is not stored yet
    (audited `pack.seed`). After that the stored copy is the owner's: it is never overwritten by code. **A new seed is
-   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-17-f3-4`, v3 F3.4, the tool
-   switches, supersedes F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b`, F3b.1's `arkona-2026-11-16-f3b1` and
-   F3.3's `arkona-2026-11-17-f3d`, which was named after the wrong session), and a pack stored from one of them is given
+   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-18-f3e`, v3 F3e, the split
+   rules, supersedes every earlier one: F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b`, F3b.1's
+   `arkona-2026-11-16-f3b1`, F3.3's `arkona-2026-11-17-f3d`, which was named after the wrong session, and F3.4's
+   `arkona-2026-11-17-f3-4`, the tool switches), and a pack stored from one of them is given
    the new seed's rules as a NEW version at start
    (audited `pack.seed_upgrade`), keeping the owner's token maps and the governance sources' places, taking the seed's
    source names and pinned sections, and adding to each attachment the template roles the new rules need. It waits for
@@ -416,6 +417,45 @@ before; the owner can leave a page out (the pages that need it go with it), and 
 **Resuming.** A package or a rename whose job stops part-way records where; the owner resumes it (Jobs and Review pages), an
 agent its own direct job (`bridge_job_resume`). The package's check runs again first: a page this package already made is
 its own (`ownIds`), and an image this job already placed is not "busy". Nothing is made twice.
+
+## Splits (v3 F3e)
+
+[ADR 0059](adr/0059-v3-f3e-splits.md); the owner-approved design: [design/F3e-splits.md](design/F3e-splits.md). The
+tools: [tools.md](tools.md#setting-packs-splits-v3-f3e).
+
+**The split rules are pack data** (`rules.splits`, new in `arkona-2026-11-18-f3e`; the owner approves the version on the
+Packs page before either split tool works, and tunes any of it with a new version). D4's thresholds and what the
+appraisal and the split need to know:
+
+| Key                                         | Arkona's value                                                                                                                                                                                                                                                        |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scopeOverload.minDomains`                  | 3 (the Scope, or else the top-level sections, name that many domains)                                                                                                                                                                                                 |
+| `retrievalCost.minWords`, `.minDomains`     | 2,000 words AND 2 section domains (length alone never counts)                                                                                                                                                                                                         |
+| `assetOwnership.minImages`, `.sectionWords` | 3 images on a non-Art page; a wardrobe, outfit or form section with any image                                                                                                                                                                                         |
+| `sharedOwnership.minWords`                  | 120 words about one other named character, with no relationship owner for the pair                                                                                                                                                                                    |
+| `unresolved.minItems`                       | 2 Unresolved Material items under one domain                                                                                                                                                                                                                          |
+| `domains`, `ownerDomains`                   | the words that put a section in a domain: a character's (Biography, Appearance, Personality, Relationships, Powers, Wardrobe, Career) and any other owner's (History, Geography, Government, Military, Economy, Culture, Religion, Law, Magic, Technology, Education) |
+| `stays`                                     | the sections a page keeps (Purpose, Identity, Overview, Summary, Source Boundaries, Unresolved Material, How to Use This Index)                                                                                                                                       |
+| `together`                                  | the Anti-Fragmentation examples (personality and habits; body, face and forms; a shared romantic hierarchy)                                                                                                                                                           |
+| `destinations`                              | the draft destination per domain (Biography → a "Biography" page, Character Biography; Appearance → "Physical & Visual Reference"; Relationships → a relationship owner; …)                                                                                           |
+| `visual`                                    | what counts as an Art or visual owner (the `art` role; Character Art and Character Physical & Visual Reference; the Character Art and Visual Reference tags)                                                                                                          |
+| `universalTypes`                            | the owner types whose material is universal (Species, Creature, Culture, Magic, Technology, Material, Equipment, Religion, Law, Condition, Ceremony…)                                                                                                                 |
+| `questions`                                 | the owner's questions for the triggers the bridge cannot measure                                                                                                                                                                                                      |
+| `guardWords`                                | 120: `write_page` refuses taking that many words off a pack page (`USE_ARKONA_SPLIT`)                                                                                                                                                                                 |
+
+**What the pack's rules do in a split.** A new owner is made by F3a's rules (a character's page: its role, title,
+Reference Type, its place in the character's index; a Compact Reference with no index gets one, and moves into it) or
+F3b's (any other owner: type, Subject, home, Temporal Scope), with the pack's names, templates, computed tags, AU and
+lifecycle, as every package is; a new owner of a canon page is canon in the same canonical proposal. The appraisal uses
+the domains, `stays`, `together`, `destinations`, `visual` and `questions`; the split's visual audit uses `visual`, its
+universal audit `universalTypes`. Character Architecture's extra audits (relationship, visual, index) apply when the
+source is a character's page; Lifecycle's split rules (coverage, summaries, Dependencies, retirement) apply to any owner.
+
+**Items and phases.** Each destination is an item, with its own source edit: left out, its sections stay in the source.
+Phase 1 is one job (made, moved verbatim with the blocks' ids, checked before anything leaves the source, edited,
+remapped, dated, verified); phase 2, for a source to be retired, is a separate canonical `archive_page` proposal the
+bridge makes once phase 1 has verified and nothing was left out. The split never deletes. A stopped phase 1 is resumed
+or reverted by the owner; a reverted one proposes deleting the pages it made.
 
 ## Types as data, and what F3b extends
 
