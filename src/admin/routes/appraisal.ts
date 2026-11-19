@@ -41,7 +41,7 @@ const STATUS: Readonly<Record<string, number>> = {
 const runBody = z.object({
   confirm: z.literal(true),
   project: projectParam,
-  tool: z.enum(['owner', 'impact', 'digest', 'visual']),
+  tool: z.enum(['owner', 'impact', 'digest', 'visual', 'split']),
   page: z.string().min(1).max(500).optional(),
   under: z.string().min(1).max(500).optional(),
   all: z.boolean().optional(),
@@ -151,6 +151,21 @@ export const registerAppraisal: Register = (api, ctx) => {
           b.tool === 'owner'
             ? await a.appraiseOwner({ projectId: p.id, actor: 'owner', scope })
             : await a.visualHygiene({ projectId: p.id, actor: 'owner', scope });
+        return { report };
+      }
+      // v3 F3e (ADR 0059): the split appraisal (A6) of a page or a branch.
+      if (b.tool === 'split') {
+        if ([page, under].filter(Boolean).length !== 1)
+          throw new AdminHttpError(400, 'INVALID_INPUT', 'Give exactly one of a page or a branch.');
+        const report = await a.splitAppraisal({
+          projectId: p.id,
+          actor: 'owner',
+          scope: {
+            ...(page ? { pageId: page } : {}),
+            ...(under ? { underId: under } : {}),
+            ...(b.include ? { include: b.include } : {}),
+          },
+        });
         return { report };
       }
       if (b.tool === 'impact') {

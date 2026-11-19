@@ -38,6 +38,7 @@ import { runWriteJob } from './write-job.js';
 import { lastMajorRevisionArg } from './schemas.js';
 import type { LmrMode } from '../../jobs/lmr-hook.js';
 import { pickDocument } from './read-document.js';
+import { manualSplitRefusal } from '../../packs/split/guard.js';
 import { finish, liveRead, repoContext, resolvePage } from './repo.js';
 import {
   railBody,
@@ -212,6 +213,13 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
       dryRun: z.boolean().optional().describe('Return the plan and the Markdown diff; write nothing.'),
       detail: z.enum(['summary', 'full']).optional().describe('"full" adds the Markdown diff to the result.'),
       lastMajorRevision: lastMajorRevisionArg,
+      plainEdit: z
+        .object({ reason: z.string().trim().min(3).max(500) })
+        .strict()
+        .optional()
+        .describe(
+          'Only when an edit on a pack project takes substantial material off an owner page on purpose (not a split): why. Without it such an edit is refused with USE_ARKONA_SPLIT (arkona_split_owner moves material between owners, verified). The reason is shown to the owner.',
+        ),
       project: projectArg,
     }),
     annotations: WRITE_PAGE_ANNOTATIONS,
@@ -384,6 +392,31 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         }
+        // v3 F3e (ADR 0059): taking substantial material off a pack owner is a split (arkona_split_owner), unless
+        // plainEdit says why it is not.
+        if (!args.plainEdit) {
+          const sb = ctx.tree.sidebars(ctx.projectId, [node.id]).data.get(node.id) ?? null;
+          const refusal = manualSplitRefusal({
+            packs: pd.services?.packs,
+            projectId: ctx.projectId,
+            node,
+            before: current.blocks,
+            after: plan.blocks,
+            characterOf: (id) => {
+              try {
+                return ctx.types.characterOfPage(id).ok;
+              } catch {
+                return false;
+              }
+            },
+            factKeys: sb
+              ? (sb as readonly { kind?: string; rows?: readonly { key: string }[] }[])
+                  .filter((x) => x.kind === 'keyValue')
+                  .flatMap((x) => (x.rows ?? []).map((r) => r.key))
+              : null,
+          });
+          if (refusal) return errorResult(refusal, pd);
+        }
         const diff = markdownDiff(plan.before, plan.after);
         const diffBody = (full: boolean) =>
           full
@@ -424,6 +457,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           plannedOn: plan.version,
           ...(args.baseVersion !== undefined ? { baseVersion: args.baseVersion } : {}),
           ...(args.dropRegions && args.dropRegions.length > 0 ? { dropRegions: args.dropRegions } : {}),
+          ...(args.plainEdit ? { plainEdit: args.plainEdit.reason } : {}),
         };
         const replanInput: WritePageReplanInput | undefined =
           sectional && plan.section && args.section !== undefined
@@ -450,8 +484,9 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           before: plan.before,
           after: plan.after,
           ...warnings,
+          ...(args.plainEdit ? { plainEdit: args.plainEdit.reason } : {}),
         };
-        const title = `write_page ${mode}${head.section ? ` “${head.section}”` : ''} on “${node.displayName}” (${doc.name ?? doc.id})`;
+        const title = `write_page ${mode}${head.section ? ` “${head.section}”` : ''} on “${node.displayName}” (${doc.name ?? doc.id})${args.plainEdit ? ` (plain edit: ${args.plainEdit.reason})` : ''}`;
         if (blockwise) {
           return writeBlockwise(pd, mctx, {
             resourceId: node.id,

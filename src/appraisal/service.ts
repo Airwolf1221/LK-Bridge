@@ -29,7 +29,16 @@ import { proposeAppraisalFix, registerFixCheckers, type FixResult } from './fixe
 import { FullText } from './fts.js';
 import { effectsOfProposal, impactOf, type PlannedEffect } from './impact.js';
 import { AppraisalIndex, type IndexState } from './overlay.js';
-import { appraisePage, type Draft } from './owner.js';
+import {
+  appraisePage,
+  characterType,
+  roleOf,
+  type Draft,
+  type OwnerContext,
+  type PageRole,
+} from './owner.js';
+import { appraiseSplit, type KnownCharacter, type PageSplitAppraisal, type SplitContext } from './split.js';
+import { cleanPrefixes } from '../registry/names.js';
 import { PageReader, type LiveRead } from './reader.js';
 import { CHECKS, FIX_CHANGE } from './rules.js';
 import { inScope, labelContext } from './scope.js';
@@ -64,6 +73,8 @@ export interface AppraisalDeps {
     readonly queries: {
       node(projectId: string, id: string): { readonly data: TreeNode | null };
       children(projectId: string, id: string): { readonly data: readonly TreeNode[] };
+      /** v3 F3e (ADR 0059): every node of a kind (the split appraisal's characters and relationship owners). */
+      byKind?(projectId: string, kind: 'bsrc' | 'bwrk'): { readonly data: readonly TreeNode[] };
     };
   };
   readonly assets: {
@@ -348,6 +359,8 @@ export class Appraisal {
       readonly extraSource?: Partial<ReportSource>;
       readonly actor: string;
       readonly startedAt: number;
+      /** v3 F3e (ADR 0059): the split appraisal's questions for the owner. */
+      readonly questions?: readonly { readonly trigger: string; readonly question: string }[];
     },
   ): AppraisalReport {
     const now = this.d.now();
@@ -377,6 +390,7 @@ export class Appraisal {
       couldNotCheck: [...(o.state?.notes ?? []), ...o.couldNotCheck],
       counts,
       findings,
+      ...(o.questions && o.questions.length > 0 ? { questions: o.questions } : {}),
     };
     return this.store.save(projectId, {
       report,
@@ -486,8 +500,14 @@ export class Appraisal {
         return { id, name: t.name, keys };
       },
     };
+    // v3 F3e (ADR 0059): the split appraisal's (A6) candidates, gathered into A2's architectural group.
+    const splitWorld = this.splitWorld(o.projectId, reader, rules);
+    const ownerCtx: OwnerContext = {
+      ...ctx,
+      split: (p, role) => appraiseSplit(p, splitWorld(p, role)),
+    };
     const drafts: Draft[] = [];
-    for (const id of ids) drafts.push(...(await appraisePage(ctx, id)));
+    for (const id of ids) drafts.push(...(await appraisePage(ownerCtx, id)));
     const latest = this.d.audits.store.latestRun(o.projectId);
     if (!latest)
       couldNotCheck.push(
@@ -524,6 +544,213 @@ export class Appraisal {
         },
         ...(o.live ? { live: { reads, at: iso(this.d.now()) } } : {}),
       },
+      actor: o.actor,
+      startedAt,
+    });
+  }
+
+  // ============================================================================================ A6 (v3 F3e)
+
+  /**
+   * v3 F3e (ADR 0059): what the split appraisal needs beyond the page itself: every character the repository tree knows
+   * (by subject, with its set's pages), the relationship owners by their pair, names and tags. From the bridge's own tree
+   * (free); without it, from the overlay's names only (no characters known, so no Shared Ownership).
+   */
+  splitWorld(
+    projectId: string,
+    reader: PageReader,
+    rules: PackRules,
+  ): (
+    p: { readonly page: { readonly id: string; readonly rawName: string } },
+    role: PageRole,
+  ) => SplitContext {
+    const q = this.d.tree.queries;
+    const nodes: TreeNode[] = q.byKind
+      ? [...q.byKind(projectId, 'bsrc').data, ...q.byKind(projectId, 'bwrk').data]
+      : [];
+    const t = characterType(rules);
+    const identityTypes = new Set(
+      (t?.roles ?? [])
+        .filter((r) => (r.role === 'core' || r.role === 'compact') && r.referenceType)
+        .map((r) => textKey(r.referenceType!)),
+    );
+    const characters: KnownCharacter[] = [];
+    for (const n of nodes) {
+      if (!n.referenceType || !identityTypes.has(textKey(n.referenceType))) continue;
+      const subject = (n.canonicalDisplayName ?? '').trim() || n.displayName.split(' - ')[0]!.trim();
+      const parent = n.parentId ? q.node(projectId, n.parentId).data : null;
+      const index =
+        parent && parent.kind === 'index' && textKey(parent.displayName) === textKey(subject) ? parent : null;
+      const pages = index ? [index.id, ...q.children(projectId, index.id).data.map((c) => c.id)] : [n.id];
+      characters.push({ id: n.id, subject, pages });
+    }
+    const pairs = new Map<string, { id: string; name: string }>();
+    for (const n of nodes) {
+      const m = / & (.+?) - /.exec(n.displayName);
+      if (!m) continue;
+      const a = n.displayName.slice(0, m.index).trim();
+      const b = m[1]!.trim();
+      pairs.set(`${textKey(a)}\u0000${textKey(b)}`, { id: n.id, name: n.rawName });
+      pairs.set(`${textKey(b)}\u0000${textKey(a)}`, { id: n.id, name: n.rawName });
+    }
+    const subjectOf = (pageId: string, role: PageRole): string | null => {
+      // The character whose identity page it is, or whose set holds it; else the set's index (a race index holding
+      // Compact References directly is not a character's index).
+      const c = characters.find((k) => k.id === pageId) ?? characters.find((k) => k.pages.includes(pageId));
+      if (c) return c.subject;
+      if (role.setIndex && role.role !== 'core' && role.role !== 'compact')
+        return q.node(projectId, role.setIndex).data?.displayName ?? null;
+      return null;
+    };
+    return (p, role) => ({
+      rules,
+      role: role.role,
+      subject:
+        subjectOf(p.page.id, role) ?? (cleanPrefixes(p.page.rawName).name.split(' - ')[0]!.trim() || null),
+      characters,
+      relationshipOf: (a, b) => pairs.get(`${textKey(a)}\u0000${textKey(b)}`) ?? null,
+      nameOf: (id) => q.node(projectId, id).data?.rawName ?? reader.page(id)?.rawName ?? null,
+      tagsOf: (id) => q.node(projectId, id).data?.tags ?? [],
+    });
+  }
+
+  /**
+   * `arkona_split_appraisal` (v3 F3e, ADR 0059; the design's A6): the measurable Split Triggers on one page or a branch,
+   * as architectural candidates in F3c's groups, each with its evidence, a draft destination map and the
+   * Anti-Fragmentation note; the triggers it cannot measure are the owner's questions. Read-only and free (the snapshots'
+   * overlay); `live: true` re-reads the pages first (2 reads each, at most 25). It never acts.
+   */
+  async splitAppraisal(o: {
+    readonly projectId: string;
+    readonly actor: string;
+    readonly scope: ScopeInput;
+    readonly live?: LiveRead;
+  }): Promise<AppraisalReport> {
+    const startedAt = this.d.now();
+    const rules = this.rules(o.projectId);
+    if (!rules.splits)
+      throw new AppraisalError(
+        'SPLIT_RULES_MISSING',
+        'The Arkona pack version the owner approved has no split rules yet (they came with v3 F3e). Approve the new pack version on the Packs page first.',
+      );
+    const { reader, state } = await this.reader(o.projectId);
+    const settings = this.d.projectSettings(o.projectId);
+    const ts = treeSettingsFrom(settings);
+    const lc = lifecycleFrom(settings);
+    const { ids, left } = this.pagesOf(reader, o.scope);
+    let reads = 0;
+    if (o.live) {
+      if (ids.length > MAX_LIVE_PAGES)
+        throw new AppraisalError(
+          'LIVE_TOO_MANY',
+          `live: true re-reads every page appraised (2 reads each); this scope has ${ids.length} pages, more than ${MAX_LIVE_PAGES}. Appraise a smaller branch live, or leave live out (free, from the snapshots).`,
+          { pages: ids.length, limit: MAX_LIVE_PAGES },
+        );
+      for (const id of ids) reads += (await reader.readLive(id, o.live, this.d.now())).reads;
+    }
+    const ownerCtx: OwnerContext = {
+      projectId: o.projectId,
+      reader,
+      rules,
+      propertiesName: ts.propertiesName,
+      indexScopeRow: ts.indexScopeRow,
+      referenceTypeRow: ts.referenceTypeRow,
+      lifecycleIndexIds: new Set([lc.workingIndexId, lc.archiveIndexId].filter((x): x is string => !!x)),
+      auditFindings: () => [],
+      templateFor: () => Promise.resolve(null),
+    };
+    const world = this.splitWorld(o.projectId, reader, rules);
+    const drafts: Draft[] = [];
+    const pages: { id: string; name: string; result: PageSplitAppraisal | null }[] = [];
+    for (const id of ids) {
+      const p = await reader.load(id);
+      if (!p) {
+        drafts.push({
+          check: 'not_in_snapshots',
+          pageId: id,
+          message:
+            'The page is not in the snapshots yet (made in the LegendKeeper app since the last full snapshot?).',
+          details: {},
+        });
+        continue;
+      }
+      if (p.page.kind === 'root' || p.page.kind === 'index') continue;
+      for (const piece of p.unreadable.filter((x) => !x.startsWith('image')))
+        drafts.push({
+          check: 'page_unreadable',
+          pageId: id,
+          key: piece,
+          message: `The page’s ${piece} could not be read from the snapshot store, so its split triggers were not measured.`,
+          details: { piece },
+        });
+      if (!p.body) {
+        drafts.push({
+          check: 'no_body',
+          pageId: id,
+          message:
+            'The page has no page document (or it could not be read), so its split triggers were not measured.',
+          details: {},
+        });
+        continue;
+      }
+      const role = await roleOf(ownerCtx, p);
+      const r = appraiseSplit(p, world(p, role));
+      pages.push({ id, name: p.page.rawName, result: r });
+      for (const c of r?.candidates ?? [])
+        drafts.push({
+          check: c.check,
+          pageId: id,
+          ...(c.key ? { key: c.key } : {}),
+          message: c.message,
+          details: {
+            trigger: c.trigger,
+            evidence: c.evidence,
+            draftMap: r!.draftMap,
+            antiFragmentation: r!.antiFragmentation,
+          },
+        });
+    }
+    const couldNotCheck: string[] = [];
+    if (!this.d.tree.queries.byKind)
+      couldNotCheck.push(
+        'The repository tree is not available, so Shared Ownership (other characters) was not measured.',
+      );
+    if (left > 0)
+      couldNotCheck.push(
+        `${left} page(s) in non-current areas (Legacy Canon Archive, Design References, Archived) were left out; include: ["legacy", "design", "archived"] brings them in.`,
+      );
+    couldNotCheck.push(
+      'Independent Retrieval, Independent Maintenance and Downstream Dependency cannot be measured: they are the owner’s questions (questions).',
+    );
+    const scope = {
+      ...(o.scope.pageId ? { page: o.scope.pageId } : {}),
+      ...(o.scope.underId ? { under: o.scope.underId } : {}),
+      ...(o.scope.all ? { all: true } : {}),
+      ...(o.scope.include?.length ? { include: [...o.scope.include].sort() } : {}),
+      ...(o.live ? { live: true } : {}),
+    };
+    const candidates = pages.filter((x) => (x.result?.candidates.length ?? 0) > 0);
+    return this.report(o.projectId, 'arkona_split_appraisal', {
+      reader,
+      state,
+      drafts,
+      scope,
+      inspected: {
+        pages: ids.length,
+        measured: pages.length,
+        withCandidates: candidates.length,
+        thresholds: {
+          scopeOverload: rules.splits.scopeOverload,
+          retrievalCost: rules.splits.retrievalCost,
+          assetOwnership: { minImages: rules.splits.assetOwnership.minImages },
+          sharedOwnership: rules.splits.sharedOwnership,
+          unresolved: rules.splits.unresolved,
+        },
+        ...(left ? { leftOut: left } : {}),
+      },
+      couldNotCheck,
+      questions: rules.splits.questions,
+      extraSource: o.live ? { live: { reads, at: iso(this.d.now()) } } : {},
       actor: o.actor,
       startedAt,
     });

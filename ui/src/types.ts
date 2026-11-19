@@ -341,7 +341,7 @@ export interface JobDetail extends Job {
 /** v3 F3d (ADR 0058): where a package, a rename or a recreate stopped part-way. */
 export interface JobStop {
   jobId: string;
-  kind: 'package' | 'rename' | 'recreate';
+  kind: 'package' | 'rename' | 'recreate' | 'split';
   /** Every step up to this one succeeded and none was read back different from its plan (0: none). */
   lastVerifiedStep: number;
   lastVerifiedLabel: string | null;
@@ -2395,7 +2395,11 @@ export interface PacksResponse {
 // ------------------------------------------------------------------------------------------------ v3 F3c: Appraisal
 
 export type AppraisalToolName =
-  'arkona_appraise_owner' | 'arkona_change_impact' | 'arkona_working_digest' | 'arkona_visual_hygiene';
+  | 'arkona_appraise_owner'
+  | 'arkona_change_impact'
+  | 'arkona_working_digest'
+  | 'arkona_visual_hygiene'
+  | 'arkona_split_appraisal';
 
 export type AppraisalFollowUp =
   | { kind: 'fix'; tool: 'arkona_appraisal_fix'; args: { findingId: string }; change: string; via?: 'audit' }
@@ -2441,6 +2445,18 @@ export interface AppraisalReportView {
   counts: Record<string, number>;
   findings: AppraisalFindingView[];
   compared?: { new: number; still: number; gone: number; previousRunAt: string };
+  /** v3 F3e (ADR 0059): the split appraisal's questions for the owner. */
+  questions?: { trigger: string; question: string }[];
+}
+
+/** v3 F3e (ADR 0059): one section of a split candidate's draft destination map. */
+export interface SplitDraftEntry {
+  section: string;
+  words: number;
+  images: number;
+  to: 'stays' | 'new' | 'relationship' | 'divide' | 'review';
+  suggestion?: Record<string, unknown>;
+  note?: string;
 }
 
 export interface AppraisalIndexView {

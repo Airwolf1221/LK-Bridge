@@ -44,6 +44,9 @@ import { ReviewService } from './review/service.js';
 import { RevertService } from './review/revert.js';
 import { ResumeService } from './resume/service.js';
 import { registerRenameChecks } from './packs/rename/checks.js';
+import { registerSplitChecks } from './packs/split/checks.js';
+import { SplitService } from './packs/split/service.js';
+import { proposeArchiveByBridge } from './mcp/tools/lifecycle.js';
 import { RenameService } from './packs/rename/service.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
@@ -161,6 +164,8 @@ export interface Runtime {
   readonly resume: ResumeService;
   /** v3 F3d (ADR 0058): arkona_rename's records, token versions and leftover reports. */
   readonly renames: RenameService;
+  /** v3 F3e (ADR 0059): arkona_split_owner's records, phase 2 and reverts. */
+  readonly splits: SplitService;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -873,6 +878,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReview = review.attach();
+  // v3 F3e: the split service is made after the reverts (it hooks the proposals); Revert reaches it through this.
+  const splitsRef: { current: SplitService | null } = { current: null };
   const reverts = new RevertService({
     db: o.db,
     engine,
@@ -888,6 +895,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       remember: (projectId, definition) => chronology.remember(projectId, definition),
     },
     images,
+    // v3 F3e (ADR 0059): a split's phase 1 is revertible; the pages it made go to a deletion proposal afterwards.
+    splits: {
+      isPhase1: (projectId, jobId) => splitsRef.current?.isPhase1(projectId, jobId) ?? false,
+      afterRevert: (projectId, jobId, revertJobId) =>
+        splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
+    },
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReverts = reverts.start();
@@ -942,6 +955,24 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachRenames = renames.start();
+  // v3 F3e (ADR 0059): arkona_split_owner: its in-job checks and rebasers, its record, phase 2 (the source's archive,
+  // proposed by the bridge once phase 1 has verified) and the deletion proposal after a revert of phase 1.
+  const unregisterSplitChecks = registerSplitChecks(engine);
+  const splits = new SplitService({
+    db: o.db,
+    engine,
+    proposals: {
+      addHooks: (h) => policy.proposals.addHooks(h),
+      get: (id) => policy.proposals.get(id),
+      itemsOf: (id) => policy.proposals.itemsOf(id),
+    },
+    parentOf: (projectId, pageId) => tree.queries.node(projectId, pageId).data?.parentId ?? null,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachSplits = splits.start();
+  splitsRef.current = splits;
 
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
@@ -1015,8 +1046,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       resume,
       // v3 F3d (ADR 0058): arkona_rename's records and leftover reports.
       renames,
+      // v3 F3e (ADR 0059): arkona_split_owner's records, phase 2 and reverts.
+      splits,
     },
   };
+  // v3 F3e (ADR 0059, D2): phase 2 is archive_page's own plan, proposed by the bridge (it needs the tool layer's deps).
+  splits.setArchiver((projectId, pageId, because) =>
+    proposeArchiveByBridge(toolDeps, projectId, pageId, because),
+  );
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.
@@ -1103,6 +1140,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     reverts,
     resume,
     renames,
+    splits,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -1142,6 +1180,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachResume();
       detachRenames();
       unregisterRenameChecks();
+      detachSplits();
+      unregisterSplitChecks();
       detachReview();
       detachRestores();
       unregisterPackEngine();

@@ -12,6 +12,7 @@ import type {
   AppraisalReportView,
   AppraisalRunView,
   AppraisalToolName,
+  SplitDraftEntry,
 } from '../types';
 
 /**
@@ -38,11 +39,13 @@ export const lkPageUrl = (projectId: string, pageId: string): string =>
     encodeURIComponent(pageId),
   );
 
-const TOOLS: { key: 'owner' | 'impact' | 'digest' | 'visual'; tool: AppraisalToolName; label: string }[] = [
+type ToolKey = 'owner' | 'impact' | 'digest' | 'visual' | 'split';
+const TOOLS: { key: ToolKey; tool: AppraisalToolName; label: string }[] = [
   { key: 'owner', tool: 'arkona_appraise_owner', label: 'Owner appraisal (A2)' },
   { key: 'impact', tool: 'arkona_change_impact', label: 'Change impact (A3)' },
   { key: 'digest', tool: 'arkona_working_digest', label: 'Working digest (A4)' },
   { key: 'visual', tool: 'arkona_visual_hygiene', label: 'Visual hygiene (A5)' },
+  { key: 'split', tool: 'arkona_split_appraisal', label: 'Split appraisal (A6)' },
 ];
 const TOOL_LABEL = Object.fromEntries(TOOLS.map((t) => [t.tool, t.label])) as Record<
   AppraisalToolName,
@@ -70,6 +73,10 @@ export const GROUP_ORDER: Record<AppraisalToolName, { key: string; label: string
   ],
   arkona_visual_hygiene: [
     { key: 'candidates', label: 'Candidates' },
+    { key: 'blocked', label: 'Blocked cases' },
+  ],
+  arkona_split_appraisal: [
+    { key: 'architectural', label: 'Architectural candidates' },
     { key: 'blocked', label: 'Blocked cases' },
   ],
 };
@@ -232,7 +239,7 @@ function RunCard({
   onReport: (r: AppraisalReportView) => void;
 }) {
   const { run, busy } = useAction();
-  const [tool, setTool] = useState<'owner' | 'impact' | 'digest' | 'visual'>('owner');
+  const [tool, setTool] = useState<ToolKey>('owner');
   const [scope, setScope] = useState<'page' | 'under' | 'all'>('under');
   const [target, setTarget] = useState('');
   const [include, setInclude] = useState<string[]>([]);
@@ -246,6 +253,10 @@ function RunCard({
       if (scope === 'all') body.all = true;
       else if (target.trim()) body[scope] = target.trim();
       if (tool === 'owner' && include.length) body.include = include;
+    }
+    if (tool === 'split') {
+      if (target.trim()) body[scope === 'all' ? 'under' : scope] = target.trim();
+      if (include.length && scope !== 'page') body.include = include;
     }
     if (tool === 'impact') {
       if (proposal.trim()) body.proposal = proposal.trim();
@@ -271,21 +282,23 @@ function RunCard({
             ))}
           </select>
         </label>
-        {(tool === 'owner' || tool === 'visual') && (
+        {(tool === 'owner' || tool === 'visual' || tool === 'split') && (
           <fieldset>
             <legend>Scope</legend>
-            {(['page', 'under', 'all'] as const).map((s) => (
-              <label key={s} className="inline">
-                <input type="radio" name="scope" checked={scope === s} onChange={() => setScope(s)} />{' '}
-                {s === 'page'
-                  ? 'One page'
-                  : s === 'under'
-                    ? 'A branch'
-                    : tool === 'visual'
-                      ? 'The whole library'
-                      : 'Everything'}
-              </label>
-            ))}
+            {(tool === 'split' ? (['page', 'under'] as const) : (['page', 'under', 'all'] as const)).map(
+              (s) => (
+                <label key={s} className="inline">
+                  <input type="radio" name="scope" checked={scope === s} onChange={() => setScope(s)} />{' '}
+                  {s === 'page'
+                    ? 'One page'
+                    : s === 'under'
+                      ? 'A branch'
+                      : tool === 'visual'
+                        ? 'The whole library'
+                        : 'Everything'}
+                </label>
+              ),
+            )}
           </fieldset>
         )}
         {((tool !== 'digest' && scope !== 'all') || tool === 'impact') && (
@@ -294,7 +307,7 @@ function RunCard({
             <input value={target} onChange={(e) => setTarget(e.target.value)} aria-label="Page or branch" />
           </label>
         )}
-        {tool === 'owner' && scope !== 'page' && (
+        {(tool === 'owner' || tool === 'split') && scope !== 'page' && (
           <fieldset>
             <legend>Bring in the non-current areas</legend>
             {(
@@ -399,6 +412,18 @@ export function ReportCard({
         </div>
       )}
       {report.findings.length === 0 && <Empty>Nothing found.</Empty>}
+      {report.questions && report.questions.length > 0 && (
+        <div className="note small-text" data-testid="split-questions">
+          <strong>Questions only you can answer</strong> (the split triggers the bridge cannot measure):
+          <ul>
+            {report.questions.map((q) => (
+              <li key={q.trigger}>
+                <strong>{q.trigger}:</strong> {q.question}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {groups.map((g) => {
         const list = report.findings.filter((f) => f.group === g.key);
         if (list.length === 0 && g.key === 'blocked') return null;
@@ -497,8 +522,80 @@ function FindingRow({
           <span className="muted small-text">{f.followUp.reason}</span>
         )}
       </div>
+      <SplitDetails f={f} />
       {note && <div className="note small-text">{note}</div>}
     </li>
+  );
+}
+
+/**
+ * v3 F3e (ADR 0059): a split candidate's draft destination map and its Anti-Fragmentation note (the split appraisal's,
+ * and A2's architectural candidates, which carry the same). A suggestion only: splitting is the owner's decision.
+ */
+function SplitDetails({ f }: { f: AppraisalFindingView }) {
+  const d = f.details as {
+    trigger?: unknown;
+    draftMap?: unknown;
+    antiFragmentation?: unknown;
+  };
+  if (typeof d.trigger !== 'string') return null;
+  if (!Array.isArray(d.draftMap))
+    return (
+      <div className="muted small-text" data-testid="split-pointer">
+        Split trigger: {d.trigger}. Run the Split appraisal (A6) on this page for its draft destination map,
+        the Anti-Fragmentation note and the questions only you can answer.
+      </div>
+    );
+  const map = d.draftMap as SplitDraftEntry[];
+  const notes = Array.isArray(d.antiFragmentation) ? (d.antiFragmentation as string[]) : [];
+  const where = (e: SplitDraftEntry) =>
+    e.to === 'stays'
+      ? 'stays'
+      : e.to === 'divide'
+        ? 'divide block by block'
+        : e.to === 'review'
+          ? 'the owner’s call'
+          : e.to === 'relationship'
+            ? `a relationship owner${typeof e.suggestion?.name === 'string' ? ` (${e.suggestion.name})` : ''}`
+            : `a new owner${typeof e.suggestion?.name === 'string' ? ` (${e.suggestion.name})` : typeof e.suggestion?.type === 'string' ? ` (${e.suggestion.type})` : ''}`;
+  return (
+    <details className="small-text" data-testid="split-details">
+      <summary>Draft destination map and Anti-Fragmentation note (a suggestion only)</summary>
+      <table className="table small-text">
+        <thead>
+          <tr>
+            <th>Section</th>
+            <th>Words</th>
+            <th>Might go</th>
+          </tr>
+        </thead>
+        <tbody>
+          {map.map((e) => (
+            <tr key={e.section} data-to={e.to}>
+              <td>{e.section}</td>
+              <td>
+                {e.words}
+                {e.images ? ` · ${e.images} image${e.images === 1 ? '' : 's'}` : ''}
+              </td>
+              <td>
+                {where(e)}
+                {e.note ? <div className="muted">{e.note}</div> : null}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {notes.length > 0 && (
+        <div data-testid="anti-fragmentation">
+          <strong>Anti-Fragmentation:</strong>
+          <ul>
+            {notes.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </details>
   );
 }
 

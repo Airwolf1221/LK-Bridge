@@ -365,7 +365,7 @@ describe('planning', () => {
     expect(err(r).message).toMatch(/target/);
   });
 
-  it('a monolith split is refused (a later tool)', async () => {
+  it('a monolith split is refused: steered to arkona_split_owner (v3 F3e)', async () => {
     const r = await call(
       compactPackage({
         name: 'Splitter',
@@ -373,7 +373,8 @@ describe('planning', () => {
         dryRun: true,
       }),
     );
-    expect(err(r).code).toBe('MONOLITH_SPLIT_UNSUPPORTED');
+    expect(err(r).code).toBe('USE_ARKONA_SPLIT');
+    expect(err(r).useTool).toBe('arkona_split_owner');
   });
 });
 

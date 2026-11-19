@@ -125,6 +125,15 @@ export interface RevertDeps {
    * staging and its record back on the Staging page.
    */
   readonly images?: Pick<ImageService, 'store' | 'copyPlacedToStaging' | 'restage' | 'dropCopy'>;
+  /**
+   * v3 F3e (ADR 0059): a split's phase 1 is revertible although the owner approved it (the design: "phase 1 can be
+   * reverted, putting the moved content back and removing what it created"): the pages it made are not reverted by the
+   * job but go to ONE deletion proposal once it has succeeded (`afterRevert`).
+   */
+  readonly splits?: {
+    isPhase1(projectId: string, jobId: string): boolean;
+    afterRevert(projectId: string, jobId: string, revertJobId: string): Promise<unknown>;
+  };
   readonly log?: { warn(o: unknown, m: string): void };
 }
 
@@ -196,7 +205,8 @@ export class RevertService {
         code: 'IS_A_REVERT',
         message: `Job ${jobId} is a revert, and a revert is never itself reverted. The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold every target as it was before it.`,
       };
-    if (!this.d.review.store.get(projectId, jobId)) {
+    const split = this.d.splits?.isPhase1(projectId, jobId) === true;
+    if (!this.d.review.store.get(projectId, jobId) && !split) {
       if (job.approvedBy !== null)
         return {
           ok: false,
@@ -277,9 +287,25 @@ export class RevertService {
     const io = this.io(projectId, jobId);
     const plans: TargetPlan[] = [];
     const blocksByDoc = new Map<string, BlockTarget[]>();
+    const split = this.d.splits?.isPhase1(projectId, jobId) === true;
     for (const t of targets) {
       if (t.kind === 'block') {
         blocksByDoc.set(t.documentId, [...(blocksByDoc.get(t.documentId) ?? []), t]);
+        continue;
+      }
+      // v3 F3e (ADR 0059): what a split made is not reverted here: once the revert has run, those pages go to ONE
+      // deletion proposal (each only while it is exactly as the split made it).
+      if (split && t.kind === 'none' && t.creation === true) {
+        plans.push({
+          check: {
+            key: t.key,
+            kind: t.kind,
+            page: t.page,
+            what: t.what,
+            state: 'nothing_to_do',
+            detail: `${t.what}: made by the split; proposed for deletion once the revert has run (only while it is as the split made it)`,
+          },
+        });
         continue;
       }
       plans.push(await this.planOne(t, io, projectId));
@@ -632,6 +658,16 @@ export class RevertService {
     }
     this.d.review.markReverted(row.project_id, row.job_id);
     if (notes.length > 0) void this.afterImages(row.id, row.project_id, row.job_id, note, notes);
+    // v3 F3e (ADR 0059): a split's phase 1 reverted: the pages it made go to ONE deletion proposal.
+    if (this.d.splits?.isPhase1(row.project_id, row.job_id))
+      void this.d.splits
+        .afterRevert(row.project_id, row.job_id, job.id)
+        .catch((err: unknown) =>
+          this.d.log?.warn(
+            { err, jobId: row.job_id },
+            'the pages a reverted split made could not be proposed for deletion',
+          ),
+        );
   }
 
   /**

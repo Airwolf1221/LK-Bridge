@@ -11,6 +11,7 @@ import { characterBrief } from '../../packs/brief.js';
 import { runArt, runRelationship } from '../../packs/character-tools.js';
 import { runOwner, runPackage } from '../../packs/run.js';
 import { renameReport, runRename } from '../../packs/rename/run.js';
+import { runSplit, splitReport } from '../../packs/split/run.js';
 import type { PackageInput } from '../../packs/engine/plan.js';
 import type { McpToolProvider } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
@@ -226,6 +227,7 @@ export const EXPLICIT_PACK_TOOLS: ReadonlySet<string> = new Set([
   'arkona_add_character_art',
   'arkona_character_brief',
   'arkona_rename',
+  'arkona_split_owner',
 ]);
 
 /** v3 F3b: how an agent stages art for a pack (design section 6): no destination, so nothing is proposed. */
@@ -709,6 +711,204 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
               ...(args.effectiveDate !== undefined ? { effectiveDate: args.effectiveDate } : {}),
               ...(args.token !== undefined ? { token: args.token } : {}),
               ...(args.from !== undefined ? { from: args.from } : {}),
+              ...(args.lastMajorRevision !== undefined ? { lastMajorRevision: args.lastMajorRevision } : {}),
+            },
+            dryRun: args.dryRun === true || args.preview === true,
+            operationId: args.operation_id,
+            args,
+          });
+        });
+      },
+    }),
+    defineTool({
+      name: 'arkona_split_owner',
+      title: 'Split an Arkona owner page into owners (pack)',
+      access: 'write',
+      description:
+        'Use this, and only this, to split an existing owner page of the Arkona pack (a character monolith, any owner covering several domains): never by hand with write_page and the create tools (write_page refuses removing substantial sections from a pack page with USE_ARKONA_SPLIT). Splitting is a deliberate, owner-approved decision (“do not split merely because a character has many facts”): appraise first with arkona_split_appraisal, bring its candidates, the Anti-Fragmentation note and the questions to the owner, and split only when the owner asks. ' +
+        'You give the DESTINATION MAP: every section of the source (and, where a section must be divided, each block id in it) goes to exactly one destination: `new` (a new owner: a character’s page by F3a’s rules, role/title/referenceType, landing in the character’s index; any other owner by F3b’s, type/name/home; each with its scope and purpose), `existing` (an existing owner page; the material is appended under the heading you give, `under`), `relationship` (an existing relationship page, or a new one `with` the other character), `stays`, or `universal` (material an existing universal owner already owns, e.g. a magic rule: NOT migrated; give `owner` and the subject-specific application `text` that replaces it; the universal owner becomes a Dependency). ' +
+        'Refused before anything is proposed: a block unassigned or assigned twice (SPLIT_COVERAGE, with the list), a section listed twice (SPLIT_DUPLICATED_AUTHORITY), images going to a page that is not an Art or visual owner (SPLIT_VISUAL), content LegendKeeper cannot create (unsupported blocks only stay), a missing interface summary for a moved section when the source survives (SPLIT_SUMMARY_REQUIRED), and, when the source is to be retired, any page depending on it not remapped (`dependencies`: each page to the new owner it actually needs; SPLIT_DEPENDENCIES_UNMAPPED). A section about one other character not going to a relationship owner is a warning for the owner. ' +
+        'Always ONE canonical proposal, whatever your scope; never resubmit it, follow it with bridge_proposal_status. The owner approves it whole or destination by destination: a destination left out keeps its sections in the source. Phase 1 (one job) makes and extends the owners with the blocks moved verbatim (ids kept), checks every destination holds them BEFORE anything leaves the source, writes the interface summaries, index lines and remapped Dependencies, and verifies (a re-read of every page touched); a failure stops it before phase 2 (Resume and Revert stay available). With `retire: true`, once phase 1 has verified the bridge proposes archiving the source (archive_page): a separate canonical proposal. The split never deletes the source. `report` (the split’s id, proposal or job) says what became of it (free). dryRun shows the whole plan first. ' +
+        'Cost (measured on the test fixtures): planning reads the source and its document (2), each remapped page (1), the pack’s governance (3) and what the pack’s planners read for the new pages (about 2 to 5 each); the approved job about 9 to 12 reads and 5 to 8 writes per new owner, 3 reads and 1 write per existing owner extended, 1 write per section group leaving the source, 2 reads and 1 write per remapped Dependency, plus its two checks (about 2 reads per page they re-read). dryRun states the plan’s own estimate.',
+      inputSchema: z.object({
+        source: z
+          .string()
+          .min(1)
+          .max(300)
+          .optional()
+          .describe('The owner page to split (name, alias, path or id).'),
+        retire: z
+          .boolean()
+          .optional()
+          .describe(
+            'Archive the source once phase 1 has verified (a separate proposal). Default false: it survives.',
+          ),
+        destinations: z
+          .array(
+            z
+              .object({
+                key: z.string().min(1).max(60).describe('The name the map uses for it.'),
+                kind: z.enum(['new', 'existing', 'relationship', 'universal']),
+                role: z
+                  .string()
+                  .max(40)
+                  .optional()
+                  .describe('A new page of a character’s set: its F3a role (specialist, art).'),
+                title: z
+                  .string()
+                  .max(200)
+                  .optional()
+                  .describe('A specialist page’s title (its name is “<Name> - <title>”).'),
+                referenceType: z.string().max(200).optional(),
+                specialistTag: z.string().max(100).optional(),
+                type: z
+                  .string()
+                  .max(100)
+                  .optional()
+                  .describe('A new owner of another page: its owner type (F3b).'),
+                name: z
+                  .string()
+                  .max(200)
+                  .optional()
+                  .describe('A new owner of another page: its Subject (F3b).'),
+                descriptor: z.string().max(200).optional(),
+                home: z
+                  .string()
+                  .max(500)
+                  .optional()
+                  .describe('A new owner of another page: its home index (F3b).'),
+                homeOverride: z.object({ reason: z.string().min(1).max(500) }).optional(),
+                nation: z.string().max(200).optional(),
+                temporalScope: z.string().max(500).optional(),
+                scope: z.string().max(1000).optional().describe('A new owner’s Scope (required).'),
+                purpose: z
+                  .string()
+                  .max(20_000)
+                  .optional()
+                  .describe('A new owner’s Purpose (Markdown; required).'),
+                dependencies: z.array(z.string().max(500)).max(50).optional(),
+                related: z.array(z.string().max(500)).max(50).optional(),
+                page: z
+                  .string()
+                  .max(500)
+                  .optional()
+                  .describe('An existing (or existing relationship) owner page.'),
+                under: z.string().max(200).optional().describe('The heading the material goes under there.'),
+                with: z
+                  .string()
+                  .max(200)
+                  .optional()
+                  .describe('A new relationship owner: the other character.'),
+                label: z.string().max(100).optional(),
+                owner: z
+                  .string()
+                  .max(500)
+                  .optional()
+                  .describe('Universal: the universal owner it belongs to.'),
+                text: z
+                  .string()
+                  .max(20_000)
+                  .optional()
+                  .describe('Universal: the subject-specific application text.'),
+                in: z
+                  .string()
+                  .max(60)
+                  .optional()
+                  .describe('Universal: where the application text goes: “source”, or a destination’s key.'),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(40)
+          .optional(),
+        map: z
+          .array(
+            z
+              .object({
+                section: z
+                  .string()
+                  .min(1)
+                  .max(500)
+                  .describe('A heading’s text or block id; “(preamble)” before the first.'),
+                to: z.string().max(60).optional().describe('A destination’s key, or “stays”.'),
+                blocks: z
+                  .array(
+                    z
+                      .object({
+                        ids: z.array(z.string().min(1).max(100)).min(1).max(500),
+                        to: z.string().min(1).max(60),
+                        summary: z.string().max(5000).optional(),
+                        under: z.string().max(200).optional(),
+                      })
+                      .strict(),
+                  )
+                  .max(100)
+                  .optional()
+                  .describe('The section divided block by block (every block of it in exactly one group).'),
+                summary: z
+                  .string()
+                  .max(5000)
+                  .optional()
+                  .describe(
+                    'The interface summary the source keeps in its place (Markdown; an exact link is added).',
+                  ),
+                under: z.string().max(200).optional(),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(300)
+          .optional(),
+        dependencies: z
+          .array(
+            z
+              .object({
+                page: z.string().min(1).max(500),
+                to: z.string().min(1).max(60),
+                keepSource: z.boolean().optional(),
+              })
+              .strict(),
+          )
+          .max(200)
+          .optional()
+          .describe(
+            'Pages that depend on the source, each remapped to the destination it actually needs (D5).',
+          ),
+        report: z
+          .string()
+          .max(100)
+          .optional()
+          .describe('Read-only: a split’s id, proposal or job: what became of it (free).'),
+        lastMajorRevision: lastMajorRevisionArg.describe(
+          'Last Major Revision of the existing pages the split changes: "auto" (default: ADR 0051’s rule per page, measured when the job runs; moved material counts on the source and on an owner it is appended to), "set" or "skip". New pages are always dated.',
+        ),
+        dryRun: z.boolean().optional().describe('The full plan; nothing written or proposed.'),
+        preview: z.boolean().optional().describe('The same as dryRun.'),
+        operation_id: operationIdArg,
+        project: projectArg,
+      }),
+      annotations: CREATE_ANNOTATIONS,
+      listed: () => (packs()?.toolListed('arkona') ?? false) && arkona()?.rules.splits !== undefined,
+      handler: (args, mctx) => {
+        if (args.report !== undefined)
+          return withProject(deps, args.project, 'read', (pd) => splitReport(pd, mctx, args.report!));
+        return withProject(deps, args.project, 'write', (pd) => {
+          if (args.source === undefined || !args.destinations || !args.map)
+            return errorResult(
+              {
+                code: 'INVALID_INPUT',
+                message: 'Give source, destinations and map (or report: a split’s id, proposal or job).',
+              },
+              pd,
+            );
+          return runSplit(pd, mctx, {
+            packId: 'arkona',
+            input: {
+              source: args.source,
+              ...(args.retire !== undefined ? { retire: args.retire } : {}),
+              destinations: args.destinations,
+              map: args.map,
+              ...(args.dependencies ? { dependencies: args.dependencies } : {}),
               ...(args.lastMajorRevision !== undefined ? { lastMajorRevision: args.lastMajorRevision } : {}),
             },
             dryRun: args.dryRun === true || args.preview === true,

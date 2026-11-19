@@ -7,13 +7,18 @@
  */
 
 export type AppraisalTool =
-  'arkona_appraise_owner' | 'arkona_change_impact' | 'arkona_working_digest' | 'arkona_visual_hygiene';
+  | 'arkona_appraise_owner'
+  | 'arkona_change_impact'
+  | 'arkona_working_digest'
+  | 'arkona_visual_hygiene'
+  | 'arkona_split_appraisal';
 
 export const APPRAISAL_TOOLS: readonly AppraisalTool[] = [
   'arkona_appraise_owner',
   'arkona_change_impact',
   'arkona_working_digest',
   'arkona_visual_hygiene',
+  'arkona_split_appraisal',
 ];
 
 /**
@@ -52,6 +57,8 @@ export const TOOL_GROUPS: Readonly<Record<AppraisalTool, readonly Group[]>> = {
   arkona_change_impact: ['proven', 'candidates', 'blocked'],
   arkona_working_digest: ['working', 'proposals', 'unpromoted', 'contradictions', 'blocked'],
   arkona_visual_hygiene: ['candidates', 'blocked'],
+  // v3 F3e (ADR 0059): the split appraisal (A6) reports architectural candidates only (and what it could not read).
+  arkona_split_appraisal: ['architectural', 'blocked'],
 };
 
 /** Repository Automation's evidence terms. */
@@ -170,6 +177,11 @@ export interface AppraisalReport {
   readonly couldNotCheck: readonly string[];
   readonly counts: Readonly<Record<string, number>>;
   readonly findings: readonly AppraisalFinding[];
+  /**
+   * v3 F3e (ADR 0059): the split appraisal's questions, the triggers the bridge cannot measure (Independent Retrieval,
+   * Independent Maintenance, Downstream Dependency), for the owner.
+   */
+  readonly questions?: readonly { readonly trigger: string; readonly question: string }[];
   /** Against the last stored run of the same scope: findings new, still present, gone. */
   readonly compared?: {
     readonly new: number;

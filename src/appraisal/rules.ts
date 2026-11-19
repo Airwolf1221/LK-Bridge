@@ -37,6 +37,18 @@ const ORDER: GovernanceRule = { page: SF, section: 'Indexes', rule: 'Sibling Ord
 const TAGS: GovernanceRule = { page: 'Controlled Native Tagging Standard', section: 'Exact Tag Grammar' };
 const ARCH: GovernanceRule = { page: 'Character Architecture', section: null, rule: 'scope and splitting' };
 const AUTOMATION: GovernanceRule = { page: 'Repository Automation', section: null };
+/** v3 F3e (ADR 0059): a Split Trigger of Character Architecture, by its name. */
+const SPLIT_TRIGGERS_RULE = (trigger: string): GovernanceRule => ({
+  page: 'Character Architecture',
+  section: 'Split Triggers',
+  rule: trigger,
+});
+/** v3 F3e: never acted on by the appraisal; a split is deliberate and the owner's to approve. */
+const SPLIT_JUDGEMENT = {
+  tool: 'arkona_split_owner',
+  decide:
+    'whether to split at all (Anti-Fragmentation: “do not split merely because a character has many facts”) and, if so, the destination map, with the owner; arkona_split_appraisal gives the evidence, a draft map and the questions only the owner can answer',
+} as const;
 const VISUAL: GovernanceRule = { page: 'Visual References', section: null };
 
 export const CHECKS = {
@@ -212,16 +224,49 @@ export const CHECKS = {
         'which tags the closed grammar allows here (a lifecycle tag only through the lifecycle tools, never by hand)',
     },
   },
+  // v3 F3e (ADR 0059): the split appraisal's (A6) measurable Split Triggers, each an architectural candidate. A2 gathers
+  // them into its own architectural group, so the Appraisal page shows them beside the page's other findings.
   scope_overload: {
-    title: 'Scope overload: the page covers several specialist domains',
+    title: 'Scope Overload: the Scope or the sections name several separate domains',
     group: 'architectural',
     evidence: 'Potential Maintenance Issue',
-    rule: ARCH,
-    judgement: {
-      tool: 'arkona_create_character',
-      decide:
-        'whether to split, and into which specialist owners: a pointer only (the split appraisal, A6, comes with F3e)',
-    },
+    rule: SPLIT_TRIGGERS_RULE('Scope Overload'),
+    judgement: SPLIT_JUDGEMENT,
+  },
+  retrieval_cost: {
+    title: 'Retrieval Cost: long text across several domains',
+    group: 'architectural',
+    evidence: 'Potential Maintenance Issue',
+    rule: SPLIT_TRIGGERS_RULE('Retrieval Cost'),
+    judgement: SPLIT_JUDGEMENT,
+  },
+  asset_ownership: {
+    title: 'Asset Ownership: a page that is not an Art or visual owner interprets images',
+    group: 'architectural',
+    evidence: 'Potential Maintenance Issue',
+    rule: SPLIT_TRIGGERS_RULE('Asset Ownership'),
+    judgement: SPLIT_JUDGEMENT,
+  },
+  shared_ownership: {
+    title: 'Shared Ownership: a section about one named character with no relationship owner',
+    group: 'architectural',
+    evidence: 'Potential Maintenance Issue',
+    rule: SPLIT_TRIGGERS_RULE('Shared Ownership'),
+    judgement: SPLIT_JUDGEMENT,
+  },
+  distinct_unresolved: {
+    title: 'Distinct Unresolved Material: its items cluster under one domain',
+    group: 'architectural',
+    evidence: 'Potential Maintenance Issue',
+    rule: SPLIT_TRIGGERS_RULE('Distinct Unresolved Material'),
+    judgement: SPLIT_JUDGEMENT,
+  },
+  distinct_dependencies: {
+    title: 'Distinct Dependencies: a Dependency only one section relies on',
+    group: 'architectural',
+    evidence: 'Potential Maintenance Issue',
+    rule: SPLIT_TRIGGERS_RULE('Distinct Dependencies'),
+    judgement: SPLIT_JUDGEMENT,
   },
   core_holds_specialist: {
     title: 'A Core holds a large biography, powers or other specialist block',
@@ -229,9 +274,9 @@ export const CHECKS = {
     evidence: 'Potential Maintenance Issue',
     rule: ARCH,
     judgement: {
-      tool: 'arkona_create_character',
+      tool: 'arkona_split_appraisal',
       decide:
-        'whether the block becomes a specialist page (role "specialist"): a pointer only (A6, the split appraisal, comes with F3e)',
+        'whether the block becomes a specialist page: appraise the split first (A6), then the owner decides; arkona_split_owner carries out the split the owner approves',
     },
   },
   audit_finding: {
