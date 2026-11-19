@@ -1192,7 +1192,8 @@ encrypted secret store, never in the env file.
    set **Contact email** under Settings to show a contact line on `/privacy`); the Caddy block already proxies every
    path, so nothing changes there. Open both pages in a private window before saving them at Google.
 4. Dashboard → **Off-site copy** → **Google Drive**: paste the **Client ID** and **Client secret**, **Save the client**
-   (it asks for your password, and authenticator code, if not confirmed in the last five minutes).
+   (it asks for the step-up, your authenticator code or your password without one, if not given in the last ten
+   minutes; ADR 0062).
 5. **Connect Google Drive**: sign in at Google and allow access; back on the page, the card says **Connected** with the
    account's name and email.
 6. **Encryption keys** → **Generate keys**. Save both (the password and the salt) in your password manager, beside
@@ -1451,8 +1452,10 @@ Since OPS2 ([ADR 0028](adr/0028-secrets-on-the-dashboard.md)) projects, their AP
 authenticator app are managed on the dashboard. The keys are kept **encrypted in the bridge's database**
 (AES-256-GCM) under `SECRETS_MASTER_KEY`, which env-sync generates; the env file keeps only the bootstrap secrets
 (`SESSION_SECRET`, `JWT_SIGNING_KEY`, `SECRETS_MASTER_KEY`). Adding, replacing or removing a key, and changing the
-password or the authenticator, ask for your password (and authenticator code) again if you have not confirmed it in the
-last five minutes.
+password or the authenticator, ask for the step-up (your authenticator code, or your password without one) if you have
+not given it in the last ten minutes; so do the settings, scope changes, pack approvals and the guarded rails' approvals
+(ADR 0062). The dashboard session lasts 30 days from its last use: remove an `AUTH_SESSION_TTL_SECONDS` lower than that
+from the env file.
 
 ### The first deploy of this release ✋
 

@@ -46,8 +46,9 @@ when a page module is neither routed nor listed there.
   dashboard bytes are served first. A session that ends while the page is open sends the page to sign-in (a 401 from the
   API, or the `unauthenticated` stream event).
 - **Cross-site requests (chunk 8).** Any `/api/admin` request a browser labels `Sec-Fetch-Site: cross-site` or
-  `same-site` is refused (`403 CROSS_SITE`), reads included: the session cookie is `SameSite=Lax`, so a link on another
-  site would otherwise carry it to read routes that spend budget (overview refresh, mapping preview).
+  `same-site` is refused (`403 CROSS_SITE`), reads included. Since ADR 0062 the session cookie is `SameSite=Strict`, so
+  no navigation from another site carries it at all; this check stays as a second line (chunk 8 had `Lax`, under which a
+  link on another site could carry it to read routes that spend budget).
 - **CSRF.** Every state-changing request (anything but GET, HEAD, OPTIONS) needs the `Origin` header to equal the
   bridge's public URL (a missing or foreign one is refused: browsers always send it on `fetch` POSTs) **and**
   `X-CSRF-Token`, the HMAC bound to the session (`GET /api/admin/session` returns it). Neither is checked on reads.
@@ -60,13 +61,20 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   owner command layer (`policy.commands`), an engine control, or the runtime settings functions
   (`src/admin/runtime-settings.ts`). Each leaves an `audit_log` row (actor `owner`) and a `policy` event on the stream.
   No route touches the database or the engine itself.
-- **Re-authentication (OPS2).** Adding, replacing or removing an API key, and changing the password or the authenticator,
-  also need the owner's password (and authenticator code) within the last five minutes on the session, or the answer is
-  `403 REAUTH_REQUIRED`; the dashboard asks in a dialog and retries ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)).
-  So does every change that lets an agent's connection do more (CR-2026-11-R2, R2-50; ADR 0057 decision 1): raising a
-  profile's scope or the default scope, moving a connection to a profile with a higher scope or to one at scope `write`,
-  and a personal access token for a profile at scope `write`; and the Status of pages agents create, whichever route
-  saves it (R2-51). Lowering a scope or moving a connection down stays one click.
+- **The step-up (OPS2, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md)).** Keys and secrets, every scope change
+  (a lowering too), every setting, pack approval and the guarded rails (approving a proposal that deletes, touches more
+  than 10 pages, or deletes or moves an asset; the owner's own bulk retag) need a step-up on the session within the last
+  ten minutes: the authenticator code (or a recovery code), or the password when no authenticator is set up. Otherwise
+  the answer is `403 REAUTH_REQUIRED`; the dashboard asks in one dialog and sends the change again
+  ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). A wrong code stays in the dialog. The brakes
+  stay one click: Sign out everywhere, revoking a connection or a token, pausing or resuming writes, cancelling a job,
+  switching most maintenance jobs off, rejecting a proposal.
+- **Sessions (ADR 0062).** A session lasts 30 days from its last use (each use renews it and its cookie), survives a
+  restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included), at a
+  password change (the other sessions) or after 30 days unused. A link to the dashboard, Claude's consent page and
+  Google Drive's return come from another site, which a Strict cookie does not ride on: each answers once with a small
+  page of the bridge's own that opens the same address again from the bridge. When the live stream is refused, the
+  dashboard checks its session once and, signed out, goes to the sign-in page instead of reconnecting.
 - **No secrets shown or logged.** An API key goes to the bridge once, from a write-only field; afterwards only its last
   four characters are shown (OPS2). The authenticator secret (while it is set up) and recovery codes are in one response
   each, marked `shownOnce`. A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
@@ -128,7 +136,8 @@ default) are not listed: you saw them before they happened. The Overview page sh
   a deletion (it points to `restore_resource`), a proposal, a running job or
   another revert. **All or nothing by default:** if anything cannot be put back, the dialog lists it and you tick
   the box to revert the others anyway (**Revert the rest**). Each target is checked again inside the revert job, so an edit made
-  meanwhile is never overwritten. It asks for your password (and TOTP code) first, and is audited (`job.revert`, with
+  meanwhile is never overwritten. It asks for the step-up first (ADR 0062: your authenticator code, or your password
+  without one), and is audited (`job.revert`, with
   the targets and the outcome). The revert is one job (system, P1) on the Jobs page; its result points to the journal
   and the snapshots if you need to go further. A reverted job is marked reviewed.
   Since CR-2026-11-R2: a target is compared in full with what the job left (a chronology row with its links, marks and
@@ -149,7 +158,8 @@ become proposals, each saying which rail sent it (`proposed because: bulk change
 - **Renames and moves of pages**: off by default;
 - **Asset deletes and asset moves** (placing a staged image is not a move): on by default.
 
-**Save rails for** a profile asks for confirmation and your password (and TOTP code), and is audited (`profile.set_rails`, with the
+**Save rails for** a profile asks for confirmation and the step-up (ADR 0062: your authenticator code, or your password
+without one), and is audited (`profile.set_rails`, with the
 rails before and after); a change applies at the profile's next request. The rails only ever add proposals: canon and
 lifecycle changes stay proposals whatever they say. See [policy.md](policy.md#write-scope-review-revert-and-safety-rails-v3-f34).
 
@@ -252,8 +262,8 @@ For each pack:
   table** (each owner type's template, primary and specialist tags and allowed homes, and the race roster's kinds);
 - its **versions**, newest first, each with its reason and whether it was approved.
 
-Four changes, each confirmed and then re-authenticated (your password, and the TOTP code if you use one), and each
-audited:
+Four changes, each confirmed and then stepped up (your authenticator code, or your password without one; ADR 0062), and
+each audited:
 
 - **Approve this pack version** records the current rules' version with each governance source's document version, read
   now (`pack.approve`), and a digest of each pinned section. A source that cannot be read cannot be approved
@@ -284,7 +294,9 @@ tool, refresh its tool list (ChatGPT: Plugins, the bridge, Refresh).
 ## Admin API
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take
-`?project=` (v2 A1); routes marked ‡ need a re-authentication within the last five minutes (OPS2).
+`?project=` (v2 A1); routes marked ‡ need the step-up within the last ten minutes (OPS2; ADR 0062, which also asks it of
+every route that changes a setting, a scope or a key, and of approving a proposal of a guarded kind: see
+[auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)).
 
 | Area        | Routes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -302,7 +314,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md))                                                                                                                                                                                                                                                                                                                                  |
 | Registry †  | `GET /registry`, `POST /registry/types\|seed-character\|templates/refresh`, `GET\|PUT /registry/types/:id`, `POST /registry/types/:id/delete`, `GET /registry/types/:id/taxonomy`, `POST /registry/types/:id/taxonomy/seed\|add-missing`, `PUT /registry/taxonomy/:id`, `POST /registry/taxonomy/:id/delete`, `GET /registry/drift`, `POST /registry/drift/run`, `GET /registry/try/resolve\|placement\|ordering`, `GET /registry/out-of-order` (v2 A3, [docs/registry.md](registry.md))                                                                                                                                                                                                                                  |
 | Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1), `PUT /projects/:name/settings` (`{ key, value }`, v2 A2), `GET\|PUT /projects/:name/canon` (`{ rules, agentDefaultStatus?, confirm: true }`, v2 C2a), `GET\|PUT /projects/:name/lifecycle` (`{ …values, workingIndexId?, archiveIndexId?, canonExemptIndexes?, reset?, confirm: true }`, v2 C2c; `canonExemptIndexes` E5.3); OPS2: `POST /projects/check` (`{ name, apiKey }`) ‡, `POST /projects/:name/key/check` (`{ apiKey }`) ‡, `POST /projects/confirm` (`{ checkId, confirm: true }`) ‡, `PUT /projects/:name/draining` (`{ value }`), `POST /projects/:name/remove` (`{ confirm: true }`) ‡ |
-| Account     | OPS2: `GET /security`, `POST /security/reauth` (`{ password, totp? }`), `POST /security/password` (`{ currentPassword, newPassword }`) ‡, `POST /security/totp/enrol` ‡, `POST /security/totp/confirm` (`{ code }`) ‡, `POST /security/totp/remove` (`{ confirm: true }`) ‡, `POST /security/recovery-codes` (`{ confirm: true }`) ‡                                                                                                                                                                                                                                                                                                                                                                                      |
+| Account     | OPS2: `GET /security`, `POST /security/reauth` (`{ totp }` with the authenticator, else `{ password }`; ADR 0062), `POST /security/sessions/revoke-all` (`{ confirm: true }`; Sign out everywhere, no step-up), `POST /security/password` (`{ currentPassword, newPassword }`) ‡, `POST /security/totp/enrol` ‡, `POST /security/totp/confirm` (`{ code }`) ‡, `POST /security/totp/remove` (`{ confirm: true }`) ‡, `POST /security/recovery-codes` (`{ confirm: true }`) ‡                                                                                                                                                                                                                                              |
 | Lifecycle † | `GET /lifecycle/records` (`limit`, `offset`; the lifecycle record, newest first, and the link index's freshness; v2 C2c). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Tool calls  | `GET /tool-calls` (filters `principalId`, `profile`, `tool`, `outcome=success\|error\|proposal\|waiting\|queued\|not_success`, `code`, `project`, `sinceMinutes`; paging `limit` (≤ 500) and `before`, answered with `nextBefore`; also the filter choices and the retention), `PUT /tool-calls/retention` (`{ days: 0-90, confirm: true }`; audited). Owner only; view only (v2 E3, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md))                                                                                                                                                                                                                                                                           |
 | Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                                                                              |
@@ -612,8 +624,9 @@ creates refuse until both are confirmed, and again if a confirmed index is renam
 opens the index names, Status values, status tags, fact names, Continuity Types and the archive texts (`{date}` and
 `{source}` are filled in) for editing; C2d adds **Note on an index archived with its set** (default "Archived - {date}.
 The author retired {source} and the pages beneath it. They are kept for provenance.", a proposed wording for the owner
-to confirm). **Save** asks for a confirmation and, since C2d (ADR 0036 decision 4), for the password (and authenticator
-code) if the owner has not re-confirmed them in the last 5 minutes; **Restore the defaults** brings back the owner's
+to confirm). **Save** asks for a confirmation and, since C2d (ADR 0036 decision 4), for the step-up (ADR 0062: the
+authenticator code, or the password without one) if the owner has not given it in the last 10 minutes; **Restore the
+defaults** brings back the owner's
 values and clears the confirmation (the same re-authentication applies). Every change is audited as
 `project.set_lifecycle` with the values before and after.
 
@@ -947,8 +960,8 @@ every few seconds while a run is going.
 - **Runs**: every copy, verify and folder deletion.
 - Links to [drive-setup.md](drive-setup.md) and the runbook's [disaster recovery](runbook-deploy.md#disaster-recovery-from-google-drive).
 
-Saving the client, connecting, disconnecting, setting keys, deleting an old folder and using an existing folder ask for
-your password (and authenticator code) if you have not confirmed it in the last five minutes. Every action is audited
+Saving the client, connecting, disconnecting, setting keys, changing the settings, deleting an old folder and using an
+existing folder ask for the step-up (ADR 0062) if you have not given it in the last ten minutes. Every action is audited
 (`offsite.*`), never with a value.
 
 The **Overview** shows a red card when the connection is broken, when no good copy is younger than the staleness
@@ -961,11 +974,11 @@ the copy is not set up at all.
 `POST /offsite/folders/:generation/delete`, `POST /offsite/adopt`. Google's answer arrives at `GET /admin/drive/callback`
 (outside `/api/admin`, because it is a navigation from Google), which redirects to `/ui/offsite`.
 
-v2 E4 ([ADR 0046](adr/0046-e4-owner-decisions.md) decision 3): `PUT /offsite/settings` needs the re-authentication when
-the change weakens a protection (the verify switched off, a smaller verify sample, a later stale-copy warning, fewer days
-for removed pieces on Drive, another folder), and so does switching off a maintenance job that keeps the backups
-(`POST /maintenance/:id/disable` for `snapshot-*` and `offsite*`); the dashboard asks for the password. Times, bandwidth,
-transfers and enabling a job stay one click.
+v2 E4 ([ADR 0046](adr/0046-e4-owner-decisions.md) decision 3): `PUT /offsite/settings` needed the re-authentication when
+the change weakened a protection (the verify switched off, a smaller verify sample, a later stale-copy warning, fewer
+days for removed pieces on Drive, another folder); since ADR 0062 every change of these settings needs the step-up,
+times, bandwidth and transfers included, as does enabling a job. Switching off a maintenance job that keeps the backups
+(`POST /maintenance/:id/disable` for `snapshot-*` and `offsite*`) needs it too; other jobs switch off in one click.
 
 ## Canon (Projects page, v2 C2a)
 
@@ -980,7 +993,7 @@ change of a set value", or, since v2 C2b, "deleting a page with these values": t
 Authoritative page need canonical approval, seeded by default as "Status = Authoritative: deleting such a page (or a
 subtree holding one) needs canonical approval; restoring does not"); nothing is stored until **Save**, which asks for a
 confirmation (marked as dangerous when it protects fewer facts than before) and, since C2d (ADR 0036 decision 4), the
-dashboard's re-authentication (password, and authenticator code when set up) unless done in the last 5 minutes:
+dashboard's step-up (ADR 0062: the authenticator code, or the password without one) unless given in the last 10 minutes:
 switching a rule off and removing every rule count as saving too. **Restore the defaults** brings back the seeded rules.
 C2d adds a rule, on by default: **Status tags (CANON, Working, Archived)**: added or removed only by the lifecycle tools
 and by creates according to their status (ADR 0036 decision 7); switching it off frees them. Every save is audited as `project.set_canonical_rules` with the rules before and after. With no rule at

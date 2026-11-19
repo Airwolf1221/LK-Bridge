@@ -131,7 +131,8 @@ describe('set_facts with two projects', () => {
       'Status', // v2 C2c: deleting a map, timeline or board of an Authoritative page
       undefined, // C2d: the status tags (ADR 0036 decision 7; no fact)
     ]);
-    // C2d (ADR 0036 decision 4): saving the rules needs the owner to have signed in again in the last 5 minutes.
+    // C2d (ADR 0036 decision 4): saving the rules needs the owner's step-up within the last 10 minutes (ADR 0062).
+    t.stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = NULL').run(); // signed in, not stepped up
     const before403 = await t.admin.put('/projects/alpha/canon', { rules: null, confirm: true });
     expect(before403.status).toBe(403);
     expect(before403.json.error.code).toBe('REAUTH_REQUIRED');

@@ -9,7 +9,7 @@ import type { PackGovernance, PackHomeRule, PackOwners, PackView, PacksResponse 
  * Packs (v3 F3a, ADR 0050): each setting pack's rules, read-only (they are data, versioned; the token
  * maps below make a new version), the governance sources the rules were derived from with the versions the owner
  * approved, the projects the pack is attached to (and its template ids there), and its versions. Two changes, each asking
- * for your password again: **Approve this pack version** (records every governance source's document version, read now)
+ * for the step-up (ADR 0062): **Approve this pack version** (records every governance source's document version, read now)
  * and **Save token maps** (race and culture → tag token: a new version, which then waits for approval). Until the
  * current version is approved and every source is as approved, the pack's tools compute no tags (fail closed).
  *

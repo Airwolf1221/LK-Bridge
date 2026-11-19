@@ -3,6 +3,7 @@
  * a request without one is sent to the existing sign-in page (`/oauth/login?return_to=…`) and comes back afterwards.
  * Every response carries the strict security headers of the dashboard (no inline script, no framing, no referrer).
  */
+import { needsBounce, sendBounce } from './bounce.js';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -82,12 +83,20 @@ export function registerUi(app: FastifyInstance, s: AuthServices, uiDir: string)
 
   const handler = async (req: FastifyRequest, reply: FastifyReply) => {
     uiSecurityHeaders(reply);
-    if (!owner.getSession(req.cookies[owner.sessionCookie])) {
+    // ADR 0062: a link to the dashboard from another site arrives without the SameSite=Strict cookie: open it again from
+    // the bridge, which carries it.
+    if (needsBounce(req, owner.sessionCookie))
+      return sendBounce(reply, safeReturnTo(req.url) ?? '/ui', owner.sessionCookie);
+    const token = req.cookies[owner.sessionCookie];
+    const used = owner.useSession(token);
+    if (!used) {
       const target = safeReturnTo(req.url) ?? '/ui';
       return reply
         .header('cache-control', 'no-store')
         .redirect(`${OAUTH_PATHS.login}?return_to=${encodeURIComponent(target)}`, 303);
     }
+    // ADR 0062: a sliding session: its cookie renewed with it.
+    if (used.renewed && token) reply.setCookie(owner.sessionCookie, token, owner.sessionCookieOptions());
     const path = req.url.split('?')[0] ?? '/ui';
     const rest = path.replace(/^\/ui\/?/, '');
     const file = resolveUiPath(root, rest);

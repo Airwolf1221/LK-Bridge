@@ -534,10 +534,29 @@ export class AuthStore {
     return r ? toSession(r) : undefined;
   }
 
-  touchSession(sessionHash: string, now: number): void {
+  /** Marks a session used now; ADR 0062: and moves its end to `expiresAt` (a sliding session), when given. */
+  touchSession(sessionHash: string, now: number, expiresAt?: number): void {
     this.db
-      .prepare('UPDATE auth_owner_sessions SET last_seen_at = ? WHERE session_hash = ?')
-      .run(now, sessionHash);
+      .prepare(
+        'UPDATE auth_owner_sessions SET last_seen_at = ?, expires_at = COALESCE(?, expires_at) WHERE session_hash = ?',
+      )
+      .run(now, expiresAt ?? null, sessionHash);
+  }
+
+  /** ADR 0062: signs out every owner session, the caller's included ("Sign out everywhere"). Returns how many. */
+  revokeAllSessions(now: number): number {
+    return this.db
+      .prepare('UPDATE auth_owner_sessions SET revoked_at = ? WHERE revoked_at IS NULL AND expires_at > ?')
+      .run(now, now).changes;
+  }
+
+  /** ADR 0062: how many owner sessions are live now. */
+  activeSessions(now: number): number {
+    return (
+      this.db
+        .prepare('SELECT COUNT(*) AS n FROM auth_owner_sessions WHERE revoked_at IS NULL AND expires_at > ?')
+        .get(now) as { n: number }
+    ).n;
   }
 
   revokeSession(sessionHash: string, now: number): void {

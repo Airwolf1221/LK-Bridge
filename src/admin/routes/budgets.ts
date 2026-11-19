@@ -1,3 +1,4 @@
+import { requireReauth } from '../guard.js';
 import * as z from 'zod';
 import type { BudgetSampleView } from '../../jobs/index.js';
 import { TIER_IDS } from '../../lk/registry-types.js';
@@ -105,6 +106,7 @@ export const registerBudgets: Register = (api, ctx) => {
   });
 
   api.put('/budgets/reserve-floors', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const body = parseInput(
       z.union([
         z.object({ reset: z.literal(true), confirm: z.literal(true) }),
@@ -164,6 +166,7 @@ export const registerBudgets: Register = (api, ctx) => {
   });
 
   api.put('/writers/max', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(
       z.object({ value: z.number().int(), confirm: z.literal(true).optional() }),
       req.body,

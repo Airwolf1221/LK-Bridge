@@ -29,6 +29,7 @@ export type AuthEventName =
   | 'login.rate_limited'
   | 'login.unavailable'
   | 'logout'
+  | 'logout.everywhere'
   | 'reauth.succeeded'
   | 'reauth.failed'
   | 'reauth.rate_limited'

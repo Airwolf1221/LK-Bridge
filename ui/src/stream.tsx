@@ -1,10 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { apiConfig } from './api';
 
 /**
  * The live stream (`/api/admin/stream`, Server-Sent Events). One connection for the whole dashboard; pages subscribe to
  * the events they care about. The browser reconnects by itself and sends `Last-Event-ID`; the bridge then replays what
  * was missed (`hello`, `resumed: true`) or says to start again (`resync`). Either way `epoch` changes on a fresh start,
  * and pages reload what they show. A watchdog reopens a connection that has gone quiet for too long.
+ *
+ * ADR 0062: a stream the bridge refused (its session ended, a 401) is not opened again blindly every few seconds: the
+ * session is checked once (`GET /api/admin/session`) and, signed out, the dashboard goes to the sign-in page (and comes
+ * back where it was); so does the stream's own `unauthenticated` event.
  */
 
 export type StreamStatus = 'connecting' | 'live' | 'reconnecting' | 'ended';
@@ -52,22 +57,40 @@ const StreamContext = createContext<StreamApi | null>(null);
 
 const defaultFactory: SourceFactory = (url) => new EventSource(url, { withCredentials: true });
 
+/** ADR 0062: whether the owner is still signed in (false only on a 401; anything else counts as signed in). */
+export const defaultCheckSession = async (): Promise<boolean> => {
+  try {
+    const res = await fetch(`${apiConfig.base}/api/admin/session`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    });
+    return res.status !== 401;
+  } catch {
+    return true; // the bridge cannot be reached: try the stream again later
+  }
+};
+
 export function StreamProvider({
   children,
   url = '/api/admin/stream',
   createSource = defaultFactory,
-  onUnauthenticated,
+  onUnauthenticated = () => apiConfig.onUnauthenticated(),
+  checkSession = defaultCheckSession,
 }: {
   children: ReactNode;
   url?: string;
   createSource?: SourceFactory;
   onUnauthenticated?: () => void;
+  checkSession?: () => Promise<boolean>;
 }) {
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const [epoch, setEpoch] = useState(0);
   const listeners = useRef(new Map<string, Set<Listener>>());
   const unauth = useRef(onUnauthenticated);
   unauth.current = onUnauthenticated;
+  const check = useRef(checkSession);
+  check.current = checkSession;
 
   useEffect(() => {
     let source: SourceLike | null = null;
@@ -111,8 +134,19 @@ export function StreamProvider({
       };
       s.onerror = () => {
         setStatus('reconnecting');
-        // A closed source will not retry by itself (for example after a 401 or a proxy error): try again later.
-        if (s.readyState === 2 && !closed) reopen = setTimeout(open, 3000);
+        // A closed source will not retry by itself (for example after a 401 or a proxy error). ADR 0062: check the session
+        // first; signed out, go to the sign-in page instead of trying again every few seconds.
+        if (s.readyState === 2 && !closed)
+          void check.current().then((signedIn) => {
+            if (closed) return;
+            if (!signedIn) {
+              closed = true;
+              setStatus('ended');
+              unauth.current?.();
+              return;
+            }
+            reopen = setTimeout(open, 3000);
+          });
       };
       for (const type of EVENTS) {
         s.addEventListener(type, (e) => {

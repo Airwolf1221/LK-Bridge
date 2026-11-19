@@ -413,8 +413,8 @@ pages under one page is refused at capture (delete or copy them in parts).
 ## Re-authentication for the canon rules and the lifecycle settings (C2d, ADR 0036 decision 4)
 
 Saving the canon rules (`PUT /projects/:name/canon`: any change, a rule switched off and `rules: []` included) and
-saving the lifecycle settings (`PUT /projects/:name/lifecycle`) need the owner to have re-confirmed their password (and
-authenticator code) on this session within the last 5 minutes, as key changes do (ADR 0028); otherwise `403
+saving the lifecycle settings (`PUT /projects/:name/lifecycle`) need the owner's step-up on this session within the
+last 10 minutes (ADR 0062: the authenticator code, or the password without one), as key changes do (ADR 0028); otherwise `403
 REAUTH_REQUIRED` and nothing is saved. "Approve and accept as canon" is unchanged.
 
 ## Timeline, map and board content on Authoritative pages (ADR 0036 decision 6)

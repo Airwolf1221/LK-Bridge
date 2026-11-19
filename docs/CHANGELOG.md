@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased: ADR 0062, dashboard sessions for 30 days and a step-up for sensitive actions (19 November 2026)
+
+The owner's request after the third review: the dashboard's session ended within the hour, where the previous bridge
+kept it for 30 days ([ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), proposed; built for the owner to confirm).
+No migration; deploy normally. Remove a lower `AUTH_SESSION_TTL_SECONDS` from the env file to get the 30 days.
+
+- **A sliding 30-day session.** A session lasts 30 days from its last use: each use of the dashboard or the consent page
+  moves its end 30 days on (at most once a minute) and renews the cookie; the live stream's periodic check is no use,
+  so an idle open tab does not keep it alive. `AUTH_SESSION_TTL_SECONDS` defaults to 2,592,000 (was 43,200, fixed from
+  sign-in); an explicit lower value still wins. Sessions stay on the server under the token's SHA-256, so
+  they survive a restart and can be revoked; the Account page shows how many are active.
+- **The cookie is `SameSite=Strict`** (was `Lax`), `HttpOnly`, `Secure`, `__Host-`. The three pages reached from
+  another site (Claude's consent page, Google Drive's return, a link to the dashboard) answer such a navigation, once,
+  with a small page of the bridge's own (no script) that opens the same address again from the bridge, so the cookie
+  comes with it (never twice in a row: a 30-second marker stops a loop).
+- **Sign out everywhere** (the Account page; `POST /api/admin/security/sessions/revoke-all`): every owner session ends,
+  this one included. No step-up (it only takes access away). Event `logout.everywhere`, audit `owner.sessions_revoked`.
+- **The step-up**: the authenticator code (or a recovery code) within the last **10 minutes** (was the password and the
+  code within 5), or the password when no authenticator is set up; with one set up, the password alone is refused.
+  Asked for keys and secrets (a personal access token at any scope too), every scope change (a lowering too), every
+  setting (the bridge's, a project's, the budgets', a maintenance job's switch, schedule and run size, the off-site
+  copy's, retention, the connections' clean-up, the audits'), pack approval, and the guarded rails: approving a proposal
+  that deletes, touches more than 10 pages or deletes or moves an asset (judged on its operations, whoever proposed it),
+  the owner's own retag batch of more than 10 pages, deleting a rehearsal's root. The brakes stay one click: Sign out
+  everywhere, revoking a connection or a token, pausing or resuming writes, cancelling a job, switching most jobs off,
+  rejecting a proposal.
+- **The dashboard**: any change answered `REAUTH_REQUIRED` opens the step-up dialog (the code only, or the password),
+  once for changes refused together, then is sent again; a wrong code stays in the dialog (it used to send the owner to
+  the sign-in page, as did a wrong current password). When the live stream is refused, the dashboard checks its session
+  once and, signed out, goes to the sign-in page instead of reconnecting every three seconds.
+- **For the owner to confirm** (ADR 0062): lowering a scope, moving a connection down, switching ChatGPT's file source
+  off, read-only on and the off-site settings now ask for the code too (ADR 0057 decisions 1 and 7 and ADR 0046 decision
+  3 kept them one click); resuming writes stays one click.
+- Tests: `test/auth/sessions-r3.test.ts`, `test/ui/sessions.test.tsx`, `test/ui/live.test.tsx`; the tests of the old
+  rules now assert these (`test/admin/r2-scope-reauth.test.ts`, `test/auth/owner.test.ts` and others).
+
 ## Unreleased: CR-2026-11-R3, the third independent review (19 November 2026)
 
 **Critical, fixed here: on the reviewed code an agent at scope `write` could get canon text the owner had left out of an

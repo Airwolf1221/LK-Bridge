@@ -26,7 +26,14 @@ import type {
   RailRequestItem,
 } from '../jobs/policy.js';
 import { isLiveApprovalToken } from './approval.js';
-import { isLowLevelTool, listsSent, railsVerdict } from './rails.js';
+import {
+  DEFAULT_WRITE_RAILS,
+  isLowLevelTool,
+  listsSent,
+  railsVerdict,
+  type RailItem,
+  type RailVerdict,
+} from './rails.js';
 import type { PolicyStore } from './store.js';
 import type { ResolvedPrincipal, Scope } from './types.js';
 
@@ -196,6 +203,21 @@ export class LivePolicyGate implements PolicyGate {
       default:
         return deny(readOnlyReason(resolved.principal.profile));
     }
+  }
+
+  /**
+   * ADR 0062: whether approving these operations is one of the owner's guarded kinds (a delete, more than 10 pages, an
+   * asset delete or move): the dashboard then asks for the step-up. Judged by the rails' own rules at the owner's
+   * defaults (ADR 0055), whatever made the request a proposal; a restore's set is not read here, so a restore counts as
+   * more than 10 pages (fails closed, as the rails do when they cannot tell).
+   */
+  guardedVerdict(projectId: string, items: readonly RailItem[]): RailVerdict | null {
+    const l = this.railLookups;
+    return railsVerdict(DEFAULT_WRITE_RAILS, items, {
+      descendants: (rid) => l.descendants?.(projectId, rid) ?? null,
+      pageName: (rid) => l.pageName?.(projectId, rid) ?? null,
+      restored: () => null,
+    });
   }
 
   /** v3 F3.4: the tree's answers the rails use (a cascade's pages, page names for the reason); merged with earlier ones. */

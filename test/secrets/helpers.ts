@@ -136,6 +136,9 @@ export async function startManaged(o: ManagedOptions): Promise<Managed> {
     for (const n of listed) env[`LK_PROJECT_${n.toUpperCase()}_API_KEY`] = projects[n]!.keys[0]!;
   }
   const stack = await startAdminStack({ ...o.stack, lkBaseUrl: lkUrl, env: { ...env, ...o.env } });
+  // OPS2's tests start as the owner does after signing in: without the step-up (the admin stack gives one by default);
+  // `reauth()` gives it.
+  stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = NULL').run();
   const clients: Client[] = [];
   const admin = {
     get: (path: string) => stack.get(`/api/admin${path}`),

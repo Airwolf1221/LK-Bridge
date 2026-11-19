@@ -393,7 +393,7 @@ function BlockIdSweepCard({
             ).then(reload);
           }}
         />
-        Override: enable without a sandbox PASS (asks for your password; audited)
+        Override: enable without a sandbox PASS (asks you to confirm it is you; audited)
       </label>
       {pre.override && (
         <p className="muted small-text">

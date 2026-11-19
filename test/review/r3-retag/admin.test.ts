@@ -104,8 +104,8 @@ describe('the classification route', () => {
     expect(classified()).toBeNull();
   });
 
-  it('RT-92: a stale re-authentication (5 minutes and 1 second) is refused; a fresh one is accepted', async () => {
-    reauthAt(301);
+  it('RT-92: a stale re-authentication (10 minutes and 1 second, ADR 0062) is refused; a fresh one is accepted', async () => {
+    reauthAt(601);
     const stale = await s.post('/api/admin/tagging/classify', BODY);
     expect(stale.status).toBe(403);
     expect(stale.json.error.code).toBe('REAUTH_REQUIRED');
@@ -115,7 +115,7 @@ describe('the classification route', () => {
     expect(ok.status, JSON.stringify(ok.json)).toBe(200);
     expect(classified()).toMatchObject({ primary: 'Culture', by: 'owner' });
     // Withdrawing it: the same rules.
-    reauthAt(301);
+    reauthAt(601);
     expect(
       (await s.post('/api/admin/tagging/unclassify', { pageId: 'r3adm001', confirm: true })).status,
     ).toBe(403);
@@ -123,7 +123,7 @@ describe('the classification route', () => {
   });
 
   it('RT-93: a re-authentication of ANOTHER owner session does not count for this one', async () => {
-    reauthAt(301);
+    reauthAt(601);
     // Every other session of the owner re-authenticated now (as if the owner confirmed on another device).
     s.db
       .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash <> ?')

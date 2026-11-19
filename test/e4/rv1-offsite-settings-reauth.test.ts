@@ -18,6 +18,7 @@ beforeEach(async () => {
   google = new MockGoogle();
   await google.start();
   stack = await startAdminStack({ googleOAuth: { endpoints: google.endpoints } });
+  stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = NULL').run(); // signed in, not stepped up
 });
 afterEach(async () => {
   await stack.close();
@@ -25,7 +26,7 @@ afterEach(async () => {
 });
 
 describe('RV1-4: off-site settings that switch a protection off', () => {
-  it('need a re-authentication within 5 minutes (REAUTH_REQUIRED without one), and change nothing', async () => {
+  it('need a re-authentication within 10 minutes (REAUTH_REQUIRED without one), and change nothing', async () => {
     const before = (await stack.get('/api/admin/offsite')).json.settings;
     for (const settings of [{ verifyEnabled: false }, { staleAfterDays: 365 }, { deletedRetentionDays: 1 }]) {
       const r = await stack.put('/api/admin/offsite/settings', { settings });

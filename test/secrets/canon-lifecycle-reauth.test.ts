@@ -2,7 +2,8 @@
 /**
  * C2d, Part 3 (ADR 0036 decision 4, accepted by the owner on 11 November 2026): saving the canon rules (any change,
  * switching a rule off and `rules: []` included) and saving the lifecycle settings need the owner to have signed in
- * again within the last 5 minutes, as the other sensitive actions do (ADR 0028). Nothing is saved without it.
+ * again within the last 10 minutes (ADR 0062; 5 before it), as the other sensitive actions do (ADR 0028). Nothing is
+ * saved without it.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_CANONICAL_RULES } from '../../src/facts/rules.js';
@@ -16,7 +17,7 @@ afterEach(async () => {
 const now = () => Math.floor(Date.now() / 1000);
 
 describe('re-authentication for the canon rules and the lifecycle settings', () => {
-  it('every save is refused without it, nothing changes; with it each saves; it lasts five minutes', async () => {
+  it('every save is refused without it, nothing changes; with it each saves; it lasts ten minutes', async () => {
     const s = (m = await startManaged({ lk: [{ name: 'alpha' }], envProjects: ['alpha'] }));
     const rulesNow = async (): Promise<{ rules: { enabled?: boolean }[] }> =>
       (await s.admin.get('/projects/alpha/canon')).json as { rules: { enabled?: boolean }[] };
@@ -54,11 +55,11 @@ describe('re-authentication for the canon rules and the lifecycle settings', () 
     expect(lc.status, lc.text).toBe(200);
     expect(lc.json.config.tags.working).toBe('WIP');
 
-    // The window is five minutes, as for keys.
+    // The window is ten minutes (ADR 0062), as for keys.
     const hash = s.stack.services.sessionHash(s.stack.sessionToken);
     s.stack.db
       .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-      .run(now() - 301, hash);
+      .run(now() - 601, hash); // ADR 0062: older than the 10-minute step-up
     const late = await s.admin.put('/projects/alpha/canon', { rules: null, confirm: true });
     expect(late.status).toBe(403);
     const lateLc = await s.admin.put('/projects/alpha/lifecycle', { confirm: true, reset: true });

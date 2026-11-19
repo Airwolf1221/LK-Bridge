@@ -200,6 +200,34 @@ describe('the stream connection', () => {
     }
   });
 
+  // ADR 0062: the owner's log showed the stream refused (401) every three seconds for hours, with nothing on the screen.
+  it('a stream the bridge refuses, its session ended: the page goes to sign-in instead of reconnecting', async () => {
+    const onUnauth = vi.fn();
+    const original = apiConfig.onUnauthenticated;
+    try {
+      const api = installApi({
+        ...baseRoutes(),
+        'GET /overview': overviewJson(),
+        'GET /session': { status: 401, body: { error: { code: 'UNAUTHENTICATED', message: 'Sign in' } } },
+      });
+      renderApp('/ui');
+      await screen.findByRole('heading', { level: 1, name: 'Overview' });
+      apiConfig.onUnauthenticated = onUnauth;
+      await waitFor(() => expect(FakeSource.all.length).toBe(1));
+      const stream = lastSource();
+      act(() => {
+        stream.close(); // the browser gives up on a 401
+        stream.fail();
+      });
+      await waitFor(() => expect(onUnauth).toHaveBeenCalledTimes(1));
+      expect(await screen.findByRole('status', { name: 'Live updates: Signed out' })).toBeInTheDocument();
+      expect(api.find('GET', '/session')).toHaveLength(1);
+      expect(FakeSource.all).toHaveLength(1);
+    } finally {
+      apiConfig.onUnauthenticated = original;
+    }
+  });
+
   it('treats a 401 from the API as a signed-out session', async () => {
     const onUnauth = vi.fn();
     const original = apiConfig.onUnauthenticated;

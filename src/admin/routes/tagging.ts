@@ -19,6 +19,7 @@
 import * as z from 'zod';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { RetagError, type RetagService } from '../../packs/retag/service.js';
+import { DEFAULT_WRITE_RAILS } from '../../policy/rails.js';
 import { verdictView } from '../../mcp/tools/retag.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
@@ -231,6 +232,8 @@ export const registerTagging: Register = (api, ctx) => {
       req.body,
     );
     const p = ctx.project(b.project);
+    // ADR 0062: the owner's own change of more than 10 pages at once (the bulk rail's size) needs the step-up.
+    if (b.pageIds.length > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
     return wrap(async () => {
       const r = retag();
       const plan = r.planApply({ projectId: p.id, runId: b.runId, pageIds: b.pageIds });
@@ -273,6 +276,8 @@ export const registerTagging: Register = (api, ctx) => {
   api.post('/tagging/reconciliations/:id/resume', async (req) => {
     const { id } = parseInput(z.object({ id: recIdSchema }), req.params);
     const b = parseInput(z.object({ project: projectParam, confirm: z.literal(true) }).strict(), req.body);
+    // ADR 0062: the next batch may hold up to the pack's batch size: a bulk change, so the step-up first.
+    requireReauth(ctx.deps.services, req);
     const p = ctx.project(b.project);
     return wrap(async () => {
       const out = await retag().resume({

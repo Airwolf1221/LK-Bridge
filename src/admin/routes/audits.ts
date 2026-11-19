@@ -9,7 +9,7 @@
  * - "Propose a fix" and "Re-check now": the only two requests that read LegendKeeper, each for one finding, each audited;
  *   a fix becomes an ordinary proposal on the Proposals page, never applied by the audit;
  * - the rules editor, the tag-definition source and the audit settings: saving needs the owner to have signed in again
- *   within the last 5 minutes, as the canon rules do (ADR 0036 decision 4), and is audited.
+ *   within the last 10 minutes (ADR 0062), as the canon rules do (ADR 0036 decision 4), and is audited.
  */
 import * as z from 'zod';
 import { AuditError, CATEGORIES, CODES, SEVERITIES, type Audits } from '../../audits/index.js';
@@ -264,7 +264,7 @@ export const registerAudits: Register = (api, ctx) => {
 
   /**
    * Saves the rules, the tag source and/or the settings (`rules: null` restores the seeded defaults; a field left out is
-   * kept). `confirm: true` required, a re-authentication within the last 5 minutes required, audited
+   * kept). `confirm: true` required, a step-up within the last 10 minutes required (ADR 0062), audited
    * (`audits.set_config`, with the old and new values).
    */
   api.put('/audits/config', async (req) => {

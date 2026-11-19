@@ -102,6 +102,7 @@ export const registerProjects: Register = (api, ctx) => {
 
   /** Pause and drain before removal (`value: false` resumes). */
   api.put('/projects/:name/draining', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const { name } = parseInput(nameParam, req.params);
     const b = parseInput(z.object({ value: z.boolean() }), req.body);
     return ctx.actions.setProjectDraining(name, b.value);
@@ -124,6 +125,7 @@ export const registerProjects: Register = (api, ctx) => {
   });
 
   api.put('/projects/:name/read-only', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const { name } = parseInput(nameParam, req.params);
     const b = parseInput(z.object({ value: z.boolean(), confirm: z.literal(true) }), req.body);
     const p = projects.find(name);
@@ -134,6 +136,7 @@ export const registerProjects: Register = (api, ctx) => {
 
   /** v2 A2: one setting of a project (`value: null` clears it). Audited as `project.set_setting`. */
   api.put('/projects/:name/settings', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const { name } = parseInput(nameParam, req.params);
     const b = parseInput(
       z.object({
@@ -166,7 +169,7 @@ export const registerProjects: Register = (api, ctx) => {
   /**
    * v2 C2a: replaces the rules (`rules: null` restores the defaults); `confirm: true` required. Audited. C2d (ADR 0036
    * decision 4, the owner's): any change, a rule switched off and `rules: []` included, needs the owner to have signed
-   * in again within the last 5 minutes, as the other sensitive actions do (ADR 0028).
+   * in again within the last 10 minutes (ADR 0062), as the other sensitive actions do (ADR 0028).
    */
   api.put('/projects/:name/canon', (req) => {
     requireReauth(ctx.deps.services, req);

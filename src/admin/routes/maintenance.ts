@@ -57,6 +57,7 @@ export const registerMaintenance: Register = (api, ctx) => {
 
   /** The most documents one run does (1 to 500; default 20). Audited. */
   api.put(`${SWEEP}/limit`, (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting (how many documents a run writes)
     const body = parseInput(z.object({ maxPerRun: z.unknown() }).strict(), req.body);
     return { maxPerRun: sweepCall(maintenance.blockIds, (s) => s.setMaxPerRun('owner', body.maxPerRun)) };
   });
@@ -76,6 +77,7 @@ export const registerMaintenance: Register = (api, ctx) => {
   });
 
   api.post('/maintenance/:id/enable', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const { id } = parseInput(params, req.params);
     return { job: cmd.enable('owner', id) };
   });
@@ -90,6 +92,7 @@ export const registerMaintenance: Register = (api, ctx) => {
 
   /** `schedule: null` restores the default. The schedule itself is validated by the scheduler. */
   api.put('/maintenance/:id/schedule', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const { id } = parseInput(params, req.params);
     const body = parseInput(
       z.object({ schedule: z.unknown() }).refine((b) => b.schedule !== undefined, 'schedule is required'),

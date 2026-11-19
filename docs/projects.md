@@ -22,8 +22,8 @@ saved, only its **last four characters** are ever shown.
 | Pause and drain | The project takes no new work (agents and the dashboard alike get `PROJECT_UNAVAILABLE` with the reason); queued and running jobs finish. **Resume** undoes it. Not kept across a restart.                                                                                                                                                                                             |
 | Remove          | Refused while the project has unfinished jobs (queued, running, waiting, paused) or open proposals (pending, approved, executing). Otherwise the project is **archived**: not served, its stored key deleted, its governor closed, its history kept and shown read-only. It comes back only under its old name, with a key of the same LegendKeeper project.                           |
 
-Adding, replacing and removing need a **re-authentication** within the last five minutes (the password, and the
-authenticator code when it is on), on top of the session, Origin and CSRF checks of every admin change
+Adding, replacing and removing need a **step-up** within the last ten minutes (ADR 0062: the authenticator code when it
+is on, else the password), on top of the session, Origin and CSRF checks of every admin change
 ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). Every action is audited with the project's name
 and the key's last four characters: `project.key_check` (refused checks too), `project.add`, `project.replace_key`,
 `project.drain`, `project.undrain`, `project.remove`, and `project.key_import` (by the system, at start-up).

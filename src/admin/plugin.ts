@@ -2,6 +2,7 @@
  * The dashboard's HTTP side (chunk 5): the admin JSON API at `/api/admin`, the live stream, and the static app at `/ui`.
  * Register it with a plain `app.register` after the auth plugin (it needs the same services). See docs/dashboard.md.
  */
+import { needsBounce, queryOf, sendBounce } from './bounce.js';
 import { registerPacks } from './routes/packs.js';
 import { registerReview } from './routes/review.js';
 import fastifyCookie from '@fastify/cookie';
@@ -147,7 +148,8 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
           end: () => {
             if (!raw.writableEnded) raw.end();
           },
-          alive: () => deps.services.owner.getSession(token) !== undefined,
+          // ADR 0062: checked without counting as a use (an idle open tab does not extend the session).
+          alive: () => deps.services.owner.isLive(token),
         };
         req.raw.on('close', () => hub.detach(client));
         hub.attach(client, Array.isArray(header) ? header[0] : header);
@@ -163,12 +165,16 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
   );
 
   /**
-   * v2 E1b (ADR 0043): Google's answer to "Connect Google Drive". A top-level navigation from Google, so it carries the
-   * session cookie (SameSite=Lax) but is cross-site: it lives outside /api/admin. The service refuses an answer without
+   * v2 E1b (ADR 0043): Google's answer to "Connect Google Drive". A top-level navigation from Google, cross-site, so it
+   * lives outside /api/admin (ADR 0062: and is bounced once, to carry the SameSite=Strict session cookie). The service refuses an answer without
    * an owner session, or whose `state` is not a pending sign-in of this session (or has expired). Nothing here echoes the
    * code; the browser is sent straight on to the Off-site copy page, with no referrer.
    */
   app.get(CALLBACK_PATH, async (req, reply) => {
+    // ADR 0062: Google's return is a cross-site navigation, which the SameSite=Strict cookie does not ride on: open the
+    // same address again from the bridge, which carries it.
+    if (needsBounce(req, deps.services.owner.sessionCookie))
+      return sendBounce(reply, `${CALLBACK_PATH}${queryOf(req)}`, deps.services.owner.sessionCookie);
     reply
       .header('cache-control', 'no-store')
       .header('pragma', 'no-cache')

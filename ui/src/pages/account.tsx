@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { api, formText } from '../api';
+import { api, apiConfig, formText } from '../api';
 import {
   Badge,
   Button,
@@ -18,9 +18,10 @@ import { useReauth } from '../reauth';
 import type { SecurityInfo } from '../types';
 
 /**
- * The owner's account (OPS2): the password, the authenticator app and its recovery codes, and the encrypted secret
- * store's state. Every change asks for the password (and code) again if the last confirmation is over five minutes old.
- * Two things are shown once and never again: the authenticator secret while it is being set up, and recovery codes.
+ * The owner's account (OPS2, ADR 0062): the sessions (30 days from their last use) and "Sign out everywhere", the
+ * password, the authenticator app and its recovery codes, and the encrypted secret store's state. Every sensitive change
+ * asks for the step-up (the authenticator code, or the password without one) if the last is over ten minutes old. Two
+ * things are shown once and never again: the authenticator secret while it is being set up, and recovery codes.
  */
 export function AccountPage() {
   const s = useApi<SecurityInfo>('/security');
@@ -39,9 +40,10 @@ export function AccountPage() {
       <p className="muted">
         Signed in as <strong>{d.username}</strong>.{' '}
         {until
-          ? `Your password was confirmed for sensitive changes until ${fmtTime(until)}.`
-          : 'Sensitive changes (keys, the password, the authenticator) ask for your password again.'}
+          ? `You confirmed it is you for sensitive changes until ${fmtTime(until)}.`
+          : `Sensitive changes (keys, scopes, settings, pack approvals, deletes and bulk changes) ask for ${d.totp.enabled ? 'an authenticator code' : 'your password'} again.`}
       </p>
+      <SessionsCard info={d} />
       {!d.totp.enabled && (
         <section className="card card-alert" aria-labelledby="totp-advice-h">
           <h2 id="totp-advice-h">Turn on the authenticator app</h2>
@@ -67,6 +69,42 @@ export function AccountPage() {
       <PasswordCard info={d} onChanged={s.reload} />
       <StoreCard info={d} />
     </>
+  );
+}
+
+/** ADR 0062: the sessions kept on the server, and "Sign out everywhere" (this one included). */
+function SessionsCard({ info }: { info: SecurityInfo }) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const s = info.sessions;
+  const signOutEverywhere = async () => {
+    const ok = await confirm({
+      title: 'Sign out everywhere?',
+      message: 'Every signed-in dashboard ends, this one included. You will sign in again here.',
+      confirmLabel: 'Sign out everywhere',
+      danger: true,
+    });
+    if (!ok) return;
+    const r = await run(() =>
+      api.post<{ revoked: number }>('/security/sessions/revoke-all', { confirm: true }),
+    );
+    // Signed out here too: the sign-in page, which brings the owner back to this page.
+    if (r) apiConfig.onUnauthenticated();
+  };
+  return (
+    <section className="card" aria-labelledby="sessions-h">
+      <h2 id="sessions-h">Sessions</h2>
+      <p>
+        A session lasts 30 days from its last use.
+        {s ? ` ${s.active} ${s.active === 1 ? 'is' : 'are'} signed in now.` : ''}
+        {s?.thisEndsAt ? ` This one ends ${fmtTime(s.thisEndsAt)} unless you use it before then.` : ''}
+      </p>
+      <div className="actions">
+        <Button onClick={() => void signOutEverywhere()} disabled={busy}>
+          Sign out everywhere
+        </Button>
+      </div>
+    </section>
   );
 }
 

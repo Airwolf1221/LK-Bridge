@@ -20,7 +20,7 @@ import {
 const CB = 'https://claude.ai/api/mcp/auth_callback';
 
 describe('owner login', () => {
-  it('sets a secure, HttpOnly, SameSite session cookie with the __Host- prefix', async () => {
+  it('sets a secure, HttpOnly, SameSite=Strict session cookie with the __Host- prefix (ADR 0062)', async () => {
     const bridge = await startBridge();
     try {
       const browser = new Browser(bridge);
@@ -33,7 +33,8 @@ describe('owner login', () => {
       expect(cookie).toBeDefined();
       expect(cookie).toMatch(/; HttpOnly/);
       expect(cookie).toMatch(/; Secure/);
-      expect(cookie).toMatch(/; SameSite=Lax/);
+      expect(cookie).toMatch(/; SameSite=Strict/);
+      expect(cookie).toMatch(/; Max-Age=2592000/); // ADR 0062: 30 days, renewed on use
       expect(cookie).toMatch(/; Path=\//);
       expect(cookie).not.toMatch(/Domain=/i);
       // The session id is stored only as a hash.
@@ -221,7 +222,7 @@ describe('owner login', () => {
 
       const again = new Browser(bridge);
       await again.login();
-      bridge.clock.advance(12 * 3600 + 1);
+      bridge.clock.advance(30 * 86400 + 1); // ADR 0062: 30 days unused
       expect((await again.request(url)).status).toBe(302);
     } finally {
       await bridge.close();

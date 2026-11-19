@@ -105,7 +105,7 @@ export function registerLoginRoutes(app: FastifyInstance, s: AuthServices): void
       path: '/',
       secure: config.secureCookies,
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite: 'strict', // ADR 0062: as the cookies were set
     });
     if (returnTo) return reply.header('cache-control', 'no-store').redirect(returnTo, 303);
     return sendHtml(reply, 200, renderSignedIn());
@@ -130,7 +130,7 @@ export function registerLoginRoutes(app: FastifyInstance, s: AuthServices): void
       path: '/',
       secure: config.secureCookies,
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite: 'strict', // ADR 0062: as the cookies were set
     });
     return sendErrorPage(reply, 200, 'Signed out', 'You have signed out of LK-Bridge.');
   });

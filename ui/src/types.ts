@@ -117,6 +117,8 @@ export interface SecurityInfo {
     enrolmentPending: boolean;
   };
   reauth: { until: number | null; windowSeconds: number };
+  /** ADR 0062: the owner's sessions kept on the server, and when this one ends unless used again. */
+  sessions?: { active: number; thisEndsAt: number | null };
   store: {
     available: boolean;
     problem: string | null;

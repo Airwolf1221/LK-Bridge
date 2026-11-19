@@ -58,7 +58,7 @@ const show = (v: unknown) =>
 /**
  * Revert a finished direct-write job (owner): reads what a revert would do now (each target read live), asks for
  * confirmation (and, when some targets would not be reverted, a deliberate yes to a partial revert), then the owner's
- * password (re-authentication), and submits ONE revert job.
+ * step-up (ADR 0062: the authenticator code, or the password without one), and submits ONE revert job.
  */
 export function RevertButton({
   jobId,

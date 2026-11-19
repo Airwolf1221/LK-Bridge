@@ -25,6 +25,8 @@ type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-ex
 function owner(world: SnapshotsWorld) {
   const s = world.stack.services;
   const session = s.owner.createSession('127.0.0.1', 'vitest');
+  // ADR 0062: the owner has stepped up (every settings change asks for it within 10 minutes).
+  s.store.setReauth(s.sessionHash(session), Math.floor(Date.now() / 1000));
   const cookie = `${s.owner.sessionCookie}=${session}`;
   const csrf = s.owner.csrfToken(session, ADMIN_CSRF_PURPOSE);
   const request = async (method: string, path: string, body?: unknown) => {

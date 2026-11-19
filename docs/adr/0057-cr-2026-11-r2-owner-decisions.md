@@ -4,6 +4,11 @@ Status: **Accepted** (the owner, 17 November 2026: every decision as recommended
 below). Proposed by CR-2026-11-R2 (numbered 0057 because F3.5's block-id sweep took 0056 while the review ran). The
 findings are in [docs/reviews/CR-2026-11-R2.md](../reviews/CR-2026-11-R2.md).
 
+Amended by [ADR 0062](0062-dashboard-sessions-and-step-up.md) (proposed, 19 November 2026): decision 1's
+re-authentication now applies to every scope change, a lowering too, and to every connection move and personal access
+token; decision 7's file-source switch is a setting like the others (switching it off asks for the step-up too). The
+step-up is the authenticator code within 10 minutes, or the password without one.
+
 - Amends (the findings' fixes, each in the review): [ADR 0036](0036-cr-2026-11-owner-decisions.md) decision 3 (a
   lifecycle index name is refused whatever the lifecycle marker) and decision 7 (a template copy takes its template's
   tags, so they are judged); [ADR 0048](0048-chronology-ii.md) decision 7 (the orphan delete lists rows whose date cannot
