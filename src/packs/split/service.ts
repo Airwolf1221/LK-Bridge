@@ -450,6 +450,17 @@ export class SplitService {
     return this.byJob(projectId, jobId) !== null;
   }
 
+  /** How many pages a split's phase 1 made (they go to a deletion proposal when it is reverted). */
+  pagesMade(projectId: string, jobId: string): number {
+    return (this.d.engine.stepRecords(projectId, jobId) ?? []).filter(
+      (s) =>
+        (s.opId === 'createResourceFromTemplate' || s.opId === 'createResource') &&
+        s.status === 'succeeded' &&
+        isObj(s.params.body) &&
+        typeof s.params.body.id === 'string',
+    ).length;
+  }
+
   /** Whether a split's phase 1 has been reverted (it is never resumed then). */
   isReverted(projectId: string, jobId: string): boolean {
     return this.byJob(projectId, jobId)?.state === 'reverted';

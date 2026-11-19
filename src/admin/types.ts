@@ -28,6 +28,7 @@ import type { RevertService } from '../review/revert.js';
  * What the admin API needs from the running bridge. `Runtime` (src/runtime.ts) satisfies it; tests may build their own.
  */
 import type { ResumeService } from '../resume/service.js';
+import type { SplitService } from '../packs/split/service.js';
 
 export interface AdminRuntime {
   readonly engine: JobEngine;
@@ -74,6 +75,8 @@ export interface AdminRuntime {
   readonly reverts?: RevertService;
   /** v3 F3d (ADR 0058): Resume of a package, a rename or a recreate that stopped part-way; optional for tests. */
   readonly resume?: ResumeService;
+  /** v3 F3e (ADR 0059): the splits' records (a split's phase 1 can be reverted); optional for tests. */
+  readonly splits?: Pick<SplitService, 'byJob'>;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

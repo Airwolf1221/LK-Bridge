@@ -5,6 +5,7 @@
  */
 import { expect } from 'vitest';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
+import { PUBLIC_URL } from '../tools/helpers.js';
 import { PROJECT, type SplitWorld } from './split-world.js';
 import type { JobOrigin } from '../../src/jobs/types.js';
 
@@ -155,6 +156,16 @@ export function intercept(
       on = false;
     },
   };
+}
+
+/** A GET of the dashboard's API as the signed-in owner. */
+export async function adminGet(w: SplitWorld, path: string): Promise<{ status: number; json: any }> {
+  const s = w.stack.services;
+  const session = s.owner.createSession('127.0.0.1', 'vitest');
+  const res = await fetch(`${w.stack.base}${path}`, {
+    headers: { cookie: `${s.owner.sessionCookie}=${session}`, origin: PUBLIC_URL },
+  });
+  return { status: res.status, json: await res.json() };
 }
 
 /** Today's date as the bridge writes Last Major Revision. */

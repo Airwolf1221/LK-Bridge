@@ -21,6 +21,7 @@ import { C, O, P, PROJECT, S, splitWorld, zahraBody, type SplitWorld } from './s
 import { ROOT } from '../discover/world.js';
 import { statutesSplit, zahraSplit } from './split-inputs.js';
 import {
+  adminGet,
   approveMeasured,
   approveSplit,
   bodyOf,
@@ -475,6 +476,14 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 
   it('Revert of phase 1: the moved content back in the source; the pages it made to ONE deletion proposal', async () => {
     const orig = original();
+    // The dashboard offers Revert for a split's phase 1 (the job's page names its split), and the preview says what
+    // follows it.
+    const detail = await adminGet(w, `/api/admin/jobs/${jobId}?project=test`);
+    expect(detail.status, JSON.stringify(detail.json)).toBe(200);
+    expect(detail.json.split).toMatchObject({ state: 'verified', retire: false });
+    const pv = await w.stack.runtime.reverts.preview(PROJECT, jobId);
+    expect(pv.eligible).toEqual({ ok: true });
+    expect(pv.split).toEqual({ pagesMade: Object.keys(pages).length + 1 });
     const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, jobId);
     expect(rv.status, JSON.stringify(rv)).toBe('submitted');
     if (rv.status !== 'submitted') return;

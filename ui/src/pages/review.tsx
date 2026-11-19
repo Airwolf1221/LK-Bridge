@@ -86,6 +86,37 @@ export function RevertButton({
       toast('error', p.eligible.message);
       return;
     }
+    // v3 F3e (ADR 0059): a split's phase 1 that stopped before anything left its source: only the pages it made, which
+    // go to ONE deletion proposal (nothing is deleted until you approve it).
+    const made = p.split?.pagesMade ?? 0;
+    if (p.ready === 0 && made > 0 && p.notReverted === 0) {
+      const yes = await confirm({
+        title: 'Revert this split?',
+        message: (
+          <p>
+            Nothing had left the source, so there is nothing to put back. The {made} page
+            {made === 1 ? '' : 's'} it made {made === 1 ? 'goes' : 'go'} to ONE deletion proposal for you to
+            approve (each only while it is exactly as the split made it).
+          </p>
+        ),
+        confirmLabel: 'Propose deleting them',
+        danger: true,
+      });
+      if (!yes) return;
+      const out = await run(() =>
+        withReauth(() =>
+          api.post<{ revert: { message: string } }>(
+            withProject(`/jobs/${encodeURIComponent(jobId)}/revert`, project),
+            { confirm: true, confirmPartial: false },
+          ),
+        ),
+      );
+      if (out) {
+        toast('ok', out.revert.message);
+        onDone?.();
+      }
+      return;
+    }
     if (p.ready === 0) {
       const why = p.targets.filter((t) => t.state !== 'nothing_to_do');
       toast(
@@ -105,6 +136,13 @@ export function RevertButton({
             Each target is checked again inside the revert job before anything is written; an outside edit is
             never overwritten. The journal and the snapshots keep everything as it was.
           </p>
+          {made > 0 && (
+            <p data-testid="revert-split-pages">
+              A split: once the revert has run, the {made} page{made === 1 ? '' : 's'} it made{' '}
+              {made === 1 ? 'goes' : 'go'} to ONE deletion proposal for you to approve (each only while it is
+              exactly as the split made it).
+            </p>
+          )}
           <ul className="revert-targets">
             {p.targets.map((t) => (
               <li key={t.key} data-state={t.state}>

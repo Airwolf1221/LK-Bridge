@@ -86,6 +86,11 @@ export interface RevertPreview {
   readonly ready: number;
   /** Targets that would not (changed since, gone, not revertible): a revert of the rest needs `confirmPartial`. */
   readonly notReverted: number;
+  /**
+   * v3 F3e (ADR 0059): a split's phase 1: the pages it made, which go to ONE deletion proposal once the revert has run
+   * (or at once, when nothing else needs putting back).
+   */
+  readonly split?: { readonly pagesMade: number };
 }
 
 export type RevertResult =
@@ -144,6 +149,8 @@ export interface RevertDeps {
     isPhase1(projectId: string, jobId: string): boolean;
     /** Whether a split's phase 1 has been reverted (with or without a revert job). */
     isReverted?(projectId: string, jobId: string): boolean;
+    /** How many pages a split's phase 1 made (its deletion proposal's pages, at most). */
+    pagesMade?(projectId: string, jobId: string): number;
     afterRevert(
       projectId: string,
       jobId: string,
@@ -377,6 +384,7 @@ export class RevertService {
           .map((c) => c.key)
           .sort(),
       );
+    const split = this.d.splits?.isPhase1(projectId, jobId) === true;
     return {
       jobId,
       projectId,
@@ -384,6 +392,7 @@ export class RevertService {
       targets,
       ready: targets.filter((c) => c.state === 'ready').length,
       notReverted: targets.filter((c) => c.state !== 'ready' && c.state !== 'nothing_to_do').length,
+      ...(split ? { split: { pagesMade: this.d.splits?.pagesMade?.(projectId, jobId) ?? 0 } } : {}),
     };
   }
 

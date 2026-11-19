@@ -899,6 +899,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits: {
       isPhase1: (projectId, jobId) => splitsRef.current?.isPhase1(projectId, jobId) ?? false,
       isReverted: (projectId, jobId) => splitsRef.current?.isReverted(projectId, jobId) ?? false,
+      pagesMade: (projectId, jobId) => splitsRef.current?.pagesMade(projectId, jobId) ?? 0,
       afterRevert: (projectId, jobId, revertJobId) =>
         splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
     },
