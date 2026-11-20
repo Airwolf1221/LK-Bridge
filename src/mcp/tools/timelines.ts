@@ -1615,7 +1615,7 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Change an event of the chronology',
     access: 'write',
     description:
-      'Changes a chronology event’s `date`, `name` (timeline) or `description` (table) as ONE job, keeping its table row, timeline event and the Main counts in step; a date in another age moves it there. Name it with `event`: its date plus its description or name, or its row_id or event_id. Refused when its row and event have drifted apart (CHRONOLOGY_DRIFT): repair that with sync_timeline_event. A job that stopped part-way finishes on the same request. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 9 reads and 3 writes (into another age 18 and 6).',
+      'Changes a chronology event’s `date`, `name` (timeline) or `description` (table) as ONE job, keeping its table row, timeline event and the Main counts in step; a date in another age moves it there. Before changing the date of a birth or a death on Arkona, run arkona_consistency: other pages may restate it. Name it with `event`: its date plus its description or name, or its row_id or event_id. Refused when its row and event have drifted apart (CHRONOLOGY_DRIFT): repair that with sync_timeline_event. A job that stopped part-way finishes on the same request. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 9 reads and 3 writes (into another age 18 and 6).',
     inputSchema: z.object({
       event: eventRefArg,
       date: z

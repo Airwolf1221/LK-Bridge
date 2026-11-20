@@ -164,8 +164,7 @@
 4. **Coverage** (D8, `arkona_as_of_coverage`, **chosen** as its own tool): the current Main CANON characters, from their
    identity pages: a readable birth, an unreadable one, a deliberately unestablished one, a recorded death, attested
    bounds, and those with nothing readable (listed). Its note says absence is often deliberate and that it is not a task
-   list. On the test fixtures: 24 characters; 8 with a readable birth, 1 with a recorded death, 3 with attested bounds,
-   the rest (the F3a to F4a fixtures' characters, which record no birth) listed as nothing readable.
+   list. On the test fixtures: 23 Main CANON characters; 8 with a readable birth, 1 with its birth deliberately unestablished, 1 with a recorded death, 3 with attested bounds, 14 with nothing readable (the F3a to F4a fixtures' characters, which record no birth; one of them, Tsubame Hoshizora, has a Temporal Scope written as a bare range, "5A 900 - 5A 931", which no phrasing reads: a phrasing for it would be a pack change, the owner's).
 5. **AU** (D9): `continuity` defaults to Main CANON; for an AU, its own pages' facts first, else the Main CANON value
    labelled "inherited from Main CANON" (birth, death and identity facts, from the Main identity page). Nothing about the
    AU's inheritance is assumed beyond that label (Project Navigation's "a separate relation").
@@ -204,6 +203,9 @@ consistency-f4b` (`test/sandbox/consistency-f4b.test.ts`): on the test world, a 
    and the label "Historical material differs" for Archived material brought in with `include`.
 4. The attested span starting at the recorded birth (D7 decision 2), and a date before the birth reading Unestablished.
 5. `approxMargin` stays 5 years (D3's question), and `present` stays 5A 931 until the owner moves it.
+6. A Temporal Scope written as a bare range ("5A 900 - 5A 931", with no "Born" or "Attested") is not read: D2's
+   phrasings do not cover it, and whether such a range is a life or a source's time is the owner's to say. Adding a
+   phrasing is one pack change.
 
 ## Tests
 

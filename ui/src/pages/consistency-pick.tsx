@@ -87,15 +87,16 @@ export function ConsistencyPick({
     });
     if (!yes) return;
     const body = 'side' in choice ? { side: choice.side } : { value: choice.value };
-    let out: PickResponse | null = null;
-    const ok = await run(async () => {
-      out = await api.post<PickResponse>(`/audits/findings/${findingId}/consistency-pick`, {
-        confirm: true,
-        project,
-        ...body,
-      });
-    }, 'Proposed: approve it on the Proposals page.');
-    if (ok && out) {
+    const out = await run(
+      () =>
+        api.post<PickResponse>(`/audits/findings/${findingId}/consistency-pick`, {
+          confirm: true,
+          project,
+          ...body,
+        }),
+      'Proposed: approve it on the Proposals page.',
+    );
+    if (out) {
       setResult(out);
       r.reload();
       reload();

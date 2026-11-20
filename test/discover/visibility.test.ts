@@ -76,6 +76,11 @@ describe('showLowLevelTools, per profile', () => {
         // v3 F4a (ADR 0063): the name check and the topic brief.
         'arkona_name_check',
         'arkona_brief',
+        // v3 F4b (ADR 0064): the consistency check and "as of a date".
+        'arkona_consistency',
+        'arkona_as_of',
+        'arkona_as_of_coverage',
+        'arkona_consistency_suggest',
         'bridge_job_resume',
         'create_document',
         'create_index',
@@ -136,15 +141,15 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 74 tools off and 74 + 3 + 2 + 89 on', async () => {
+  it('shows 78 tools off and 78 + 3 + 2 + 89 on', async () => {
     const t = w.stack.newToken('counting', 'write');
     // 61 before v2 E3b; get_resources, bridge_proposals_mine and bridge_job_wait were merged (-3) and lk_upload_image and
     // create_bare_resource are hidden by default (-2); v3 F3b's four pack tools (+4); v3 F3c's five appraisal tools (+5);
     // v3 F3d's bridge_job_resume and arkona_rename (+2); v3 F3e's arkona_split_appraisal and arkona_split_owner (+2);
-    // v3 F3f's arkona_retag_audit and arkona_retag_apply (+2); v3 F4a's arkona_name_check and arkona_brief (+2).
-    expect(await list(t.token)).toHaveLength(74);
+    // v3 F3f's arkona_retag_audit and arkona_retag_apply (+2); v3 F4a's arkona_name_check and arkona_brief (+2); v3 F4b's four consistency tools (+4).
+    expect(await list(t.token)).toHaveLength(78);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(74 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(78 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

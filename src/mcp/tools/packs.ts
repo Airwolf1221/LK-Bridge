@@ -957,7 +957,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       access: 'read',
       description:
         'The Arkona pack, read-only: who a character is before you work on them (Character Architecture’s “remind the user who is under discussion”; arkona_brief answers for any subject and hands a character to this tool): the six identity fields, every owner page of their set with its Reference Type and Scope, their relationships, Art pages and image counts, open audit findings, and Unresolved Material headings, each with how fresh it is. ' +
-        'Read from the bridge’s own tree, snapshots and audits: free (no LegendKeeper read). live: true re-reads the identity page’s sidebar (one read) for the six fields. ' +
+        'Read from the bridge’s own tree, snapshots and audits: free (no LegendKeeper read). live: true re-reads the identity page’s sidebar (one read) for the six fields. Its consistency line lists open contradictions on their dates and identity facts; to write about them at a date, arkona_as_of first. ' +
         'Cost: none; 1 read with live: true.',
       inputSchema: z.object({
         character: z.string().min(1).max(200).describe('A character (name, alias or id).'),
