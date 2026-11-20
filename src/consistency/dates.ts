@@ -160,6 +160,64 @@ export function readFirst(
   return { ok: false, reason: `the calendar cannot read a date in “${clip(clause, 120)}”` };
 }
 
+/** What a scan found: a reading, a date-shaped text the calendar refused (with its reason), or nothing date-shaped. */
+export type ScanResult =
+  | { readonly ok: true; readonly reading: DateReading }
+  | { readonly ok: false; readonly reason: string; readonly text: string }
+  | null;
+
+const SHAPES = new WeakMap<Calendar, RegExp>();
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Where a date-shaped substring starts (ADR 0064 amendment 1, rule B): a word starting with one of the calendar's month
+ * names or era abbreviations followed by a number (`Jehet 27th, 4A 84`, `Isar 4A 566`, `2A 748,455`), with an optional
+ * "c." or "approximately" before it. Built from the calendar: nothing about Arkona is here.
+ */
+function shapeOf(cal: Calendar): RegExp {
+  let re = SHAPES.get(cal);
+  if (!re) {
+    const alt = (xs: readonly string[]) =>
+      xs
+        .map((x) => x.trim())
+        .filter((x) => x !== '')
+        .sort((a, b) => b.length - a.length)
+        .map(escapeRe)
+        .join('|');
+    const months = alt(cal.engine.definition.months.map((m) => m.name));
+    const eras = alt(cal.engine.eras.filter((e) => !e.hideAbbr).map((e) => e.abbr));
+    const heads = [months, eras].filter((x) => x !== '').map((x) => `(?:${x})\\s+\\d`);
+    re = new RegExp(
+      `(?<![\\p{L}\\p{N}])(?:(?:c\\.|ca\\.|circa|approx\\.|approximately|about|around)\\s*)?(?:${heads.join('|') || '(?!)'})`,
+      'giu',
+    );
+    SHAPES.set(cal, re);
+  }
+  return re;
+}
+
+/**
+ * The first date-shaped substring of a clause, read by the calendar engine (ADR 0064 amendment 1, rule B): a leading
+ * place ("Erzherzogtum Falkenau on …"), "to <parents>" and a trailing "(… KCY)" are skipped because only the date-shaped
+ * text is read. The text is cut at its first `;`. Null when nothing in it is date-shaped (then no fact is recorded:
+ * "unreadable" is kept for a date-shaped text the calendar refuses, with its reason).
+ */
+export function readScan(
+  cal: Calendar,
+  input: string,
+  style: DateTextStyle = DEFAULT_DATE_STYLE,
+): ScanResult {
+  const clause = input.split(';')[0]!.replace(/\s+/g, ' ').trim();
+  if (clause === '') return null;
+  const re = shapeOf(cal);
+  re.lastIndex = 0;
+  const m = re.exec(clause);
+  if (!m) return null;
+  const at = clause.slice(m.index);
+  const r = readLeading(cal, at, style);
+  return r.ok ? r : { ok: false, reason: r.reason, text: clip(at, 120) };
+}
+
 /**
  * A chronology row's Date cell, read as the chronology reads it: a plain form, else the qualified reader (by its anchor:
  * `c. 4A 563; exact date unresolved`, `Before Selyros 40th, 4A 605`).

@@ -12,12 +12,17 @@
  *   pronoun. A given name alone counts only on that character's own pages (decided where the facts are compared).
  * - **Dates** go through the calendar engine and keep their precision; a date it cannot read is kept as unreadable, with
  *   the reason, and never guessed.
+ * - **ADR 0064 amendment 1** (from the first live run): the subject is the name governing the verb in its own clause
+ *   (rule A, `resolveName`); the date is the first date-shaped text after the verb, and nothing date-shaped is no fact
+ *   (rule B, `scan`); a table row is never read as its joined cells (rule C, `extractRowFacts` reads the chronology's
+ *   rows by their columns); an identity value's principal part decides a gap (rule E); facts in sections or rows marked
+ *   non-current are marked (F).
  */
 import type { Calendar, DateTextStyle } from '../calendar/index.js';
 import { nameKeyOf, subjectPart } from '../packs/naming/namesakes.js';
 import { textKey } from '../packs/engine/text.js';
 import type { ConsistencyPattern, ConsistencyRules } from '../packs/types.js';
-import { readCell, readFirst, readLeading, type DateReading } from './dates.js';
+import { readCell, readFirst, readLeading, readScan, type DateReading } from './dates.js';
 
 export type FactKind = 'birth' | 'death' | 'attested' | 'identity';
 export type FactSource = 'temporalScope' | 'lifeState' | 'prose' | 'chronology' | 'sidebar';
@@ -52,6 +57,11 @@ export interface ExtractedFact {
   /** The sentence, the field's text, or the row (clipped). */
   readonly excerpt: string;
   readonly mentions: readonly string[];
+  /**
+   * ADR 0064 amendment 1 (F): read from a section (or a chronology row) marked non-current ("Author-Facing Pre-Rewrite
+   * History"): left out unless `include: ["pre-rewrite"]` asks for it, while the pack's switch is on.
+   */
+  readonly nonCurrent?: true;
 }
 
 /** A page's own subject and continuity, as its sidebar states them. */
@@ -79,6 +89,11 @@ export interface ChronologyRowInput {
   readonly event: string;
   readonly date: string;
   readonly mentions: readonly string[];
+  /**
+   * ADR 0064 amendment 1 (rule A): the pages mentioned in the Historical Event cell, with the mention's text. A row is
+   * attributed to a mentioned page's character only when the mention's text is the name governing the verb.
+   */
+  readonly subjects?: readonly { readonly resourceId: string; readonly text: string }[];
 }
 
 /** The names the extractor recognises: a name's key → how it names a character (a name, or a given name alone). */
@@ -101,6 +116,56 @@ export interface Compiled {
   readonly problems: readonly string[];
   readonly identity: ReadonlySet<string>;
   readonly unestablished: ReadonlySet<string>;
+  /** Rule A's vocabulary: titles (name keys) and the clause words. */
+  readonly words: SubjectWords;
+  /** F's markers, normalised; null when the pack names none. */
+  readonly nonCurrent: readonly string[] | null;
+}
+
+/** ADR 0064 amendment 1, rule A: what may stand between a clause's start and its subject, and what starts a clause. */
+export interface SubjectWords {
+  readonly titles: ReadonlySet<string>;
+  /** Splits a text before a verb into clauses: commas, semicolons, a spaced dash and the clause words (captured). */
+  readonly split: RegExp;
+  /** Where the text after a verb stops being its clause: a semicolon or a clause word. */
+  readonly cut: RegExp;
+}
+
+/** Rule A's defaults (the owner's words, 20 November 2026), when the pack names none. */
+export const DEFAULT_TITLES: readonly string[] = ['Kaiser', 'Kaiserin'];
+export const DEFAULT_CLAUSE_WORDS: readonly string[] = ['after', 'when', 'before', 'until', 'while'];
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function subjectWords(
+  titles: readonly string[] = DEFAULT_TITLES,
+  clauseWords: readonly string[] = DEFAULT_CLAUSE_WORDS,
+): SubjectWords {
+  const words = clauseWords
+    .map((w) => w.trim())
+    .filter((w) => w !== '')
+    .map(escapeRe)
+    .join('|');
+  const wordAlt = words ? `|\\b(?:${words})\\b` : '';
+  return {
+    titles: new Set(titles.map(nameKeyOf).filter((t) => t !== '')),
+    split: new RegExp(`(,|;|\\s[-–—]\\s${wordAlt})`, 'iu'),
+    cut: new RegExp(`;${wordAlt}`, 'iu'),
+  };
+}
+
+/** A marker or a heading as markers compare: case, and any dashes or spaces between words, ignored. */
+const markerKey = (s: string) =>
+  s
+    .toLocaleLowerCase('en-GB')
+    .replace(/[\s\-–—_]+/gu, ' ')
+    .trim();
+
+/** Whether a text (a section's headings, a row) holds one of the non-current markers. */
+export function isNonCurrent(text: string | null | undefined, markers: readonly string[] | null): boolean {
+  if (!text || !markers || markers.length === 0) return false;
+  const k = ` ${markerKey(text)} `;
+  return markers.some((m) => m !== '' && k.includes(m));
 }
 
 /** What `{name}` becomes: a short run of words before the verb (resolved against the name index afterwards). */
@@ -117,7 +182,8 @@ export function compilePatterns(rules: ConsistencyRules): Compiled {
   for (const p of rules.patterns) {
     const named = p.regex.includes('{name}');
     try {
-      const re = new RegExp(p.regex.replace('{name}', NAME_GROUP), 'iu');
+      // `d`: the name group's indices, so a comma the phrasing passes over before the verb is kept (rule A).
+      const re = new RegExp(p.regex.replace('{name}', NAME_GROUP), 'iud');
       bySource[p.source].push({ p, re, named });
     } catch (e) {
       problems.push(
@@ -131,7 +197,20 @@ export function compilePatterns(rules: ConsistencyRules): Compiled {
     problems,
     identity: new Set(rules.identityFields.map(textKey)),
     unestablished: new Set(rules.unestablished.map(textKey)),
+    words: subjectWords(rules.titles, rules.clauseWords),
+    nonCurrent: rules.nonCurrent ? rules.nonCurrent.markers.map(markerKey).filter((m) => m !== '') : null,
   };
+}
+
+/**
+ * An identity value's principal part (ADR 0064 amendment 1, rule E): what comes before its first qualifier (`;`, `(`,
+ * or a spaced dash). "Rangawan (current); Falkenreicher (historical identity)" → "Rangawan"; "None - adopted Old
+ * Shenxian mononym" → "None".
+ */
+export function principalValue(v: string): string {
+  const cut = v.search(/;|\(|\s[-–—]\s/u);
+  const p = (cut >= 0 ? v.slice(0, cut) : v).replace(/\s+/g, ' ').trim();
+  return p === '' ? v.replace(/\s+/g, ' ').trim() : p;
 }
 
 const clip = (s: string, n = 300) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -146,15 +225,24 @@ export function sentences(text: string): string[] {
 }
 
 /**
- * Who a run of words before a verb names: a name, an alias or a Canonical Display Name, never a pronoun. Before an
- * appositive ("Yasmin al-Naim, daughter of Karim al-Naim, is born") the name is what comes before the first comma, and
- * must be one whole; otherwise the longest run of its last words that is a name.
+ * Who governs a verb (ADR 0064 amendment 1, rule A; D2 made precise): the name or alias directly before it in its own
+ * clause, with only titles ("Kaiser") and appositives between; never a pronoun, and never a name elsewhere in the
+ * sentence. `candidate` is the text of the sentence before the verb.
+ *
+ * - **Clauses** break at commas, semicolons, a spaced dash and the clause words (after, when, before, until, while).
+ * - **The clause right before the verb** ("The imperial dignity passed to Soren after | Tobias von Hohenfalk died"): the
+ *   longest run of its last words that is a name ("Their son Murad al-Khalid" → Murad al-Khalid; "After Kaiser Soren von
+ *   Woerfels" → Soren von Woerfels). None: nobody (never a name earlier in the sentence).
+ * - **A comma right before the verb** ("Their son, Leopold I von Hohenfalk, was born"; "Yasmin al-Naim, daughter of
+ *   Karim al-Naim, is born"): the clause before it must be a name on its own (after its titles); otherwise it is an
+ *   appositive, passed over only when a comma opens it too. A name inside an appositive is never the subject.
  */
 export function resolveName(
   candidate: string,
   names: NameIndex,
+  words: SubjectWords = DEFAULT_WORDS,
 ): { readonly key: string; readonly text: string; readonly as: MatchedAs } | null {
-  const c = tidy(candidate).replace(/[,\s]+$/u, '');
+  const c = tidy(candidate);
   if (c === '') return null;
   const tryText = (t: string) => {
     const key = nameKeyOf(t);
@@ -162,18 +250,49 @@ export function resolveName(
     const as = names.lookup(key);
     return as ? { key, text: t, as } : null;
   };
-  if (c.includes(',')) {
-    // "Yasmin al-Naim, daughter of Karim al-Naim, is born": the name before the appositive. "In 4A 100, Yasmin was
-    // born": the whole part after the last comma. Never a name found inside an appositive ("…of Karim al-Naim").
-    const parts = c.split(',').map((p) => p.trim());
-    return tryText(parts[0]!) ?? tryText(parts[parts.length - 1]!);
+  // Clauses, each with what opens it: the sentence's start, a comma, or a clause word (a semicolon, a dash).
+  const parts = c.split(words.split);
+  const clauses: { text: string; opened: 'start' | 'comma' | 'clause' }[] = [];
+  let opened: 'start' | 'comma' | 'clause' = 'start';
+  parts.forEach((p, i) => {
+    if (i % 2 === 1) opened = p === ',' ? 'comma' : 'clause';
+    else clauses.push({ text: tidy(p ?? ''), opened });
+  });
+  const wordsOf = (t: string) => t.split(' ').filter((w) => w !== '');
+  const withoutTitles = (t: string) => {
+    const ws = wordsOf(t);
+    while (ws.length > 1 && (words.titles.has(nameKeyOf(ws[0]!)) || /^the$/iu.test(ws[0]!))) ws.shift();
+    return ws.join(' ');
+  };
+  let i = clauses.length - 1;
+  const last = clauses[i]!;
+  if (last.text !== '') {
+    // The clause runs straight into the verb: its last words name the subject, or nobody does.
+    const ws = wordsOf(last.text);
+    for (let k = Math.min(8, ws.length); k >= 1; k--) {
+      const r = tryText(ws.slice(-k).join(' '));
+      if (r) return r;
+    }
+    return null;
   }
-  const words = c.split(' ');
-  for (let k = Math.min(8, words.length); k >= 1; k--) {
-    const r = tryText(words.slice(-k).join(' '));
+  if (last.opened !== 'comma') return null;
+  // "<subject>, <appositive>, was born": a clause standing alone as a name, else an appositive to pass over.
+  for (i -= 1; i >= 0; i--) {
+    const cl = clauses[i]!;
+    const r = cl.text === '' ? null : tryText(withoutTitles(cl.text));
     if (r) return r;
+    if (cl.opened !== 'comma') return null;
   }
   return null;
+}
+
+const DEFAULT_WORDS = subjectWords();
+
+/** The text before the verb a phrasing matched: its `{name}` group, with the comma the phrasing passed over after it. */
+function beforeVerb(m: RegExpExecArray, src: string): string {
+  const name = m.groups?.name ?? '';
+  const end = m.indices?.groups?.name?.[1];
+  return end !== undefined && /^\s*,/u.test(src.slice(end)) ? `${name},` : name;
 }
 
 interface Ctx {
@@ -183,13 +302,24 @@ interface Ctx {
   readonly style: DateTextStyle;
 }
 
+/**
+ * The date a phrasing's `date` group holds. Null for `scan` when nothing in the clause is date-shaped: then no fact is
+ * recorded (ADR 0064 amendment 1, rule B), "unreadable" being kept for a date-shaped text the calendar refuses.
+ */
 function readDate(
   ctx: Ctx,
   text: string,
-  how: 'leading' | 'first',
-): { date: DateReading | null; unreadable: string | null } {
+  how: 'leading' | 'first' | 'scan',
+): { date: DateReading | null; unreadable: string | null; text?: string } | null {
   if (!ctx.cal)
     return { date: null, unreadable: 'the chronology’s calendar is not available to the bridge yet' };
+  if (how === 'scan') {
+    // The clause after the verb: up to a semicolon or a clause word ("…in Falkenau, when the war ended in 3A 98").
+    const clause = text.split(ctx.compiled.words.cut)[0] ?? '';
+    const r = readScan(ctx.cal, clause, ctx.style);
+    if (r === null) return null;
+    return r.ok ? { date: r.reading, unreadable: null } : { date: null, unreadable: r.reason, text: r.text };
+  }
   const r = how === 'first' ? readFirst(ctx.cal, text, ctx.style) : readLeading(ctx.cal, text, ctx.style);
   return r.ok ? { date: r.reading, unreadable: null } : { date: null, unreadable: r.reason };
 }
@@ -234,7 +364,9 @@ export function extractPageFacts(
           subjectText: own.text,
           matchedAs: 'page',
           valueText: tidy(u.text),
-          gap: ctx.compiled.unestablished.has(textKey(u.text)),
+          gap:
+            ctx.compiled.unestablished.has(textKey(u.text)) ||
+            ctx.compiled.unestablished.has(textKey(principalValue(u.text))),
           date: null,
           unreadable: null,
           bound: null,
@@ -260,6 +392,7 @@ export function extractPageFacts(
             const d = gap
               ? { date: null, unreadable: null }
               : readDate(ctx, dateText, cp.p.date ?? 'leading');
+            if (!d) continue; // nothing date-shaped: not a fact (rule B)
             facts.push({
               ...base(u),
               kind: cp.p.kind,
@@ -269,7 +402,7 @@ export function extractPageFacts(
               subjectKey: own.key,
               subjectText: own.text,
               matchedAs: 'page',
-              valueText: gap ? tidy(m[0]) : (d.date?.text ?? tidy(dateText)),
+              valueText: gap ? tidy(m[0]) : (d.date?.text ?? d.text ?? tidy(dateText)),
               gap,
               date: d.date,
               unreadable: d.unreadable,
@@ -280,21 +413,24 @@ export function extractPageFacts(
       }
       continue;
     }
-    if ((u.unit === 'text' || u.unit === 'row') && VERBS.test(u.text))
+    // Prose only: a table row is never read as its joined cells (rule C); the chronology's rows are read by their
+    // columns (extractRowFacts).
+    if (u.unit === 'text' && VERBS.test(u.text))
       for (const sentence of sentences(u.text)) {
         if (!VERBS.test(sentence)) continue;
         for (const cp of ctx.compiled.bySource.prose) {
           const m = cp.re.exec(sentence);
           if (!m) continue;
           const who = cp.named
-            ? resolveName(m.groups?.name ?? '', ctx.names)
+            ? resolveName(beforeVerb(m, sentence), ctx.names, ctx.compiled.words)
             : own
               ? { ...own, as: 'page' as const }
               : null;
-          if (!who) continue; // a pronoun, or a name the bridge does not know: never read (D2)
+          if (!who) continue; // a pronoun, another clause's name, or a name the bridge does not know: never read (D2)
           const gap = cp.p.gap === true;
           const dateText = m.groups?.date ?? '';
           const d = gap ? { date: null, unreadable: null } : readDate(ctx, dateText, cp.p.date ?? 'leading');
+          if (!d) continue; // nothing date-shaped after the verb: not a fact (rule B)
           facts.push({
             ...base(u),
             kind: cp.p.kind,
@@ -304,12 +440,13 @@ export function extractPageFacts(
             subjectKey: who.key,
             subjectText: who.text,
             matchedAs: who.as,
-            valueText: gap ? tidy(m[0]) : (d.date?.text ?? tidy(dateText).slice(0, 120)),
+            valueText: gap ? tidy(m[0]) : (d.date?.text ?? d.text ?? tidy(dateText).slice(0, 120)),
             gap,
             date: d.date,
             unreadable: d.unreadable,
             bound: cp.p.kind === 'attested' ? (cp.p.bound ?? 'both') : null,
             excerpt: clip(sentence),
+            ...(isNonCurrent(u.section, ctx.compiled.nonCurrent) ? { nonCurrent: true as const } : {}),
           });
           break; // one fact a sentence: the first phrasing that reads it
         }
@@ -326,12 +463,21 @@ export function extractRowFacts(rows: readonly ChronologyRowInput[], ctx: Ctx): 
     for (const cp of ctx.compiled.bySource.chronology) {
       const m = cp.re.exec(row.event);
       if (!m) continue;
-      let who: { key: string; text: string; as: MatchedAs } | null = cp.named
-        ? resolveName(m.groups?.name ?? '', ctx.names)
-        : null;
-      // No name: the one page the row mentions (resolved to its character where the facts are compared).
-      if (!who && row.mentions.length === 1)
-        who = { key: `page:${row.mentions[0]!}`, text: m.groups?.name?.trim() || row.event, as: 'mention' };
+      // Rule A on the Historical Event cell: the name governing the verb, or a mention whose text is that name (then the
+      // mentioned page's character, resolved where the facts are compared). Never the joined row (rule C).
+      const mentioned = new Map<string, string>();
+      for (const s of row.subjects ?? []) {
+        const k = nameKeyOf(s.text);
+        if (k !== '' && !mentioned.has(k)) mentioned.set(k, s.resourceId);
+      }
+      const lookup: NameIndex = {
+        lookup: (k) => ctx.names.lookup(k) ?? (mentioned.has(k) ? 'mention' : null),
+      };
+      const found = cp.named ? resolveName(beforeVerb(m, row.event), lookup, ctx.compiled.words) : null;
+      const who: { key: string; text: string; as: MatchedAs } | null =
+        found && found.as === 'mention'
+          ? { key: `page:${mentioned.get(found.key)!}`, text: found.text, as: 'mention' }
+          : found;
       if (!who) continue;
       const d = ctx.cal
         ? (() => {
@@ -358,6 +504,9 @@ export function extractRowFacts(rows: readonly ChronologyRowInput[], ctx: Ctx): 
         section: null,
         excerpt: clip(`${tidy(row.event)} | ${tidy(row.date)}`),
         mentions: row.mentions,
+        ...(isNonCurrent(`${row.event} ${row.date}`, ctx.compiled.nonCurrent)
+          ? { nonCurrent: true as const }
+          : {}),
       });
       break;
     }

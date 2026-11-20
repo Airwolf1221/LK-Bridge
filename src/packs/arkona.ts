@@ -697,7 +697,10 @@ const rules: PackRules = packRulesSchema.parse({
   // v3 F4b (ADR 0064; the owner-approved design docs/design/F4b-consistency-and-as-of.md): the consistency check and "as
   // of a date". Deliberately narrow (D2: precision over recall): only these phrasings are read, the subject only by a
   // name, alias or Canonical Display Name (never a pronoun), each date through the calendar engine with its precision.
-  // New phrasings are added here (a new pack version), never in code.
+  // New phrasings are added here (a new pack version), never in code. `-f4b1` (ADR 0064 amendment 1, from the first
+  // live run): a date is the first date-shaped text of its clause (`scan`), a dateless "Deceased" and "Deceased by" are
+  // no death date, a dated Life State's gap, rule A's titles and clause words, and the non-current markers (switched on:
+  // the owner's ruling, 20 November 2026).
   consistency: {
     present: '5A 931',
     approxMargin: 5,
@@ -719,12 +722,14 @@ const rules: PackRules = packRulesSchema.parse({
         source: 'temporalScope',
         kind: 'birth',
         regex: String.raw`^\s*born\s+(?<date>.+)$`,
+        date: 'scan',
       },
       {
         id: 'death.scope',
         source: 'temporalScope',
         kind: 'death',
         regex: String.raw`^\s*died\s+(?<date>.+)$`,
+        date: 'scan',
       },
       {
         id: 'birth.scope.gap',
@@ -759,16 +764,24 @@ const rules: PackRules = packRulesSchema.parse({
         source: 'temporalScope',
         kind: 'attested',
         regex: String.raw`\b(?:alive|active)\b(?<date>.*)$`,
-        date: 'first',
+        date: 'scan',
         bound: 'both',
       },
-      // A Life State of "Deceased" with a date.
+      // A Life State of "Deceased" with a date. "Deceased" alone is a state (the Life State identity fact), not a date;
+      // "Deceased by <date>" is an upper bound on death, never a death date (ADR 0064 amendment 1, D).
       {
         id: 'death.lifestate',
         source: 'lifeState',
         kind: 'death',
-        regex: String.raw`^\s*deceased\b(?<date>.*)$`,
-        date: 'first',
+        regex: String.raw`^\s*deceased\b(?!\s+(?:by|before)\b)(?<date>.*)$`,
+        date: 'scan',
+      },
+      {
+        id: 'death.lifestate.gap',
+        source: 'lifeState',
+        kind: 'death',
+        regex: String.raw`\bdeath(?:\s+date)?\s+(?:is\s+)?(?:unestablished|unknown|unrecorded)\b`,
+        gap: true,
       },
       // Prose, one sentence at a time: "Yasmin was born on Camue 1st, 4A 100", and a dated line on a nation page:
       // "Azah 19th, 4A 51 (1,250,358 KCY) - Cornelia von Katzen is born in…".
@@ -777,6 +790,7 @@ const rules: PackRules = packRulesSchema.parse({
         source: 'prose',
         kind: 'birth',
         regex: String.raw`{name}\s*,?\s+(?:was|is)\s+born\s+(?:on|in)\s+(?<date>.+)$`,
+        date: 'scan',
       },
       {
         id: 'birth.prose.dated',
@@ -789,6 +803,7 @@ const rules: PackRules = packRulesSchema.parse({
         source: 'prose',
         kind: 'death',
         regex: String.raw`{name}\s*,?\s+(?:died|dies|was\s+killed|is\s+killed)\s+(?:on|in)\s+(?<date>.+)$`,
+        date: 'scan',
       },
       {
         id: 'death.prose.dated',
@@ -811,6 +826,32 @@ const rules: PackRules = packRulesSchema.parse({
         regex: String.raw`{name}\s*,?\s+(?:died|dies|was\s+killed|is\s+killed)\b`,
       },
     ],
+    // Rule A: what may stand before a name governing its verb ("Kaiser Soren von Woerfels dies"), and what starts a
+    // clause besides commas, semicolons and a spaced dash.
+    titles: [
+      'Kaiser',
+      'Kaiserin',
+      'King',
+      'Queen',
+      'Emperor',
+      'Empress',
+      'Prince',
+      'Princess',
+      'Archduke',
+      'Archduchess',
+      'Duke',
+      'Duchess',
+      'Count',
+      'Countess',
+      'Lord',
+      'Lady',
+      'Sir',
+      'Dame',
+    ],
+    clauseWords: ['after', 'when', 'before', 'until', 'while'],
+    // F: non-current sections and rows inside current pages. Switched on by the owner's ruling (20 November 2026):
+    // "Pre-Rewrite" and "Author-Facing" sections and rows are non-current.
+    nonCurrent: { markers: ['Pre-Rewrite', 'Author-Facing'], exclude: true },
   },
   rulings: [
     {
@@ -836,9 +877,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // Standard's "Excluded Routine Tags" pinned. `-f4a` (ADR 0063, 19 November 2026; session F4a): the governance drift
   // audit's equivalence map and sections (`governanceAudit`) and the name check's culture index (`naming`). `-f4b` (ADR
   // 0064, 20 November 2026; session F4b): the consistency check's phrasings, the present day and the "c." margin
-  // (`consistency`).
-  seed: 'arkona-2026-11-20-f4b',
+  // (`consistency`). `-f4b1` (ADR 0064 amendment 1, 20 November 2026; from the first live run): dates scanned in their
+  // clause, rule A's titles and clause words, a dateless "Deceased" and "Deceased by" never a death date, and the
+  // non-current markers, switched on.
+  seed: 'arkona-2026-11-20-f4b1',
   supersedes: [
+    'arkona-2026-11-20-f4b',
     'arkona-2026-11-19-f4a',
     'arkona-2026-11-19-f3f',
     'arkona-2026-11-18-f3e',
