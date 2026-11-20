@@ -6,8 +6,9 @@
  *
  * - **governance**: Character Architecture calls the old bridge (`write_lk {"job_action":"guide"}`); a Repository
  *   Automation tab whose Startup section names Fiction Writing (the Design References page "Arkona – Fiction Writing
- *   Reference", tagged "Fiction Writing": it resolves), the Moonlit Ledger (nowhere) and LK Bootstrap (a near miss for
- *   the root's "AI Bootstrap" tab), and whose Diagnostic Workflows name the skills by their old names; a Project
+ *   Reference", tagged "Fiction Writing": it resolves), the Moonlit Ledger (nowhere), LK Bootstrap (a near miss for
+ *   the root's "AI Bootstrap" tab) and the Tagging Standard (only part of the "Controlled Native Tagging Standard"
+ *   tab's name: a near miss too), and whose Diagnostic Workflows name the skills by their old names; a Project
  *   Navigation tab;
  * - **names**: Tsubame Hoshizora (given name first, alias "The Silver Crane", Fujimatsuan) beside Kamigawa Miyuki and
  *   the discover world's Asagiri Miyabi (family name first), Éloïse Ferré (accents), the shared alias "Mehrana
@@ -324,6 +325,7 @@ export async function f4aWorld(o: Parameters<typeof appraisalWorld>[0] = {}): Pr
     para('ra4', t('Read Fiction Writing before any prose task.')),
     para('ra4a', t('Read the Moonlit Ledger before a chronology task.')),
     para('ra4b', t('Then open LK Bootstrap.')),
+    para('ra4c', t('Check the Tagging Standard before any retagging.')),
     heading('ra5', 2, 'Diagnostic Workflows'),
     para('ra6', t('Owners: run '), code('format-baisheng-owners'), t('.')),
     para('ra7', t('Impact: '), code('audit-baisheng-change-impact'), t('.')),

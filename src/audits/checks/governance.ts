@@ -21,7 +21,9 @@
  *   by its name, its subject, or its name with the lifecycle prefix, a leading "Arkona – " and a trailing generic word
  *   ("Reference", "Standard", "Workflow", "Index") removed; no tab, alias or tag; nor a template or a heading of the
  *   governance documents themselves. Elsewhere a capitalised phrase is too often not a name. A near miss ("LK
- *   Bootstrap" beside the root's tab "AI Bootstrap") names its closest match as the suggested replacement.
+ *   Bootstrap" beside the root's tab "AI Bootstrap") names its closest match as the suggested replacement; so does a
+ *   name that is only a run inside a longer one ("the Tagging Standard": the owner's decision of 20 November 2026,
+ *   never resolved silently), naming the name and page it partially matched.
  */
 import { cleanPrefixes } from '../../registry/names.js';
 import type { GovernanceAuditRules, GovernanceEquivalent } from '../../packs/types.js';
@@ -413,8 +415,10 @@ export function capitalisedRuns(text: string): string[][] {
 export const GENERIC_WORDS: readonly string[] = ['Reference', 'Standard', 'Workflow', 'Index'];
 
 /**
- * The names the AI REPOSITORY knows: each whole (any length), each without a trailing generic word, and every run of two
- * words or more inside one.
+ * The names the AI REPOSITORY knows. A name resolves only as a whole: as it is, without a trailing generic word, or
+ * without a leading "The" (an epithet is written "the White Fox" in a sentence). `parts`, every run of two words or more
+ * inside a known name, never resolves one: the owner's decision (20 November 2026) makes a name found only there an
+ * info near miss naming the name it is part of (`containingName`), for the owner to acknowledge.
  */
 export interface Resolvable {
   readonly whole: ReadonlySet<string>;
@@ -429,6 +433,10 @@ function withoutGeneric(k: string, generic: ReadonlySet<string>): string | null 
   return w.length > 1 && generic.has(w[w.length - 1]!) ? w.slice(0, -1).join(' ') : null;
 }
 
+/** A name without its leading "the" (compared form), or null. */
+const withoutArticle = (k: string): string | null =>
+  k.startsWith('the ') && k.length > 4 ? k.slice(4) : null;
+
 export function resolvableNames(
   names: Iterable<string>,
   genericWords: Iterable<string> = GENERIC_WORDS,
@@ -439,9 +447,12 @@ export function resolvableNames(
   for (const n of names) {
     const k = nameNorm(n);
     if (k === '') continue;
-    whole.add(k);
-    const short = withoutGeneric(k, generic);
-    if (short) whole.add(short);
+    for (const v of [k, withoutArticle(k)]) {
+      if (v === null) continue;
+      whole.add(v);
+      const short = withoutGeneric(v, generic);
+      if (short) whole.add(short);
+    }
     const words = k.split(' ').slice(0, 16);
     for (let i = 0; i < words.length; i++)
       for (let j = i + 2; j <= words.length; j++) parts.add(words.slice(i, j).join(' '));
@@ -449,23 +460,32 @@ export function resolvableNames(
   return { whole, parts, generic };
 }
 
-/** Whether a name (compared form) resolves: as it is, or without its trailing generic word. */
+/** Whether a name (compared form) resolves as a whole name: as it is, or without its trailing generic word. */
 export function knows(known: Resolvable, k: string): boolean {
   if (k === '') return false;
-  if (known.whole.has(k) || known.parts.has(k)) return true;
+  if (known.whole.has(k)) return true;
   const short = withoutGeneric(k, known.generic);
-  return short !== null && (known.whole.has(short) || known.parts.has(short));
+  return short !== null && known.whole.has(short);
+}
+
+/** Whether a name (compared form) that does not resolve is a run of two words or more inside a known name. */
+export function partOfKnown(known: Resolvable, k: string): boolean {
+  if (k === '' || knows(known, k)) return false;
+  if (known.parts.has(k)) return true;
+  const short = withoutGeneric(k, known.generic);
+  return short !== null && short.includes(' ') && known.parts.has(short);
 }
 
 /** The words that separate the names of a list ("Project Navigation and Fiction Writing"). */
 const LIST_WORDS = new Set(['and', '&', 'or']);
 
 /**
- * The capitalised names of a run that resolve to nothing. Every known name of two words or more is taken out of the run
- * first (the longest from the left: "Approved Hierarchy and Standardised Navigation" whole); what is left is split at
- * the words of a list, a starter ("Read", "The") is dropped from each piece, and a piece of two capitalised words or
- * more is a name that resolves to nothing. A single word never stands for a name here, so a page called "Fiction" never
- * hides a missing "Fiction Writing".
+ * The capitalised names of a run that resolve to nothing as a whole name. Every known name of two words or more is taken
+ * out of the run first (the longest from the left: "Approved Hierarchy and Standardised Navigation" whole); what is left
+ * is split at the words of a list, a starter ("Read", "The") is dropped from each piece, and a piece of two capitalised
+ * words or more is a name that resolves to nothing. A single word never stands for a name here, so a page called
+ * "Fiction" never hides a missing "Fiction Writing". A piece that is only a run inside a longer name ("the Tagging
+ * Standard") is returned too: the check reports it as a near miss naming that name.
  */
 export function unresolvedIn(run: readonly string[], known: Resolvable): string[] {
   const out: string[] = [];
@@ -597,6 +617,48 @@ export function closestName(name: string, candidates: ReadonlyMap<string, KnownN
   return best?.c ?? null;
 }
 
+/** A known name by its compared form (padded with spaces, to find a run of whole words inside it). */
+export interface KnownKey {
+  readonly key: string;
+  readonly c: KnownName;
+}
+
+/**
+ * The known name that a name is only a run of (two words or more inside it, as it is or without its trailing generic
+ * word), and how many names hold that run (a page once; a tab once): the owner's decision (20 November 2026), so
+ * that "the Tagging Standard" is a near miss naming "Controlled Native Tagging Standard" rather than resolving silently.
+ * Among several: a tab first, then the name of fewest words, then alphabetical. Null when no known name holds it.
+ */
+export function containingName(
+  name: string,
+  known: readonly KnownKey[],
+  generic: ReadonlySet<string>,
+): { readonly c: KnownName; readonly of: number } | null {
+  const k = nameNorm(name);
+  const tries = [k, withoutGeneric(k, generic)]
+    .filter((t): t is string => t !== null && t.includes(' '))
+    .map((t) => ` ${t} `);
+  if (tries.length === 0) return null;
+  let best: { c: KnownName; words: number } | null = null;
+  const holders = new Set<string>();
+  for (const { key, c } of known) {
+    // A name is never part of itself.
+    if (key === k) continue;
+    const padded = ` ${key} `;
+    if (!tries.some((t) => padded !== t && padded.includes(t))) continue;
+    // A page once however many of its names hold the run; a tab (and a heading of the same name) once.
+    holders.add(c.page && c.kind !== 'tab' ? `page|${c.page.id}` : `name|${key}`);
+    const words = key.split(' ').length;
+    const better =
+      !best ||
+      KIND_RANK[c.kind] < KIND_RANK[best.c.kind] ||
+      (KIND_RANK[c.kind] === KIND_RANK[best.c.kind] &&
+        (words < best.words || (words === best.words && c.name.localeCompare(best.c.name, 'en') < 0)));
+    if (better) best = { c, words };
+  }
+  return best ? { c: best.c, of: holders.size } : null;
+}
+
 /** A near miss's closest name, as the message says it ("the tab “AI Bootstrap” of AI REPOSITORY"). */
 function knownWords(c: KnownName): string {
   const on = c.page ? ` of ${c.page.name}` : '';
@@ -604,9 +666,9 @@ function knownWords(c: KnownName): string {
     case 'tab':
       return `the tab “${c.name}”${on}`;
     case 'page':
-      return c.page && nameNorm(c.page.name) !== nameNorm(c.name)
+      return c.page && nameNorm(cleanPrefixes(c.page.name).name) !== nameNorm(c.name)
         ? `“${c.name}”, the page ${c.page.name}`
-        : `the page “${c.name}”`;
+        : `the page “${c.page?.name ?? c.name}”`;
     case 'alias':
       return `“${c.name}”, an alias${on}`;
     case 'tag':
@@ -700,6 +762,10 @@ export const governanceCheck: Check = (ctx: AuditContext): FindingDraft[] => {
     entries.map((e) => e.name),
     generic,
   );
+  // Every known name by its compared form: a name that is only a run inside one is a near miss naming it.
+  const knownKeys: KnownKey[] = entries
+    .map((c) => ({ key: nameNorm(c.name), c }))
+    .filter((x) => x.key !== '');
   // The near-miss candidates: every known name of two words or more, as written, and without its generic word.
   const candidates = new Map<string, KnownName>();
   for (const e of entries)
@@ -834,13 +900,20 @@ export const governanceCheck: Check = (ctx: AuditContext): FindingDraft[] => {
           }
     }
     for (const [key, m] of missing) {
-      // A near miss names its closest match, in the evidence too (so an acknowledgement covers that match); a name with
-      // nothing near says what to do instead.
-      const closest = closestName(m.name, candidates);
+      // A near miss names its closest match, in the evidence too (so an acknowledgement covers that match): first a
+      // known name the name is only a run inside (the owner's decision: never resolved silently), then one near it in
+      // spelling or words. A name with nothing near says what to do instead.
+      const partial = partOfKnown(resolvable, nameNorm(m.name))
+        ? containingName(m.name, knownKeys, resolvable.generic)
+        : null;
+      const closest = partial?.c ?? closestName(m.name, candidates);
       const times = m.count > 1 ? ` (${plural(m.count, 'time')})` : '';
-      const message = closest
-        ? `${tabName}’s section “${own(m.section)}” names “${m.name}”${times}, which resolves to no page, tab, alias or tag in the AI REPOSITORY: a near miss for ${knownWords(closest)}. ${m.snippet} Suggested replacement: “${closest.name}”. Correct it by hand if that is meant, or acknowledge this finding if it is right as it is.`
-        : `${tabName}’s section “${own(m.section)}” names “${m.name}”${times}, which resolves to no page, tab, alias or tag in the AI REPOSITORY, and nothing is near it: ${m.snippet} Correct it by hand, remove it if what it points to is gone, or acknowledge this finding if it is right as it is.`;
+      const at = `${tabName}’s section “${own(m.section)}” names “${m.name}”${times}`;
+      const message = partial
+        ? `${at}, which is only part of a longer name${partial.of > 1 ? ` (part of ${partial.of} names; the nearest is given)` : ''}: a near miss for ${knownWords(partial.c)}. ${m.snippet} Suggested replacement: “${partial.c.name}”. Use the full name if that is meant, or acknowledge this finding if the short form is right as it is.`
+        : closest
+          ? `${at}, which resolves to no page, tab, alias or tag in the AI REPOSITORY: a near miss for ${knownWords(closest)}. ${m.snippet} Suggested replacement: “${closest.name}”. Correct it by hand if that is meant, or acknowledge this finding if it is right as it is.`
+          : `${at}, which resolves to no page, tab, alias or tag in the AI REPOSITORY, and nothing is near it: ${m.snippet} Correct it by hand, remove it if what it points to is gone, or acknowledge this finding if it is right as it is.`;
       out.push({
         code: 'governance_missing_reference',
         pageId: doc.pageId,
@@ -857,6 +930,7 @@ export const governanceCheck: Check = (ctx: AuditContext): FindingDraft[] => {
                   closest: closest.name,
                   kind: closest.kind,
                   ...(closest.page ? { page: closest.page } : {}),
+                  ...(partial ? { partial: true } : {}),
                 },
                 suggestedReplacement: closest.name,
               }

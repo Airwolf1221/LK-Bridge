@@ -73,7 +73,7 @@
    or more is taken out of the run first (the longest from the left); what is left is split at "and", "&" and "or", a
    sentence's starter ("Read", "The", "Then"…) is dropped from each piece, and a piece of two capitalised words or more
    that resolves to nothing is reported. A single word never stands for a name, so a page called "Moonlit" never hides
-   a missing "Moonlit Ledger". **The owner's review (19 November 2026): resolution is generous before anything is
+   a missing "Moonlit Ledger". **The owner's review (20 November 2026): resolution is generous before anything is
    reported.** "Fiction Writing" in Repository Automation's Startup section is not missing: it is the Design References
    page "Arkona – Fiction Writing Reference" (tagged "Fiction Writing"). So a short name resolves if it matches a page's
    subject with its lifecycle prefix, a leading "Arkona -" (any dash, any spacing) and a trailing generic word
@@ -81,16 +81,22 @@
    alias or a tag, of any page in any area (the Design References and the Legacy Canon Archive included). Besides those:
    every page's display name, its name without prefix, its subject (before a dash) and its subject with the
    descriptor's last word ("the Salahad Reference"), its Canonical Display Name, every template's name, the governance
-   documents' own headings (a reference to another standard's section is a reference), any of these without its
-   trailing generic word, and any run of two words or more inside one of them ("the Tagging Standard"). A name in the
-   text is also tried without its own trailing generic word ("the Fiction Writing Standard"). Mention links are never
-   read as names (they resolve by id), nor is code formatting.
+   documents' own headings (a reference to another standard's section is a reference), and any of these without its
+   trailing generic word or a leading "The" (an epithet is written "the White Fox" in a sentence). A name in the text
+   is also tried without its own trailing generic word ("the Fiction Writing Standard"). Mention links are never read
+   as names (they resolve by id), nor is code formatting. **The owner's decision (20 November 2026): a run inside a
+   longer name never resolves silently.** A name that matches only as a run of two words or more inside a known name
+   ("the Tagging Standard" inside the tab "Controlled Native Tagging Standard") is reported as an info near miss naming
+   the name and page it partially matched (`nearMiss.partial`), for the owner to acknowledge; "Fiction Writing" and "the
+   Fiction Writing Standard" still resolve, as whole names.
 6. **What a finding holds.** One finding per tab and name (and, for a tool, per equivalent), fingerprinted on them.
    Each carries `tab`, `name`, the sections it appears in, `arguments` for an old call, `equivalent` (`use`, `note`,
    `partial`) and **`suggestedReplacement`**, the text the owner may copy into a `write_page` edit by hand. Every finding
-   suggests a replacement. A name that resolves to nothing but is near a known one (two edits at most, one under eight
-   letters; the same words reordered; or a longer name holding every word) is reported as a **near miss**, still
-   `info`: its evidence names the closest match (`nearMiss: { closest, kind, page }`, a tab first among equals) and
+   suggests a replacement. A name that resolves to nothing but is near a known one is reported as a **near miss**,
+   still `info`: first a known name it is only a run inside (decision 5; `partial: true`; among several, a tab first,
+   then the name of fewest words, and the message says how many names hold the run), else one near it in spelling or
+   words (two edits at most, one under eight letters; the same words reordered; or a longer name holding every word).
+   Its evidence names the closest match (`nearMiss: { closest, kind, page, partial? }`, a tab first among equals) and
    carries it as `suggestedReplacement`, as the owner's review asked ("LK Bootstrap" → the root's tab "AI Bootstrap").
    A name with nothing near says so, and what to do. An unknown tool with no equivalent names the bridge tool nearest in
    spelling in its message. **Chosen:** a missing reference's evidence is its tab, section and name (and a near miss's
@@ -225,7 +231,8 @@ point to the new tools. "How to decide" stays under its 9,000-character limit (8
 suggested and `job_action` folded in; the old skill names with their equivalents, the partial one and one with none; an
 allowed name silent; "Fiction Writing" resolved to its Design References page (by its name with the prefixes and
 "Reference" removed, with either dash, by a tag, an alias or a tab), "Moonlit Ledger" missing in a Startup section and
-only there, "LK Bootstrap" an info near miss for the root's tab "AI Bootstrap" with it suggested; names resolving to a tab, a page, a
+only there, "LK Bootstrap" an info near miss for the root's tab "AI Bootstrap" with it suggested, "the Tagging Standard" and
+"the Continent Reference" near misses naming the tab and the page they are only part of; names resolving to a tab, a page, a
 subject, an alias or a heading silent; the reading of runs), `test/audits/governance-world.test.ts` (the nightly run
 reports it; `audit_findings` reads it; "Allow this name" through the admin API, audited, then silent; the existing
 categories unchanged), `test/packs/name-check.test.ts` (exact, given-name, surname and alias matches; East Asian order

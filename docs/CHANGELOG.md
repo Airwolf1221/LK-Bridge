@@ -16,7 +16,8 @@ version, the governance category reports nothing, and the name check looks up no
   Related Guidance, Source Boundaries or Dependencies section that resolves to nothing, read generously as the owner's
   review asked: a page's subject with its prefix, a leading "Arkona -" and a trailing generic word removed, a tab, an
   alias or a tag, in any area, so "Fiction Writing" is the Design References page "Arkona – Fiction Writing Reference";
-  a near miss such as "LK Bootstrap" names the closest match, the root's "AI Bootstrap" tab). Each carries the
+  a near miss such as "LK Bootstrap" names the closest match, the root's "AI Bootstrap" tab, and a name that is only part
+  of a longer one, such as "the Tagging Standard", is a near miss naming that name and its page, never silent). Each carries the
   replacement the pack's equivalence map suggests (`get_bridge_guide`, `arkona_appraise_owner`, `arkona_change_impact`,
   the chronology audit, `arkona_visual_hygiene`, `arkona_working_digest` (partial)), or a near miss's closest match, or
   else a tool near it in spelling, to copy into a `write_page` edit by hand; no fix is ever proposed. **Allow this

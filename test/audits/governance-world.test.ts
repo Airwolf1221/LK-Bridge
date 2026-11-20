@@ -2,8 +2,9 @@
 /**
  * v3 F4a (ADR 0063): the governance drift check in the nightly audit, against the REAL stack on the mock LegendKeeper
  * (test/packs/f4a-world.ts: Character Architecture's old `write_lk` call; Repository Automation's Startup naming Fiction
- * Writing, a Design References page that resolves, the Moonlit Ledger, which is nowhere, and LK Bootstrap, a near miss
- * for the root's AI Bootstrap tab; its Diagnostic Workflows naming the old skills). The run after a full snapshot
+ * Writing, a Design References page that resolves, the Moonlit Ledger, which is nowhere, LK Bootstrap, a near miss for
+ * the root's AI Bootstrap tab, and the Tagging Standard, only part of a tab's name; its Diagnostic Workflows naming the
+ * old skills). The run after a full snapshot
  * reports the `governance` category; `audit_findings` reads it; "Allow this name" silences an external skill for good;
  * and the categories that existed before are unchanged by it. Nothing reads LegendKeeper.
  */
@@ -95,6 +96,23 @@ describe('the governance category in the nightly audit (v3 F4a)', () => {
       },
     });
     expect(byName('LK Bootstrap')[0]!.message).toContain('Suggested replacement: “AI Bootstrap”');
+    // Only part of a longer name (the owner's decision): a near miss naming the tab it partially matched.
+    expect(byName('Tagging Standard')[0]).toMatchObject({
+      code: 'governance_missing_reference',
+      severity: 'info',
+      documentId: w.tabs.automation,
+      evidence: {
+        nearMiss: {
+          closest: 'Controlled Native Tagging Standard',
+          kind: 'tab',
+          page: { name: 'AI REPOSITORY' },
+          partial: true,
+        },
+        suggestedReplacement: 'Controlled Native Tagging Standard',
+      },
+    });
+    // The whole name on the same page is silent.
+    expect(byName('Controlled Native Tagging Standard')).toHaveLength(0);
     expect(byName('format-baisheng-owners')[0]).toMatchObject({
       code: 'governance_external_name',
       severity: 'info',

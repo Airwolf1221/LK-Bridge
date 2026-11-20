@@ -224,11 +224,13 @@ what to do when nothing is near.
   matches a page's subject with its lifecycle prefix, a leading "Arkona -" (any dash) and a trailing generic word
   (Reference, Standard, Workflow, Index) removed, a tab's name, an alias or a tag, of any page in any area: "Fiction
   Writing" is the Design References page "Arkona – Fiction Writing Reference" and is never reported. Page names,
-  subjects, Canonical Display Names, templates and the governance headings resolve too, and a name in the text is also
-  tried without its own generic word. A name close to a known one is reported as a **near miss** with the closest match
-  suggested ("LK Bootstrap" → the root's tab "AI Bootstrap", in the evidence as `nearMiss` and
-  `suggestedReplacement`). Acknowledge it when it is right as it is; its evidence is the tab, section and name (and a
-  near miss's closest match), so the acknowledgement survives a reworded sentence.
+  subjects, Canonical Display Names, templates and the governance headings resolve too (also without a leading "The"),
+  and a name in the text is also tried without its own generic word. Only whole names resolve: a name that is only a
+  run inside a longer one ("the Tagging Standard" in the tab "Controlled Native Tagging Standard") is a **near miss**
+  naming the name and page it partially matched (`nearMiss.partial`; the owner's decision), and so is a name close to
+  a known one in spelling ("LK Bootstrap" → the root's tab "AI Bootstrap"); the closest match is in the evidence as
+  `nearMiss` and `suggestedReplacement`. Acknowledge it when it is right as it is; its evidence is the tab, section and
+  name (and a near miss's closest match), so the acknowledgement survives a reworded sentence.
 
 "Re-check now" is not offered for these: a governance finding depends on the whole repository and the bridge's tools, so
 the next run (after the edited page reaches the snapshots) checks it again. A run with and without the drift rules

@@ -678,7 +678,8 @@ const rules: PackRules = packRulesSchema.parse({
       },
     ],
     referenceSections: ['Startup', 'Related Guidance', 'Source Boundaries', 'Dependencies'],
-    // The owner's review (19 November 2026): resolution is generous before anything is reported. "Fiction Writing" is
+    // The owner's review (20 November 2026): resolution is generous before anything is reported, but a name found only
+    // as a run inside a longer name is a near miss, never silent (the owner's decision). "Fiction Writing" is
     // the Design References page "Arkona – Fiction Writing Reference" (tagged "Fiction Writing"), never a missing page.
     resolution: {
       // "Arkona" and a dash (any dash, any spacing): "Arkona – Fiction Writing Reference".

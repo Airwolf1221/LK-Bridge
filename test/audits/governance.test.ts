@@ -11,15 +11,18 @@ import {
   argsIn,
   capitalisedRuns,
   closestName,
+  containingName,
   editDistance,
   governanceBlocks,
   governanceCheck,
   knows,
   nameNorm,
   nearTool,
+  partOfKnown,
   resolvableNames,
   unresolvedIn,
   type GovernanceAuditInput,
+  type KnownKey,
   type KnownName,
   type KnownNames,
 } from '../../src/audits/checks/governance.js';
@@ -361,9 +364,10 @@ describe('the governance drift check (v3 F4a, ADR 0063)', () => {
     const names = drafts
       .filter((d) => d.code === 'governance_missing_reference')
       .map((d) => (d.evidence as { name: string }).name);
-    // Project Navigation and the Tagging Standard are tabs; the Salahad Reference is a page's subject and name (in
-    // part); the White Fox is Kamigawa Miyuki's alias; Character Architecture and Source Formatting are headings or tabs;
-    // Fiction Writing is a Design References page and its tag.
+    // Project Navigation and the Controlled Native Tagging Standard are tabs; the Salahad Reference is a page's subject
+    // with its descriptor's last word (and its subject with "Reference" dropped); the White Fox is Kamigawa Miyuki's
+    // alias "The White Fox" (a leading "The" is no part of a name); Character Architecture and Source Formatting are
+    // headings or tabs; Fiction Writing is a Design References page and its tag. Each resolves as a whole name.
     for (const n of [
       'Project Navigation',
       'Controlled Native Tagging Standard',
@@ -375,6 +379,50 @@ describe('the governance drift check (v3 F4a, ADR 0063)', () => {
     ])
       expect(names, n).not.toContain(n);
     expect([...names].sort()).toEqual(['LK Bootstrap', 'Moonlit Ledger']);
+  });
+
+  it('reports a name that is only a run inside a longer name as an info near miss, naming the name and page it partially matched', () => {
+    // The owner's decision (20 November 2026): never resolved silently.
+    const drafts = world({
+      navigation: [para('pn7', t('Read the Tagging Standard, then the Continent Reference.'))],
+    });
+    const tagging = byName(drafts, 'Tagging Standard');
+    expect(tagging).toHaveLength(1);
+    expect(tagging[0]!.code).toBe('governance_missing_reference');
+    expect(CODES.governance_missing_reference.severity).toBe('info');
+    expect(tagging[0]!.evidence).toEqual({
+      tab: { id: 'docnav', name: 'Project Navigation' },
+      section: 'Project Navigation › Startup',
+      name: 'Tagging Standard',
+      nearMiss: {
+        closest: 'Controlled Native Tagging Standard',
+        kind: 'tab',
+        page: { id: 'root', name: 'AI REPOSITORY' },
+        partial: true,
+      },
+      suggestedReplacement: 'Controlled Native Tagging Standard',
+    });
+    expect(tagging[0]!.message).toContain(
+      'only part of a longer name: a near miss for the tab “Controlled Native Tagging Standard” of AI REPOSITORY',
+    );
+    expect(tagging[0]!.message).toContain('acknowledge this finding if the short form is right as it is');
+    // A run inside a page's name names that page.
+    expect(byName(drafts, 'Continent Reference')[0]!.evidence).toMatchObject({
+      nearMiss: {
+        closest: 'Salahad - Continent Reference',
+        kind: 'page',
+        page: { id: 'salref01', name: '[BSRC] Salahad - Continent Reference' },
+        partial: true,
+      },
+      suggestedReplacement: 'Salahad - Continent Reference',
+    });
+    // A whole name still resolves silently, and so do Fiction Writing and the Fiction Writing Standard.
+    expect(byName(drafts, 'Controlled Native Tagging Standard')).toHaveLength(0);
+    const fiction = world({
+      navigation: [para('pn8', t('Read Fiction Writing and the Fiction Writing Standard.'))],
+    });
+    expect(byName(fiction, 'Fiction Writing')).toHaveLength(0);
+    expect(byName(fiction, 'Fiction Writing Standard')).toHaveLength(0);
   });
 
   it('reads a tab the snapshot could not give as nothing (no finding about it)', () => {
@@ -420,19 +468,56 @@ describe('the governance check’s reading of text', () => {
       'Fiction Writing',
     ]);
     expect(unresolvedIn(['Approved', 'Hierarchy', 'and', 'Standardised', 'Navigation'], known)).toEqual([]);
+    // Only a run inside a longer name: returned, for the check to report as a near miss naming that name.
+    expect(unresolvedIn(['Read', 'Standardised', 'Navigation'], known)).toEqual(['Standardised Navigation']);
   });
 
-  it('tries a name without its trailing generic word, on both sides', () => {
+  it('resolves a whole name only: as it is, without its trailing generic word or a leading “The”', () => {
     const known = resolvableNames([
-      'Arkona – Fiction Writing Reference',
+      'Fiction Writing Reference',
       'Controlled Native Tagging Standard',
+      'The White Fox',
     ]);
-    // The tab without its generic word, and a name in the text without its own.
+    // The tab without its generic word, a name in the text without its own, an alias without its "The".
     expect(knows(known, nameNorm('Controlled Native Tagging'))).toBe(true);
     expect(knows(known, nameNorm('Fiction Writing Standard'))).toBe(true);
+    expect(knows(known, nameNorm('White Fox'))).toBe(true);
     expect(knows(known, nameNorm('Moonlit Ledger'))).toBe(false);
+    // A run inside a longer name is not resolved: it is only part of one.
+    expect(knows(known, nameNorm('Native Tagging Standard'))).toBe(false);
+    expect(partOfKnown(known, nameNorm('Native Tagging Standard'))).toBe(true);
+    expect(partOfKnown(known, nameNorm('Moonlit Ledger'))).toBe(false);
+    expect(partOfKnown(known, nameNorm('Controlled Native Tagging Standard'))).toBe(false);
     // Only a trailing generic word: "Reference Desk" is not "Desk".
     expect(knows(resolvableNames(['Desk']), nameNorm('Reference Desk'))).toBe(false);
+  });
+
+  it('names the known name a run is part of: a tab first, then the fewest words, then alphabetical', () => {
+    const root = { id: 'root', name: 'AI REPOSITORY' };
+    const keys: KnownKey[] = (
+      [
+        { name: 'Controlled Native Tagging Standard', kind: 'heading' },
+        { name: 'Controlled Native Tagging Standard', kind: 'tab', page: root },
+        {
+          name: 'Velaran - Continent Reference',
+          kind: 'page',
+          page: { id: 'velref01', name: '[BSRC] Velaran - Continent Reference' },
+        },
+        {
+          name: 'Salahad - Continent Reference',
+          kind: 'page',
+          page: { id: 'salref01', name: '[BSRC] Salahad - Continent Reference' },
+        },
+      ] as const
+    ).map((c) => ({ key: nameNorm(c.name), c }));
+    const generic = new Set(['reference', 'standard', 'workflow', 'index']);
+    // The tab ahead of the heading of the same name, counted once.
+    expect(containingName('Tagging Standard', keys, generic)).toEqual({ c: keys[1]!.c, of: 1 });
+    // Two pages hold the run: the first alphabetically is named, and both are counted.
+    expect(containingName('Continent Reference', keys, generic)).toEqual({ c: keys[3]!.c, of: 2 });
+    // A whole name is not part of itself; a name nowhere is part of nothing.
+    expect(containingName('Controlled Native Tagging Standard', keys, generic)).toBeNull();
+    expect(containingName('Moonlit Ledger', keys, generic)).toBeNull();
   });
 
   it('finds the closest name literally: a slip of two edits, the same words reordered, or a longer name holding them', () => {
