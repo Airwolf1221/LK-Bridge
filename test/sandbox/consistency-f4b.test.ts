@@ -13,15 +13,18 @@
  * - **F1** the calendar: the chronology's calendar read (one request), as the chronology tools keep it;
  * - **F2** two pages that restate one birth differently: a throwaway Character Core `[BSRC] F4b Probe <time> - Character
  *   Core` (Temporal Scope "Born Camue 1st, 4A 100") and a plain page saying "F4b Probe <time> was born on Camue 1st, 4A
- *   103.", under one plain throwaway index `lk-bridge f4b check <time>`;
+ *   103.", under one plain throwaway index `lk-bridge f4b check <time>`. They are made with the sandbox's RAW client
+ *   (the governor paces and counts them; no job, proposal or guard of the bridge is involved), as the assumptions checks
+ *   make theirs: the Core is canon, which the bridge's governed route rightly refuses to make (the owner's sandbox run of
+ *   20 November 2026). A tree sweep then shows them to the bridge;
  * - **F3** a full snapshot, then `arkona_consistency` for the probe: one Contradictory finding, the Core's value first;
  * - **F4** the owner's pick of the Core's value: ONE proposal with one item (the restating page), the Core untouched;
  * - **F5** approved, its job succeeds, and the page read live says "Camue 1st, 4A 100" in that sentence, the rest as it
  *   was; the Core's Temporal Scope is unchanged;
  * - **F6** the check run again over the job's change snapshot finds the pages agreeing.
  *
- * Clean-up: the throwaway index is deleted with everything under it (cascade), even after a failure; the report names it
- * if it must be deleted by hand. Cost: a full snapshot of the test world (its pages' reads), about 12 writes and 15 other
+ * Clean-up: the throwaway index is deleted with everything under it (cascade), with the raw client, even after a failure;
+ * the report names it if it must be deleted by hand. Cost: a full snapshot of the test world (its pages' reads), about 12 writes and 15 other
  * reads.
  */
 import { describe, expect, it } from 'vitest';
@@ -30,6 +33,7 @@ import { ProjectStore } from '../../src/projects/store.js';
 import { createSoakRuntime, type SoakRuntime } from './soak.js';
 import { resolveSandboxTarget } from './target.js';
 import { copyBridgeState } from './write-scope.js';
+import { createProbePages, deleteProbe, rawLk, type RawLk } from './f4b-probe.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
 
@@ -42,7 +46,7 @@ interface Item {
   readonly detail: string;
 }
 
-async function runCheck(sb: SoakRuntime): Promise<Item[]> {
+async function runCheck(sb: SoakRuntime, raw: RawLk): Promise<Item[]> {
   const rt = sb.runtime;
   const pid = sb.projectId;
   const items: Item[] = [];
@@ -104,45 +108,25 @@ async function runCheck(sb: SoakRuntime): Promise<Item[]> {
     if (!ok1) return items;
 
     const ok2 = await check('F2', 'two pages restating one birth with different dates', async () => {
-      const index = await run('createResource', {
-        body: { name: `lk-bridge f4b check ${stamp}`, ...(rootId ? { parentId: rootId } : {}) },
-      });
-      made.index = String(index.id);
-      const core = await run('createResource', {
-        body: { name: `[BSRC] ${subject} - Character Core`, parentId: made.index },
-      });
-      coreId = String(core.id);
-      await run('createProperty', {
-        path: { resourceId: coreId },
-        body: {
-          kind: 'keyValue',
-          title: 'PROPERTIES',
-          rows: [
-            { key: 'Subject', text: subject },
-            { key: 'Reference Type', text: 'Character Core' },
-            { key: 'Temporal Scope', text: 'Born Camue 1st, 4A 100' },
-          ],
+      // The owner's sandbox run of 20 November 2026: the Core is canon, so the governed route (rightly) refuses to make
+      // it. The probe's pages are made with the raw client, as the assumptions checks make theirs (f4b-probe.ts).
+      const probe = await createProbePages(raw, {
+        rootId,
+        stamp,
+        subject,
+        made: (id) => {
+          made.index = id;
         },
       });
-      const page = await run('createResource', {
-        body: { name: `lk-bridge f4b restatement ${stamp}`, parentId: made.index },
-      });
-      pageId = String(page.id);
-      pageDoc = String(page.documents?.[0]?.id ?? '');
-      await run('replaceDocumentBlocks', {
-        path: { resourceId: pageId, documentId: pageDoc },
-        body: {
-          blocks: [
-            {
-              kind: 'paragraph',
-              content: [{ text: `${subject} was born on Camue 1st, 4A 103, in the harbour quarter.` }],
-            },
-            { kind: 'paragraph', content: [{ text: 'This line stays as it is.' }] },
-          ],
-        },
-      });
+      coreId = probe.core;
+      pageId = probe.page;
+      pageDoc = probe.pageDoc;
+      // The bridge did not make them, so its tree learns of them from a sweep (one listing of the project).
+      await rt.tree.sweep(pid, 'manual');
       await rt.tree.whenIdle();
-      return `index ${made.index}, Core ${coreId}, restatement ${pageId}`;
+      if (!rt.tree.queries.node(pid, coreId).data)
+        throw new Error(`the tree's sweep did not find the probe's Core ${coreId}`);
+      return `index ${made.index}, Core ${coreId}, restatement ${pageId} (made with the raw client)`;
     });
     if (!ok2) return items;
 
@@ -222,11 +206,7 @@ async function runCheck(sb: SoakRuntime): Promise<Item[]> {
   } finally {
     if (made.index)
       try {
-        await run(
-          'deleteResource',
-          { path: { resourceId: made.index }, query: { cascade: true } },
-          { confirm: 'cascade' },
-        );
+        await deleteProbe(raw, made.index);
       } catch (e) {
         record(
           'cleanup',
@@ -251,7 +231,13 @@ describe.skipIf(!projectName)(
         ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
       });
       try {
-        const items = await runCheck(sb);
+        const raw = rawLk({
+          lk: sb.lk,
+          projectId: sb.projectId,
+          apiKey: target.apiKey,
+          ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+        });
+        const items = await runCheck(sb, raw);
         const mark = { pass: 'PASS', fail: 'FAIL', noted: 'NOTED' } as const;
         process.stdout.write(
           [

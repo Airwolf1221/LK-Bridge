@@ -191,6 +191,16 @@ consistency-f4b` (`test/sandbox/consistency-f4b.test.ts`): on the test world, a 
   again, and clean-up (the throwaway index deleted with everything under it). It copies the project's settings, tree
   and packs from the bridge's database read-only, as the write-scope rehearsal does, and needs the chronology's calendar
   confirmed on the test world.
+- **Amended after the owner's sandbox run (20 November 2026).** F2 failed: the check made its throwaway Authoritative
+  `[BSRC] … - Character Core` through the bridge's governed `createResource` as the system principal, and the canon
+  guard correctly refused it (an Authoritative page is made only by the owner's canonical approval). The guard is
+  unchanged. The probe's three pages (the throwaway index, the Core and the restating page) are now made, and deleted
+  again, with the sandbox runtime's raw client (`test/sandbox/f4b-probe.ts`: `LkClient.call` with the governor's own
+  `fetch`, as the assumptions checks make their throwaway pages: paced and counted by the governor, with If-Match on
+  the versioned write, but no job, proposal or guard of the bridge), followed by a tree sweep so the bridge sees them;
+  the check, the pick, the approval and the read-back go through the bridge as before.
+  `test/consistency/sandbox-probe.test.ts` (mock) pins that the helper makes the `[BSRC]` Core with the raw client and
+  never through the job engine, and that the sandbox check itself makes no governed create or delete.
 - **Unverified on a real project**: the pick's writes are the ones existing sandbox rounds check (a block replaced with
   its ids kept, a sidebar row updated, a chronology row and its event in step); the sandbox check exercises them together.
 

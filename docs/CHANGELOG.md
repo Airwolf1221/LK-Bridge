@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased: the consistency-f4b sandbox check makes its probe with the raw client (20 November 2026)
+
+From the owner's sandbox run of `consistency-f4b`: F2 failed because the check made its throwaway Authoritative
+`[BSRC] … - Character Core` through the bridge's governed `createResource` as the system principal, and the canon guard
+correctly refused it. The canon guard is unchanged.
+
+- The probe's pages (the throwaway index, the Core, the restating page) are made and deleted with the sandbox runtime's
+  raw client (`test/sandbox/f4b-probe.ts`, as the assumptions checks make theirs: the governor paces and counts them and
+  requires If-Match on the versioned write; no job, proposal or guard of the bridge is involved), then a tree sweep shows
+  them to the bridge. The consistency check, the owner's pick, the approval and the read-back go through the bridge as
+  before (ADR 0064, amended).
+- `test/consistency/sandbox-probe.test.ts` (mock): the helper never creates a `[BSRC]` page through the governed route,
+  and the sandbox check makes no governed create or delete.
+
 ## Unreleased: v3 F4b, the consistency check and "as of a date" (ADR 0064, 20 November 2026)
 
 From the owner-approved design [design/F4b-consistency-and-as-of.md](design/F4b-consistency-and-as-of.md) (D1 to D10).
