@@ -121,7 +121,10 @@ describe('the governance category in the nightly audit (v3 F4a)', () => {
         suggestedReplacement: 'arkona_appraise_owner',
       },
     });
-    expect(byName('plan-baisheng-stories')[0]!.evidence.equivalent).toBeUndefined();
+    // v3 F4c (ADR 0065): the story-planning skill's equivalent is the narrative tools.
+    expect(byName('plan-baisheng-stories')[0]!.evidence.equivalent).toMatchObject({
+      use: expect.stringMatching(/arkona_story_create/) as unknown,
+    });
     // Project Navigation names only what exists: nothing from it.
     expect(governance().filter((f) => f.documentId === w.tabs.navigation)).toEqual([]);
   });

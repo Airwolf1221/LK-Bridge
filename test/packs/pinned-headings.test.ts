@@ -10,6 +10,7 @@
  *   the pin makes a new version holding the mapping, audited with the old and the new heading, and approval succeeds.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { seedFictionGovernance } from './fiction-governance.js';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import type { PackError } from '../../src/packs/types.js';
 import { compactPolity, ownersWorld, PINNED, type OwnersWorld } from './owners-world.js';
@@ -17,6 +18,8 @@ import { compactPolity, ownersWorld, PINNED, type OwnersWorld } from './owners-w
 let w: OwnersWorld;
 beforeAll(async () => {
   w = await ownersWorld();
+  // v3 F4c: the fiction Design References the new seed pins by name (found in this project's tree).
+  seedFictionGovernance(w);
 });
 afterAll(async () => {
   await w?.close();

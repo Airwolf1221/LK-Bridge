@@ -648,7 +648,10 @@ export async function planRename(
   // 1. Page names (and each page's place among its siblings), then the in-lock check of each page. Every name of the
   // set changes at once in the simulation first, so a page is moved only when its place among its siblings (as they
   // will all be named) really changes: renaming a whole set keeps its own order.
-  const sim = new SiblingSim((parentId) => ctx.tree.children(projectId, parentId).data);
+  const sim = new SiblingSim(
+    (parentId) => ctx.tree.children(projectId, parentId).data,
+    (parentId) => ctx.types.orderFor?.(parentId) ?? null,
+  );
   const renamed = new Map<string, { display: string; raw: string }>();
   for (const p of pages) {
     const n = p.node;

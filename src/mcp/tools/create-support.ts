@@ -4,6 +4,7 @@
  * planned on its template's sidebar, the ONE job that creates the pages, writes their facts and verifies everything,
  * and `operation_id` with duplicate-request claims around it.
  */
+import type { SiblingCompare } from '../../registry/ordering.js';
 import { factKey, sidebarFrom, type SidebarProperty } from '../../facts/index.js';
 import { expandNewPageFacts } from '../../facts/expand.js';
 import { FactsPlanError, planFacts, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
@@ -492,9 +493,17 @@ export interface CreateJob {
 export function planCreateJob(
   ctx: RepoCtx,
   pages: readonly NewPage[],
-  o: { readonly batch: boolean; readonly tool: string },
+  o: {
+    readonly batch: boolean;
+    readonly tool: string;
+    /** v3 F4c (ADR 0065): a parent's own order, for parents the plan itself makes (a new story's acts). */
+    readonly orderFor?: (parentId: string) => SiblingCompare | null;
+  },
 ): Result<{ readonly plan: CreatePlan<NewPage>; readonly job: CreateJob }> {
-  const sim = new SiblingSim((parentId) => ctx.tree.children(ctx.projectId, parentId).data);
+  const sim = new SiblingSim(
+    (parentId) => ctx.tree.children(ctx.projectId, parentId).data,
+    (parentId) => o.orderFor?.(parentId) ?? ctx.types.orderFor?.(parentId) ?? null,
+  );
   let plan: CreatePlan<NewPage>;
   try {
     plan = planCreates(pages, sim, { batch: o.batch });

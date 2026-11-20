@@ -8,6 +8,7 @@
  * offered to a pack stored from F3a's seed as a new version, the owner's token maps kept, until the owner approves it.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { seedFictionGovernance } from './fiction-governance.js';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import { packRulesSchema } from '../../src/packs/types.js';
 import { fixture } from '../images/world.js';
@@ -17,6 +18,8 @@ import { compactPolity, ownerText, ownersWorld, PINNED, PROJECT, type OwnersWorl
 let w: OwnersWorld;
 beforeAll(async () => {
   w = await ownersWorld();
+  // v3 F4c: the fiction Design References the new seed pins by name (found in this project's tree).
+  seedFictionGovernance(w);
 });
 afterAll(async () => {
   await w?.close();
@@ -213,7 +216,14 @@ describe('the new seed is offered to a pack stored from F3a’s seed', () => {
     expect(after.rules.tags.au).toEqual({ continuityType: 'AU', tag: 'AU' });
     expect(after.rules.tags.race.Starborn).toBe('Starborn');
     // The governance documents stay where they are (this world's), with the seed's pinned sections.
-    expect(after.governance.map((g) => g.documentId)).toEqual(before.governance.map((g) => g.documentId));
+    expect(after.governance.slice(0, before.governance.length).map((g) => g.documentId)).toEqual(
+      before.governance.map((g) => g.documentId),
+    );
+    // v3 F4c: the fiction Design References join, found by their page names in this world's project.
+    expect(after.governance.slice(before.governance.length).map((g) => [g.key, g.project, g.page])).toEqual([
+      ['narrative-workflow', 'test', 'Arkona - Narrative Story Planning & Drafting Workflow'],
+      ['fiction-writing', 'test', 'Arkona - Fiction Writing Reference'],
+    ]);
     expect(after.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([
       ...PINNED.formatting,
     ]);

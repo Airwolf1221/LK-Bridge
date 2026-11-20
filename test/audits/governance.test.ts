@@ -99,7 +99,14 @@ const AUTOMATION = [
   para('ra10', t('Chronology: '), code('audit-baisheng-chronology'), t('.')),
   para('ra11', t('Visuals: '), code('intake-baisheng-visuals'), t('.')),
   para('ra12', t('Resuming: the resume-baisheng-workstreams skill.')),
-  para('ra13', t('Stories: '), code('plan-baisheng-stories'), t('.')),
+  para(
+    'ra13',
+    t('Stories: '),
+    code('plan-baisheng-stories'),
+    t('; letters: '),
+    code('draft-baisheng-letters'),
+    t('.'),
+  ),
   heading('ra14', 2, 'Notes'),
   // Outside the reference sections a missing name is never looked for.
   para(
@@ -257,10 +264,15 @@ describe('the governance drift check (v3 F4a, ADR 0063)', () => {
     const resume = ext('resume-baisheng-workstreams');
     expect(resume.evidence).toMatchObject({ equivalent: { use: 'arkona_working_digest', partial: true } });
     expect(resume.message).toMatch(/nearest equivalent: arkona_working_digest \(partial: /);
+    // v3 F4c (ADR 0065): the story-planning skill's work is the narrative tools now.
     const stories = ext('plan-baisheng-stories');
-    expect(stories.evidence).not.toHaveProperty('equivalent');
-    expect(stories.message).toMatch(/no equivalent/);
-    expect(stories.message).toMatch(/allow the name on the Audits page/);
+    expect(stories.evidence).toMatchObject({
+      equivalent: { use: expect.stringMatching(/arkona_story_create.*arkona_chapter_save/) as unknown },
+    });
+    const letters = ext('draft-baisheng-letters');
+    expect(letters.evidence).not.toHaveProperty('equivalent');
+    expect(letters.message).toMatch(/no equivalent/);
+    expect(letters.message).toMatch(/allow the name on the Audits page/);
   });
 
   it('is silent about an external name the owner allowed (compared without case)', () => {
@@ -352,7 +364,7 @@ describe('the governance drift check (v3 F4a, ADR 0063)', () => {
     expect(slip[0]!.message).toContain('Suggested replacement: get_bridge_guide');
     expect(slip[0]!.evidence).not.toHaveProperty('suggestedReplacement');
     // An external name with no equivalent says what to do with it.
-    expect(byName(drafts, 'plan-baisheng-stories')[0]!.message).toMatch(/Otherwise remove it/);
+    expect(byName(drafts, 'draft-baisheng-letters')[0]!.message).toMatch(/Otherwise remove it/);
     // A finding with an equivalent (pack data, stable) carries it in the evidence too.
     expect(byName(drafts, 'write_lk')[0]!.evidence).toMatchObject({
       suggestedReplacement: 'get_bridge_guide',

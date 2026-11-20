@@ -13,11 +13,12 @@ import { PROJECT } from '../tools/helpers.js';
 import { approve, compactPackage, packWorld, type PackWorld } from './world.js';
 import { fixture } from '../images/world.js';
 
-describe('the seed (arkona-2026-11-20-f4b1, superseding F3.4’s arkona-2026-11-17-f3-4)', () => {
+describe('the seed (arkona-2026-11-20-f4c, superseding F3.4’s arkona-2026-11-17-f3-4)', () => {
   it('supersedes F3.3’s seed (labelled f3d) and F3.4’s', () => {
-    // v3 F3e (ADR 0059), F3f (ADR 0060), F4a (ADR 0063) and F4b (ADR 0064) made new seeds; F3.4's switches are
-    // unchanged in them.
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-20-f4b1');
+    // v3 F3e (ADR 0059), F3f (ADR 0060), F4a (ADR 0063), F4b (ADR 0064), F4b.1 (ADR 0064 amendment 1) and F4c (ADR 0065) made new seeds; F3.4's
+    // switches are unchanged in them.
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-20-f4c');
+    expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b1');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-19-f4a');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-19-f3f');
@@ -38,6 +39,16 @@ describe('the seed (arkona-2026-11-20-f4b1, superseding F3.4’s arkona-2026-11-
     // A tool no switch names follows alwaysPropose (on in the seed).
     expect(packToolMode(r, 'arkona_create_polity')).toBe('propose');
     expect(packToolMode({ settings: { alwaysPropose: false } }, 'arkona_create_polity')).toBe('scope');
+    // v3 F4c (ADR 0065, design E5): routine narrative organisation follows the scope; promotion to canon proposes.
+    for (const t of [
+      'arkona_story_create',
+      'arkona_chapter_plan',
+      'arkona_chapter_save',
+      'arkona_chapter_insert',
+      'arkona_chapter_move',
+    ])
+      expect(packToolMode(r, t), t).toBe('scope');
+    expect(packToolMode(r, 'arkona_promote_from_chapter')).toBe('propose');
   });
 });
 

@@ -86,6 +86,11 @@ export interface DocumentScan {
     readonly language: string;
     readonly text: string;
   }[];
+  /**
+   * v3 F4c (ADR 0065): the plain text of the document's first block (at most 300 characters; mentions by their label),
+   * or null for an empty document: a chapter's dateline, for the narrative audit.
+   */
+  readonly firstText?: string | null;
 }
 
 export interface AuditPage {
@@ -333,11 +338,27 @@ export function scanDocument(
     }
   };
   walk(blocks);
+  const first = blocks.find(isObj);
+  const firstRuns = first && Array.isArray(first.content) ? (first.content as unknown[]) : null;
+  const firstText = firstRuns
+    ? firstRuns
+        .map((r) =>
+          isObj(r) && typeof r.text === 'string'
+            ? r.text
+            : isObj(r) && isObj(r.mention)
+              ? (str(r.mention.text) ?? '')
+              : '',
+        )
+        .join('')
+        .trim()
+        .slice(0, 300)
+    : null;
   return {
     refs,
     scan: {
       documentId: doc.id,
       name: doc.name,
+      firstText,
       lineBreaks,
       iconBlocks,
       unsupported: { count: unsupportedCount, blockIds: unsupportedIds },

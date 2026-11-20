@@ -28,6 +28,8 @@ import { appraisalTools } from './appraisal.js';
 import { retagTools } from './retag.js';
 import { arkonaReadTools } from './arkona-reads.js';
 import { consistencyTools } from './consistency.js';
+import { narrativeTools } from './narrative.js';
+import { narrativeReadTools } from './narrative-read.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -49,6 +51,17 @@ export const BRIDGE_INSTRUCTIONS =
   'Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page.';
 
 export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: boolean }): McpToolProvider[] {
+  const all: McpToolProvider[] = [];
+  all.push(...createTools(deps, opts, (name) => all.find((t) => t.name === name)));
+  return all;
+}
+
+function createTools(
+  deps: ToolDeps,
+  opts: { exposePerOpTools: boolean },
+  /** v3 F4c: another tool of this list, by name (`arkona_promote_from_chapter` hands its proposals to them). */
+  tool: (name: string) => McpToolProvider | undefined,
+): McpToolProvider[] {
   return [
     ...bridgeTools(deps),
     ...discoverTools(deps),
@@ -66,6 +79,9 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     // v3 F4a (ADR 0063): the Arkona pack's name check and topic brief (read-only, free).
     ...arkonaReadTools(deps),
     ...consistencyTools(deps),
+    // v3 F4c (ADR 0065): the Arkona pack's narrative tools (writing at the agent's scope; reading free).
+    ...narrativeTools(deps),
+    ...narrativeReadTools(deps, tool),
     // v2 C2c (ADR 0035): the page lifecycle.
     ...lifecycleTools(deps),
     ...documentTools(deps),

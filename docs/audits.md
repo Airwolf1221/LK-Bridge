@@ -249,3 +249,35 @@ consistency service from the same snapshots (its facts index over the appraisal'
 which stays a pure function of its context. No "Propose a fix" and no "Re-check now": the owner's **Pick the right
 value** on the Audits page (a step-up) shows both values side by side, the agents' suggestions and earlier picks, and
 makes ONE proposal editing every page that disagrees (docs/tools.md).
+
+## Narratives (category Narratives; v3 F4c)
+
+[ADR 0065](adr/0065-v3-f4c-fiction.md), design E4 and E8: the Narrative Integrity audit, Repository Automation's
+diagnostic that had no tool. Read-only, from the snapshots, while the project's APPROVED pack version has narrative rules.
+Narrative pages (everything under the one Narratives index) are left out of the rules, tags, lifecycle and unclassified
+checks; the ordering check uses the narrative order there (the Story Map first, acts and chapters by number), and a Story
+Map not first is this category's own finding. Stable codes:
+
+| Code                                                                                                                                                            | Severity      | Fix                                                    |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------ |
+| `narrative_root_missing` (no single Narratives index found by name)                                                                                             | info          | none                                                   |
+| `narrative_main_index_missing`, `narrative_au_index_missing` (an AU under Continuities with no index)                                                           | warning       | the index, tagged `Narrative` (+ `AU`)                 |
+| `narrative_unknown_continuity`, `narrative_reserved_word` ("CANON" outside Main CANON)                                                                          | warning       | none                                                   |
+| `narrative_story_map_missing`                                                                                                                                   | warning       | none                                                   |
+| `narrative_story_map_not_first`                                                                                                                                 | warning       | the Story Map moved first                              |
+| `narrative_empty_act` (no chapter, and no plan in its Act Map), `narrative_unnamed`                                                                             | info          | none                                                   |
+| `narrative_wrong_act` (the Act field against the parent), `narrative_continuity_mismatch`                                                                       | warning       | none                                                   |
+| `narrative_tags` (`Narrative`, the kind, `AU` in an AU story)                                                                                                   | info          | the tags set (others kept)                             |
+| `narrative_number_gap` (no chapter and no plan), `narrative_number_duplicate`                                                                                   | info, warning | none                                                   |
+| `narrative_number_mismatch` (Chapter Number against the name)                                                                                                   | warning       | the field set to the name's number                     |
+| `narrative_chapter_without_plan`                                                                                                                                | info          | none                                                   |
+| `narrative_plan_drafted_without_chapter`, `narrative_gate_open` (a chapter exists, its gate Open)                                                               | warning       | none                                                   |
+| `narrative_link_broken` (the chapter's Chapter Plan or the plan's Chapter)                                                                                      | warning       | the field pointed at the page                          |
+| `narrative_dateline_mismatch`                                                                                                                                   | warning       | the first line made the dateline (the prose untouched) |
+| `narrative_date_unreadable`                                                                                                                                     | warning       | none                                                   |
+| `narrative_date_backwards` (earlier than the chapter before, no `Flashback` tag), `narrative_date_outside_span` (Act Span or Story Span, when the field exists) | info          | none                                                   |
+| `narrative_placeholder` (a field still holding template placeholder text, pack data)                                                                            | info          | none                                                   |
+
+**Propose a fix** is offered only where the fix is mechanical, and is always ONE proposal for the owner: re-read live and
+compared with what the audit saw (`FIX_STALE` otherwise). A dateline fix replaces only the chapter's first block (or puts
+the dateline first), echoing every other block exactly as read. Never the prose.

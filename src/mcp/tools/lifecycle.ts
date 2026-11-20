@@ -23,6 +23,12 @@
  * from the page as it is now and the record's target, and does only what is left (a new proposal, every guard and
  * precondition checked again). Nothing is ever replayed.
  */
+import {
+  inNarratives,
+  NARRATIVE_NO_LIFECYCLE,
+  NARRATIVE_NO_LIFECYCLE_MESSAGE,
+  narrativeScope,
+} from '../../narrative/scope.js';
 import * as z from 'zod';
 import { stateHash } from '../../jobs/sidebar-state.js';
 import { factKey, factRows, sidebarFrom, valueText, type SidebarProperty } from '../../facts/index.js';
@@ -887,6 +893,9 @@ async function runLifecycle(
             'ROOT_PAGE',
             'The AI REPOSITORY page itself has no lifecycle. Name a page inside it.',
           );
+        // v3 F4c (ADR 0065, design E2): narrative pages have no lifecycle; every lifecycle tool refuses them.
+        if (inNarratives(narrativeScope(pd.services?.packs, ctx.tree, ctx.projectId), node))
+          return refuse(pd, NARRATIVE_NO_LIFECYCLE, NARRATIVE_NO_LIFECYCLE_MESSAGE);
         if (node.id === idx.working.id || node.id === idx.archived.id) {
           return refuse(
             pd,

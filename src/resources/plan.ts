@@ -17,7 +17,7 @@
  * - **Neighbours**: the plan simulates every insertion on the sibling lists, so the verify step can check each page's
  *   final neighbours (by rank) exactly.
  */
-import { compareSiblings, slotAmong, type Orderable } from '../registry/ordering.js';
+import { compareSiblings, slotAmong, type Orderable, type SiblingCompare } from '../registry/ordering.js';
 import type { ResolveKind, Slot } from '../registry/index.js';
 
 /** A sibling as the simulation holds it. */
@@ -29,7 +29,16 @@ export interface SimNode extends Orderable {
 export class SiblingSim {
   private readonly lists = new Map<string, SimNode[]>();
 
-  constructor(private readonly children: (parentId: string) => readonly Orderable[]) {}
+  constructor(
+    private readonly children: (parentId: string) => readonly Orderable[],
+    /** v3 F4c (ADR 0065): a parent's own sibling order (Narratives', design E1); null: the ordinary rule. */
+    private readonly orderFor: (parentId: string) => SiblingCompare | null = () => null,
+  ) {}
+
+  /** The order of a parent's children. */
+  compareFor(parentId: string): SiblingCompare {
+    return this.orderFor(parentId) ?? compareSiblings;
+  }
 
   list(parentId: string): SimNode[] {
     let l = this.lists.get(parentId);
@@ -48,7 +57,7 @@ export class SiblingSim {
     excludeId?: string,
   ): Slot {
     const sibs = this.list(parentId).filter((s) => s.id !== excludeId && anchorable(s));
-    return slotAmong(sibs, page.displayName, page.kind as ResolveKind);
+    return slotAmong(sibs, page.displayName, page.kind as ResolveKind, this.compareFor(parentId));
   }
 
   /** Puts `page` where LegendKeeper will put it for `slot` (no slot: at the end). */
@@ -122,7 +131,11 @@ export class CreatePlanError extends Error {
 }
 
 /** The items parents-first, depth-first, each parent's new children in sibling order. Refuses unknown keys and loops. */
-export function orderItems<T extends CreateItem>(items: readonly T[]): T[] {
+export function orderItems<T extends CreateItem>(
+  items: readonly T[],
+  /** v3 F4c: the order of a parent's children (by the parent's id); default the ordinary rule. */
+  compareFor: (parentId: string) => SiblingCompare = () => compareSiblings,
+): T[] {
   const byKey = new Map<string, T>();
   for (const it of items) {
     if (byKey.has(it.key)) throw new CreatePlanError('INVALID_ITEMS', `The key “${it.key}” is used twice.`);
@@ -160,13 +173,16 @@ export function orderItems<T extends CreateItem>(items: readonly T[]): T[] {
     if ('item' in it.parent) kids.set(it.parent.item, [...(kids.get(it.parent.item) ?? []), it]);
     else roots.set(it.parent.existing, [...(roots.get(it.parent.existing) ?? []), it]);
   }
-  const sorted = (l: readonly T[]) => [...l].sort((a, b) => compareSiblings(a, b));
+  const sorted = (l: readonly T[], parentId: string) => {
+    const cmp = compareFor(parentId);
+    return [...l].sort((a, b) => cmp(a, b));
+  };
   const out: T[] = [];
   const visit = (it: T) => {
     out.push(it);
-    for (const c of sorted(kids.get(it.key) ?? [])) visit(c);
+    for (const c of sorted(kids.get(it.key) ?? [], it.id)) visit(c);
   };
-  for (const group of roots.values()) for (const it of sorted(group)) visit(it);
+  for (const [parentId, group] of roots) for (const it of sorted(group, parentId)) visit(it);
   return out;
 }
 
@@ -179,7 +195,7 @@ export function planCreates<T extends CreateItem>(
   sim: SiblingSim,
   o: { readonly batch: boolean },
 ): CreatePlan<T> {
-  const ordered = orderItems(items);
+  const ordered = orderItems(items, (parentId) => sim.compareFor(parentId));
   const byKey = new Map(ordered.map((it) => [it.key, it]));
   const parentOf = (it: T) => ('item' in it.parent ? byKey.get(it.parent.item)!.id : it.parent.existing);
   const created = new Set<string>(); // ids created by an earlier step

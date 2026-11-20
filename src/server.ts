@@ -86,6 +86,8 @@ export interface BuildServerOptions {
   readonly pruneIntervalMs?: number;
   /** v2 E3 (ADR 0045): the tool-call log; the transport records each tool call in it. */
   readonly toolCalls?: McpToolCallObserver;
+  /** Tells connected MCP sessions when what is listed changes (the runtime's `toolList`). */
+  readonly toolsChanged?: { subscribe(fn: () => void): () => void };
   /** The policy layer (profiles, scopes, proposals). Defaults to one on `db`, without a job engine attached. */
   readonly policy?: Policy;
   /** OPS2: the encrypted secret store (the owner's credentials live there). Without it, the env file's values only. */
@@ -265,6 +267,7 @@ export async function buildServer(
     tools: withPolicyTools(o.tools ?? [bridgeInfoStub(bridgeInfo)], policy.tools),
     access: policy.access,
     ...(o.toolCalls ? { observer: o.toolCalls } : {}),
+    ...(o.toolsChanged ? { toolsChanged: o.toolsChanged } : {}),
     ...(o.resources ? { resources: o.resources } : {}),
     ...(o.mcpMaxBodyBytes !== undefined ? { maxBodyBytes: o.mcpMaxBodyBytes } : {}),
   });
@@ -361,6 +364,7 @@ export async function createBridge(
     mcpMaxBodyBytes: mcpMaxBodyBytes(o.toolsSettings.upload.maxBytes),
     policy: runtime.policy,
     toolCalls: runtime.toolCalls,
+    toolsChanged: runtime.toolList,
     secrets: runtime.secrets,
     images: runtime.images,
     restarting: () => runtime.restarting,

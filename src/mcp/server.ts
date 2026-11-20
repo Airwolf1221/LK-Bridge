@@ -275,6 +275,9 @@ export function createMcpServerFactory(
   registerTools({ registerTool: () => undefined as never }, { tools, log });
   let fallbackWarned = false;
   let observeWarned = false;
+  // The owner's report (20 November 2026): the list each caller was last given, so a 2025-era (stateless) session,
+  // which no server push can reach, is told on its next request that its list changed (see `tellListChanged`).
+  const lastListed = new Map<string, string>();
   /** v2 E3: records the calls of `server` (see observeToolCalls); says once if the SDK's internals moved. */
   const observe = (target: McpServer, who: ReturnType<typeof callerOf>): void => {
     if (!observer || observeToolCalls(target, observer, who)) return;
@@ -286,7 +289,7 @@ export function createMcpServerFactory(
     const server = new McpServer(
       { name: info.name, version: info.version },
       {
-        capabilities: { tools: {}, ...(resources.length > 0 ? { resources: {} } : {}) },
+        capabilities: { tools: { listChanged: true }, ...(resources.length > 0 ? { resources: {} } : {}) },
         ...(info.instructions ? { instructions: info.instructions } : {}),
       },
     );
@@ -327,6 +330,12 @@ export function createMcpServerFactory(
       // The tool-call log records at the SDK's own tools/call handler, so a call the SDK refuses (an unknown tool,
       // arguments that do not validate: an assistant inventing arguments) is in the log too.
       observe(server, callerOf(policy));
+      tellListChanged(
+        server,
+        lastListed,
+        policy?.principal.principalId ?? `anonymous:${caller?.clientId ?? ''}`,
+        visible,
+      );
       return server;
     }
     // Fallback (the SDK internals moved): register only the visible tools, as strict as before. Said once in the log
@@ -341,7 +350,7 @@ export function createMcpServerFactory(
     const strict = new McpServer(
       { name: info.name, version: info.version },
       {
-        capabilities: { tools: {}, ...(resources.length > 0 ? { resources: {} } : {}) },
+        capabilities: { tools: { listChanged: true }, ...(resources.length > 0 ? { resources: {} } : {}) },
         ...(info.instructions ? { instructions: info.instructions } : {}),
       },
     );
@@ -350,6 +359,58 @@ export function createMcpServerFactory(
     observe(strict, callerOf(policy));
     return strict;
   };
+}
+
+/** The most callers whose last list is remembered (the oldest is forgotten first). */
+const LAST_LISTED_MAX = 1_000;
+
+/**
+ * The owner's report (20 November 2026): `tools/list_changed` for a 2025-era session. Serving is stateless, so a 2025
+ * client has no open stream a change could be pushed on (2026-07-28 sessions get it on their `subscriptions/listen`
+ * stream, src/mcp/transport.ts). Instead the list each caller was last given is remembered, and when a later request of
+ * that caller finds its list different (a pack approved, its scope changed), the notification goes out on that
+ * request's own response stream, before its answer: the client then asks for its list again, which is worked out
+ * afresh. Best effort: a client that ignores it simply keeps calling as before. Same SDK internals as `hideFromList`.
+ */
+export function tellListChanged(
+  server: McpServer,
+  lastListed: Map<string, string>,
+  who: string,
+  visible: ReadonlySet<string>,
+): boolean {
+  const handlers = (server.server as unknown as { _requestHandlers?: unknown })._requestHandlers;
+  if (!(handlers instanceof Map)) return false;
+  const now = [...visible].sort().join('\u0000');
+  const remember = () => {
+    lastListed.delete(who);
+    lastListed.set(who, now);
+    if (lastListed.size > LAST_LISTED_MAX) lastListed.delete(lastListed.keys().next().value!);
+  };
+  for (const method of [...handlers.keys()]) {
+    if (typeof method !== 'string' || method === 'initialize' || method === 'ping') continue;
+    const inner = handlers.get(method) as RequestHandler | undefined;
+    if (typeof inner !== 'function') continue;
+    handlers.set(method, async (request: unknown, ctx: unknown) => {
+      if (method === 'tools/list') {
+        const result = await inner(request, ctx);
+        remember();
+        return result;
+      }
+      const had = lastListed.get(who);
+      if (had !== undefined && had !== now) {
+        remember();
+        const notify = (ctx as { mcpReq?: { notify?: (n: { method: string }) => Promise<void> } } | undefined)
+          ?.mcpReq?.notify;
+        try {
+          await notify?.({ method: 'notifications/tools/list_changed' });
+        } catch {
+          // Best effort: the request itself is answered as ever.
+        }
+      }
+      return inner(request, ctx);
+    });
+  }
+  return true;
 }
 
 /** v3 F3a: a tool's `listed()`, never failing the list (a predicate that throws hides the tool). */

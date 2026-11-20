@@ -59,6 +59,14 @@ export interface PacksDeps {
   readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
   /** The seeds offered (default: the bridge's own, the Arkona pack). Tests pass their own. */
   readonly seeds?: readonly PackSeed[];
+  /**
+   * v3 F4c (ADR 0065): a governance source given by `page` (no ids): the page of that display name in the project's tree
+   * (any dash, any spacing) and its main page document, or null when there is none or several.
+   */
+  readonly findPage?: (
+    projectId: string,
+    name: string,
+  ) => { readonly resourceId: string; readonly documentId: string } | null;
 }
 
 /** One governance source as checked now. */
@@ -432,6 +440,9 @@ export function createPacks(d: PacksDeps): Packs {
     version: string | null;
     digest: string | null;
     reason?: string;
+    /** v3 F4c: the ids read (a source found by `page` has them worked out here). */
+    resourceId?: string;
+    documentId?: string;
     /** v3 F3b: each pinned section as read now (empty when the source pins none or could not be read). */
     sections: FoundSection[];
     headings: string[];
@@ -448,17 +459,31 @@ export function createPacks(d: PacksDeps): Packs {
       return { version: null, digest: null, reason: `project ${src.project} is not registered`, ...none };
     if (!d.projects.activeIds().includes(p.id))
       return { version: null, digest: null, reason: `project ${src.project} is not served now`, ...none };
+    // v3 F4c (ADR 0065): a source given by its page's name is found in the tree now (any dash).
+    let ids = { resourceId: src.resourceId, documentId: src.documentId };
+    if (ids.resourceId === '' || ids.documentId === '') {
+      const found = src.page !== undefined ? (d.findPage?.(p.id, src.page) ?? null) : null;
+      if (!found)
+        return {
+          version: null,
+          digest: null,
+          reason: `no single page named “${src.page ?? src.name}” (any dash) with a page document in ${src.project}'s repository tree`,
+          ...none,
+        };
+      ids = { resourceId: found.resourceId, documentId: found.documentId };
+    }
     try {
       const r = (await d.engine.internalRead(
         p.id,
         'getDocumentBlocks',
-        { path: { resourceId: src.resourceId, documentId: src.documentId } },
+        { path: ids },
         { priority: 'P1', notFoundIsAnswer: true, ...(signal ? { signal } : {}) },
       )) as { version?: unknown; blocks?: unknown } | null;
       if (!r || typeof r.version !== 'string')
         return { version: null, digest: null, reason: 'the document is gone or has no version', ...none };
       return {
         version: r.version,
+        ...ids,
         digest: blocksDigest(r.blocks),
         sections: pinnedSections(r.blocks, src.sections ?? []),
         headings: (src.sections ?? []).length > 0 ? headingsOf(r.blocks) : [],
@@ -517,8 +542,8 @@ export function createPacks(d: PacksDeps): Packs {
         name: src.name,
         ...(src.label ? { label: src.label } : {}),
         project: src.project,
-        resourceId: src.resourceId,
-        documentId: src.documentId,
+        resourceId: read.resourceId ?? src.resourceId,
+        documentId: read.documentId ?? src.documentId,
         approved: was,
         current: read.version,
         digest: read.digest,
@@ -1052,11 +1077,17 @@ export function mergeGovernance(
   stored: readonly GovernanceSource[],
   seed: readonly GovernanceSource[],
 ): GovernanceSource[] {
+  // v3 F4c: a NEW source found by its page's name goes in the project the stored sources share (where this bridge keeps
+  // the pack's governance; a test world points them at its own project).
+  const projects = [...new Set(stored.map((x) => x.project.toLowerCase()))];
+  const home = projects.length === 1 ? stored[0]!.project : null;
   const out: GovernanceSource[] = seed.map((s) => {
     const had = stored.find((x) => x.key === s.key);
     return had
       ? { ...s, project: had.project, resourceId: had.resourceId, documentId: had.documentId }
-      : { ...s };
+      : s.page !== undefined && home !== null
+        ? { ...s, project: home }
+        : { ...s };
   });
   for (const s of stored) if (!out.some((x) => x.key === s.key)) out.push({ ...s });
   return out;

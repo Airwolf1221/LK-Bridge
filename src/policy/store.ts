@@ -152,9 +152,24 @@ export class PolicyStore {
     return this.changeCounter;
   }
 
+  private readonly bumpListeners = new Set<() => void>();
+
   /** Marks policy state as changed (clears every cache at once). */
   bump(): void {
     this.changeCounter++;
+    for (const fn of [...this.bumpListeners]) {
+      try {
+        fn();
+      } catch {
+        // A listener that fails never stops a policy change.
+      }
+    }
+  }
+
+  /** Told after every policy change (the tool lists' watch compares what it lists). Returns an unsubscribe function. */
+  onChange(fn: () => void): () => void {
+    this.bumpListeners.add(fn);
+    return () => this.bumpListeners.delete(fn);
   }
 
   /** Events go to every attached emitter (the job engine's, so the dashboard has one stream). */

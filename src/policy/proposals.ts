@@ -1817,6 +1817,24 @@ export class ProposalService implements ProposalSink {
     return r?.state;
   }
 
+  /**
+   * v3 F4c (ADR 0065, design E7): a note added to a pending proposal's summary (where a canon proposal came from: "introduced
+   * in Chapter 4 of <Story>"), which the owner reads with it. Only a pending proposal; never its operations or steps.
+   */
+  annotate(id: string, note: string): boolean {
+    const p = this.get(id);
+    if (!p || p.state !== 'pending') return false;
+    const add = ` · ${note.replace(/\s+/g, ' ').trim()}`;
+    const summary = `${p.summary.slice(0, Math.max(0, SUMMARY_MAX - add.length))}${add}`.slice(
+      0,
+      SUMMARY_MAX,
+    );
+    this.store.db
+      .prepare('UPDATE proposals SET summary = ? WHERE id = ? AND state = ?')
+      .run(summary, id, 'pending');
+    return true;
+  }
+
   get(id: string): ProposalView | undefined {
     const r = this.store.db.prepare('SELECT * FROM proposals WHERE id = ?').get(id) as Row | undefined;
     return r ? toView(r, this.opCount(id)) : undefined;

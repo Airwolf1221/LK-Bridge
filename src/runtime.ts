@@ -1,6 +1,12 @@
 import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
+import { findPageByName } from './packs/find-page.js';
+import { ToolListWatch } from './mcp/tool-list.js';
+import { inNarratives, narrativeRulesOf, narrativeScope } from './narrative/scope.js';
+import { narrativeCalendar } from './narrative/calendar.js';
+import { narrativeBlindAppraisal } from './narrative/authority.js';
+import { narrativeCompare } from './narrative/names.js';
 import { governanceAuditHook } from './packs/governance-audit.js';
 import { knownNamesOf } from './mcp/tools/known-names.js';
 import { textRemovalReader } from './policy/text-removal.js';
@@ -184,6 +190,8 @@ export interface Runtime {
   /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
   readonly retag: RetagService;
   readonly tools: readonly McpToolProvider[];
+  /** Tells connected MCP sessions when what is listed changes (`notifications/tools/list_changed`). */
+  readonly toolList: ToolListWatch;
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
   readonly instructions: string;
@@ -413,6 +421,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine,
     projects,
     registry,
+    // v3 F4c (ADR 0065): a governance source given by its page's name (any dash), found in the tree.
+    findPage: (projectId, name) => findPageByName(tree.queries, projectId, name),
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
@@ -422,6 +432,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   } catch (err) {
     log.warn({ err }, 'the setting packs could not be seeded');
   }
+  // v3 F4c (ADR 0065, design E1): inside Narratives, the Story Map comes first and acts and chapters follow by number
+  // (never alphabetically): every tool that places a page there asks the registry for the parent's order.
+  registry.setSiblingOrder((projectId, parentId) => {
+    const scope = narrativeScope(packs, tree.queries, projectId);
+    if (!scope) return null;
+    return inNarratives(scope, tree.queries.node(projectId, parentId).data)
+      ? narrativeCompare(scope.rules)
+      : null;
+  });
   const unregisterPackEngine = registerPackEngine(engine, {
     packs,
     registry,
@@ -802,6 +821,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
     consistency: async (projectId) =>
       consistencyRef.current ? consistencyRef.current.auditItems(projectId) : null,
+    // v3 F4c (ADR 0065): the narrative audit (the `narrative` category) and the narrative pages' exemptions.
+    narrative: (projectId) => {
+      const rules = narrativeRulesOf(packs, projectId);
+      return rules ? { rules, ...narrativeCalendar(chronology, projectId) } : null;
+    },
   });
   audits.start();
   // v3 F3c (ADR 0054): the appraisal tools and the full-text index, over the snapshot overlay, the audits, the asset tree
@@ -836,7 +860,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // and the calendar engine (free); the owner's pick is one proposal (src/consistency/fix.ts).
   const consistency: Consistency = new Consistency({
     db: o.db,
-    appraisal,
+    // v3 F4c (ADR 0065, design E2): the facts index never reads a narrative page (fiction is never canon evidence).
+    appraisal: narrativeBlindAppraisal(
+      appraisal,
+      (projectId) => narrativeRulesOf(packs, projectId)?.indexes.narratives ?? null,
+    ),
     tree,
     registry,
     chronology,
@@ -1248,6 +1276,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       appraisal,
       // v3 F4b (ADR 0064): the consistency check and "as of a date".
       consistency,
+      // v3 F4c (ADR 0065, design E7): the chapter a promoted lore proposal comes from, in its note.
+      proposals: { annotate: (id: string, note: string) => policy.proposals.annotate(id, note) },
       // v3 F3d (ADR 0058): resuming a package or a rename that stopped part-way.
       resume,
       // v3 F3d (ADR 0058): arkona_rename's records and leftover reports.
@@ -1282,6 +1312,30 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   };
   syncPackTools();
   const detachPackTools = packs.onChange(syncPackTools);
+  // The owner's report (20 November 2026): a pack approval (or any setting) that changes what is listed tells every
+  // connected session (`notifications/tools/list_changed`, sent by the transport); each list is worked out afresh.
+  const toolList = new ToolListWatch({
+    listed: () =>
+      tools
+        .filter((t) => {
+          if (t.retired === true) return false;
+          try {
+            return t.listed?.() !== false;
+          } catch {
+            return false;
+          }
+        })
+        .map((t) => t.name),
+    profiles: () =>
+      policy.store
+        .listProfiles()
+        .map((p) => ({ id: p.id, scope: p.scope, showLowLevelTools: p.showLowLevelTools })),
+  });
+  const detachToolList = [
+    packs.onChange(() => toolList.poke()),
+    projects.onChange(() => toolList.poke()),
+    policy.store.onChange(() => toolList.poke()),
+  ];
   // v2 E3 (ADR 0045): the tool-call log. Its budget probe sums every project's hourly request and write counters, so a
   // call's budget use is how far they moved while it ran (approximate: another call in the same moment counts too).
   const toolCalls = new ToolCallLog({
@@ -1356,6 +1410,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits,
     retag,
     tools,
+    toolList,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
     config,
@@ -1461,6 +1516,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     detachRestores();
     unregisterPackEngine();
     detachPackTools();
+    for (const off of detachToolList) off();
     await run('the repository tree', tree.stop(), w.treesMs);
     detachRegistry();
     await run('the asset tree', assets.stop(), w.treesMs);

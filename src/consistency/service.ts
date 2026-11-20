@@ -54,6 +54,7 @@ import {
   overlaps,
   readCell,
   readLeading,
+  readScan,
   spanOf,
   type DateReading,
   type Span,
@@ -61,6 +62,7 @@ import {
 import {
   compilePatterns,
   extractPageFacts,
+  principalValue,
   type ChronologyRowInput,
   type Compiled,
   type MatchedAs,
@@ -1050,7 +1052,17 @@ export class Consistency {
     // recorded death; Unestablished otherwise. An attested life never proves survival past it.
     const deathSpan = death?.fact.date ? span(death.fact) : null;
     const birthSpan = birth?.fact.date ? span(birth.fact) : null;
-    const attested = cf.facts.filter((f) => f.kind === 'attested' && f.date && f.pageId === id);
+    // D9: an AU with no identity page of its own inherits Main CANON's attested life as well as its birth and death
+    // (v3 F4c, ADR 0065: the AU's state is Main CANON's unless the AU states otherwise), labelled.
+    const inAu = cf.inherited.size > 0;
+    const ownAttested = cf.facts.filter((f) => f.kind === 'attested' && f.date && f.pageId === id);
+    const attested =
+      ownAttested.length || !inAu
+        ? ownAttested
+        : this.facts
+            .factsOn(w.projectId, [id])
+            .filter((f) => f.matchedAs === 'page' && f.kind === 'attested' && f.date !== null);
+    const attestedInherited = attested.length > 0 && ownAttested.length === 0;
     const presentSpan = (() => {
       const r = readLeading(cal, w.rules.present, w.style);
       return r.ok ? spanOf(cal, r.reading, 0) : null;
@@ -1066,14 +1078,58 @@ export class Consistency {
       if (from === null) continue;
       window_ = window_ ? { from: Math.min(window_.from, from), to: Math.max(window_.to, to) } : { from, to };
     }
+    // v3 F4c (ADR 0065; the owner's ruling from F4b.1's review): "Deceased by <date>" in the Life State is an upper bound
+    // on death, read here only (never a fact, never compared): at or after it, "Deceased (recorded by <date>)".
+    const lifeState =
+      cf.facts.find(
+        (f) =>
+          f.kind === 'identity' && textKey(f.field ?? '') === textKey(w.rules.lifeState) && f.pageId === id,
+      ) ?? cf.inherited.get(`identity:${textKey(w.rules.lifeState)}`);
+    const deceasedBy = lifeState ? this.deceasedBy(w, lifeState.valueText) : null;
+    const lifeInherited = lifeState
+      ? cf.inherited.get(`identity:${textKey(w.rules.lifeState)}`) === lifeState
+      : false;
+    // ADR 0065 (amending D7): a Life State recording the character alive (its principal part, "Alive") holds at the present.
+    const aliveNow =
+      lifeState !== undefined &&
+      !lifeState.gap &&
+      (w.rules.aliveValues ?? []).some((v) => textKey(v) === textKey(principalValue(lifeState.valueText)));
+    // v3 F4c (ADR 0065; the owner's guard on the Life State ruling): a recorded death always wins inside its own span. With
+    // a death recorded before the present and a current Life State recording the character alive (a rebirth, a return),
+    // the Life State never carries the life across the gap: from the death to the next recorded birth or return the
+    // character is Deceased (recorded); after the last death with no return, Unestablished (recorded death; current Life
+    // State …); after a return, alive from it to the present.
+    const afterDeath = aliveNow && presentSpan ? this.afterDeath(w, cf, id, at.span, presentSpan) : null;
     let state: string;
     let why: string;
-    if (deathSpan && at.span.from > deathSpan.to) {
+    let inherited = false;
+    if (afterDeath) {
+      if (afterDeath.state === 'deceased') {
+        state = 'Deceased (recorded)';
+        why = `after the recorded death (${afterDeath.death.valueText}), before the recorded return (${afterDeath.next!.valueText})`;
+      } else if (afterDeath.state === 'returned') {
+        state = 'Alive (recorded)';
+        why = `between the recorded return (${afterDeath.next!.valueText}) and the present (${w.rules.present}): the Life State records the character “${lifeState!.valueText}”`;
+      } else if (afterDeath.state === 'gap') {
+        state = `Unestablished (recorded death; current Life State ${principalValue(lifeState!.valueText)})`;
+        why = `a death is recorded (${afterDeath.death.valueText}) and the Life State records the character “${lifeState!.valueText}” now, but no return is recorded after it: never alive across the gap`;
+      } else {
+        state = 'Unestablished';
+        why = `the date spans the recorded death (${afterDeath.death.valueText}) or a recorded return`;
+      }
+      inherited = afterDeath.inherited;
+    } else if (deathSpan && at.span.from > deathSpan.to) {
       state = 'Deceased (recorded)';
       why = `after the recorded death (${death!.fact.valueText})`;
+      inherited = death!.inherited;
+    } else if (deceasedBy && at.span.from >= deceasedBy.span.from) {
+      state = `Deceased (recorded by ${deceasedBy.text})`;
+      why = `at or after the upper bound on death the Life State records (“${lifeState!.valueText}”); the exact death date is not recorded`;
+      inherited = lifeInherited;
     } else if (birthSpan && deathSpan && at.span.from > birthSpan.to && at.span.to < deathSpan.from) {
       state = 'Alive (recorded)';
       why = 'between the recorded birth and the recorded death';
+      inherited = birth!.inherited || death!.inherited;
     } else if (
       window_ &&
       at.span.from >= window_.from &&
@@ -1082,6 +1138,19 @@ export class Consistency {
     ) {
       state = 'Alive (recorded)';
       why = 'inside the attested span';
+      inherited = attestedInherited || (birth?.inherited ?? false);
+    } else if (
+      aliveNow &&
+      presentSpan &&
+      (birthSpan ? at.span.from > birthSpan.to : at.span.from >= presentSpan.from) &&
+      at.span.to <= presentSpan.to &&
+      !(deathSpan && at.span.to >= deathSpan.from)
+    ) {
+      state = 'Alive (recorded)';
+      why = birthSpan
+        ? `between the recorded birth and the present (${w.rules.present}): the Life State records the character “${lifeState.valueText}”`
+        : `at the present (${w.rules.present}): the Life State records the character “${lifeState.valueText}”`;
+      inherited = lifeInherited || (birth?.inherited ?? false);
     } else {
       state = 'Unestablished';
       why =
@@ -1134,7 +1203,18 @@ export class Consistency {
       elapsedYears: elapsed,
       ...(elapsed === null ? { elapsedNote: 'no age: the birth is not recorded' } : {}),
       ...(death?.fact.date ? { died: where(death.fact, death.inherited) } : {}),
-      state: { value: state, why },
+      state: { value: state, why, ...(inherited ? { label: 'inherited from Main CANON' } : {}) },
+      ...(deceasedBy
+        ? {
+            deceasedBy: {
+              value: deceasedBy.text,
+              precision: describeDate(deceasedBy.reading),
+              recorded: lifeState!.valueText,
+              note: 'an upper bound on death (Life State), read by arkona_as_of only; never compared',
+              ...(lifeInherited ? { label: 'inherited from Main CANON' } : {}),
+            },
+          }
+        : {}),
       around: {
         before: before.reverse().map(view),
         ...(during.length ? { during: during.map(view) } : {}),
@@ -1150,6 +1230,85 @@ export class Consistency {
         : {}),
       ...(race ? { raceReference: race } : {}),
     };
+  }
+
+  /**
+   * The guard on a Life State of "Alive" after a recorded death (ADR 0065): null when the date does not reach the first
+   * recorded death (the other rules apply). The identity page's dated deaths and starts (births, and attested lives with
+   * an open end: a return), Main CANON's in an AU with no identity page of its own.
+   */
+  private afterDeath(
+    w: World,
+    cf: CharacterFacts,
+    id: string,
+    at: Span,
+    present: Span,
+  ): {
+    state: 'deceased' | 'returned' | 'gap' | 'spans';
+    death: StoredFact;
+    next: StoredFact | null;
+    inherited: boolean;
+  } | null {
+    const leaveOut = (f: StoredFact) => f.nonCurrent && w.rules.nonCurrent?.exclude === true;
+    let pool = cf.facts.filter((f) => f.pageId === id && f.source !== 'chronology' && f.date !== null);
+    let inherited = false;
+    if (pool.length === 0 && cf.inherited.size > 0) {
+      pool = this.facts
+        .factsOn(w.projectId, [id])
+        .filter(
+          (f) => f.matchedAs === 'page' && f.source !== 'chronology' && f.date !== null && !leaveOut(f),
+        );
+      inherited = pool.length > 0;
+    }
+    const cal = w.cal!;
+    const withSpan = (f: StoredFact) => ({ f, s: spanOf(cal, f.date!, w.rules.approxMargin) });
+    const deaths = pool
+      .filter((f) => f.kind === 'death')
+      .map(withSpan)
+      .filter((x) => x.s.to < present.from)
+      .sort((a, b) => a.s.from - b.s.from);
+    const first = deaths[0];
+    if (!first || at.to < first.s.from) return null;
+    const starts = pool
+      .filter((f) => f.kind === 'birth' || (f.kind === 'attested' && f.bound === 'from'))
+      .map(withSpan)
+      .sort((a, b) => a.s.from - b.s.from);
+    const last = deaths.filter((d) => d.s.from <= at.to).at(-1)!;
+    const next = starts.find((b) => b.s.from > last.s.to) ?? null;
+    const out = (state: 'deceased' | 'returned' | 'gap' | 'spans') => ({
+      state,
+      death: last.f,
+      next: next?.f ?? null,
+      inherited,
+    });
+    if (at.from < last.s.from) return out('spans');
+    if (!next) return out('gap');
+    if (at.to < next.s.from) return out('deceased');
+    return at.from > next.s.to && at.to <= present.to ? out('returned') : out('spans');
+  }
+
+  /** A Life State's upper bound on death ("Deceased by 5A 931"), by the pack's `deceasedBy` phrasings; null when none. */
+  private deceasedBy(w: World, value: string): { text: string; reading: DateReading; span: Span } | null {
+    if (!w.cal) return null;
+    for (const clause of value.split(';'))
+      for (const p of w.rules.deceasedBy ?? []) {
+        let m: RegExpExecArray | null;
+        try {
+          m = new RegExp(p.regex, 'iu').exec(clause);
+        } catch {
+          continue;
+        }
+        const date = m?.groups?.date;
+        if (!date) continue;
+        const r = readScan(w.cal, date, w.style);
+        if (r?.ok)
+          return {
+            text: date.trim(),
+            reading: r.reading,
+            span: spanOf(w.cal, r.reading, w.rules.approxMargin),
+          };
+      }
+    return null;
   }
 
   /** The character's race reference (its Race / Species value's page), for the maturation rules (D7): never guessed. */

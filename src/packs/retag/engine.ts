@@ -41,7 +41,14 @@ export type Slot = 'status' | 'primary' | 'specialist' | 'race' | 'culture' | 'o
 
 /** Why a page is outside the automatic grammar. */
 export type ExclusionCode =
-  'index' | 'governance' | 'area' | 'unclassified' | 'continuity' | 'not_in_snapshots';
+  | 'index'
+  | 'governance'
+  | 'area'
+  | 'unclassified'
+  | 'continuity'
+  | 'not_in_snapshots'
+  /** v3 F4c (ADR 0065): under Narratives (the narrative tools set its tags; design E2). */
+  | 'narrative';
 
 export type HoldKind = 'uncertain_category' | 'specialist' | 'identity' | 'status' | 'scope';
 
@@ -348,6 +355,13 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
   });
 
   // ---- scope
+  // v3 F4c (ADR 0065, design E2): the retag audit leaves Narratives alone (the narrative tools set its tags).
+  const narratives = rules.narrative?.indexes.narratives;
+  if (narratives && page.ancestors.some((a) => textKey(a) === textKey(narratives)))
+    return excluded(
+      'narrative',
+      'a narrative page (under Narratives): tagged Narrative and its kind by the narrative tools, never by the tagging grammar',
+    );
   if (page.kind === 'root' || page.kind === 'index')
     return excluded('index', 'a navigation index: never retagged by inference');
   if (ctx.governanceIds.has(page.id))

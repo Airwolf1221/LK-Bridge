@@ -571,9 +571,133 @@ export const consistencyRulesSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * v3 F4c (ADR 0065, design E6): the phrasings of an age written in prose, read by `arkona_chapter_check` only (never
+     * by the consistency check): "<Name> is / was <n> (years old)", "<Name>, aged <n>". `{name}` stands for a
+     * character's name, alias or Canonical Display Name (never a pronoun); the named group `age` holds the number.
+     */
+    ages: z
+      .array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_.-]{0,59}$/), regex: text(500) }).strict())
+      .max(20)
+      .optional(),
+    /**
+     * v3 F4c (ADR 0065; the owner's ruling from F4b.1's review, 20 November 2026): the Life State phrasings of an upper
+     * bound on death ("Deceased by 5A 931"), one `;` clause at a time; the named group `date` holds the bound. Read by
+     * `arkona_as_of` only: at or after the bound the state is "Deceased (recorded by <date>)", before it the other rules
+     * apply. Never a fact, so never compared by the consistency check.
+     */
+    deceasedBy: z
+      .array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_.-]{0,59}$/), regex: text(500) }).strict())
+      .max(10)
+      .optional(),
+    /**
+     * v3 F4c (ADR 0065, amending F4b's D7 by the owner's ruling of 20 November 2026): Life State values (their principal
+     * part) that record the character alive at the pack's `present`. Read by `arkona_as_of` only: with a recorded birth,
+     * the life is recorded from the birth to the present ("Alive (recorded)"); with none, at the present only. Never a
+     * fact, never compared. Absent: a Life State says nothing about a date.
+     */
+    aliveValues: z.array(text(100)).max(10).optional(),
   })
   .strict();
 export type ConsistencyRules = z.infer<typeof consistencyRulesSchema>;
+
+// ============================================================================================ v3 F4c: fiction
+
+/**
+ * v3 F4c (ADR 0065; the owner-approved design docs/design/F4c-fiction.md, E1 and E9): the layout of Narratives, as DATA.
+ * Every name here is found by name in the repository tree (never by id); the templates by name through the project's
+ * template list. A change is a new pack version the owner approves. Absent (an older pack): no narrative tools, no
+ * narrative audit, and Narratives is ordinary repository content.
+ */
+export const narrativeRulesSchema = z
+  .object({
+    /** The indexes, by name: Narratives (every story under it), Continuities (each direct child an AU), Main CANON. */
+    indexes: z.object({ narratives: text(200), continuities: text(200), main: text(200) }).strict(),
+    /** The word only the main continuity index may carry in its name (E1: "the only index allowed CANON"). */
+    reservedWord: text(50),
+    /** The Continuity values that mean the main continuity (the index's own name, and Arkona's "Main"). */
+    mainContinuityValues: z.array(text(100)).min(1).max(10),
+    /** Continuity Type values (an AU's, and the main continuity's), written where a template has the field. */
+    continuityType: z.object({ main: text(100), au: text(100) }).strict(),
+    /** The name patterns (`{n}` a number, `{Title}` a title): unique within a story. */
+    names: z
+      .object({
+        storyMap: text(100),
+        actMap: text(100),
+        chapterPlan: text(100),
+        act: text(100),
+        chapter: text(100),
+        /** The optional overview page of a continuity index (any of these names). */
+        chronologyMap: z.array(text(100)).min(1).max(10),
+      })
+      .strict(),
+    /** The templates, by name (they sit outside the AI REPOSITORY; resolved through the template list). */
+    templates: z
+      .object({ storyMap: text(200), actMap: text(200), chapterPlan: text(200), chapter: text(200) })
+      .strict(),
+    /** The tags: `Narrative`, then the kind, then `AU` for an AU story; `Flashback` marks a chapter dated earlier. */
+    tags: z
+      .object({
+        narrative: text(100),
+        au: text(100),
+        flashback: text(100),
+        story: text(100),
+        storyMap: text(100),
+        act: text(100),
+        actMap: text(100),
+        chapterPlan: text(100),
+        chapter: text(100),
+        chronologyMap: text(100),
+        continuity: text(100).optional(),
+      })
+      .strict(),
+    /** The sidebar fields the tools read and write, by name (a field a template lacks is a template mismatch). */
+    fields: z
+      .object({
+        story: text(100),
+        act: text(100),
+        chapterNumber: text(100),
+        actNumber: text(100),
+        inWorldDate: text(100),
+        continuity: text(100),
+        continuityType: text(100),
+        pov: text(100),
+        chapterPlan: text(100),
+        chapter: text(100),
+        draftStatus: text(100),
+        lastMajorRevision: text(100),
+        charactersPresent: text(100),
+        locations: text(100),
+        plannedDate: text(100),
+        questionGate: text(100),
+        planningStatus: text(100),
+        storySpan: text(100),
+        actSpan: text(100),
+        principalCharacters: text(100),
+      })
+      .strict(),
+    /** The Question Gate's values (the Workflow's Drafting Gate: a chapter is drafted only with its gate Closed). */
+    gate: z.object({ open: text(50), closed: text(50) }).strict(),
+    /** Planning Status values the tools write. */
+    planning: z
+      .object({ planned: text(50), drafted: text(50), reassessed: text(50), planning: text(50) })
+      .strict(),
+    /** The Chapter Plan's sections the reading tools return (the Workflow's chapter-plan format). */
+    planSections: z.object({ canonConstraints: text(200), closingState: text(200) }).strict(),
+    /** The dateline: In-world Date, then (with a place) this separator, spaced, and the place. Never an em dash. */
+    dateline: z.object({ separator: text(10) }).strict(),
+    /**
+     * Template placeholder text (regular expression sources, matched case-insensitively against a whole field value):
+     * a field still holding one in a real page is reported by the narrative audit (E8).
+     */
+    placeholders: z.array(text(300)).max(100),
+    /** `arkona_chapter_check`: at most this many new-lore candidates are listed. */
+    candidateCap: z.number().int().min(1).max(500),
+    /** Capitalised words that are never a new-lore candidate on their own (weekdays, honorifics, "I"). */
+    notNames: z.array(text(100)).max(500),
+  })
+  .strict();
+export type NarrativeRules = z.infer<typeof narrativeRulesSchema>;
 
 /** An owner's ruling the pack follows that its governance pages do not record yet (design 1.5: the AU tag). */
 export const rulingSchema = z
@@ -664,6 +788,8 @@ export const packRulesSchema = z
     naming: namingRulesSchema.optional(),
     /** v3 F4b (ADR 0064): the consistency check and "as of a date" (absent: neither tool applies). */
     consistency: consistencyRulesSchema.optional(),
+    /** v3 F4c (ADR 0065): the fiction layout and its tools (absent: no narrative tools, no narrative audit). */
+    narrative: narrativeRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
@@ -726,9 +852,16 @@ export const governanceSourceSchema = z
     key: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
     /** The project it lives in, by name (the pack's home: `arkona`). */
     project: text(64),
-    resourceId: text(64),
-    documentId: text(64),
+    /** Empty when the source is found by `page` (v3 F4c): its ids are worked out from the repository tree. */
+    resourceId: z.string().trim().max(64),
+    documentId: z.string().trim().max(64),
     name: text(200),
+    /**
+     * v3 F4c (ADR 0065): the page the source is, found by its display name in the project's tree (any dash, any
+     * spacing: "Arkona – Fiction Writing Reference" and "Arkona - Fiction Writing Reference" are one name), its main
+     * page document read. Used when `resourceId` is empty (a Design References page whose id the pack does not hold).
+     */
+    page: text(200).optional(),
     /** The version the standard calls itself by, for people (`v1.8`); the approval records the document's version. */
     label: z.string().max(100).optional(),
     /**
@@ -738,7 +871,10 @@ export const governanceSourceSchema = z
      */
     sections: z.array(text(200)).max(20).optional(),
   })
-  .strict();
+  .strict()
+  .refine((g) => (g.resourceId !== '' && g.documentId !== '') || g.page !== undefined, {
+    message: 'a governance source needs its resource and document ids, or the page to find it by',
+  });
 export type GovernanceSource = z.infer<typeof governanceSourceSchema>;
 
 /** v3 F3b: a pinned section as an approval records it. */

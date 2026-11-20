@@ -191,6 +191,16 @@ consistency-f4b` (`test/sandbox/consistency-f4b.test.ts`): on the test world, a 
   again, and clean-up (the throwaway index deleted with everything under it). It copies the project's settings, tree
   and packs from the bridge's database read-only, as the write-scope rehearsal does, and needs the chronology's calendar
   confirmed on the test world.
+- **Amended after the owner's sandbox run (20 November 2026).** F2 failed: the check made its throwaway Authoritative
+  `[BSRC] … - Character Core` through the bridge's governed `createResource` as the system principal, and the canon
+  guard correctly refused it (an Authoritative page is made only by the owner's canonical approval). The guard is
+  unchanged. The probe's three pages (the throwaway index, the Core and the restating page) are now made, and deleted
+  again, with the sandbox runtime's raw client (`test/sandbox/f4b-probe.ts`: `LkClient.call` with the governor's own
+  `fetch`, as the assumptions checks make their throwaway pages: paced and counted by the governor, with If-Match on
+  the versioned write, but no job, proposal or guard of the bridge), followed by a tree sweep so the bridge sees them;
+  the check, the pick, the approval and the read-back go through the bridge as before.
+  `test/consistency/sandbox-probe.test.ts` (mock) pins that the helper makes the `[BSRC]` Core with the raw client and
+  never through the job engine, and that the sandbox check itself makes no governed create or delete.
 - **Unverified on a real project**: the pick's writes are the ones existing sandbox rounds check (a block replaced with
   its ids kept, a sidebar row updated, a chronology row and its event in step); the sandbox check exercises them together.
 
@@ -376,3 +386,11 @@ the mention-only row, the coverage shape). The heap test (`index.test.ts`) passe
 5. Tables other than the chronology's age tables are no longer read (C.3).
 6. Check the section Purandukht Mithra's Biography sentence stands under on Arkona (F.4).
 7. The titles seeded in `-f4b1` (edit them on the Packs page).
+
+## Amended by ADR 0065 (v3 F4c, 20 November 2026)
+
+On top of amendment 1's seed, `-f4c` adds pack data and changes `arkona_as_of` only (the extractor and comparison are
+unchanged): the bare-range attested phrasing (decision 6), the age phrasings for `arkona_chapter_check`, "Deceased by
+<date>" as an as-of-only upper bound (replacing D.2's "recorded as nothing" in `arkona_as_of`; still never a fact), D9's
+inheritance of the attested life and the Life State, and D7 amended by the owner's ruling: a Life State of "Alive"
+records the character alive at the present. See [ADR 0065](0065-v3-f4c-fiction.md), "On top of F4b.1".

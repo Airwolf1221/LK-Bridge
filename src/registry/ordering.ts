@@ -21,6 +21,12 @@ const GROUP: Readonly<Record<NodeKind, number>> = {
   root: 3,
 };
 
+/** A sibling comparator: negative when `a` belongs before `b`. */
+export type SiblingCompare = (
+  a: Pick<Orderable, 'displayName' | 'kind'>,
+  b: Pick<Orderable, 'displayName' | 'kind'>,
+) => number;
+
 export interface Orderable {
   readonly id: string;
   readonly displayName: string;
@@ -41,16 +47,22 @@ export function compareSiblings(
  * in particular (an empty parent). So the new page always lands next to its correct alphabetical neighbour, even when
  * other siblings are out of order.
  */
-export function slotAmong(siblings: readonly Orderable[], displayName: string, kind: ResolveKind): Slot {
+export function slotAmong(
+  siblings: readonly Orderable[],
+  displayName: string,
+  kind: ResolveKind,
+  /** v3 F4c (ADR 0065): the order of this parent (Narratives' own, E1); default the ordinary rule. */
+  compare: SiblingCompare = compareSiblings,
+): Slot {
   const me = { displayName, kind };
   let after: Orderable | null = null;
   let before: Orderable | null = null;
   for (const s of siblings) {
-    const c = compareSiblings(s, me);
+    const c = compare(s, me);
     if (c <= 0) {
       // The greatest sibling at or below the new page; among equals, the latest in the current order.
-      if (after === null || compareSiblings(s, after) >= 0) after = s;
-    } else if (before === null || compareSiblings(s, before) < 0) {
+      if (after === null || compare(s, after) >= 0) after = s;
+    } else if (before === null || compare(s, before) < 0) {
       before = s;
     }
   }
@@ -69,7 +81,10 @@ export interface OutOfOrderSibling {
  * The siblings that break the rule: those outside a longest run already in order (a longest non-decreasing
  * subsequence), so the list is the fewest pages that would have to move. Each with the sibling it belongs after.
  */
-export function outOfOrderAmong(siblings: readonly Orderable[]): OutOfOrderSibling[] {
+export function outOfOrderAmong(
+  siblings: readonly Orderable[],
+  compare: SiblingCompare = compareSiblings,
+): OutOfOrderSibling[] {
   const n = siblings.length;
   if (n < 2) return [];
   // Longest non-decreasing subsequence, O(n log n), keeping predecessors.
@@ -80,7 +95,7 @@ export function outOfOrderAmong(siblings: readonly Orderable[]): OutOfOrderSibli
     let hi = tails.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (compareSiblings(siblings[tails[mid]!]!, siblings[i]!) <= 0) lo = mid + 1;
+      if (compare(siblings[tails[mid]!]!, siblings[i]!) <= 0) lo = mid + 1;
       else hi = mid;
     }
     if (lo > 0) prev[i] = tails[lo - 1]!;
@@ -88,7 +103,7 @@ export function outOfOrderAmong(siblings: readonly Orderable[]): OutOfOrderSibli
   }
   const keep = new Set<number>();
   for (let i = tails.at(-1)!; i >= 0; i = prev[i]!) keep.add(i);
-  const sorted = siblings.map((s, i) => ({ s, i })).sort((a, b) => compareSiblings(a.s, b.s) || a.i - b.i);
+  const sorted = siblings.map((s, i) => ({ s, i })).sort((a, b) => compare(a.s, b.s) || a.i - b.i);
   const out: OutOfOrderSibling[] = [];
   sorted.forEach(({ s, i }, at) => {
     if (keep.has(i)) return;
@@ -107,7 +122,7 @@ export function placementFor(
   parentId: string,
   newDisplayName: string,
   kind: ResolveKind,
-  o: { excludeId?: string } = {},
+  o: { excludeId?: string; compare?: SiblingCompare | null } = {},
 ): Slot {
   tree.requireUsable();
   if (!tree.node(parentId)) {
@@ -118,7 +133,7 @@ export function placementFor(
   const name = newDisplayName.trim();
   if (name === '') throw new RegistryError('INVALID_INPUT', 'A display name is required.');
   const siblings = tree.children(parentId).filter((c) => c.id !== o.excludeId);
-  return slotAmong(siblings, name, kind);
+  return slotAmong(siblings, name, kind, o.compare ?? compareSiblings);
 }
 
 export interface OutOfOrderParent {
@@ -128,7 +143,13 @@ export interface OutOfOrderParent {
 }
 
 /** Siblings that break the rule under one parent, or under every parent of the tree. Reports only; moves nothing. */
-export function outOfOrder(tree: ProjectTree, parentId?: string, limit = 500): OutOfOrderParent[] {
+export function outOfOrder(
+  tree: ProjectTree,
+  parentId?: string,
+  limit = 500,
+  /** v3 F4c: a parent's own order (Narratives'), or null for the ordinary rule. */
+  orderFor: (parentId: string) => SiblingCompare | null = () => null,
+): OutOfOrderParent[] {
   tree.requireUsable();
   const parents: TreeNode[] = [];
   if (parentId !== undefined) {
@@ -144,7 +165,7 @@ export function outOfOrder(tree: ProjectTree, parentId?: string, limit = 500): O
   for (const p of parents) {
     const kids = tree.children(p.id);
     if (kids.length < 2) continue;
-    const bad = outOfOrderAmong(kids);
+    const bad = outOfOrderAmong(kids, orderFor(p.id) ?? compareSiblings);
     if (bad.length === 0) continue;
     out.push({
       parent: tree.ref(p),

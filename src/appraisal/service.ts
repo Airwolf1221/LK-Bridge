@@ -474,15 +474,45 @@ export class Appraisal {
   }
 
   /** The pages a scope covers (a branch and everything leave the non-current areas out unless asked for). */
+  /**
+   * v3 F4c (ADR 0065, design E2): the narrative pages (everything under the one Narratives index), which the owner body
+   * rules, the completion gate and the split triggers never apply to. Empty without narrative rules.
+   */
+  narrativeIds(reader: PageReader): ReadonlySet<string> {
+    const name = this.approvedRules()?.narrative?.indexes.narratives;
+    if (!name) return new Set();
+    const key = name.replace(/\s+/g, ' ').trim().toLocaleLowerCase('en-GB');
+    const roots = reader
+      .all()
+      .filter(
+        (p) =>
+          p.kind === 'index' && p.displayName.replace(/\s+/g, ' ').trim().toLocaleLowerCase('en-GB') === key,
+      );
+    if (roots.length !== 1) return new Set();
+    return new Set(reader.descendants(roots[0]!.id).map((p) => p.id));
+  }
+
   private pagesOf(reader: PageReader, s: ScopeInput): { ids: string[]; left: number } {
     const include = new Set(s.include ?? []);
-    if (s.pageId) return { ids: [s.pageId], left: 0 };
+    const narrative = this.narrativeIds(reader);
+    if (s.pageId) {
+      if (narrative.has(s.pageId))
+        throw new AppraisalError(
+          'NARRATIVE_EXEMPT',
+          'This is a narrative page (under Narratives): the owner body rules, the completion gate and the split triggers do not apply to fiction (the F4c design, E2). To check a chapter against canon, use arkona_chapter_check.',
+        );
+      return { ids: [s.pageId], left: 0 };
+    }
     const candidates = s.underId
       ? [...(reader.page(s.underId) ? [reader.page(s.underId)!] : []), ...reader.descendants(s.underId)]
       : reader.all().filter((p) => p.kind !== 'root');
     let left = 0;
     const ids: string[] = [];
     for (const p of candidates) {
+      if (narrative.has(p.id)) {
+        left++;
+        continue;
+      }
       const l = reader.labels(p.id);
       const archived = l.lifecycle === 'Archived' && !include.has('archived');
       if (!inScope(l, include) || archived) {

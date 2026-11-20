@@ -1,5 +1,78 @@
 # Changelog
 
+## Unreleased: v3 F4c, fiction (ADR 0065, 20 November 2026)
+
+From the owner-approved design [design/F4c-fiction.md](design/F4c-fiction.md) (E1 to E10). No migration. **After
+deploying, approve the new pack version `arkona-2026-11-20-f4c` on the Packs page** (it carries the narrative layout, the
+narrative tools' switches and the two fiction Design References pinned by name); until then the narrative tools are not
+listed and the narrative audit reports nothing.
+
+- **The layout as pack data** (`rules.narrative`): Narratives, Continuities and Main CANON found by name; a story's Story
+  Map first; acts `Act <n> - <Title>` with their `Act <n> Map`; chapters `Chapter <n> - <Title>` numbered across the story;
+  plans `Chapter <n> Plan`; inside Narratives the Story Map first, then by number (Act 10 after Act 9), in every tool that
+  places a page and in the ordering audit.
+- **Narrative pages**: no [BSRC] or [BWRK] prefix, no lifecycle (the lifecycle tools refuse them), tagged `Narrative`, the
+  kind and `AU`; exempt from the owner body rules, the completion gate, the split triggers, the tagging grammar and the
+  audits' rules checks; never canon evidence (the facts index never reads them; `arkona_brief` refuses one).
+- **Writing tools** (direct at scope `write`, proposals at `propose`): `arkona_story_create`, `arkona_chapter_plan`,
+  `arkona_chapter_save` (the dateline written from In-world Date; the date read by the calendar; revised in place with
+  `baseVersion`; the Drafting Gate, `overrideGate` with its reason on the Review page; read back word for word),
+  `arkona_chapter_insert` and `arkona_chapter_move` (renumbering as items; more than 10 pages a proposal).
+- **The narrative audit** (category `narrative`, 25 `narrative_*` codes): structure, numbering, plans against chapters,
+  open gates, datelines, backwards dates without `Flashback`, dates outside a span, placeholder text; "Propose a fix" for
+  the mechanical ones (a continuity index, tags, a link, a number, a dateline, the order), always ONE proposal.
+- **Reading and promotion**: `arkona_chapter_context` (free: as-of states, briefs, chronology, contradictions, the
+  plan's constraints and gate, the previous chapter's closing state, each labelled by evidence class),
+  `arkona_chapter_check` (read-only: people at the date, presence, births and deaths in the prose, new-lore candidates,
+  Archived-only names and Locations; labelled Contradicts canon, Not in canon (candidate), Unestablished in canon) and
+  `arkona_promote_from_chapter` (canon proposals through the existing tools whatever the scope; facts and texts as ONE
+  proposal of items; the chapter cited in the proposal's note only).
+- Governance sources may be found by their page's name (any dash); `plan-baisheng-stories` maps to the narrative tools.
+- `get_bridge_guide` part "Arkona fiction", with the Workflow's working sequence.
+- The sandbox check `narrative-f4c` (written, not run).
+- **On top of F4b.1** (merged in; `arkona-2026-11-20-f4c` supersedes `arkona-2026-11-20-f4b1`, so approving it covers
+  both): the age phrasings (`rules.consistency.ages`, read by `arkona_chapter_check`); the bare-range attested phrasing
+  ("5A 900 - 5A 931", F4b decision 6; the coverage report counts these as attested bounds); "Deceased by <date>" as an
+  upper bound read by `arkona_as_of` only ("Deceased (recorded by 5A 931)" at or after it; never compared); D9 in
+  `arkona_as_of` inheriting Main CANON's attested life and Life State too, the state labelled "inherited from Main
+  CANON"; and D7 amended by the owner's ruling: a Life State of "Alive" (`aliveValues`) records the character alive at
+  the present, so with a recorded birth they are Alive (recorded) from it to the present (Yasmin al-Naim at 4A 120, in
+  Main CANON and inherited in Moonfall), with its guard: a recorded death always wins inside its own span (from a death
+  to the next recorded birth or return "Deceased (recorded)"; after the last death with no return, "Unestablished
+  (recorded death; current Life State Alive)", never Alive across the gap). A return ("Reborn / Returned / Reincarnated
+  <date>", `attested.scope.return`) is an attested start of life, never a second birth.
+
+## Unreleased: connected sessions are told when their tool list changes (20 November 2026)
+
+From the owner's report: after approving `arkona-2026-11-20-f4b`, a Claude session connected before the approval kept
+the old tool list until the bridge restarted. Every `tools/list` was already worked out afresh per request; the client
+had simply never been told to ask again.
+
+- The server advertises `tools.listChanged`. A watch (`src/mcp/tool-list.ts`) follows everything that can change a list
+  (a pack's rules or approval, a project served or not, a profile's scope or its low-level switch) and compares a
+  fingerprint of what would be listed; when it moved, every connected 2026-07-28 session listening on
+  `subscriptions/listen` gets `notifications/tools/list_changed` at once. A change that lists the same tools sends
+  nothing.
+- A 2025-era session (stateless serving: no stream a change could be pushed on) is told on its NEXT request: the bridge
+  remembers the list each caller was last given, and sends the notification on that request's own response stream
+  before its answer (once). Its next `tools/list` shows the new list.
+- `test/tools/tool-list-changed.test.ts`: a pack approval that lists a new tool, a profile's scope change, a 2025-era
+  session told on its next call, and a change that lists the same tools sending nothing.
+
+## Unreleased: the consistency-f4b sandbox check makes its probe with the raw client (20 November 2026)
+
+From the owner's sandbox run of `consistency-f4b`: F2 failed because the check made its throwaway Authoritative
+`[BSRC] … - Character Core` through the bridge's governed `createResource` as the system principal, and the canon guard
+correctly refused it. The canon guard is unchanged.
+
+- The probe's pages (the throwaway index, the Core, the restating page) are made and deleted with the sandbox runtime's
+  raw client (`test/sandbox/f4b-probe.ts`, as the assumptions checks make theirs: the governor paces and counts them and
+  requires If-Match on the versioned write; no job, proposal or guard of the bridge is involved), then a tree sweep shows
+  them to the bridge. The consistency check, the owner's pick, the approval and the read-back go through the bridge as
+  before (ADR 0064, amended).
+- `test/consistency/sandbox-probe.test.ts` (mock): the helper never creates a `[BSRC]` page through the governed route,
+  and the sandbox check makes no governed create or delete.
+
 ## Unreleased: v3 F4b.1, the consistency check after its first live run (ADR 0064 amendment 1, 20 November 2026)
 
 From the owner's review of the first run on Arkona (run `apr_7e189380f2f0ee05`: 4 Contradictory, all false; 5 Gaps; 39

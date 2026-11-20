@@ -10,6 +10,14 @@
  * a template gets Status `Working` (the project's default) when it has a Status row, and its template is recorded in the
  * tree at once.
  */
+import {
+  inNarratives,
+  NARRATIVE_NO_LIFECYCLE,
+  NARRATIVE_NO_LIFECYCLE_MESSAGE,
+  narrativeScope,
+  treeView,
+} from '../../narrative/scope.js';
+import { narrativeTags, newPageKind } from '../../narrative/tags.js';
 import { stateHash } from '../../jobs/sidebar-state.js';
 import { toWriteIcon } from '../../lk/icons.js';
 import * as z from 'zod';
@@ -56,6 +64,8 @@ import {
   type CreateCtx,
   type CreateOutcome,
   type NewPage,
+  type FactInput,
+  type LinkEdits,
 } from './create-support.js';
 import { defineTool } from './define.js';
 import { finish, liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
@@ -574,6 +584,10 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
           const name = cleanName(args.name);
           if (!name) return refusal(pd, 'INVALID_PARAMS', 'A page name (1 to 200 characters) is required.');
           const cc = createCtx(pd, mctx, ctx, 'create_resource');
+          // v3 F4c (ADR 0065, design E2): a page under Narratives is a narrative page: no [BSRC] or [BWRK] prefix, no
+          // lifecycle, tagged Narrative and its kind (and AU in an AU's continuity).
+          const narrative = await narrativeCreate(cc, args, name);
+          if (narrative) return narrative;
           const status: CreateStatus = args.status ?? 'working';
           const parent = parentForStatus(cc, status, args.parent);
           if (!parent.ok) return { kind: 'answer', result: parent.result };
@@ -636,6 +650,92 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
           });
         });
       }),
+  });
+}
+
+/**
+ * v3 F4c (ADR 0065, design E2): `create_resource` under Narratives. The page takes no prefix and no status (narrative
+ * pages have no lifecycle: a `status` is refused), the template's own tags give way to `Narrative`, its kind and `AU`
+ * (the caller's tags kept after them), and it is placed in the narrative order (E1). Null: the parent is not in
+ * Narratives (the ordinary create).
+ */
+async function narrativeCreate(
+  cc: CreateCtx,
+  args: {
+    readonly parent?: string | undefined;
+    readonly template: string;
+    readonly status?: CreateStatus | undefined;
+    readonly facts?: Readonly<Record<string, FactInput>> | undefined;
+    readonly links?: LinkEdits | undefined;
+    readonly tags?: readonly string[] | undefined;
+    readonly aliases?: readonly string[] | undefined;
+    readonly dryRun?: boolean | undefined;
+  },
+  name: string,
+): Promise<CreateOutcome | null> {
+  const { pd, ctx } = cc;
+  if (args.parent === undefined) return null;
+  const scope = narrativeScope(pd.services?.packs, ctx.tree, ctx.projectId);
+  if (!scope) return null;
+  const rp = resolvePage(ctx, args.parent, { what: `the parent “${args.parent}”` });
+  if (!rp.ok) return null;
+  const parent = rp.node;
+  if (!inNarratives(scope, parent) && parent.id !== scope.roots.narratives?.id) return null;
+  if (parent.id === scope.roots.narratives?.id)
+    return refusal(
+      pd,
+      'NARRATIVE_INDEX',
+      `Directly under ${parent.displayName} go only the continuity indexes (Main CANON and one per AU): the narrative audit’s “Propose a fix” proposes a missing one, and arkona_story_create makes a story in one.`,
+    );
+  if (args.status !== undefined)
+    return refusal(pd, NARRATIVE_NO_LIFECYCLE, `${NARRATIVE_NO_LIFECYCLE_MESSAGE} Leave status out.`);
+  const t = await resolveTemplate(pd, cc.mctx, ctx, 'create_resource', args.template);
+  const bad = pageTemplateCheck(pd, t);
+  if (bad) return bad;
+  const tpl = (t as Extract<typeof t, { ok: true }>).value;
+  if (tpl.kind === 'index')
+    return refusal(pd, 'INDEX_TEMPLATE', `${tpl.name ?? tpl.id} makes an [INDEX] page: use create_index.`);
+  const display = cleanPrefixes(name).name;
+  const twin = ctx.tree
+    .children(ctx.projectId, parent.id)
+    .data.find((n) => n.displayName.toLocaleLowerCase('en-GB') === display.toLocaleLowerCase('en-GB'));
+  if (twin)
+    return refusal(
+      pd,
+      'PAGE_EXISTS',
+      `“${parent.displayName}” already has a page named “${twin.displayName}” (its details are in “existing”). Use that page (get_resource), or choose another name.`,
+      { existing: nodeView(twin) },
+    );
+  const view = treeView(ctx.tree, ctx.projectId);
+  const kind = newPageKind(view, scope.rules, scope.roots, parent.id, display, false);
+  const page = newPage({
+    key: 'page',
+    rawName: display,
+    parent: { existing: parent.id },
+    templateId: tpl.id,
+    facts: null,
+    parentName: parent.rawName,
+    templateName: tpl.name ?? tpl.id,
+    status: null,
+    ...(args.aliases ? { aliases: args.aliases } : {}),
+  });
+  const facts = await planNewPageFacts(cc, {
+    pageId: page.id,
+    pageName: page.rawName,
+    templateId: tpl.id,
+    ...(args.facts ? { facts: args.facts } : {}),
+    ...(args.links ? { links: args.links } : {}),
+    status: null,
+    what: page.rawName,
+  });
+  if (!facts.ok) return { kind: 'answer', result: facts.result };
+  const tags = narrativeTags(scope.rules, kind?.kind ?? null, kind?.au ?? false, args.tags ?? []);
+  return finishCreate(cc, [{ ...page, facts: facts.value, tags }], {
+    batch: false,
+    dryRun: args.dryRun === true,
+    extraHead: { narrative: true, ...(kind?.kind ? { narrativeKind: kind.kind } : {}) },
+    markerPages: [{ id: page.id, to: null }],
+    summary: `create_resource: ${page.rawName} (a narrative page) under ${parent.rawName}`,
   });
 }
 
@@ -1351,7 +1451,10 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
           if (k in body) fields[k] = body[k];
         let placement: { parentId: string; after: string | null; before: string | null } | undefined;
         if (rename && node.parentId) {
-          const sim = new SiblingSim((pid) => ctx.tree.children(ctx.projectId, pid).data);
+          const sim = new SiblingSim(
+            (pid) => ctx.tree.children(ctx.projectId, pid).data,
+            (pid) => ctx.types.orderFor?.(pid) ?? null,
+          );
           const now = sim.neighbours(node.parentId, node.id);
           sim.remove(node.parentId, node.id);
           const slot = sim.slot(node.parentId, { displayName: rename.displayName, kind: node.kind });
@@ -1473,7 +1576,10 @@ function moveResourceTool(deps: ToolDeps): McpToolProvider {
             },
             pd,
           );
-        const sim = new SiblingSim((pid) => ctx.tree.children(ctx.projectId, pid).data);
+        const sim = new SiblingSim(
+          (pid) => ctx.tree.children(ctx.projectId, pid).data,
+          (pid) => ctx.types.orderFor?.(pid) ?? null,
+        );
         const before = node.parentId ? sim.neighbours(node.parentId, node.id) : null;
         if (node.parentId) sim.remove(node.parentId, node.id);
         const slot = sim.slot(dest.id, node, () => true, node.id);

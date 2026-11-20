@@ -24,7 +24,7 @@ import {
   type RegistryCommands,
 } from './commands.js';
 import type { DriftReport } from './drift.js';
-import { outOfOrder, placementFor, type OutOfOrderParent } from './ordering.js';
+import { outOfOrder, placementFor, type OutOfOrderParent, type SiblingCompare } from './ordering.js';
 import {
   planCharacterPlacement,
   resolveCharacterRaceFolders,
@@ -63,6 +63,11 @@ export interface ProjectTypes {
   placementFor(parentId: string, newDisplayName: string, kind: ResolveKind, o?: { excludeId?: string }): Slot;
   /** Siblings out of order (reports only). */
   outOfOrder(parentId?: string): OutOfOrderParent[];
+  /**
+   * v3 F4c (ADR 0065): a parent's own sibling order, when it has one (a page under Narratives: the Story Map first, acts
+   * and chapters by number, design E1); null: the ordinary rule (`[INDEX]` first, then alphabetical).
+   */
+  orderFor(parentId: string): SiblingCompare | null;
   /** Where a character page goes (PLAN-v2 section 9), with no write. */
   planCharacterPlacement(input: CharacterPlacementInput): CharacterPlacementPlan;
   /** v2 D3 (ADR 0041): a declared race's asset folder names (`[group, race]` or `[race]`), or unknown. */
@@ -75,6 +80,11 @@ export interface Registry {
   forProject(projectId: string): ProjectTypes;
   /** Follows the tree's passes: each completed daily check makes a taxonomy drift report. Returns a detach function. */
   attach(): () => void;
+  /**
+   * v3 F4c (ADR 0065): who says a parent has its own sibling order (the runtime: the narrative rules of the project's
+   * approved pack). Unset: every parent follows the ordinary rule.
+   */
+  setSiblingOrder(fn: ((projectId: string, parentId: string) => SiblingCompare | null) | null): void;
   /** Makes and stores a drift report for a project (what the daily check calls). */
   driftReport(projectId: string, source: 'check' | 'owner', passId: string | null): DriftReport;
 }
@@ -124,6 +134,7 @@ export function createRegistry(o: RegistryOptions): Registry {
   const projectStore = new ProjectStore(o.db, now);
   const settingsOf = (projectId: string): ProjectSettings => projectStore.byId(projectId)?.settings ?? {};
   const cache = new Map<string, ProjectTypes>();
+  let siblingOrder: ((projectId: string, parentId: string) => SiblingCompare | null) | null = null;
   const readTemplates =
     o.readTemplates ??
     ((projectId: string) => {
@@ -155,8 +166,13 @@ export function createRegistry(o: RegistryOptions): Registry {
       characterRole: (id: string) => resolver().characterRole(id),
       characterOfPage: (id: string) => resolver().characterOfPage(id),
       placementFor: (parentId: string, name: string, kind: ResolveKind, po?: { excludeId?: string }) =>
-        placementFor(tree(), parentId, name, kind, po),
-      outOfOrder: (parentId?: string) => outOfOrder(tree(), parentId),
+        placementFor(tree(), parentId, name, kind, {
+          ...po,
+          compare: siblingOrder?.(projectId, parentId) ?? null,
+        }),
+      outOfOrder: (parentId?: string) =>
+        outOfOrder(tree(), parentId, 500, (pid) => siblingOrder?.(projectId, pid) ?? null),
+      orderFor: (parentId: string) => siblingOrder?.(projectId, parentId) ?? null,
       planCharacterPlacement: (input: CharacterPlacementInput) =>
         planCharacterPlacement(tree(), store, input),
       raceFolders: (race: string | null | undefined, type?: string) =>
@@ -174,6 +190,9 @@ export function createRegistry(o: RegistryOptions): Registry {
   return {
     forProject,
     driftReport,
+    setSiblingOrder(fn) {
+      siblingOrder = fn;
+    },
     attach() {
       if (!o.tree.onPassFinished) return () => undefined;
       return o.tree.onPassFinished((pass) => {
@@ -208,6 +227,7 @@ export {
   placementFor,
   slotAmong,
   type OutOfOrderParent,
+  type SiblingCompare,
 } from './ordering.js';
 export {
   planCharacterPlacement,

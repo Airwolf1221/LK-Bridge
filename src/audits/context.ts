@@ -12,11 +12,14 @@ import type { CheckRun } from '../chronology/store.js';
 import type { AuditRule, AuditSettings, TagSource } from './config.js';
 import { nameKey, type AuditPage } from './model.js';
 import type { AuditModel } from './reader.js';
-import { SnapshotTree } from './snapshot-tree.js';
 import type { FindingDraft, FindingSource } from './types.js';
 import type { AssetLibrary } from './checks/assets.js';
 import type { GovernanceAuditInput } from './checks/governance.js';
 import type { ClassificationRecord, RetagContext } from '../packs/retag/engine.js';
+import type { NarrativeRules } from '../packs/types.js';
+import type { Calendar, DateTextStyle } from '../calendar/index.js';
+import { nkey, rootsOf, type NView } from '../narrative/layout.js';
+import { childrenByRank, SnapshotTree } from './snapshot-tree.js';
 
 /** A lifecycle record or set record that stopped part-way (the audit reports it with its pages). */
 export interface IncompleteRecord {
@@ -86,6 +89,20 @@ export interface AuditContext {
    * consistency service: the facts index over the appraisal's overlay); null or absent: no consistency check here.
    */
   readonly consistency?: readonly ConsistencyAuditItem[] | null;
+  /**
+   * v3 F4c (ADR 0065): the narrative rules of the project's approved pack and the chronology's calendar (null or absent:
+   * no narrative audit, and Narratives is ordinary content).
+   */
+  readonly narrative?: NarrativeAuditInput | null;
+  /** v3 F4c: every page under Narratives (narrative pages: E2's exemptions), worked out by `makeContext`. */
+  readonly narrativeIds?: ReadonlySet<string>;
+}
+
+/** v3 F4c (ADR 0065): what the narrative audit needs besides the snapshots. */
+export interface NarrativeAuditInput {
+  readonly rules: NarrativeRules;
+  readonly calendar: Calendar | null;
+  readonly style?: DateTextStyle;
 }
 
 /** v3 F4b (ADR 0064): one Contradictory finding of the consistency check, as the audits receive it. */
@@ -108,10 +125,47 @@ export interface RetagAuditHook {
   readonly templateOf: (pageId: string) => string | null;
 }
 
-export function makeContext(o: Omit<AuditContext, 'tree' | 'snapshotTree'>): AuditContext {
+export function makeContext(o: Omit<AuditContext, 'tree' | 'snapshotTree' | 'narrativeIds'>): AuditContext {
   const snapshotTree = new SnapshotTree(o.model, o.treeSettings);
-  return { ...o, snapshotTree, tree: new ProjectTree(snapshotTree, o.projectId) };
+  const narrativeIds = o.narrative ? narrativePagesOf(o.model, o.narrative.rules) : new Set<string>();
+  return { ...o, snapshotTree, tree: new ProjectTree(snapshotTree, o.projectId), narrativeIds };
 }
+
+/** v3 F4c: the snapshots' pages as the narrative layout reads them (sibling order is LegendKeeper's rank). */
+export function modelView(model: AuditModel): NView {
+  const kids = childrenByRank(model);
+  return {
+    node: (id) => model.pages.get(id) ?? null,
+    children: (id) => kids.get(id) ?? [],
+    indexesNamed: (name) =>
+      [...model.pages.values()].filter((p) => p.kind === 'index' && nkey(p.displayName) === nkey(name)),
+    fact: (id, key) => {
+      const f = model.pages.get(id)?.facts.get(nameKey(key));
+      const t = f && f.count === 1 ? f.text.trim() : '';
+      return t === '' ? null : t;
+    },
+  };
+}
+
+/** v3 F4c: every page under the one Narratives index (none when it is missing or ambiguous). */
+export function narrativePagesOf(model: AuditModel, rules: NarrativeRules): Set<string> {
+  const view = modelView(model);
+  const roots = rootsOf(view, rules);
+  const out = new Set<string>();
+  if (!roots.narratives) return out;
+  const walk = (id: string) => {
+    for (const k of view.children(id)) {
+      if (out.has(k.id)) continue;
+      out.add(k.id);
+      walk(k.id);
+    }
+  };
+  walk(roots.narratives.id);
+  return out;
+}
+
+/** v3 F4c: whether a page is a narrative page (E2: exempt from the owner rules, tagging and lifecycle checks). */
+export const isNarrativePage = (ctx: AuditContext, id: string): boolean => ctx.narrativeIds?.has(id) ?? false;
 
 /** Where a page is, for a finding: its display-name path. */
 export function pathOf(ctx: AuditContext, p: AuditPage): string {
@@ -147,6 +201,14 @@ export function factAmbiguous(p: AuditPage, row: string): boolean {
 /** Pages worth auditing: everything but the root. */
 export function contentPages(ctx: AuditContext): AuditPage[] {
   return [...ctx.model.pages.values()].filter((p) => p.kind !== 'root');
+}
+
+/**
+ * v3 F4c (ADR 0065, design E2): the content pages the owner's rules, the tagging grammar and the lifecycle checks apply
+ * to: every content page but the narrative pages (Narratives has its own audit, the `narrative` category).
+ */
+export function ownedPages(ctx: AuditContext): AuditPage[] {
+  return contentPages(ctx).filter((p) => !isNarrativePage(ctx, p.id));
 }
 
 export type Check = (ctx: AuditContext) => FindingDraft[];

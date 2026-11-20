@@ -198,10 +198,13 @@ describe('arkona_as_of (D7, D9, D10)', () => {
     expect(inside.state.value).toBe('Alive (recorded)');
     const before = await asOf('Kamigawa Haru', '5A 300');
     expect(before.state.value).toBe('Unestablished');
-    // Titania: born, and "active at…" holds no date (not a fact, ADR 0064 amendment 1): never alive past what is recorded.
+    // Titania: born, and "active at…" holds no date (not a fact, ADR 0064 amendment 1). v3 F4c (ADR 0065, amending D7 by
+    // the owner's ruling): her Life State "Alive" records her alive at the present, so she is alive from her birth to it.
     const later = await asOf('Titania', '4A 100');
-    expect(later.state.value).toBe('Unestablished');
-    expect(later.state.why).toMatch(/does not prove survival/);
+    expect(later.state.value).toBe('Alive (recorded)');
+    expect(later.state.why).toMatch(/Life State records/);
+    // Before her birth, still Unestablished.
+    expect((await asOf('Titania', '1A 51,000')).state.value).toBe('Unestablished');
   });
 
   it('after a recorded death: Deceased (recorded); between birth and death: Alive (recorded)', async () => {
@@ -262,12 +265,14 @@ describe('arkona_as_of_coverage (D8)', () => {
   it('counts one primary bucket per character (they add up), with a recorded death and an unreadable birth as flags; lists those with nothing readable; never a task list', async () => {
     const b = await call('arkona_as_of_coverage', {});
     // ADR 0064 amendment 1 (G): Haru's birth is deliberately unestablished (he is attested, but the birth bucket wins).
+    // v3 F4c (ADR 0065): the bare-range attested phrasing ("5A 900 - 5A 931", F4b decision 6) reads six fixture
+    // characters' Temporal Scopes as attested bounds (Tsubame Hoshizora's among them).
     expect(b.counts).toEqual({
       characters: 23,
       readableBirth: 8,
       birthUnestablished: 1,
-      attestedBoundsOnly: 0,
-      nothingReadable: 14,
+      attestedBoundsOnly: 6,
+      nothingReadable: 8,
     });
     expect(b.flags).toEqual({ recordedDeath: 1, unreadableBirth: 0 });
     const c = b.counts;
@@ -277,7 +282,9 @@ describe('arkona_as_of_coverage (D8)', () => {
     expect(b.sums).toMatch(/one bucket/);
     expect(b.counts.nothingReadable).toBe((b.nothingReadable as any[]).length);
     const listed = (b.nothingReadable as any[]).map((x) => x.character);
-    expect(listed).toContain('Kamigawa Miyuki');
+    expect(listed).toContain('Asagiri Kaede');
+    // Her Temporal Scope is a bare range: attested bounds since F4c (ADR 0065).
+    expect(listed).not.toContain('Kamigawa Miyuki');
     expect(listed).not.toContain('Kamigawa Haru');
     expect(listed).not.toContain('Rashad al-Khalid');
     expect(b.note).toMatch(/not a task list/);
