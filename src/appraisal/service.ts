@@ -272,6 +272,76 @@ export class Appraisal {
     return { reader, state: e.state };
   }
 
+  // ============================================================================================ v3 F4a: for the brief
+
+  /**
+   * v3 F4a (ADR 0063): every reference the overlay holds to these pages (each mention and collection item of another
+   * page; free, the snapshots'), for `arkona_brief`'s incoming Dependencies and Working pages. Call `reader` (or
+   * `ensureIndex`) first, so the overlay is up to date.
+   */
+  references(
+    projectId: string,
+    toPages: readonly string[],
+  ): {
+    readonly fromPage: string;
+    readonly fromDocument: string | null;
+    readonly via: 'mention' | 'collection';
+    readonly property: string | null;
+    readonly toPage: string;
+    readonly section: string | null;
+  }[] {
+    if (toPages.length === 0) return [];
+    const rows: Record<string, unknown>[] = [];
+    for (let i = 0; i < toPages.length; i += 400) {
+      const chunk = toPages.slice(i, i + 400);
+      rows.push(
+        ...(this.d.db
+          .prepare(
+            `SELECT from_page, from_document, via, property, to_page, section FROM appraisal_refs
+             WHERE project_id = ? AND to_page IN (${chunk.map(() => '?').join(', ')}) ORDER BY from_page`,
+          )
+          .all(projectId, ...chunk) as Record<string, unknown>[]),
+      );
+    }
+    return rows.map((r) => ({
+      fromPage: String(r.from_page),
+      fromDocument: (r.from_document as string | null) ?? null,
+      via: r.via === 'collection' ? ('collection' as const) : ('mention' as const),
+      property: (r.property as string | null) ?? null,
+      toPage: String(r.to_page),
+      section: (r.section as string | null) ?? null,
+    }));
+  }
+
+  /**
+   * v3 F4a (ADR 0063): the pending and conflicted proposals of a project whose operations touch these pages (an
+   * operation on one of them, or a page made or moved under one), for `arkona_brief`'s work in progress. Free.
+   */
+  proposalsTouching(
+    projectId: string,
+    pageIds: ReadonlySet<string>,
+  ): { readonly id: string; readonly state: string; readonly summary: string; readonly createdAt: number }[] {
+    const out: { id: string; state: string; summary: string; createdAt: number }[] = [];
+    for (const p of this.d.proposals.list({
+      project: projectId,
+      state: ['pending', 'conflicted'],
+      limit: 500,
+    })) {
+      const detail = this.d.proposals.detail(p.id);
+      const touches = (detail?.ops ?? []).some((op) => {
+        const params = (op.params ?? {}) as {
+          path?: Record<string, unknown>;
+          body?: Record<string, unknown>;
+        };
+        return [params.path?.resourceId, params.body?.parentId, params.body?.resourceId].some(
+          (x) => typeof x === 'string' && pageIds.has(x),
+        );
+      });
+      if (touches) out.push({ id: p.id, state: p.state, summary: p.summary, createdAt: p.createdAt });
+    }
+    return out;
+  }
+
   // ============================================================================================ findings and reports
 
   private toFinding(

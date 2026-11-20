@@ -67,6 +67,8 @@ export function renamePreview(plan: RenamePlan): Obj {
     ...(plan.historical.length ? { leftAsHistorical: plan.historical } : {}),
     ...(plan.notPlanned.length ? { notPlanned: plan.notPlanned } : {}),
     ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
+    // v3 F4a (ADR 0063): the new name's namesakes (a warning above for an exact full name; never a refusal).
+    ...(plan.namesakes?.length ? { namesakes: plan.namesakes } : {}),
     ...(plan.replacements.length ? { replacements: plan.replacements } : {}),
     ...(plan.notes.length ? { notes: plan.notes } : {}),
     // ADR 0058 amendment (B, D): never items, nothing to approve: for the agent to bring to the owner.
@@ -218,6 +220,11 @@ export async function runRename(
             ...(plan.historical.length ? { leftAsHistorical: plan.historical.slice(0, 100) } : {}),
             ...(plan.notPlanned.length ? { notPlanned: plan.notPlanned.slice(0, 100) } : {}),
             ...(plan.review.count > 0 ? { reviewOnly: plan.review } : {}),
+            // v3 F4a (ADR 0063): what the owner should know before approving: the new name is already in use.
+            ...(plan.warnings.some((w) => w.code === 'NAMESAKE')
+              ? { warnings: plan.warnings.filter((w) => w.code === 'NAMESAKE').map((w) => w.message) }
+              : {}),
+            ...(plan.namesakes?.length ? { namesakes: plan.namesakes } : {}),
             cost: preview.cost,
           },
           prefetched: plan.prefetched,

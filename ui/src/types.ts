@@ -1999,6 +1999,8 @@ export interface AuditSettingsView {
   manualOrderIndexes: string[];
   knownReferenceTypes: string[];
   strictReferenceTypes: boolean;
+  /** v3 F4a (ADR 0063): external skill names the governance check never reports. */
+  governanceAllowedNames?: string[];
 }
 
 export interface AuditConfigResponse {

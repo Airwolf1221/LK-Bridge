@@ -89,6 +89,10 @@ describe('the misses of the owner’s evaluation (14 to 15 November 2026)', () =
     ['arkona_split_appraisal', 'Setting packs (Arkona) > Arkona splits'],
     ['Arkona splits', 'Setting packs (Arkona) > Arkona splits'],
     ['Split an Arkona owner into several owners', 'Setting packs (Arkona) > Arkona splits'],
+    // v3 F4a (ADR 0063): the briefs and names part.
+    ['arkona_brief', 'Setting packs (Arkona) > Arkona briefs and names'],
+    ['arkona_name_check', 'Setting packs (Arkona) > Arkona briefs and names'],
+    ['Arkona briefs and names', 'Setting packs (Arkona) > Arkona briefs and names'],
     ['Make a character', 'Create a page or a character (Working first)'],
     ['set_facts', 'Change facts and links'],
     ['write_page', "Edit a page's text"],
@@ -213,6 +217,15 @@ describe('through the tools', () => {
     expect(r.body.matched).toBeDefined();
     const none = await call('get_markdown_guide', { section: 'nothing like it' });
     expect(none.body.error.code).toBe('SECTION_NOT_FOUND');
+  });
+
+  it('"How to decide" puts arkona_brief first for a subject, and arkona_name_check in every intake and rename (ADR 0063)', () => {
+    const text = readFileSync(new URL('../../docs/bridge-guide.md', import.meta.url), 'utf8');
+    const decide = text.slice(text.indexOf('## How to decide'), text.indexOf('\n## Find and read a page'));
+    expect(decide).toMatch(/^\*\*A question about a subject → `arkona_brief` first\*\*/m);
+    expect(decide.indexOf('`arkona_brief` first')).toBeLessThan(decide.indexOf('**Which tool?**'));
+    expect(decide).toMatch(/then `search` and `read_document` only for what it points to/);
+    expect(decide).toMatch(/^\*\*Every character intake and rename → `arkona_name_check`\*\*/m);
   });
 
   it('"How to decide" sends a subject’s rename to arkona_rename, on a line of its own (ADR 0058 amendment C)', () => {

@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased: v3 F4a, the governance drift audit, the name check and the topic brief (ADR 0063, 19 November 2026)
+
+From the owner's repository check of 19 November 2026 ([ADR 0063](adr/0063-v3-f4a-governance-drift-names-and-briefs.md)).
+All three are read-only (Repository Automation's Default Boundary: report, never repair); none writes to LegendKeeper,
+and none infers. No migration. **After deploying, approve the new pack version `arkona-2026-11-19-f4a` on the Packs
+page** (it carries the equivalence map and the cultures index); until then the package tools refuse as for every new
+version, the governance category reports nothing, and the name check looks up no culture owner.
+
+- **The governance drift audit** (the audits' new `governance` category, free, in every run after the nightly full
+  snapshot). It reads every tab of the governance root (Arkona's AI REPOSITORY, the pinned sections included) from the
+  snapshots and reports `governance_unknown_tool` (warning: a name in tool form the bridge does not have, an old bridge
+  call such as `write_lk {"job_action":"guide"}`, or a retired tool name), `governance_external_name` (a kebab-case skill
+  name such as `format-baisheng-owners`) and `governance_missing_reference` (a page, tab or standard named in a Startup,
+  Related Guidance, Source Boundaries or Dependencies section that resolves to nothing, read generously as the owner's
+  review asked: a page's subject with its prefix, a leading "Arkona -" and a trailing generic word removed, a tab, an
+  alias or a tag, in any area, so "Fiction Writing" is the Design References page "Arkona – Fiction Writing Reference";
+  a near miss such as "LK Bootstrap" names the closest match, the root's "AI Bootstrap" tab, and a name that is only part
+  of a longer one, such as "the Tagging Standard", is a near miss naming that name and its page, never silent). Each carries the
+  replacement the pack's equivalence map suggests (`get_bridge_guide`, `arkona_appraise_owner`, `arkona_change_impact`,
+  the chronology audit, `arkona_visual_hygiene`, `arkona_working_digest` (partial)), or a near miss's closest match, or
+  else a tool near it in spelling, to copy into a `write_page` edit by hand; no fix is ever proposed. **Allow this
+  name** on the Audits page
+  silences a real external skill for good (audited `audits.allow_name`; the list is in the audit settings).
+- **`arkona_name_check`** (free): namesakes among the current characters (Authoritative, Working, AU; never Archived)
+  by full name in either order ("Asagiri Miyabi" finds "Miyabi Asagiri"), given name, surname or alias, normalised for
+  case, accents and prefixes, each with its identity page, Naming Culture and Life State; with `namingCulture`, its
+  culture owner under Arkonan Cultures (through the culture map), that owner's naming sections and the characters
+  recorded with it; an unmapped culture is said so. It never suggests or infers a culture, race or nationality from a
+  name, and never proposes a rename. `arkona_create_character` and `arkona_rename` run the namesake part: an exact
+  full-name match is a `NAMESAKE` warning in the preview and in the proposal's summary; never a refusal.
+- **`arkona_brief`** (free; `live: true` one read): the brief on any subject (a nation, polity, culture, religion,
+  place, event, magic system, item; a character is delegated to `arkona_character_brief`): its owners with their
+  lifecycle, Reference Type, Scope, Last Major Revision and tags; their Dependencies one level (a Dependency on a Working
+  or Archived page flagged, quoting Project Navigation) and incoming Dependencies; Source Boundaries and Unresolved
+  Material (cut with a handle); Related Sources; the chronology rows naming it or an alias, with KCY and age table;
+  Working pages and pending proposals touching it; its open findings; and how fresh each source is. Every item labelled
+  by lifecycle, never merged; the Legacy Canon Archive and Design References left out unless `include` names them; an
+  ambiguous name refused with the candidates.
+- **Guidance.** `get_bridge_guide`'s "How to decide" puts `arkona_brief` first for any subject (before `search` and
+  `read_document`) and makes `arkona_name_check` part of every character intake and rename; a new guide part, "Arkona
+  briefs and names". The descriptions of `search`, `read_document`, `arkona_create_character`, `arkona_rename` and
+  `arkona_character_brief` point to the new tools. Two more tools are listed (74 in a `write` profile).
+
 ## Unreleased: split completeness, and the owner's run of the third review's sandbox checks (19 November 2026)
 
 Two items from the owner's tests, after R3 was merged and deployed. No migration; deploy normally. Agents' splits now

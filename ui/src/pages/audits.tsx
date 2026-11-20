@@ -56,6 +56,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   keep_regions: 'Keep regions',
   chronology: 'Chronology',
   assets: 'Asset library',
+  governance: 'Governance',
   audit: 'The audit itself',
 };
 
@@ -660,6 +661,26 @@ function FindingRow({
       () => api.post(`/audits/findings/${f.id}/unacknowledge`, { confirm: true, project }),
       'No longer acknowledged.',
     ).then((ok) => ok && reload());
+  // v3 F4a (ADR 0063): a governance finding naming an external skill: allow the name (a real skill used elsewhere).
+  const skill =
+    f.code === 'governance_external_name' && typeof f.evidence.name === 'string' ? f.evidence.name : null;
+  const allowName = async () => {
+    const yes = await confirm({
+      title: 'Allow this skill name?',
+      message: (
+        <p>
+          <strong>{skill}</strong> is a real skill you use elsewhere: the governance check never reports it
+          again. You can remove it later from the audit settings below.
+        </p>
+      ),
+      confirmLabel: 'Allow this name',
+    });
+    if (!yes) return;
+    void run(
+      () => api.post(`/audits/findings/${f.id}/allow-name`, { confirm: true, project }),
+      'Allowed: it is not reported again.',
+    ).then((ok) => ok && reload());
+  };
   return (
     <>
       <tr data-finding={f.id} data-code={f.code} data-severity={f.severity}>
@@ -721,9 +742,14 @@ function FindingRow({
             {f.state === 'open' && f.fix?.confirm && (
               <Badge tone="warn">{f.fix.confirm.shapeChange}: needs your confirmation</Badge>
             )}
-            {f.state === 'open' && (
+            {f.state === 'open' && f.category !== 'governance' && (
               <Button className="small" busy={busy} disabled={!project} onClick={recheck}>
                 Re-check now
+              </Button>
+            )}
+            {f.state === 'open' && skill && (
+              <Button className="small" busy={busy} disabled={!project} onClick={() => void allowName()}>
+                Allow this name
               </Button>
             )}
             {f.state === 'open' &&
@@ -1321,6 +1347,15 @@ function RulesEditor({
             rows={2}
             value={settings.manualOrderIndexes.join('\n')}
             onChange={(e) => setSettings({ ...settings, manualOrderIndexes: lines(e.target.value) })}
+          />
+        </label>
+        <label>
+          External skills you use elsewhere, never reported by the governance check (one name per line; “Allow
+          this name” on a finding adds one)
+          <textarea
+            rows={2}
+            value={(settings.governanceAllowedNames ?? []).join('\n')}
+            onChange={(e) => setSettings({ ...settings, governanceAllowedNames: lines(e.target.value) })}
           />
         </label>
       </div>

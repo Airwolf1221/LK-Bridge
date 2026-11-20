@@ -50,6 +50,14 @@ import type { TypeHook } from '../hooks.js';
 import type { Pack, RoleRule, TypeRules } from '../types.js';
 import { computeTags, type HeldSlot } from './tags.js';
 import {
+  currentCharacters,
+  namesakeLine,
+  namesakesOf,
+  namesakeView,
+  splitAliases,
+  usableName,
+} from '../naming/namesakes.js';
+import {
   blockText,
   checkBody,
   isPlaceholder,
@@ -517,6 +525,8 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     inheritance: null,
   };
   const props = rules.sidebar.property;
+  /** v3 F4a: the characters CHARACTER_EXISTS names (its refusal says so; they are not repeated as namesakes). */
+  const existingIds = new Set<string>();
 
   const characterCandidates = (q: string) => findCharacters(ctx, q);
 
@@ -587,6 +597,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     }
   } else if (name !== '') {
     const found = characterCandidates(name);
+    for (const s of found.subjects) existingIds.add(s.identity.id);
     if (found.subjects.length > 0) {
       refuse(
         'CHARACTER_EXISTS',
@@ -1617,6 +1628,65 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     );
   }
 
+  // v3 F4a (ADR 0063): a new character's namesakes (Character Architecture's naming-culture review), free from the tree.
+  // An exact full-name match is a warning, in the preview and in the proposal's summary the owner reads; a partial one
+  // (given name, surname, alias) a note. Never a refusal: names may be shared.
+  let namesakeExtra: Obj | null = null;
+  let namesakeSummary: string | undefined;
+  if (mode === 'new' && hook.name === 'character' && name !== '') {
+    const scan = currentCharacters({ ctx, rules, lifecycle: env.lifecycle });
+    const found = namesakesOf(
+      scan,
+      {
+        name: subject,
+        givenName: identity.givenName?.value ?? null,
+        surname: identity.surname?.value ?? null,
+        aliases: splitAliases(identity.aliases?.value),
+      },
+      usableName(rules),
+      existingIds,
+    );
+    const exact = found.filter((n) => n.severity === 'warning');
+    const partial = found.filter((n) => n.severity === 'info');
+    if (exact.length > 0) {
+      warn(
+        'NAMESAKE',
+        `A current character already goes by this name: ${exact
+          .slice(0, 5)
+          .map(namesakeLine)
+          .join(
+            '; ',
+          )}. Names may be shared, so nothing is refused: tell the owner, and ask whether this is a different person (Character Architecture's naming-culture review). arkona_name_check lists every namesake.`,
+        { namesakes: exact.slice(0, 10).map(namesakeView) },
+      );
+      namesakeSummary = `namesake: ${exact
+        .slice(0, 3)
+        .map(
+          (n) =>
+            `${n.character.subject} (${[n.character.lifecycle, ...(n.character.au ? ['AU'] : [])].join(', ')})`,
+        )
+        .join(
+          ', ',
+        )}${exact.length > 3 ? ` and ${exact.length - 3} more` : ''} already ${exact.length === 1 ? 'goes' : 'go'} by this name`;
+    }
+    if (partial.length > 0)
+      notes.push(
+        `Namesakes (info: a given name, surname or alias in common): ${partial
+          .slice(0, 5)
+          .map(namesakeLine)
+          .join('; ')}${partial.length > 5 ? `; and ${partial.length - 5} more (arkona_name_check)` : ''}.`,
+      );
+    if (found.length > 0)
+      namesakeExtra = {
+        namesakes: {
+          warning: exact.length,
+          info: partial.length,
+          list: found.slice(0, 10).map(namesakeView),
+          rule: 'Names may be shared: never refused. The bridge never suggests a naming culture, race or nationality from a name.',
+        },
+      };
+  }
+
   const allPages = indexPage ? [indexPage, ...pages] : pages;
   const absentUnder: { parentId: string; names: string[] }[] = [];
   if (mode === 'new') {
@@ -1661,6 +1731,8 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     },
     target,
     notes,
+    ...(namesakeExtra ? { extra: namesakeExtra } : {}),
+    ...(namesakeSummary ? { summaryNote: namesakeSummary } : {}),
     ...(images.some((i) => i.takeover)
       ? {
           takeovers: images

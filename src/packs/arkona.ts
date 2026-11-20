@@ -655,6 +655,45 @@ const rules: PackRules = packRulesSchema.parse({
     excludedRoutineTags: [],
     excludedAreas: ['Legacy Canon Archive', 'Design References', 'Repository Governance'],
   },
+  // v3 F4a (ADR 0063): the governance drift audit (the audits' `governance` category), from the owner's repository check
+  // of 19 November 2026. The old bridge's call shapes; the equivalence map (each finding suggests its `use` as the
+  // replacement, to copy into a write_page edit by hand); the sections where a missing reference is looked for.
+  governanceAudit: {
+    legacyNames: ['write_lk', 'read_lk', 'job_action'],
+    equivalents: [
+      { name: 'write_lk', when: { job_action: 'guide' }, use: 'get_bridge_guide' },
+      { name: 'format-baisheng-owners', use: 'arkona_appraise_owner' },
+      { name: 'audit-baisheng-change-impact', use: 'arkona_change_impact' },
+      {
+        name: 'audit-baisheng-chronology',
+        use: 'the chronology audit',
+        note: 'the audits’ chronology findings: audit_findings with category "chronology"',
+      },
+      { name: 'intake-baisheng-visuals', use: 'arkona_visual_hygiene' },
+      {
+        name: 'resume-baisheng-workstreams',
+        use: 'arkona_working_digest',
+        partial: true,
+        note: 'it lists Working pages, pending proposals and approved packages not yet promoted; it does not resume a workstream (bridge_job_resume continues one stopped job)',
+      },
+    ],
+    referenceSections: ['Startup', 'Related Guidance', 'Source Boundaries', 'Dependencies'],
+    // The owner's review (20 November 2026): resolution is generous before anything is reported, but a name found only
+    // as a run inside a longer name is a near miss, never silent (the owner's decision). "Fiction Writing" is
+    // the Design References page "Arkona – Fiction Writing Reference" (tagged "Fiction Writing"), never a missing page.
+    resolution: {
+      // "Arkona" and a dash (any dash, any spacing): "Arkona – Fiction Writing Reference".
+      leading: ['Arkona -'],
+      generic: ['Reference', 'Standard', 'Workflow', 'Index'],
+    },
+  },
+  // v3 F4a (ADR 0063): the name check. A Naming Culture resolves through the culture map to its owner under Arkonan
+  // Cultures; names are matched in both orders, and the presentation standard is pointed to, never applied by guesswork.
+  naming: {
+    culturesIndex: 'Arkonan Cultures',
+    sections: [],
+    presentationStandard: 'East Asian Personal Name Presentation Standard',
+  },
   rulings: [
     {
       key: 'au-status-tag',
@@ -676,9 +715,11 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // Arkona. `-f3-4` (ADR 0055, 17 November 2026; session F3.4): the per-tool "always propose" switches. `-f3e` (ADR 0059,
   // 18 November 2026; session F3e): the split appraisal's triggers and the split tool's audits (`splits`, D4). `-f3f`
   // (ADR 0060, 19 November 2026; session F3f): the retag rules (`retag`), the retag apply's switch, and the Tagging
-  // Standard's "Excluded Routine Tags" pinned.
-  seed: 'arkona-2026-11-19-f3f',
+  // Standard's "Excluded Routine Tags" pinned. `-f4a` (ADR 0063, 19 November 2026; session F4a): the governance drift
+  // audit's equivalence map and sections (`governanceAudit`) and the name check's culture index (`naming`).
+  seed: 'arkona-2026-11-19-f4a',
   supersedes: [
+    'arkona-2026-11-19-f3f',
     'arkona-2026-11-18-f3e',
     'arkona-2026-11-16',
     'arkona-2026-11-16-f3b',

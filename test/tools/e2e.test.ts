@@ -78,6 +78,9 @@ describe('the MCP surface with the official client', () => {
         // v3 F3f (ADR 0060): the retag tools.
         'arkona_retag_audit',
         'arkona_retag_apply',
+        // v3 F4a (ADR 0063): the name check and the topic brief.
+        'arkona_name_check',
+        'arkona_brief',
         'bridge_job_resume',
         'create_document',
         'create_index',
@@ -147,6 +150,9 @@ describe('the MCP surface with the official client', () => {
       'read_document',
       'get_markdown_guide',
       'get_bridge_guide',
+      // v3 F4a (ADR 0063): read-only, free.
+      'arkona_name_check',
+      'arkona_brief',
     ]) {
       expect(by[n]!.annotations?.readOnlyHint, n).toBe(true);
     }

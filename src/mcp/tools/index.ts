@@ -26,6 +26,7 @@ import { snapshotTools } from './snapshots.js';
 import { auditTools } from './audits.js';
 import { appraisalTools } from './appraisal.js';
 import { retagTools } from './retag.js';
+import { arkonaReadTools } from './arkona-reads.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -61,6 +62,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     ...appraisalTools(deps),
     // v3 F3f (ADR 0060): the Arkona pack's retag audit (read-only) and apply (a proposal).
     ...retagTools(deps),
+    // v3 F4a (ADR 0063): the Arkona pack's name check and topic brief (read-only, free).
+    ...arkonaReadTools(deps),
     // v2 C2c (ADR 0035): the page lifecycle.
     ...lifecycleTools(deps),
     ...documentTools(deps),

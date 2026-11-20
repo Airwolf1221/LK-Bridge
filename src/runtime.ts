@@ -1,6 +1,8 @@
 import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
+import { governanceAuditHook } from './packs/governance-audit.js';
+import { knownNamesOf } from './mcp/tools/known-names.js';
 import { textRemovalReader } from './policy/text-removal.js';
 import { registerPackEngine } from './packs/engine/checks.js';
 import { PACK_CHECKS } from './packs/engine/job.js';
@@ -764,6 +766,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v3 F3f (ADR 0060): the retag service is made later (it needs the appraisal and the proposals); the audits (its tag
   // findings) and Revert (an approved retag batch is revertible) reach it through this.
   const retagRef: { current: RetagService | null } = { current: null };
+  // v3 F4a (ADR 0063): the governance check compares the governance pages with the bridge's tool list, made below.
+  const toolsRef: { current: readonly McpToolProvider[] } = { current: [] };
   const audits: Audits = new Audits({
     db: o.db,
     snapshots,
@@ -781,6 +785,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     lifecycleTags: (projectId) => packs.lifecycleRules(projectId),
     // v3 F3f (ADR 0060): the tag findings from the retag engine, where the approved pack has retag rules.
     retag: (projectId) => retagRef.current?.auditHook(projectId) ?? null,
+    // v3 F4a (ADR 0063): the governance documents against the bridge, where an attached pack has drift rules.
+    governance: (projectId) =>
+      governanceAuditHook({
+        packs: packs.forProject(projectId),
+        rulesAt: (id, version) => packs.store.rulesAt(id, version),
+        projectName: projectStore.byId(projectId)?.name ?? null,
+        known: () => knownNamesOf(toolsRef.current),
+      }),
   });
   audits.start();
   // v3 F3c (ADR 0054): the appraisal tools and the full-text index, over the snapshot overlay, the audits, the asset tree
@@ -1220,6 +1232,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.
   const tools: McpToolProvider[] = [...bridgeTools, ...policy.tools];
+  // v3 F4a (ADR 0063): the same array, kept current as pack tools join and leave it.
+  toolsRef.current = tools;
   // v3 F3a (ADR 0050): a pack's tools follow its data: every tool name its types name besides the explicit ones gets the
   // generic pack tool, added (and removed) in this same list when the pack's rules change, so a new type needs no code.
   const syncPackTools = () => {

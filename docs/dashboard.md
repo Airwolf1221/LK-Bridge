@@ -856,7 +856,12 @@ each nightly full snapshot completes, and **Run an audit now** runs one at once.
     page alphabetically under the same parent, adding a missing required tag (never removing one), and the chronology's
     `sync_timeline_event`. If the page has changed since the audit, it says so and proposes nothing.
   - **Re-check now**: reads the finding's page live (a few requests) and runs its check again; the finding is still there (its
-    source becomes "read live") or gone. Findings about more than one page cannot be re-checked.
+    source becomes "read live") or gone. Findings about more than one page cannot be re-checked, nor can governance findings
+    (the next run checks them).
+  - **Allow this name** (v3 F4a, [ADR 0063](adr/0063-v3-f4a-governance-drift-names-and-briefs.md)), on a governance
+    finding naming an external skill (`governance_external_name`): after a confirmation, the name joins the allowed names
+    in the audit settings and is never reported again (its findings go at once). Audited (`audits.allow_name`). Remove a
+    name from the settings' list to have it reported again.
   - Lifecycle findings are **never fixed by an audit**: the lifecycle tools refuse an inconsistent page and you decide.
 - **Runs**: each audit with its trigger (`snapshot`, `manual`, `schedule`), state, duration, snapshot and result.
 - **Rules and settings**: the rules editor, the tag-definition source and the audit settings. A rule selects pages (a
@@ -864,11 +869,22 @@ each nightly full snapshot completes, and **Run an audit now** runs one at once.
   names a template (a registry role, a name or an id). Until you save a list the rules are the **seeded defaults from the
   registry** (Character Core, Compact Character Reference, the Index template). The tag-definition source is a page (found by
   name) and one of its documents. Settings: report pages no rule matches, the stale limit, how strictly Reference Types are
-  judged, the Reference Types that are fine, and indexes in a manual order. **Saving asks you to sign in again** (within five
+  judged, the Reference Types that are fine, indexes in a manual order, and (v3 F4a) the external skills the governance
+  check never reports. **Saving asks you to sign in again** (within five
   minutes, as the canon rules do) and is audited (`audits.set_config`).
 
-Audited: `audits.set_config`, `audits.acknowledge`, `audits.unacknowledge`, `audits.propose_fix`, `audits.recheck`. The audits'
-maintenance job `audit-run` (off by default) is on the Maintenance Jobs page.
+**The Governance category** (v3 F4a) compares the governance pages (every tab of the AI REPOSITORY root the pack's
+governance sources sit on) with the bridge: a tool name the bridge does not have or an old bridge call
+(`governance_unknown_tool`, a warning), an external skill name (`governance_external_name`), and a page, tab or standard
+named in a Startup, Related Guidance, Source Boundaries or Dependencies section that resolves to nothing, read
+generously: a page's subject without its prefixes and generic word, a tab, an alias or a tag, in any area
+(`governance_missing_reference`; a near miss, such as "LK Bootstrap" for the "AI Bootstrap" tab, names the closest
+match). Each finding suggests a replacement (the pack's equivalence map's, or a near miss's closest match), to copy into
+the page by hand; **no fix is ever proposed**: governance edits are yours. It runs once the pack version
+`arkona-2026-11-19-f4a` is approved.
+
+Audited: `audits.set_config`, `audits.acknowledge`, `audits.unacknowledge`, `audits.propose_fix`, `audits.recheck`,
+`audits.allow_name`. The audits' maintenance job `audit-run` (off by default) is on the Maintenance Jobs page.
 
 ## Appraisal (v3 F3c)
 

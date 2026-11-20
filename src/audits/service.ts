@@ -19,6 +19,13 @@ import type { ProjectSettings } from '../projects/settings.js';
 import { auditConfigInputSchema, effectiveRules, type AuditConfig, type AuditRule } from './config.js';
 import { chronologyCheck, keepRegionsCheck, lifecycleCheck } from './checks/lifecycle.js';
 import { duplicateFoldersCheck, type AssetLibrary } from './checks/assets.js';
+import {
+  governanceCheck,
+  type GovernanceAuditInput,
+  type GovernanceDocument,
+  type KnownNames,
+} from './checks/governance.js';
+import type { GovernanceAuditRules } from '../packs/types.js';
 import { orderingCheck, referencesCheck, unclassifiedCheck } from './checks/references.js';
 import { rulesCheck, tagDefinitionOf } from './checks/rules.js';
 import { factsCheck, taxonomyCheck } from './checks/taxonomy.js';
@@ -67,7 +74,21 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'keep-regions', run: keepRegionsCheck },
   { id: 'chronology', run: chronologyCheck },
   { id: 'assets', run: duplicateFoldersCheck },
+  // v3 F4a (ADR 0063): the governance documents against the bridge (report only).
+  { id: 'governance', run: governanceCheck },
 ];
+
+/**
+ * v3 F4a (ADR 0063): what the governance check needs of the bridge for one project: the drift rules of the pack that
+ * governs it, the pages its governance sources sit on in this project (the governance root, whose tabs are read from the
+ * snapshots), and the names the bridge knows.
+ */
+export interface GovernanceAuditHook {
+  readonly rules: GovernanceAuditRules;
+  readonly packName: string;
+  readonly roots: readonly string[];
+  readonly known: KnownNames;
+}
 
 export interface AuditDeps {
   readonly db: Db;
@@ -99,6 +120,8 @@ export interface AuditDeps {
   readonly lifecycleTags?: (projectId: string) => LifecycleTagRules;
   /** v3 F3f (ADR 0060): the retag engine's hook for a project (null: its approved pack has no retag rules). */
   readonly retag?: (projectId: string) => RetagAuditHook | null;
+  /** v3 F4a (ADR 0063): the governance check's hook for a project (null: no pack's drift rules govern it). */
+  readonly governance?: (projectId: string) => GovernanceAuditHook | null;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -184,6 +207,47 @@ export class Audits {
     return f;
   }
 
+  /**
+   * v3 F4a (ADR 0063): the owner allows the skill a `governance_external_name` finding names (a real skill used
+   * elsewhere): the name joins the audit settings' allowed names, the governance check never reports it again, and its
+   * open findings go now. Audited (`audits.allow_name`). Withdrawn by removing it from the allowed names in the audit
+   * settings (which asks for the step-up, as every settings change does).
+   */
+  allowName(
+    actor: string,
+    projectId: string,
+    findingId: number,
+  ): { readonly finding: Finding | null; readonly name: string; readonly allowed: readonly string[] } {
+    const f = this.store.get(projectId, findingId);
+    if (!f) throw new AuditError('NOT_FOUND', `No finding ${findingId}.`);
+    if (f.code !== 'governance_external_name')
+      throw new AuditError(
+        'NOT_ALLOWABLE',
+        'Only an external skill name (governance_external_name) can be allowed; acknowledge any other finding instead.',
+      );
+    const name = typeof f.evidence.name === 'string' ? f.evidence.name.trim() : '';
+    if (name === '') throw new AuditError('NOT_ALLOWABLE', 'This finding names no skill.');
+    const had = this.store.config(projectId).settings.governanceAllowedNames;
+    const known = had.some((n) => n.toLowerCase() === name.toLowerCase());
+    const allowed = known ? had : [...had, name];
+    if (!known)
+      this.store.setConfig(projectId, { settings: { governanceAllowedNames: [...allowed] } }, actor);
+    const runId = `allow:${this.d.now()}`;
+    for (const x of this.store.list(projectId, {
+      code: ['governance_external_name'],
+      acknowledged: 'include',
+      limit: 1000,
+    }).findings)
+      if (typeof x.evidence.name === 'string' && x.evidence.name.toLowerCase() === name.toLowerCase())
+        this.store.markGone(projectId, x.id, runId);
+    this.d.audit(actor, 'audits.allow_name', projectId, known ? { name } : null, {
+      finding: findingId,
+      name,
+      allowed: allowed.length,
+    });
+    return { finding: this.store.get(projectId, findingId), name, allowed };
+  }
+
   // ============================================================================================ reading
 
   list(projectId: string, f: FindingFilter = {}) {
@@ -235,9 +299,12 @@ export class Audits {
       const types = registry.listTypes();
       const treeSettings = treeSettingsFrom(settings);
       const source = this.d.source ? this.d.source(projectId) : sourceOf(this.d.snapshots);
+      // v3 F4a (ADR 0063): the governance root's tabs are kept whole for the governance check (only those pages).
+      const governance = this.governanceHook(projectId);
       const built = await buildModel(source, projectId, {
         propertiesName: treeSettings.propertiesName,
         tagSource: cfg.tagSource,
+        ...(governance ? { keepBlocksOf: new Set(governance.roots) } : {}),
       });
       if (!built.ok) {
         const summary =
@@ -246,7 +313,15 @@ export class Audits {
         return { runId: run.id, state: 'skipped', summary, changed: false, skipped: true };
       }
       const model = built.model;
-      const ctx = this.context(projectId, model, cfg, types, treeSettings, settings);
+      const ctx = this.context(
+        projectId,
+        model,
+        cfg,
+        types,
+        treeSettings,
+        settings,
+        governance ? governanceInput(governance, model, cfg) : null,
+      );
       const drafts: FindingDraft[] = [];
       for (const c of CHECKS) {
         try {
@@ -420,7 +495,9 @@ export class Audits {
         'RECHECK_UNSUPPORTED',
         f.category === 'chronology'
           ? 'Chronology findings are re-checked by the chronology check itself (Chronology page: “Run the check now”).'
-          : 'This finding is about more than one page (or about the audit itself), so it cannot be re-checked from one page. Run the audit again after the next full snapshot.',
+          : f.category === 'governance'
+            ? 'Governance findings are checked against the whole repository and the bridge’s tools, so they are not re-checked from one page: run the audit again once the snapshots hold the edited governance page (the next change snapshot or full snapshot).'
+            : 'This finding is about more than one page (or about the audit itself), so it cannot be re-checked from one page. Run the audit again after the next full snapshot.',
       );
     const settings = this.d.projectSettings(projectId);
     const cfg = this.store.config(projectId);
@@ -564,6 +641,18 @@ export class Audits {
 
   // ============================================================================================ context
 
+  /** v3 F4a (ADR 0063): the governance check's hook for a project, or null (none, or it could not be worked out). */
+  private governanceHook(projectId: string): GovernanceAuditHook | null {
+    if (!this.d.governance) return null;
+    try {
+      const h = this.d.governance(projectId);
+      return h && h.roots.length > 0 ? h : null;
+    } catch (e) {
+      this.d.log?.warn({ err: e, projectId }, 'the governance check could not be set up; it is skipped');
+      return null;
+    }
+  }
+
   private context(
     projectId: string,
     model: Awaited<ReturnType<typeof buildModel>> extends infer R
@@ -575,6 +664,7 @@ export class Audits {
     types: ReturnType<ReturnType<Registry['forProject']>['store']['listTypes']>,
     treeSettings: ReturnType<typeof treeSettingsFrom>,
     settings: Readonly<ProjectSettings>,
+    governance: GovernanceAuditInput | null = null,
   ): AuditContext {
     const registry = this.d.registry.forProject(projectId).store;
     const chron = this.d.chronology;
@@ -682,6 +772,7 @@ export class Audits {
         const named = rows.find((r) => r.name);
         return { name: named?.name ?? null, deleted: rows[0]!.piece === 'deleted' };
       },
+      ...(governance ? { governance } : {}),
     });
   }
 
@@ -729,6 +820,34 @@ const safeJson = (s: string): unknown => {
     return null;
   }
 };
+
+/**
+ * v3 F4a (ADR 0063): the governance check's input: every page document of the governance root (its tabs), with their
+ * blocks as the snapshots hold them (null for a piece the store could not give), and the names the owner allowed.
+ */
+function governanceInput(h: GovernanceAuditHook, model: AuditModel, cfg: AuditConfig): GovernanceAuditInput {
+  const documents: GovernanceDocument[] = [];
+  for (const root of h.roots) {
+    const page = model.pages.get(root);
+    if (!page) continue;
+    for (const d of page.documents) {
+      if (d.type !== 'page') continue;
+      documents.push({
+        pageId: root,
+        documentId: d.id,
+        name: d.name,
+        blocks: model.blocks?.get(d.id) ?? null,
+      });
+    }
+  }
+  return {
+    rules: h.rules,
+    packName: h.packName,
+    documents,
+    known: h.known,
+    allowed: new Set(cfg.settings.governanceAllowedNames.map((n) => n.toLowerCase())),
+  };
+}
 
 const summaryOf = (c: AuditConfig) => ({
   rules:
