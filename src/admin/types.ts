@@ -1,5 +1,6 @@
 import type { Packs } from '../packs/service.js';
 import type { Appraisal } from '../appraisal/index.js';
+import type { Consistency } from '../consistency/service.js';
 import type { ImageService } from '../images/service.js';
 import type { Lifecycle } from '../lifecycle/index.js';
 import type { Audits } from '../audits/index.js';
@@ -70,6 +71,8 @@ export interface AdminRuntime {
   readonly packs?: Packs;
   /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (the Appraisal page); optional for tests. */
   readonly appraisal?: Appraisal;
+  /** v3 F4b (ADR 0064): the consistency check (the Audits page's "Pick the right value"); optional for tests. */
+  readonly consistency?: Consistency;
   /** v3 F3.4 (ADR 0055): the review queue of direct writes (the Review page); optional for tests' runtimes. */
   readonly review?: ReviewService;
   /** v3 F3.4 (ADR 0055): Revert of a direct-write job (the Review and Jobs pages); optional for tests' runtimes. */

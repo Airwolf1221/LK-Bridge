@@ -25,6 +25,7 @@ export type Category =
   | 'chronology' // D1's chronology check, folded in
   | 'assets' // v3 F2: the asset library (duplicate folders)
   | 'governance' // v3 F4a: the governance documents against the bridge (old tool names, external skills, missing names)
+  | 'consistency' // v3 F4b: dates and identity facts restated differently on Authoritative pages (Contradictory only)
   | 'audit'; // about the run itself (a stale snapshot, a missing template read)
 
 export const CATEGORIES: readonly Category[] = [
@@ -41,6 +42,7 @@ export const CATEGORIES: readonly Category[] = [
   'chronology',
   'assets',
   'governance',
+  'consistency',
   'audit',
 ];
 
@@ -461,6 +463,28 @@ export const CODES = {
     category: 'governance',
     severity: 'info',
     title: 'A governance page names a page, tab or standard the AI REPOSITORY does not have',
+  },
+  // ---- consistency (v3 F4b, ADR 0064): Contradictory pairs only (Authoritative against Authoritative); report only, the
+  // owner picks the right value on the dashboard ("Pick the right value"), which becomes one proposal
+  consistency_birth: {
+    category: 'consistency',
+    severity: 'warning',
+    title: 'A birth is restated differently on Authoritative pages (Contradictory)',
+  },
+  consistency_death: {
+    category: 'consistency',
+    severity: 'warning',
+    title: 'A death is restated differently on Authoritative pages (Contradictory)',
+  },
+  consistency_identity: {
+    category: 'consistency',
+    severity: 'warning',
+    title: 'An identity fact is restated differently on Authoritative pages (Contradictory)',
+  },
+  consistency_chronology: {
+    category: 'consistency',
+    severity: 'warning',
+    title: 'A chronology row’s date differs from the same event on an Authoritative page (Contradictory)',
   },
   // ---- the run itself
   stale_snapshot: {

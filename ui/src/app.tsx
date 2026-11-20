@@ -105,6 +105,8 @@ export const SUB_PAGES: { module: string; parent: string }[] = [
   { module: 'evaluation-compare', parent: '/evaluation' },
   { module: 'evaluation-shared', parent: '/evaluation' },
   { module: 'chronology-ties', parent: '/chronology' },
+  // v3 F4b (ADR 0064): "Pick the right value" on a consistency finding of the Audits page.
+  { module: 'consistency-pick', parent: '/audits' },
   { module: 'registry', parent: '/mappings' },
 ];
 

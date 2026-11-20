@@ -81,6 +81,22 @@ export interface AuditContext {
    * the bridge's tool names and the names the owner allowed; null or absent: no governance check for this project.
    */
   readonly governance?: GovernanceAuditInput | null;
+  /**
+   * v3 F4b (ADR 0064): the consistency check's Contradictory findings (computed from the same snapshots by the
+   * consistency service: the facts index over the appraisal's overlay); null or absent: no consistency check here.
+   */
+  readonly consistency?: readonly ConsistencyAuditItem[] | null;
+}
+
+/** v3 F4b (ADR 0064): one Contradictory finding of the consistency check, as the audits receive it. */
+export interface ConsistencyAuditItem {
+  /** Its stable id (`cf_…`), the same in the tool, the audits and the dashboard. */
+  readonly id: string;
+  readonly code:
+    'consistency_birth' | 'consistency_death' | 'consistency_identity' | 'consistency_chronology';
+  readonly pageId: string;
+  readonly message: string;
+  readonly evidence: Readonly<Record<string, unknown>>;
 }
 
 /** v3 F3f: what the audits need of the retag engine (src/packs/retag): its context and each page's records. */

@@ -202,6 +202,23 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'namesakes',
       'naming culture',
     ],
+    // v3 F4b (ADR 0064): the consistency check and "as of a date".
+    'Arkona consistency checks': [
+      'A character at a date (free)',
+      'Dates and identity facts that disagree (free)',
+      'Which characters have readable dates (free)',
+      'Suggest the right value to the owner',
+      // Not `arkona_as_of` or "as of": "as" and "of" are dropped, leaving "arkona" (the pack's own section).
+      'a character at a date',
+      'age at a date',
+      'arkona_as_of_coverage',
+      'arkona_consistency',
+      'arkona_consistency_suggest',
+      'consistency',
+      'contradiction',
+      'contradictions',
+      'pick the right value',
+    ],
     // v3 F3c (ADR 0054): the appraisal part (read-only reports, fixes are proposals).
     'Arkona appraisal': [
       'Appraise Arkona pages, or see what a change breaks',

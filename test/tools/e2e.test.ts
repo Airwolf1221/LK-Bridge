@@ -81,6 +81,11 @@ describe('the MCP surface with the official client', () => {
         // v3 F4a (ADR 0063): the name check and the topic brief.
         'arkona_name_check',
         'arkona_brief',
+        // v3 F4b (ADR 0064): the consistency check and "as of a date".
+        'arkona_consistency',
+        'arkona_as_of',
+        'arkona_as_of_coverage',
+        'arkona_consistency_suggest',
         'bridge_job_resume',
         'create_document',
         'create_index',
@@ -153,6 +158,10 @@ describe('the MCP surface with the official client', () => {
       // v3 F4a (ADR 0063): read-only, free.
       'arkona_name_check',
       'arkona_brief',
+      // v3 F4b (ADR 0064): read-only, free.
+      'arkona_consistency',
+      'arkona_as_of',
+      'arkona_as_of_coverage',
     ]) {
       expect(by[n]!.annotations?.readOnlyHint, n).toBe(true);
     }

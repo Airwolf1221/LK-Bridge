@@ -235,3 +235,17 @@ what to do when nothing is near.
 "Re-check now" is not offered for these: a governance finding depends on the whole repository and the bridge's tools, so
 the next run (after the edited page reaches the snapshots) checks it again. A run with and without the drift rules
 leaves every other category's findings exactly as they were.
+
+## Consistency (category Consistency; v3 F4b)
+
+[ADR 0064](adr/0064-v3-f4b-consistency-and-as-of.md). Only **Contradictory** pairs become findings: a birth, a death, an
+identity fact or a chronology row's date that two Authoritative pages state differently (spans that cannot both be true;
+values compared normalised). Stable codes: `consistency_birth`, `consistency_death`, `consistency_identity`,
+`consistency_chronology` (all `warning`), each keyed by its consistency id (`cf_…`, the same in `arkona_consistency`), on
+the character's identity page; its evidence holds the identity page's value and each disagreeing restatement (page,
+lifecycle, section, excerpt). Working proposals, gaps, historical material and unreadable dates stay in the tool. A
+finding clears when the pages agree (the next run over the snapshots that hold the edit). It is computed by the
+consistency service from the same snapshots (its facts index over the appraisal's overlay), and handed to the check,
+which stays a pure function of its context. No "Propose a fix" and no "Re-check now": the owner's **Pick the right
+value** on the Audits page (a step-up) shows both values side by side, the agents' suggestions and earlier picks, and
+makes ONE proposal editing every page that disagrees (docs/tools.md).

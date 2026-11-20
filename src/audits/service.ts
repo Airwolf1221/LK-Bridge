@@ -53,6 +53,8 @@ import { buildModel, sourceOf, type AuditModel, type SnapshotSource } from './re
 import { sidebarPiece } from '../snapshots/canonical.js';
 import { classifyName } from '../tree/classify.js';
 import { AuditStore, evidenceHashOf, fingerprintOf, type FindingFilter, type StoredDraft } from './store.js';
+import { consistencyCheck } from './checks/consistency.js';
+import type { ConsistencyAuditItem } from './context.js';
 import {
   CODES,
   type AuditRun,
@@ -76,6 +78,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'assets', run: duplicateFoldersCheck },
   // v3 F4a (ADR 0063): the governance documents against the bridge (report only).
   { id: 'governance', run: governanceCheck },
+  // v3 F4b (ADR 0064): dates and identity facts restated differently on Authoritative pages (Contradictory only).
+  { id: 'consistency', run: consistencyCheck },
 ];
 
 /**
@@ -122,6 +126,11 @@ export interface AuditDeps {
   readonly retag?: (projectId: string) => RetagAuditHook | null;
   /** v3 F4a (ADR 0063): the governance check's hook for a project (null: no pack's drift rules govern it). */
   readonly governance?: (projectId: string) => GovernanceAuditHook | null;
+  /**
+   * v3 F4b (ADR 0064): the consistency check's Contradictory findings for a project (null: the consistency rules do not
+   * apply here). Free: the consistency service's facts index over the same snapshots.
+   */
+  readonly consistency?: (projectId: string) => Promise<readonly ConsistencyAuditItem[] | null>;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -321,6 +330,7 @@ export class Audits {
         treeSettings,
         settings,
         governance ? governanceInput(governance, model, cfg) : null,
+        await this.consistencyItems(projectId),
       );
       const drafts: FindingDraft[] = [];
       for (const c of CHECKS) {
@@ -641,6 +651,17 @@ export class Audits {
 
   // ============================================================================================ context
 
+  /** v3 F4b (ADR 0064): the consistency check's findings, or null (not configured here, or it could not be read). */
+  private async consistencyItems(projectId: string): Promise<readonly ConsistencyAuditItem[] | null> {
+    if (!this.d.consistency) return null;
+    try {
+      return await this.d.consistency(projectId);
+    } catch (e) {
+      this.d.log?.warn({ err: e, projectId }, 'the consistency check could not run; it is skipped');
+      return null;
+    }
+  }
+
   /** v3 F4a (ADR 0063): the governance check's hook for a project, or null (none, or it could not be worked out). */
   private governanceHook(projectId: string): GovernanceAuditHook | null {
     if (!this.d.governance) return null;
@@ -665,6 +686,7 @@ export class Audits {
     treeSettings: ReturnType<typeof treeSettingsFrom>,
     settings: Readonly<ProjectSettings>,
     governance: GovernanceAuditInput | null = null,
+    consistency: readonly ConsistencyAuditItem[] | null = null,
   ): AuditContext {
     const registry = this.d.registry.forProject(projectId).store;
     const chron = this.d.chronology;
@@ -773,6 +795,7 @@ export class Audits {
         return { name: named?.name ?? null, deleted: rows[0]!.piece === 'deleted' };
       },
       ...(governance ? { governance } : {}),
+      ...(consistency ? { consistency } : {}),
     });
   }
 

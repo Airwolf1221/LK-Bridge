@@ -95,7 +95,7 @@ export function findingView(f: AppraisalFinding, full: boolean): Record<string, 
 }
 
 /** One page of a report as an answer. */
-function answer(
+export function answer(
   pd: ProjectDeps,
   mctx: McpToolContext,
   tool: string,

@@ -101,13 +101,13 @@ const DATE_HELP =
 
 // ============================================================================================ the chronology now
 
-interface Chrono {
+export interface Chrono {
   readonly ctx: RepoCtx;
   readonly config: ChronologyConfig;
   readonly resource: TreeNode;
 }
 
-function chrono(pd: ProjectDeps): { ok: true; value: Chrono } | { ok: false; result: McpToolResult } {
+export function chrono(pd: ProjectDeps): { ok: true; value: Chrono } | { ok: false; result: McpToolResult } {
   const rc = repoContext(pd);
   if (!rc.ok) return rc;
   const ch = pd.services?.chronology;
@@ -122,7 +122,7 @@ function chrono(pd: ProjectDeps): { ok: true; value: Chrono } | { ok: false; res
 }
 
 /** The chronology's calendar, read again (one request) so a write never plans with a stale definition. */
-async function freshCalendar(
+export async function freshCalendar(
   pd: ProjectDeps,
   mctx: McpToolContext,
   tool: string,
@@ -555,7 +555,7 @@ function excerpt(t: AgeTable, around: number, extra?: { at: number; line: string
   return lines.slice(from, around + 3);
 }
 
-interface Submit {
+export interface Submit {
   readonly tool: ChronologyTool;
   readonly ch: Chrono;
   readonly target: ChronologyTarget;
@@ -1251,6 +1251,361 @@ async function findEvent(
   return { ok: true, value: { age, table: tr.value, row, event, events } };
 }
 
+/**
+ * v3 F4b (ADR 0064): the planning of `update_timeline_event` (a row's date, name or description), as ONE chronology change:
+ * its row, KCY, timeline event and counts in step. Shared by the tool and by the consistency check's pick (design D6),
+ * which edits a chronology row's date through exactly this path. Answers the change to submit, or the refusal.
+ */
+export async function planEventChange(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  tool: ChronologyTool,
+  ch: Chrono,
+  cal: Calendar,
+  args: {
+    readonly event: z.infer<typeof eventRefArg>;
+    readonly date?: string | undefined;
+    readonly name?: string | undefined;
+    readonly description?: z.infer<typeof descriptionArg> | undefined;
+    readonly dryRun?: boolean | undefined;
+    readonly lastMajorRevision?: LmrMode | undefined;
+  },
+  requestKey: string,
+): Promise<
+  { readonly ok: true; readonly submit: Submit } | { readonly ok: false; readonly outcome: CreateOutcome }
+> {
+  const f = await findEvent(pd, mctx, tool, ch, cal, args.event);
+  if (!f.ok) return { ok: false, outcome: { kind: 'answer', result: f.result } };
+  const { age, row, event, table } = f.value;
+  // A qualified row keeps its own Date cell unless a new date is given (ADR 0048: never rewritten).
+  let newDate: ParsedDate = row.date ?? row.eventDate!;
+  if (args.date !== undefined) {
+    try {
+      newDate = cal.parser.parse(args.date, ch.config.style.date);
+    } catch (e) {
+      return { ok: false, outcome: { kind: 'answer', result: calendarError(pd, e) } };
+    }
+  }
+  const newAge = ageOfDate(ch, cal, newDate);
+  if (!newAge)
+    return {
+      ok: false,
+      outcome: refuse(
+        pd,
+        'AGE_NOT_CONFIGURED',
+        `${newDate.text} is in an age with no confirmed table and timeline.`,
+      ),
+    };
+  let desc = { runs: row.descriptionRuns as Obj[], text: row.description };
+  if (args.description !== undefined) {
+    const d = descriptionRuns(pd, ch, args.description);
+    if (!d.ok) return { ok: false, outcome: { kind: 'answer', result: d.result } };
+    desc = { runs: d.runs, text: d.text };
+  }
+  const name = args.name?.trim() ?? event.name;
+  const dateChanged =
+    args.date !== undefined && !(sameDate(newDate, row.eventDate!) && newDate.text === row.dateText.trim());
+  const descChanged = args.description !== undefined && !sameText(desc.text, row.description);
+  const nameChanged = name !== event.name;
+  if (!dateChanged && !descChanged && !nameChanged)
+    return {
+      ok: false,
+      outcome: refuse(
+        pd,
+        'NOTHING_TO_DO',
+        'The event already has this date, name and description; nothing was proposed.',
+      ),
+    };
+  const ages = newAge.name === age.name ? [age.name] : [age.name, newAge.name];
+  const stopped = stoppedChange(pd, ch, requestKey, ages);
+  if (stopped.refusal) return { ok: false, outcome: stopped.refusal };
+  const mr = await readMain(pd, mctx, tool, ch);
+  if (!mr.ok) return { ok: false, outcome: { kind: 'answer', result: mr.result } };
+  const tables = new Map<string, TableNow>([[age.tableDocumentId, table]]);
+  let newTable = table;
+  if (newAge.name !== age.name) {
+    const tr = await readTable(pd, mctx, tool, ch, cal, newAge);
+    if (!tr.ok) return { ok: false, outcome: { kind: 'answer', result: tr.result } };
+    newTable = tr.value;
+    tables.set(newAge.tableDocumentId, newTable);
+  }
+  const twin = newTable.table.rows.find(
+    (r) => r.id !== row.id && r.date && sameDate(r.date, newDate) && sameText(r.description, desc.text),
+  );
+  if (twin)
+    return {
+      ok: false,
+      outcome: refuse(
+        pd,
+        'DUPLICATE_EVENT',
+        `The ${newAge.name} table already has “${twin.dateText}”, ${twin.description.slice(0, 120)}. Nothing was done.`,
+      ),
+    };
+  const kcyText = formatKcy(newDate.kcy, ch.config.style.kcy);
+  const texts = {
+    description: desc.text,
+    // The cell as it stands unless the date changes (it is only written then).
+    date: dateChanged ? newDate.text : row.dateText,
+    kcy: dateChanged ? kcyText : row.kcyText,
+  };
+  const before = { description: row.description, date: row.dateText, kcy: row.kcyText };
+  const rid = ch.resource.id;
+  const writes: TargetWrite[] = [];
+  let link: ChronologyTarget['link'];
+  let unlink: ChronologyTarget['unlink'] = null;
+  const rowsCtx: Record<string, WriteContext['rows'][string]> = {};
+  const moves = new Set<string>();
+  // v2 E4 (RV3-5): an event made again (an end taken away, a move to another age) keeps everything else it had
+  // (its colour, icon, image, hidden and calendar flags…): the writable fields of the old event, in their write
+  // form, then the changes.
+  const kept = keptEventFields(event.raw);
+  const eventBody = (id: string, a: AgeConfig) => ({
+    ...kept,
+    id,
+    laneId: a.laneId,
+    type: 'event',
+    name,
+    start: newDate.start,
+    ...(newDate.end !== null ? { end: newDate.end } : {}),
+    detail: newDate.detail,
+    uri: tableUri(rid, a.tableDocumentId),
+  });
+  if (newAge.name === age.name) {
+    const block = replaceCells(
+      row.row.block,
+      table.table.columns,
+      {
+        ...(descChanged ? { descriptionRuns: desc.runs } : {}),
+        ...(dateChanged ? { date: newDate.text, kcy: kcyText } : {}),
+      },
+      () => mintClientId(8),
+    );
+    if (dateChanged || descChanged) {
+      writes.push({
+        kind: 'row.replace',
+        age: age.name,
+        resourceId: rid,
+        documentId: age.tableDocumentId,
+        rowId: row.id!,
+        before,
+        texts,
+        block,
+      });
+      rowsCtx[rowKey(age.tableDocumentId, row.id!)] = {
+        sortKey: sortKey(newDate),
+        date: { start: newDate.start, end: newDate.end, detail: newDate.detail },
+        description: desc.text,
+      };
+      if (dateChanged) moves.add(rowKey(age.tableDocumentId, row.id!));
+    }
+    if (dateChanged && event.end !== null && newDate.end === null) {
+      // LegendKeeper cannot take an end away: the event is made again (same lane, link and name).
+      const id = mintClientId(24);
+      writes.push({
+        kind: 'event.delete',
+        age: age.name,
+        resourceId: rid,
+        documentId: age.timelineDocumentId,
+        eventId: event.id,
+      });
+      writes.push({
+        kind: 'event.create',
+        age: age.name,
+        resourceId: rid,
+        documentId: age.timelineDocumentId,
+        eventId: id,
+        body: eventBody(id, age),
+      });
+      link = {
+        age: age.name,
+        tableDocumentId: age.tableDocumentId,
+        rowId: row.id!,
+        timelineDocumentId: age.timelineDocumentId,
+        eventId: id,
+      };
+    } else if (dateChanged || nameChanged) {
+      const fields: Obj = {
+        ...(nameChanged ? { name } : {}),
+        ...(dateChanged
+          ? {
+              start: newDate.start,
+              ...(newDate.end !== null ? { end: newDate.end } : {}),
+              detail: newDate.detail,
+            }
+          : {}),
+      };
+      writes.push({
+        kind: 'event.update',
+        age: age.name,
+        resourceId: rid,
+        documentId: age.timelineDocumentId,
+        eventId: event.id,
+        fields,
+      });
+      link = {
+        age: age.name,
+        tableDocumentId: age.tableDocumentId,
+        rowId: row.id!,
+        timelineDocumentId: age.timelineDocumentId,
+        eventId: event.id,
+      };
+    } else
+      link = {
+        age: age.name,
+        tableDocumentId: age.tableDocumentId,
+        rowId: row.id!,
+        timelineDocumentId: age.timelineDocumentId,
+        eventId: event.id,
+      };
+  } else {
+    // Another age: the row moves to that table, the event to that timeline, and both counts change.
+    const width = newTable.table.table.header.cells.length;
+    const ids = {
+      row: mintClientId(8),
+      cells: Array.from({ length: width }, () => mintClientId(8)),
+      paragraphs: Array.from({ length: width }, () => mintClientId(8)),
+    };
+    const block = buildRow({
+      ids,
+      width,
+      columns: newTable.table.columns,
+      descriptionRuns: desc.runs,
+      dateText: newDate.text,
+      kcyText,
+    });
+    const id = mintClientId(24);
+    writes.push({
+      kind: 'row.insert',
+      age: newAge.name,
+      resourceId: rid,
+      documentId: newAge.tableDocumentId,
+      rowId: ids.row,
+      texts: { ...texts, kcy: kcyText },
+      block,
+    });
+    writes.push({
+      kind: 'row.delete',
+      age: age.name,
+      resourceId: rid,
+      documentId: age.tableDocumentId,
+      rowId: row.id!,
+      texts: before,
+    });
+    writes.push({
+      kind: 'event.create',
+      age: newAge.name,
+      resourceId: rid,
+      documentId: newAge.timelineDocumentId,
+      eventId: id,
+      body: eventBody(id, newAge),
+    });
+    writes.push({
+      kind: 'event.delete',
+      age: age.name,
+      resourceId: rid,
+      documentId: age.timelineDocumentId,
+      eventId: event.id,
+    });
+    writes.push({
+      kind: 'count',
+      age: newAge.name,
+      resourceId: rid,
+      documentId: ch.config.mainDocumentId!,
+      rowId: newAge.mainRowId,
+      delta: 1,
+    });
+    writes.push({
+      kind: 'count',
+      age: age.name,
+      resourceId: rid,
+      documentId: ch.config.mainDocumentId!,
+      rowId: age.mainRowId,
+      delta: -1,
+    });
+    rowsCtx[rowKey(newAge.tableDocumentId, ids.row)] = {
+      sortKey: sortKey(newDate),
+      date: { start: newDate.start, end: newDate.end, detail: newDate.detail },
+      description: desc.text,
+    };
+    link = {
+      age: newAge.name,
+      tableDocumentId: newAge.tableDocumentId,
+      rowId: ids.row,
+      timelineDocumentId: newAge.timelineDocumentId,
+      eventId: id,
+    };
+    unlink = { tableDocumentId: age.tableDocumentId, rowId: row.id! };
+  }
+  const target: ChronologyTarget = { writes, link, unlink };
+  const now: Now = { tables, main: mr.value, events: new Map([[event.id, event.raw]]) };
+  const counts = Object.fromEntries(mr.value.rows.map((r) => [r.age, r.countText]));
+  const head: Obj = {
+    event: {
+      rowId: row.id,
+      eventId: event.id,
+      age: age.name,
+      date: row.dateText,
+      name: event.name,
+      description: row.description.slice(0, 200),
+    },
+    changes: {
+      ...(dateChanged ? { date: { from: row.dateText, to: dateView(newDate, ch) } } : {}),
+      ...(nameChanged ? { name: { from: event.name, to: name } } : {}),
+      ...(descChanged
+        ? { description: { from: row.description.slice(0, 200), to: desc.text.slice(0, 200) } }
+        : {}),
+      ...(newAge.name !== age.name ? { age: { from: age.name, to: newAge.name } } : {}),
+    },
+  };
+  const line = (t: { description: string; date: string; kcy: string }) =>
+    `| ${t.description} | ${t.date} | ${t.kcy} |`;
+  const md = {
+    before: [
+      `## ${age.name} - Table`,
+      line(before),
+      `- ${event.formattedStart ?? event.start}: **${event.name}**`,
+      ...(newAge.name !== age.name
+        ? [
+            '',
+            '## Main',
+            `| ${age.name} | ${counts[age.name] ?? ''} |`,
+            `| ${newAge.name} | ${counts[newAge.name] ?? ''} |`,
+          ]
+        : []),
+    ].join('\n'),
+    after: [
+      `## ${newAge.name} - Table`,
+      line({ ...texts, kcy: dateChanged ? kcyText : texts.kcy }),
+      `- ${newDate.formattedStart}${newDate.formattedEnd ? ` – ${newDate.formattedEnd}` : ''}: **${name}**`,
+      ...(newAge.name !== age.name
+        ? [
+            '',
+            '## Main',
+            `| ${age.name} | ${String((parseInt((counts[age.name] ?? '0').replace(/,/g, ''), 10) || 0) - 1)} |`,
+            `| ${newAge.name} | ${String((parseInt((counts[newAge.name] ?? '0').replace(/,/g, ''), 10) || 0) + 1)} |`,
+          ]
+        : []),
+    ].join('\n'),
+  };
+  return {
+    ok: true,
+    submit: {
+      lastMajorRevision: args.lastMajorRevision,
+      tool,
+      ch,
+      target,
+      writes,
+      ctx: writeContext(ch, now, rowsCtx, { moves }),
+      requestKey,
+      ages,
+      summary: `${tool}: ${row.dateText} “${event.name}” (${age.name})${dateChanged ? ` → ${newDate.text}${newAge.name !== age.name ? ` (${newAge.name})` : ''}` : ''}`,
+      head,
+      markdown: md,
+      dryRun: args.dryRun,
+    },
+  };
+}
+
 // ============================================================================================ update
 
 function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
@@ -1260,7 +1615,7 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Change an event of the chronology',
     access: 'write',
     description:
-      'Changes a chronology event’s `date`, `name` (timeline) or `description` (table) as ONE job, keeping its table row, timeline event and the Main counts in step; a date in another age moves it there. Name it with `event`: its date plus its description or name, or its row_id or event_id. Refused when its row and event have drifted apart (CHRONOLOGY_DRIFT): repair that with sync_timeline_event. A job that stopped part-way finishes on the same request. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 9 reads and 3 writes (into another age 18 and 6).',
+      'Changes a chronology event’s `date`, `name` (timeline) or `description` (table) as ONE job, keeping its table row, timeline event and the Main counts in step; a date in another age moves it there. Before changing the date of a birth or a death on Arkona, run arkona_consistency: other pages may restate it. Name it with `event`: its date plus its description or name, or its row_id or event_id. Refused when its row and event have drifted apart (CHRONOLOGY_DRIFT): repair that with sync_timeline_event. A job that stopped part-way finishes on the same request. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 9 reads and 3 writes (into another age 18 and 6).',
     inputSchema: z.object({
       event: eventRefArg,
       date: z
@@ -1299,326 +1654,9 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
           if (resume)
             return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun, args.lastMajorRevision);
-          const f = await findEvent(pd, mctx, tool, ch, cal, args.event);
-          if (!f.ok) return { kind: 'answer', result: f.result };
-          const { age, row, event, table } = f.value;
-          // A qualified row keeps its own Date cell unless a new date is given (ADR 0048: never rewritten).
-          let newDate: ParsedDate = row.date ?? row.eventDate!;
-          if (args.date !== undefined) {
-            try {
-              newDate = cal.parser.parse(args.date, ch.config.style.date);
-            } catch (e) {
-              return { kind: 'answer', result: calendarError(pd, e) };
-            }
-          }
-          const newAge = ageOfDate(ch, cal, newDate);
-          if (!newAge)
-            return refuse(
-              pd,
-              'AGE_NOT_CONFIGURED',
-              `${newDate.text} is in an age with no confirmed table and timeline.`,
-            );
-          let desc = { runs: row.descriptionRuns as Obj[], text: row.description };
-          if (args.description !== undefined) {
-            const d = descriptionRuns(pd, ch, args.description);
-            if (!d.ok) return { kind: 'answer', result: d.result };
-            desc = { runs: d.runs, text: d.text };
-          }
-          const name = args.name?.trim() ?? event.name;
-          const dateChanged =
-            args.date !== undefined &&
-            !(sameDate(newDate, row.eventDate!) && newDate.text === row.dateText.trim());
-          const descChanged = args.description !== undefined && !sameText(desc.text, row.description);
-          const nameChanged = name !== event.name;
-          if (!dateChanged && !descChanged && !nameChanged)
-            return refuse(
-              pd,
-              'NOTHING_TO_DO',
-              'The event already has this date, name and description; nothing was proposed.',
-            );
-          const ages = newAge.name === age.name ? [age.name] : [age.name, newAge.name];
-          const stopped = stoppedChange(pd, ch, requestKey, ages);
-          if (stopped.refusal) return stopped.refusal;
-          const mr = await readMain(pd, mctx, tool, ch);
-          if (!mr.ok) return { kind: 'answer', result: mr.result };
-          const tables = new Map<string, TableNow>([[age.tableDocumentId, table]]);
-          let newTable = table;
-          if (newAge.name !== age.name) {
-            const tr = await readTable(pd, mctx, tool, ch, cal, newAge);
-            if (!tr.ok) return { kind: 'answer', result: tr.result };
-            newTable = tr.value;
-            tables.set(newAge.tableDocumentId, newTable);
-          }
-          const twin = newTable.table.rows.find(
-            (r) =>
-              r.id !== row.id && r.date && sameDate(r.date, newDate) && sameText(r.description, desc.text),
-          );
-          if (twin)
-            return refuse(
-              pd,
-              'DUPLICATE_EVENT',
-              `The ${newAge.name} table already has “${twin.dateText}”, ${twin.description.slice(0, 120)}. Nothing was done.`,
-            );
-          const kcyText = formatKcy(newDate.kcy, ch.config.style.kcy);
-          const texts = {
-            description: desc.text,
-            // The cell as it stands unless the date changes (it is only written then).
-            date: dateChanged ? newDate.text : row.dateText,
-            kcy: dateChanged ? kcyText : row.kcyText,
-          };
-          const before = { description: row.description, date: row.dateText, kcy: row.kcyText };
-          const rid = ch.resource.id;
-          const writes: TargetWrite[] = [];
-          let link: ChronologyTarget['link'];
-          let unlink: ChronologyTarget['unlink'] = null;
-          const rowsCtx: Record<string, WriteContext['rows'][string]> = {};
-          const moves = new Set<string>();
-          // v2 E4 (RV3-5): an event made again (an end taken away, a move to another age) keeps everything else it had
-          // (its colour, icon, image, hidden and calendar flags…): the writable fields of the old event, in their write
-          // form, then the changes.
-          const kept = keptEventFields(event.raw);
-          const eventBody = (id: string, a: AgeConfig) => ({
-            ...kept,
-            id,
-            laneId: a.laneId,
-            type: 'event',
-            name,
-            start: newDate.start,
-            ...(newDate.end !== null ? { end: newDate.end } : {}),
-            detail: newDate.detail,
-            uri: tableUri(rid, a.tableDocumentId),
-          });
-          if (newAge.name === age.name) {
-            const block = replaceCells(
-              row.row.block,
-              table.table.columns,
-              {
-                ...(descChanged ? { descriptionRuns: desc.runs } : {}),
-                ...(dateChanged ? { date: newDate.text, kcy: kcyText } : {}),
-              },
-              () => mintClientId(8),
-            );
-            if (dateChanged || descChanged) {
-              writes.push({
-                kind: 'row.replace',
-                age: age.name,
-                resourceId: rid,
-                documentId: age.tableDocumentId,
-                rowId: row.id!,
-                before,
-                texts,
-                block,
-              });
-              rowsCtx[rowKey(age.tableDocumentId, row.id!)] = {
-                sortKey: sortKey(newDate),
-                date: { start: newDate.start, end: newDate.end, detail: newDate.detail },
-                description: desc.text,
-              };
-              if (dateChanged) moves.add(rowKey(age.tableDocumentId, row.id!));
-            }
-            if (dateChanged && event.end !== null && newDate.end === null) {
-              // LegendKeeper cannot take an end away: the event is made again (same lane, link and name).
-              const id = mintClientId(24);
-              writes.push({
-                kind: 'event.delete',
-                age: age.name,
-                resourceId: rid,
-                documentId: age.timelineDocumentId,
-                eventId: event.id,
-              });
-              writes.push({
-                kind: 'event.create',
-                age: age.name,
-                resourceId: rid,
-                documentId: age.timelineDocumentId,
-                eventId: id,
-                body: eventBody(id, age),
-              });
-              link = {
-                age: age.name,
-                tableDocumentId: age.tableDocumentId,
-                rowId: row.id!,
-                timelineDocumentId: age.timelineDocumentId,
-                eventId: id,
-              };
-            } else if (dateChanged || nameChanged) {
-              const fields: Obj = {
-                ...(nameChanged ? { name } : {}),
-                ...(dateChanged
-                  ? {
-                      start: newDate.start,
-                      ...(newDate.end !== null ? { end: newDate.end } : {}),
-                      detail: newDate.detail,
-                    }
-                  : {}),
-              };
-              writes.push({
-                kind: 'event.update',
-                age: age.name,
-                resourceId: rid,
-                documentId: age.timelineDocumentId,
-                eventId: event.id,
-                fields,
-              });
-              link = {
-                age: age.name,
-                tableDocumentId: age.tableDocumentId,
-                rowId: row.id!,
-                timelineDocumentId: age.timelineDocumentId,
-                eventId: event.id,
-              };
-            } else
-              link = {
-                age: age.name,
-                tableDocumentId: age.tableDocumentId,
-                rowId: row.id!,
-                timelineDocumentId: age.timelineDocumentId,
-                eventId: event.id,
-              };
-          } else {
-            // Another age: the row moves to that table, the event to that timeline, and both counts change.
-            const width = newTable.table.table.header.cells.length;
-            const ids = {
-              row: mintClientId(8),
-              cells: Array.from({ length: width }, () => mintClientId(8)),
-              paragraphs: Array.from({ length: width }, () => mintClientId(8)),
-            };
-            const block = buildRow({
-              ids,
-              width,
-              columns: newTable.table.columns,
-              descriptionRuns: desc.runs,
-              dateText: newDate.text,
-              kcyText,
-            });
-            const id = mintClientId(24);
-            writes.push({
-              kind: 'row.insert',
-              age: newAge.name,
-              resourceId: rid,
-              documentId: newAge.tableDocumentId,
-              rowId: ids.row,
-              texts: { ...texts, kcy: kcyText },
-              block,
-            });
-            writes.push({
-              kind: 'row.delete',
-              age: age.name,
-              resourceId: rid,
-              documentId: age.tableDocumentId,
-              rowId: row.id!,
-              texts: before,
-            });
-            writes.push({
-              kind: 'event.create',
-              age: newAge.name,
-              resourceId: rid,
-              documentId: newAge.timelineDocumentId,
-              eventId: id,
-              body: eventBody(id, newAge),
-            });
-            writes.push({
-              kind: 'event.delete',
-              age: age.name,
-              resourceId: rid,
-              documentId: age.timelineDocumentId,
-              eventId: event.id,
-            });
-            writes.push({
-              kind: 'count',
-              age: newAge.name,
-              resourceId: rid,
-              documentId: ch.config.mainDocumentId!,
-              rowId: newAge.mainRowId,
-              delta: 1,
-            });
-            writes.push({
-              kind: 'count',
-              age: age.name,
-              resourceId: rid,
-              documentId: ch.config.mainDocumentId!,
-              rowId: age.mainRowId,
-              delta: -1,
-            });
-            rowsCtx[rowKey(newAge.tableDocumentId, ids.row)] = {
-              sortKey: sortKey(newDate),
-              date: { start: newDate.start, end: newDate.end, detail: newDate.detail },
-              description: desc.text,
-            };
-            link = {
-              age: newAge.name,
-              tableDocumentId: newAge.tableDocumentId,
-              rowId: ids.row,
-              timelineDocumentId: newAge.timelineDocumentId,
-              eventId: id,
-            };
-            unlink = { tableDocumentId: age.tableDocumentId, rowId: row.id! };
-          }
-          const target: ChronologyTarget = { writes, link, unlink };
-          const now: Now = { tables, main: mr.value, events: new Map([[event.id, event.raw]]) };
-          const counts = Object.fromEntries(mr.value.rows.map((r) => [r.age, r.countText]));
-          const head: Obj = {
-            event: {
-              rowId: row.id,
-              eventId: event.id,
-              age: age.name,
-              date: row.dateText,
-              name: event.name,
-              description: row.description.slice(0, 200),
-            },
-            changes: {
-              ...(dateChanged ? { date: { from: row.dateText, to: dateView(newDate, ch) } } : {}),
-              ...(nameChanged ? { name: { from: event.name, to: name } } : {}),
-              ...(descChanged
-                ? { description: { from: row.description.slice(0, 200), to: desc.text.slice(0, 200) } }
-                : {}),
-              ...(newAge.name !== age.name ? { age: { from: age.name, to: newAge.name } } : {}),
-            },
-          };
-          const line = (t: { description: string; date: string; kcy: string }) =>
-            `| ${t.description} | ${t.date} | ${t.kcy} |`;
-          const md = {
-            before: [
-              `## ${age.name} - Table`,
-              line(before),
-              `- ${event.formattedStart ?? event.start}: **${event.name}**`,
-              ...(newAge.name !== age.name
-                ? [
-                    '',
-                    '## Main',
-                    `| ${age.name} | ${counts[age.name] ?? ''} |`,
-                    `| ${newAge.name} | ${counts[newAge.name] ?? ''} |`,
-                  ]
-                : []),
-            ].join('\n'),
-            after: [
-              `## ${newAge.name} - Table`,
-              line({ ...texts, kcy: dateChanged ? kcyText : texts.kcy }),
-              `- ${newDate.formattedStart}${newDate.formattedEnd ? ` – ${newDate.formattedEnd}` : ''}: **${name}**`,
-              ...(newAge.name !== age.name
-                ? [
-                    '',
-                    '## Main',
-                    `| ${age.name} | ${String((parseInt((counts[age.name] ?? '0').replace(/,/g, ''), 10) || 0) - 1)} |`,
-                    `| ${newAge.name} | ${String((parseInt((counts[newAge.name] ?? '0').replace(/,/g, ''), 10) || 0) + 1)} |`,
-                  ]
-                : []),
-            ].join('\n'),
-          };
-          return submit(pd, mctx, {
-            lastMajorRevision: args.lastMajorRevision,
-            tool,
-            ch,
-            target,
-            writes,
-            ctx: writeContext(ch, now, rowsCtx, { moves }),
-            requestKey,
-            ages,
-            summary: `${tool}: ${row.dateText} “${event.name}” (${age.name})${dateChanged ? ` → ${newDate.text}${newAge.name !== age.name ? ` (${newAge.name})` : ''}` : ''}`,
-            head,
-            markdown: md,
-            dryRun: args.dryRun,
-          });
+          const planned = await planEventChange(pd, mctx, tool, ch, cal, args, requestKey);
+          if (!planned.ok) return planned.outcome;
+          return submit(pd, mctx, planned.submit);
         });
       }),
   });

@@ -7,6 +7,7 @@ import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useReauth } from '../reauth';
 import { Link } from '../router';
 import { rowCandidates, tieFromError, TieChoices, type TieCandidate } from './chronology-ties';
+import { ConsistencyPick } from './consistency-pick';
 import type {
   AuditCodeInfo,
   AuditConfigResponse,
@@ -57,6 +58,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   chronology: 'Chronology',
   assets: 'Asset library',
   governance: 'Governance',
+  consistency: 'Consistency (dates and identity facts)',
   audit: 'The audit itself',
 };
 
@@ -548,6 +550,8 @@ function FindingRow({
   const confirm = useConfirm();
   const [reason, setReason] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // v3 F4b (ADR 0064, D6): a consistency finding's values side by side, to pick the right one.
+  const [picking, setPicking] = useState(false);
   const colspan = hidePage ? 4 : 5;
   // v3 F2.1: a chronology tie: the candidates of a refused fix, or of an event in a tie (`chronology_pair`).
   const [tie, setTie] = useState<TieCandidate[] | null>(null);
@@ -742,7 +746,17 @@ function FindingRow({
             {f.state === 'open' && f.fix?.confirm && (
               <Badge tone="warn">{f.fix.confirm.shapeChange}: needs your confirmation</Badge>
             )}
-            {f.state === 'open' && f.category !== 'governance' && (
+            {f.state === 'open' && f.category === 'consistency' && (
+              <button
+                type="button"
+                className="small"
+                aria-expanded={picking}
+                onClick={() => setPicking(!picking)}
+              >
+                {picking ? 'Hide the values' : 'Pick the right value'}
+              </button>
+            )}
+            {f.state === 'open' && f.category !== 'governance' && f.category !== 'consistency' && (
               <Button className="small" busy={busy} disabled={!project} onClick={recheck}>
                 Re-check now
               </Button>
@@ -779,6 +793,9 @@ function FindingRow({
           {note && <div className="small-text note note-ok">{note}</div>}
         </td>
       </tr>
+      {picking && f.state === 'open' && (
+        <ConsistencyPick findingId={f.id} project={project} colspan={colspan} reload={reload} />
+      )}
       {reason !== null && (
         <tr>
           <td colSpan={colspan}>

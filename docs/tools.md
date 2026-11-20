@@ -214,7 +214,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (169 tools in all with the Arkona pack's seventeen tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, and v3 F3d's `bridge_job_resume`; 171 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (173 tools in all with the Arkona pack's twenty-one tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, v3 F4b's `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency_suggest`, and v3 F3d's `bridge_job_resume`; 175 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -2015,6 +2015,77 @@ proposed rename. Cost: none.
 left out), are checked the same way, free. An exact full-name match is a `NAMESAKE` warning in the preview and the
 answer and in the proposal the owner sees (its summary: "namesake: … already goes by this name"; a rename's operation
 also lists `namesakes`); a partial match is a note. `CHARACTER_EXISTS` is unchanged.
+
+## Setting packs: consistency and "as of a date" (v3 F4b)
+
+[ADR 0064](adr/0064-v3-f4b-consistency-and-as-of.md), the owner-approved design
+[design/F4b-consistency-and-as-of.md](design/F4b-consistency-and-as-of.md). The agent guide's part is "Arkona consistency
+checks"; "How to decide" says: a character at a date → `arkona_as_of`; changing a date → `arkona_consistency` first. All
+four are listed while the Arkona pack is attached and its approved version has consistency rules
+(`arkona-2026-11-20-f4b` or later); none writes to LegendKeeper, and none picks a winner.
+
+**What is read** (pack data, `rules.consistency`: new phrasings are a new pack version, never code). Births, deaths and
+the bounds of an attested life from a Temporal Scope field (each `;` clause: "Born Camue 44th, 4A 360", "attested
+through 5A 931", "Attested 5A 411–5A 931", "alive … 5A 931", "birth date unestablished"), a Life State of "Deceased"
+with a date, prose ("<name> was born on <date>", "<name> died in <date>", a dated line "<date> - <name> is born…") and
+chronology rows (the kind and subject from the Historical Event cell, the date from the Date cell, read by its anchor);
+and the identity facts Race / Species, Naming Culture, Life State, Personal / Given Name and Family / Surname where a page
+whose Subject is the character restates them. A sentence is about someone only when it names them: a name, alias or
+Canonical Display Name (either order); a given name alone only on the character's own pages; a name two current
+characters share only on one's own pages; never a pronoun. Dates go through the calendar engine with their precision; one
+the engine cannot read is reported with the calendar's reason, never guessed. The facts are kept in the bridge's
+database (`consistency_facts`, migration `3900`), read from the appraisal's overlay page by page and kept current from
+the change snapshots; rebuilt when the phrasings, the characters' names, the calendar or the chronology settings change.
+
+### `arkona_consistency`
+
+`{ subject | under | all, include?, continuity?, live?, runId?, group?, offset?, limit?, detail? }`. For each character
+in scope, in its own continuity (or `continuity`): its identity page's value first (its Core or Compact Reference; when
+it records none, the first Authoritative restatement, said), then every disagreeing restatement with its page,
+lifecycle, section, excerpt and precision. Two dates conflict only when their spans do not overlap (a day is that day, a
+year that year, a "c." date widened by `approxMargin`, 5 years). Identity values are compared without case, accents,
+punctuation or word order. A chronology row is compared with the same event on a page it mentions (or a page linking to
+its table). Groups: `contradictory` (Authoritative against Authoritative, `warning`: also the audits'), `differs`
+(Proposal differs from canon: a Working page, `info`), `gaps` ("Unestablished" against a value, `info`), `historical`
+(Archived or a non-current area, only with `include`), `unreadable`. Attested bounds are read but never compared (a
+page's Temporal Scope may be the time its source covers). AU pages are compared only within their AU; an AU without its
+own identity page shows Main CANON's value labelled "inherited from Main CANON". The run is stored (`runId`, read a page
+at a time). Cost: none; `live: true` re-reads the identity pages' sidebars (1 read each, at most 25).
+
+### `arkona_as_of`
+
+`{ characters (≤ 25), date, continuity?, window?, live? }`. `date` is a date of the calendar or `now` (the pack's
+`present`, 5A 931). For each: `born` (value, precision, page, source) or "birth unestablished"; `elapsedYears`
+(`{ years, exact: true }` when both dates are exact days, `{ min, max }` otherwise, "not yet born", or none when the
+birth is unknown): **calendar years only, never apparent or biological age**, with the race reference linked for its
+maturation rules; `state`: **Alive (recorded)** between the birth and a recorded death, or inside the attested span (from
+the recorded birth, or the attestation's own start, to the latest attestation; "alive at" the present attests up to
+it), **Deceased (recorded)** after a recorded death, **Unestablished** otherwise (an attested life never proves survival
+past it); `around` (the chronology rows naming it, `window` each side, default 3); and `contradictions` on its birth or
+death. Cost: none; `live: true` 1 read a character.
+
+### `arkona_as_of_coverage`
+
+The current Main CANON characters with a birth the engine can read, an unreadable one, a deliberately unestablished
+one, a recorded death and attested bounds, and those with nothing readable (listed). A report, never a task list. Cost:
+none.
+
+### `arkona_consistency_suggest`
+
+`{ findingId, value, reason }` (a `cf_…` id from `arkona_consistency` or the audits): records the agent's suggestion,
+shown to the owner beside the finding on the Audits page. It changes nothing and proposes nothing (access `write`: it
+writes the bridge's own record). Agents can never pick.
+
+### "Pick the right value" (the owner's, on the Audits page)
+
+`POST /api/admin/audits/findings/:id/consistency-pick` `{ side | value, confirm: true }`, a step-up action (ADR 0062).
+The bridge makes ONE proposal of items, one per page that disagrees with the pick: a sidebar field's date replaced inside
+the field (`set_facts`' plan), a sentence's date replaced in its one text run (`write_page`'s block-by-block path), a
+chronology row's date through `update_timeline_event`'s own plan (its Date and KCY cells and its timeline event together).
+The side picked, and every value agreeing with it, is never touched; a gap, a value inherited from Main CANON, or a date
+split by a mention is listed and left. Approval (selective, as every itemized proposal), the rails (more than 10 pages
+asks for the step-up at approval), Last Major Revision (the engine's rule) and Revert work as for any proposal. Audited
+`consistency.pick`.
 
 ## The calendar and the timelines (v2 D1)
 
