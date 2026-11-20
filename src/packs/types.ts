@@ -571,6 +571,32 @@ export const consistencyRulesSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * v3 F4c (ADR 0065, design E6): the phrasings of an age written in prose, read by `arkona_chapter_check` only (never
+     * by the consistency check): "<Name> is / was <n> (years old)", "<Name>, aged <n>". `{name}` stands for a
+     * character's name, alias or Canonical Display Name (never a pronoun); the named group `age` holds the number.
+     */
+    ages: z
+      .array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_.-]{0,59}$/), regex: text(500) }).strict())
+      .max(20)
+      .optional(),
+    /**
+     * v3 F4c (ADR 0065; the owner's ruling from F4b.1's review, 20 November 2026): the Life State phrasings of an upper
+     * bound on death ("Deceased by 5A 931"), one `;` clause at a time; the named group `date` holds the bound. Read by
+     * `arkona_as_of` only: at or after the bound the state is "Deceased (recorded by <date>)", before it the other rules
+     * apply. Never a fact, so never compared by the consistency check.
+     */
+    deceasedBy: z
+      .array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_.-]{0,59}$/), regex: text(500) }).strict())
+      .max(10)
+      .optional(),
+    /**
+     * v3 F4c (ADR 0065, amending F4b's D7 by the owner's ruling of 20 November 2026): Life State values (their principal
+     * part) that record the character alive at the pack's `present`. Read by `arkona_as_of` only: with a recorded birth,
+     * the life is recorded from the birth to the present ("Alive (recorded)"); with none, at the present only. Never a
+     * fact, never compared. Absent: a Life State says nothing about a date.
+     */
+    aliveValues: z.array(text(100)).max(10).optional(),
   })
   .strict();
 export type ConsistencyRules = z.infer<typeof consistencyRulesSchema>;

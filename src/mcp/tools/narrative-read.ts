@@ -426,13 +426,15 @@ async function chapterCheck(
         character: who,
         born: c.born,
       });
-    else if (state.value === 'Deceased (recorded)')
+    else if (state.value?.startsWith('Deceased (recorded'))
       items.push({
         label: LABELS.contradicts,
         kind: 'person',
         what: `${who} is recorded deceased by ${date}`,
         character: who,
-        died: c.died,
+        ...(c.died ? { died: c.died } : {}),
+        // "Deceased by <date>" (an upper bound on death, the Life State's): the state says which.
+        ...(c.deceasedBy ? { deceasedBy: c.deceasedBy, state: state.value } : {}),
       });
     else if (state.value === 'Unestablished')
       items.push({
@@ -467,8 +469,7 @@ async function chapterCheck(
       presence.push({ issue: 'in the prose but not in Characters Present', character: rec.subject });
   }
   // ---- ages and dates written in the prose (the pack's phrasings; by name only, never a pronoun).
-  const cons = pack.consistency as
-    (typeof pack.consistency & { ages?: { id: string; regex: string }[] }) | undefined;
+  const cons = pack.consistency;
   for (const id of listed) {
     const rec = recordOf(id);
     const c = asOf.get(id);

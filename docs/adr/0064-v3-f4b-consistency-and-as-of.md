@@ -386,3 +386,11 @@ the mention-only row, the coverage shape). The heap test (`index.test.ts`) passe
 5. Tables other than the chronology's age tables are no longer read (C.3).
 6. Check the section Purandukht Mithra's Biography sentence stands under on Arkona (F.4).
 7. The titles seeded in `-f4b1` (edit them on the Packs page).
+
+## Amended by ADR 0065 (v3 F4c, 20 November 2026)
+
+On top of amendment 1's seed, `-f4c` adds pack data and changes `arkona_as_of` only (the extractor and comparison are
+unchanged): the bare-range attested phrasing (decision 6), the age phrasings for `arkona_chapter_check`, "Deceased by
+<date>" as an as-of-only upper bound (replacing D.2's "recorded as nothing" in `arkona_as_of`; still never a fact), D9's
+inheritance of the attested life and the Life State, and D7 amended by the owner's ruling: a Life State of "Alive"
+records the character alive at the present. See [ADR 0065](0065-v3-f4c-fiction.md), "On top of F4b.1".

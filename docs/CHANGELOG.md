@@ -30,8 +30,14 @@ listed and the narrative audit reports nothing.
 - Governance sources may be found by their page's name (any dash); `plan-baisheng-stories` maps to the narrative tools.
 - `get_bridge_guide` part "Arkona fiction", with the Workflow's working sequence.
 - The sandbox check `narrative-f4c` (written, not run).
-- **Waiting for F4b.1** (it owns `rules.consistency`): the age phrasings, the bare-range attested phrasing and "Deceased
-  by <date>" are added on top of its pack seed once it is merged.
+- **On top of F4b.1** (merged in; `arkona-2026-11-20-f4c` supersedes `arkona-2026-11-20-f4b1`, so approving it covers
+  both): the age phrasings (`rules.consistency.ages`, read by `arkona_chapter_check`); the bare-range attested phrasing
+  ("5A 900 - 5A 931", F4b decision 6; the coverage report counts these as attested bounds); "Deceased by <date>" as an
+  upper bound read by `arkona_as_of` only ("Deceased (recorded by 5A 931)" at or after it; never compared); D9 in
+  `arkona_as_of` inheriting Main CANON's attested life and Life State too, the state labelled "inherited from Main
+  CANON"; and D7 amended by the owner's ruling: a Life State of "Alive" (`aliveValues`) records the character alive at
+  the present, so with a recorded birth they are Alive (recorded) from it to the present (Yasmin al-Naim at 4A 120, in
+  Main CANON and inherited in Moonfall).
 
 ## Unreleased: connected sessions are told when their tool list changes (20 November 2026)
 

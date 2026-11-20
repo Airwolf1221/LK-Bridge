@@ -782,6 +782,15 @@ const rules: PackRules = packRulesSchema.parse({
         date: 'scan',
         bound: 'both',
       },
+      // v3 F4c (ADR 0065; the owner's F4b decision 6): a Temporal Scope clause that is a bare range of dates, "5A 900 -
+      // 5A 931" (Tsubame Hoshizora's), reads as attested bounds. Attested bounds are still never compared (ADR 0064).
+      {
+        id: 'attested.scope.range',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`^\s*(?<date>(?:c\.\s*)?(?:[a-z]+\s+\d{1,3}(?:st|nd|rd|th),\s*)?\d{1,2}A\s+[\d,]+\s*[-–]\s*(?:[a-z]+\s+\d{1,3}(?:st|nd|rd|th),\s*)?(?:\d{1,2}A\s+)?[\d,]+)\s*$`,
+        bound: 'both',
+      },
       // A Life State of "Deceased" with a date. "Deceased" alone is a state (the Life State identity fact), not a date;
       // "Deceased by <date>" is an upper bound on death, never a death date (ADR 0064 amendment 1, D).
       {
@@ -867,6 +876,18 @@ const rules: PackRules = packRulesSchema.parse({
     // F: non-current sections and rows inside current pages. Switched on by the owner's ruling (20 November 2026):
     // "Pre-Rewrite" and "Author-Facing" sections and rows are non-current.
     nonCurrent: { markers: ['Pre-Rewrite', 'Author-Facing'], exclude: true },
+    // v3 F4c (ADR 0065, design E6): an age in prose, read only by arkona_chapter_check against "as of" the chapter's
+    // date: "<Name> is / was <n> (years old)" and "<Name>, aged <n>"; by a name only, never a pronoun.
+    ages: [
+      { id: 'age.is', regex: String.raw`{name}\s+(?:is|was)\s+(?<age>\d{1,6})(?:\s+years?\s+old)?\b` },
+      { id: 'age.aged', regex: String.raw`{name}\s*,\s*aged\s+(?<age>\d{1,6})\b` },
+    ],
+    // v3 F4c (ADR 0065; the owner's ruling from F4b.1's review): "Deceased by 5A 931" (Jahan-Timur's Life State) is an
+    // upper bound on death, read only by arkona_as_of; never a fact, never compared.
+    deceasedBy: [{ id: 'deceased.by', regex: String.raw`^\s*deceased\s+(?:by|before)\s+(?<date>.+)$` }],
+    // v3 F4c (ADR 0065; the owner's ruling amending D7): a Life State of "Alive" records the character alive at the present
+    // (5A 931), so with a recorded birth "as of" reads them alive from it to the present; read by arkona_as_of only.
+    aliveValues: ['Alive'],
   },
   // v3 F4c (ADR 0065; the owner-approved design docs/design/F4c-fiction.md, E1 to E9): the layout of Narratives. Every
   // name is found by name (never by id); the templates by name through the template list. The governance it derives
@@ -1001,8 +1022,9 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // (`consistency`). `-f4b1` (ADR 0064 amendment 1, 20 November 2026; from the first live run): dates scanned in their
   // clause, rule A's titles and clause words, a dateless "Deceased" and "Deceased by" never a death date, and the
   // non-current markers, switched on. `-f4c` (ADR 0065, 20 November 2026; session F4c, on top of F4b.1's rules): the
-  // narrative layout (`narrative`), the narrative tools' switches, plan-baisheng-stories in the equivalence map, and the
-  // two fiction Design References pinned (found by their names).
+  // narrative layout (`narrative`), the narrative tools' switches, plan-baisheng-stories in the equivalence map, the two
+  // fiction Design References pinned (found by their names), and in `consistency` the age phrasings (`ages`), the
+  // bare-range attested phrasing and "Deceased by <date>" as an as-of-only upper bound (`deceasedBy`).
   seed: 'arkona-2026-11-20-f4c',
   supersedes: [
     'arkona-2026-11-20-f4b1',

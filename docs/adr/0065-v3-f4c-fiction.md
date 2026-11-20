@@ -174,14 +174,37 @@ planned as `set_facts` and `write_page` plan them (`append_to_section`) and subm
 migration); never a Dependency or a Related Source. The agent supplies every value; nothing is taken from the prose by
 the tool, and nothing is ever applied by itself.
 
-## Waiting for F4b.1
+## On top of F4b.1
 
-The coordination of 20 November 2026: the F4b.1 session owns `rules.consistency` and the extractor and comparison code.
-Three pieces of this work touch them and are held until F4b.1 is merged to main, then added on top of its pack seed:
-the age phrasings (`rules.consistency.ages`: "<Name> is / was <n> (years old)", "<Name>, aged <n>"), which
-`arkona_chapter_check` already reads when present; the bare-range attested phrasing (F4b decision 6: "5A 900 - 5A 931"
-as attested bounds, tested on Tsubame Hoshizora); and "Deceased by <date>" as an upper bound used only by
-`arkona_as_of` (Jahan-Timur). Until then the check reports no age item, and the session's report says so.
+The coordination of 20 November 2026: the F4b.1 session owned `rules.consistency` and the extractor and comparison code.
+Once it was merged to main (ADR 0064 amendment 1), main was merged in (not rebased) and these were added on top of its
+pack seed; `arkona-2026-11-20-f4c` supersedes `arkona-2026-11-20-f4b1` (approving it covers both). The extractor and the
+comparison code are unchanged; everything below is pack data or `arkona_as_of`.
+
+1. **Ages** (`rules.consistency.ages`): "<Name> is / was <n> (years old)" and "<Name>, aged <n>", by a name only, read by
+   `arkona_chapter_check` against the elapsed calendar years (a number outside the as-of range is `Contradicts canon`;
+   no birth recorded is `Unestablished in canon`).
+2. **The bare-range attested phrasing** (the owner's F4b decision 6): a Temporal Scope clause that is only a range of
+   dates, "5A 900 - 5A 931" (Tsubame Hoshizora's), reads as attested bounds (`attested.scope.range`). Attested bounds are
+   still never compared. The coverage report counts such characters under attested bounds (six of F4b's fixture
+   characters moved there from "nothing readable").
+3. **"Deceased by <date>"** (the owner's ruling from F4b.1's review; `rules.consistency.deceasedBy`): a Life State clause
+   "Deceased by <date>" (or "before") is an upper bound on death read by `arkona_as_of` only: at or after the bound the
+   state is "Deceased (recorded by <date>)", with `deceasedBy` (value, precision, the Life State it comes from); before
+   it, the other rules apply. It is never a fact: F4b.1's reading ("Deceased by" is never a death date; "exact death date
+   unestablished" a gap) is kept, and the consistency check never compares it (Jahan-Timur).
+4. **D9 in `arkona_as_of`**: in an AU with no identity page of its own, the attested life and the Life State are
+   inherited from Main CANON with the birth and death (F4b inherited only the birth and death values), and a state decided
+   by inherited values is labelled "inherited from Main CANON" (`state.label`). Rashad al-Khalid is Alive (recorded) in
+   Moonfall, labelled; Harun al-Saffar Deceased (recorded), labelled.
+5. **D7 amended (the owner's ruling, 20 November 2026)**: a Life State whose principal part is one of
+   `rules.consistency.aliveValues` (Arkona: "Alive") records the character alive at the pack's present, so with a recorded
+   birth the character is Alive (recorded) from just after the birth to the present ("between the recorded birth and the
+   present (5A 931): the Life State records the character …"); with none, at the present only. Never before the birth,
+   never past the present, never against a recorded death. Read by `arkona_as_of` only, never compared. This resolves
+   decision 10 below: Yasmin al-Naim (born Camue 1st, 4A 100 in Main CANON, Life State "Alive") is Alive (recorded) at 4A
+   120 in Main CANON and, labelled "inherited from Main CANON", in Moonfall. F4b's test that Titania was Unestablished at
+   4A 100 now reads her Alive (her Life State is "Alive"); before her birth she is still Unestablished.
 
 ## Guidance and docs
 
@@ -201,9 +224,9 @@ tools in the governance audit's equivalence map.
 7. Continuity indexes directly under Narratives stay alphabetical.
 8. `arkona_chapter_check` reads the chapter live by default; presence is its own unlabelled list.
 9. Promotion takes a list of candidates; the citation is appended to the proposal's summary.
-10. In the AU test fixture, F4b's as-of reads Yasmin as Unestablished in Moonfall at 4A 120 (no AU birth taken from the
-    AU page that restates it, and no inherited one applied): possibly for F4b.1 to look at; the narrative tools only ask
-    in the right continuity.
+10. Resolved (see "On top of F4b.1", 5): D7 amended so a Life State of "Alive" records the life up to the present;
+    Yasmin is Alive (recorded) in Moonfall at 4A 120, inherited from Main CANON. The six fixture characters with a bare
+    range now count as attested bounds.
 
 ## The sandbox check (written, not run)
 

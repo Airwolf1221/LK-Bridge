@@ -150,6 +150,28 @@ describe('arkona_chapter_check (E6.2)', () => {
     );
   });
 
+  it('ages in the prose, by the pack’s phrasings and by name only, against the elapsed calendar years', async () => {
+    await w.tool('arkona_chapter_plan', { story, number: 4, questionGate: 'closed' });
+    const s = await save(
+      4,
+      'Spring',
+      '4A 120',
+      ['Yasmin al-Naim'],
+      'Yasmin al-Naim was 25 years old that spring. Yasmin al-Naim, aged 20, laughed at the gulls. ' +
+        'She was 40 in the songs, which no one believed.',
+    );
+    expect(s.status, JSON.stringify(s)).toBe('written');
+    const b = await w.tool('arkona_chapter_check', { story, number: 4 });
+    const ages = (b.items as any[]).filter((i) => i.kind === 'age');
+    // Born Camue 1st, 4A 100: 19 to 20 calendar years at 4A 120 (a year). 25 contradicts; 20 fits; a pronoun is never read.
+    expect(ages).toEqual([
+      expect.objectContaining({
+        label: 'Contradicts canon',
+        what: 'Yasmin al-Naim is 25 in the prose, 19 to 20 calendar years at 4A 120',
+      }),
+    ]);
+  });
+
   it('an AU chapter is read with the AU’s facts first', async () => {
     const moon = w.repo.seed({
       name: '[INDEX] Moonfall',
