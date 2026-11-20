@@ -198,7 +198,7 @@ describe('arkona_as_of (D7, D9, D10)', () => {
     expect(inside.state.value).toBe('Alive (recorded)');
     const before = await asOf('Kamigawa Haru', '5A 300');
     expect(before.state.value).toBe('Unestablished');
-    // Titania: born, attested only by an unreadable "active at…": never alive past what is recorded.
+    // Titania: born, and "active at…" holds no date (not a fact, ADR 0064 amendment 1): never alive past what is recorded.
     const later = await asOf('Titania', '4A 100');
     expect(later.state.value).toBe('Unestablished');
     expect(later.state.why).toMatch(/does not prove survival/);
@@ -259,10 +259,22 @@ describe('arkona_as_of (D7, D9, D10)', () => {
 });
 
 describe('arkona_as_of_coverage (D8)', () => {
-  it('counts readable births, recorded deaths and attested bounds, and lists those with nothing readable; never a task list', async () => {
+  it('counts one primary bucket per character (they add up), with a recorded death and an unreadable birth as flags; lists those with nothing readable; never a task list', async () => {
     const b = await call('arkona_as_of_coverage', {});
-    expect(b.counts).toMatchObject({ readableBirth: 8, recordedDeath: 1, attestedBounds: 3 });
-    expect(b.counts.characters).toBeGreaterThan(b.counts.readableBirth);
+    // ADR 0064 amendment 1 (G): Haru's birth is deliberately unestablished (he is attested, but the birth bucket wins).
+    expect(b.counts).toEqual({
+      characters: 23,
+      readableBirth: 8,
+      birthUnestablished: 1,
+      attestedBoundsOnly: 0,
+      nothingReadable: 14,
+    });
+    expect(b.flags).toEqual({ recordedDeath: 1, unreadableBirth: 0 });
+    const c = b.counts;
+    expect(c.readableBirth + c.birthUnestablished + c.attestedBoundsOnly + c.nothingReadable).toBe(
+      c.characters,
+    );
+    expect(b.sums).toMatch(/one bucket/);
     expect(b.counts.nothingReadable).toBe((b.nothingReadable as any[]).length);
     const listed = (b.nothingReadable as any[]).map((x) => x.character);
     expect(listed).toContain('Kamigawa Miyuki');

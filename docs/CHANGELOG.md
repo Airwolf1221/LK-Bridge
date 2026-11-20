@@ -64,6 +64,25 @@ correctly refused it. The canon guard is unchanged.
 - `test/consistency/sandbox-probe.test.ts` (mock): the helper never creates a `[BSRC]` page through the governed route,
   and the sandbox check makes no governed create or delete.
 
+## Unreleased: v3 F4b.1, the consistency check after its first live run (ADR 0064 amendment 1, 20 November 2026)
+
+From the owner's review of the first run on Arkona (run `apr_7e189380f2f0ee05`: 4 Contradictory, all false; 5 Gaps; 39
+Unreadable, most readable; 12 of 299 births readable). No migration. **After deploying, approve the new pack version
+`arkona-2026-11-20-f4b1` on the Packs page**, then re-run the coverage report and `arkona_consistency { all: true }`.
+
+- **Rule A, subject attribution**: a sentence is the governing name's (the name directly before the verb in its own
+  clause, with only titles and appositives between), never the page's character because it is on the page.
+- **Rule B, the date inside the clause**: the first date-shaped text after the verb; nothing date-shaped is no fact;
+  "unreadable" only for a date-shaped text the calendar refuses.
+- **Rule C, chronology rows**: by their columns only, never as their joined text.
+- **D**: a dateless "Deceased" is a state; "Deceased by <date>" a bound; "death date unestablished" a gap.
+- **E**: identity values compared by their principal value (before the first `;`, `(` or " - ").
+- **F**: "Pre-Rewrite" and "Author-Facing" sections and chronology rows left out unless `include: ["pre-rewrite"]`
+  (labelled Historical material differs); switched on, by the owner's ruling.
+- **G**: `arkona_as_of_coverage` puts each character in one bucket (they add up), with a recorded death and an unreadable
+  birth as flags.
+- On the integration world built from the run's excerpts: Contradictory 4 → 0, Gaps 4 → 1, Unreadable 16 → 1.
+
 ## Unreleased: v3 F4b, the consistency check and "as of a date" (ADR 0064, 20 November 2026)
 
 From the owner-approved design [design/F4b-consistency-and-as-of.md](design/F4b-consistency-and-as-of.md) (D1 to D10).

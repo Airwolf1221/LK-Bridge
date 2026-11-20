@@ -60,6 +60,8 @@ export interface StoredFact {
   readonly section: string | null;
   readonly excerpt: string;
   readonly mentions: readonly string[];
+  /** ADR 0064 amendment 1 (F): read from a section or row marked non-current (kept with the mentions, no migration). */
+  readonly nonCurrent?: true;
 }
 
 export interface FactIndexState {
@@ -112,7 +114,10 @@ function rowToFact(r: Obj): StoredFact {
           ...(r.open_start === 1 ? { openStart: true } : {}),
           ...(r.open_end === 1 ? { openEnd: true } : {}),
         };
-  const meta = json<{ bound?: StoredFact['bound']; mentions?: string[] }>(r.mentions, {});
+  const meta = json<{ bound?: StoredFact['bound']; mentions?: string[]; nonCurrent?: boolean }>(
+    r.mentions,
+    {},
+  );
   return {
     pageId: String(r.page_id),
     seq: Number(r.seq),
@@ -133,6 +138,7 @@ function rowToFact(r: Obj): StoredFact {
     section: (r.section as string | null) ?? null,
     excerpt: String(r.excerpt),
     mentions: meta.mentions ?? [],
+    ...(meta.nonCurrent === true ? { nonCurrent: true as const } : {}),
   };
 }
 
@@ -340,7 +346,11 @@ export class FactIndex {
         f.blockId,
         f.section,
         f.excerpt,
-        JSON.stringify({ ...(f.bound ? { bound: f.bound } : {}), mentions: f.mentions }),
+        JSON.stringify({
+          ...(f.bound ? { bound: f.bound } : {}),
+          mentions: f.mentions,
+          ...(f.nonCurrent ? { nonCurrent: true } : {}),
+        }),
       ),
     );
   }

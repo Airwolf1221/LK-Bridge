@@ -228,3 +228,161 @@ one proposal, one item per page, the side picked untouched; a suggestion shown a
 value; more than 10 pages asks for the step-up at approval), `pick-chronology.test.ts` (a row through the row tools: its
 Date, KCY and event together), `index.test.ts` (incremental from a change snapshot; rebuilt on a new key; the heap back
 to its baseline after repeated extractions); and the guide's (`test/discover`).
+
+## Amendment 1: from the first live run
+
+- Status: **Proposed** (20 November 2026, session F4b.1). It amends the decisions above; where it changes one, the
+  change is said here and the text above is left as it was approved.
+- **What the run found** (the owner, 20 November 2026; run `apr_7e189380f2f0ee05` on Arkona: 299 characters, 2,039
+  facts, 1,467 pages): 4 Contradictory, 5 Gaps, 39 Unreadable, and only 12 of 299 births readable. On review, every
+  Contradictory finding was false and most Unreadable dates were readable: the fixtures had not modelled how Arkona's
+  pages are written. Every fixture of this amendment is built from the excerpts the owner quoted from that run, verbatim.
+- **Write scope: no issue found.** Nothing in this amendment writes: the four tools stay read-only, the audits'
+  category still reports Contradictory pairs only, and "Pick the right value" is unchanged (always ONE proposal).
+- Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
+  spike, rehearsal or round-trip script. Mocks and fixtures only.
+- **No new ADR number** (the owner's instruction). No migration: the one new stored value (a fact's non-current mark)
+  is kept in the facts' existing JSON column. The facts index's key gains a version, so the index is rebuilt once on
+  the first request after deploying.
+- **Pack version `arkona-2026-11-20-f4b1`** (supersedes `arkona-2026-11-20-f4b`; the owner approves it on the Packs
+  page). Rules A, C, E and G and the identity-page fix are code and apply at once; rules B and D and the switch F are
+  pack data and apply when `-f4b1` is approved.
+
+### A. Subject attribution (D2 made precise)
+
+1. **The subject is the name or alias governing the verb in its own clause** (`resolveName`, src/consistency/extract.ts):
+   the name directly before "was / is born", "died / dies", "was killed", with only titles and appositives between.
+   Clauses break at commas, semicolons, a spaced dash and the clause words (after, when, before, until, while).
+   - The clause running straight into the verb: the longest run of its last words that is a name ("Their son Murad
+     al-Khalid" → Murad al-Khalid; "After Kaiser Soren von Woerfels" → Soren von Woerfels). None: nobody, never a name
+     in an earlier clause ("…passed to Soren after Tobias von Hohenfalk died" is Tobias's, or nobody's).
+   - A comma before the verb: the clause before it must be a name standing alone (after its titles: "Their son,
+     Leopold I von Hohenfalk, was born"); otherwise it is an appositive, passed over only when a comma opens it too
+     ("Yasmin al-Naim, daughter of Karim al-Naim, is born" is Yasmin's). **Chosen**: an appositive opened by a clause
+     word is not passed over (nobody), so a name inside an appositive never governs.
+   - The phrasing's own `\s*,?` before the verb is put back (match indices), so the comma counts.
+   - **Titles and clause words are pack data** (`rules.consistency.titles`, `clauseWords`; absent: Kaiser and Kaiserin,
+     and the five words). `-f4b1` seeds Kaiser, Kaiserin and the common European titles.
+2. **The identity page is no exception** (the cause of the false findings): F4b counted every sentence on a character's
+   identity page as that character's. Now a sentence there counts only when its governing name is one of the
+   character's own names, aliases or its given name (`characterFacts`, src/consistency/service.ts). Falling back to the
+   page's character is left to the phrasings without `{name}` (the Temporal Scope and Life State fields).
+3. Pronouns are still never read; a sentence naming two characters is only the governing one's.
+4. **Chosen, kept from F4b**: a given name alone counts only on that character's own pages. "When Finn died on Kusha 9th,
+   4A 12…" on Veresa von Mader's page is Finn von Mader's death (by his given name), so it is no longer Veresa's, but it
+   is not compared with Finn's own pages either.
+5. **Departure from F4b decision D2.3** (a row with no name read, attributed to the one page it mentions): a chronology
+   row is attributed to a mentioned page's character only when the mention's text is the name governing the verb ("A
+   daughter is born" with one mention is nobody's). The owner's rule allows falling back only when the clause's subject
+   is literally the character's name.
+
+### B. The date inside the clause
+
+1. **A new reading, `date: 'scan'`** (`readScan`, src/consistency/dates.ts): after the verb, the clause (cut at a
+   semicolon or a clause word, never at a comma, which dates and places hold) is scanned for the first date-shaped text:
+   a word starting with one of the calendar's month names or era abbreviations followed by a number, with an optional
+   "c." or "approximately". It is read by the calendar engine's leading reader, so a leading place, "to <parents>" and a
+   trailing "(… KCY)" are skipped. "in <era year>" reads as a year. Built from the calendar: nothing about Arkona is in
+   the code.
+2. **Nothing date-shaped: no fact is recorded.** "Unreadable" is reserved for a date-shaped text the engine refuses,
+   with its reason ("Camue has 50 days; there is no day 51").
+3. `-f4b1` reads with `scan`: "Born …" and "Died …" in a Temporal Scope, "alive / active …", the Life State's
+   "Deceased …", and the prose "<name> was / is born on / in …" and "<name> died / dies / was killed on / in …". A
+   consequence, tested: Titania's "active at…" is no longer reported as unreadable (it holds no date).
+4. "born al-Shariff" (a maiden name) is no second birth: one fact a sentence, as before, and the phrasing needs "was /
+   is born on / in".
+
+### C. Chronology rows
+
+1. **A table row is never read as its joined cells.** The full-text index keeps a row as one unit ("Varadi Bendeguz is
+   born in Varadyn Kiralysag | Selaphos 40th, 3A 78 | 1,250,076"); F4b read those units as prose, which made most of the
+   run's Unreadable rows. They are no longer read as prose.
+2. The chronology's rows are read as F4b already did besides: through F2's row parser (`findTable` on the configured age
+   tables), the date from the Date column (read as the chronology reads it), the subject from the Historical Event
+   column by rule A, with the event cell's mentions and their text (`ChronologyRowInput.subjects`). The KCY column is
+   not compared (as before).
+3. **For the owner**: a table elsewhere (not one of the chronology's age tables) is no longer read at all. Reading such
+   tables by their columns too would be a later change.
+
+### D. Life State and bounds
+
+1. A dateless "Deceased" is a state: the Life State identity fact records it, and the death date comes from the Temporal
+   Scope or prose; none, nothing is reported.
+2. "Deceased by <date>" is an upper bound on death, never a death date (`death.lifestate` no longer matches "Deceased by"
+   or "Deceased before"). **Chosen**: it is not recorded as a fact at all; recording it as a bound would be a new fact
+   kind, for the owner. "alive at", "active at" and "attested through" stay attested bounds (lower bounds on life),
+   never a death.
+3. "death date unestablished" and "exact death date unestablished" are an explicit gap in the Life State too
+   (`death.lifestate.gap`), as they already were in the Temporal Scope.
+
+### E. Identity values
+
+1. **The principal value is compared** (`principalValue`, `principalKey`): the part before the first qualifier (`;`,
+   `(`, or a spaced dash), normalised as before (case, accents, punctuation, word order). Differing qualifiers or wording
+   after it are no conflict and nothing is reported; Contradictory needs different principal values.
+2. A value whose principal value is in `unestablished` ("Unestablished (pending review)") is a gap too.
+
+### F. Non-current sections inside current pages
+
+1. **The owner's ruling (20 November 2026)**: "Pre-Rewrite" and "Author-Facing" sections and rows are non-current; the
+   exclusion is **switched on** by default.
+2. **Pack data** (`rules.consistency.nonCurrent: { markers, exclude }`, `-f4b1`: `["Pre-Rewrite", "Author-Facing"]`,
+   `exclude: true`). A fact read from a section with a marker in any heading above it, or from a chronology row whose
+   text holds one ("(author-facing pre-rewrite provenance)"), is marked (case, dashes and spaces between words ignored).
+3. With the switch on, marked facts are left out of `arkona_consistency`, `arkona_as_of`, the coverage report and the
+   audits unless `include: ["pre-rewrite"]` asks for them; the run's `leftOut` says how many. When included they are
+   labelled **Historical material differs** (`info`), never Contradictory, and never the reference. With the switch off,
+   nothing changes.
+4. **For the owner to check on Arkona**: in the integration fixture, Purandukht Mithra's birth in Yue Bailu's Biography
+   ("born on Zarzakh 17th, 2A 748,455…") is under a current heading, so it is the one sentence compared (a Gap against
+   her identity page's "birth date unestablished"). If on Arkona that sentence stands under "Birth, Upbringing and
+   Magical Reputation - Pre-Rewrite", it is left out too, and her Gap disappears.
+
+### G. Coverage that adds up
+
+`arkona_as_of_coverage` now puts each character in **one primary bucket**, in this order: a readable birth; a birth
+deliberately unestablished; attested bounds only; nothing readable. The buckets add up to the total (`counts`; `sums`
+says so). A recorded death and an unreadable birth are **flags** with their own counts (`flags`). **Chosen**: a
+character with only a recorded death is in "nothing readable", listed with the flag. The output's shape changed:
+`counts.unreadableBirth`, `counts.recordedDeath` and `counts.attestedBounds` moved (no consumer in the repository besides
+the tests).
+
+### The integration test's numbers
+
+`test/consistency/live-run.test.ts`, on a world built from the run's excerpts (`test/consistency/live-world.ts`: F4b's
+fixture world plus 29 characters and their pages), the findings about the run's subjects, before (F4b's code and pack)
+and after:
+
+| Finding                                   | Before | After                                     |
+| ----------------------------------------- | -----: | ----------------------------------------- |
+| Contradictory                             |      4 | 0                                         |
+| Gap                                       |      4 | 1 (Purandukht Mithra: a real gap)         |
+| Unreadable (findings)                     |     16 | 1 (F4b's "Camue 51st, 4A 360": refused)   |
+| Coverage: readable births (52 characters) |     19 | 23                                        |
+| Coverage: unreadable births               |      4 | 0                                         |
+| Coverage: recorded deaths                 |      8 | 7 ("Deceased by 5A 931" is no death date) |
+
+Before, the 4 Contradictory were Soren von Woerfels (Tobias's death), Daryavan al-Khalid (Murad's birth), Katsuragi
+Koharu (Naming Culture) and Murket (Family / Surname); the Gaps included Veresa von Mader (Finn's death), Yvonne von
+Hohenfalk (Leopold's birth) and Jahan-Timur ("Deceased by"). After, the coverage buckets are 23 + 3 + 3 + 23 = 52.
+
+### Tests
+
+`test/consistency/amendment1.test.ts` (every fixture above, on the extractor, the scan and the comparison: A's four
+must-not-attribute sentences and the Falkenreich line; B's nine clauses and their sentences; C's ten rows and the joined
+row never read; D's Life States and bounds; E's two must-not-conflict pairs and the must-conflict one; F's markers, the
+Core's and Biography's sections and the row; D2 kept: pronouns, two names), `test/consistency/live-run.test.ts` (the
+integration world), and the F4b suites updated where the amendment changes their expectation (Titania's "active at…",
+the mention-only row, the coverage shape). The heap test (`index.test.ts`) passes unchanged.
+
+### For the owner
+
+1. Approve `arkona-2026-11-20-f4b1`, then re-run the coverage report and `arkona_consistency { all: true }` and compare
+   with run `apr_7e189380f2f0ee05`.
+2. Rule A's chosen narrowings: an appositive opened by a clause word is never passed over; a given name alone still counts
+   only on the character's own pages (Finn's death on Veresa's page is read as Finn's but not compared).
+3. The departure in A.5 (a mention counts only as the governing name).
+4. "Deceased by <date>" is recorded as nothing (D.2); a bound fact kind would be a later change.
+5. Tables other than the chronology's age tables are no longer read (C.3).
+6. Check the section Purandukht Mithra's Biography sentence stands under on Arkona (F.4).
+7. The titles seeded in `-f4b1` (edit them on the Packs page).

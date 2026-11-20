@@ -515,8 +515,12 @@ export const consistencyPatternSchema = z
     /** `attested`: the bounds of a subject's attested life ("attested through", "alive at", "active at"). */
     kind: z.enum(['birth', 'death', 'attested']),
     regex: text(500),
-    /** How the date is read from the `date` group (absent: `leading`). */
-    date: z.enum(['leading', 'first']).optional(),
+    /**
+     * How the date is read from the `date` group (absent: `leading`). `scan` (ADR 0064 amendment 1): the first
+     * date-shaped substring of the clause (a day, a month or a year form of the calendar), cut at a clause word or `;`;
+     * none found, no fact is recorded; one the calendar refuses is unreadable, with its reason.
+     */
+    date: z.enum(['leading', 'first', 'scan']).optional(),
     /** The bound an attested date gives: `to` (through, until: an open start), `from`, or `both` (a span, the default). */
     bound: z.enum(['from', 'to', 'both']).optional(),
     /** A deliberate gap ("birth date unestablished"): no date is read. */
@@ -544,6 +548,29 @@ export const consistencyRulesSchema = z
     /** Values meaning "deliberately not established": never a conflict, reported as a gap (design D3). */
     unestablished: z.array(text(100)).max(20),
     patterns: z.array(consistencyPatternSchema).min(1).max(100),
+    /**
+     * ADR 0064 amendment 1 (rule A): titles allowed between a clause's start and the name governing its verb ("Kaiser
+     * Soren von Woerfels dies"), and stripped before a name standing alone in an appositive. Absent: Kaiser, Kaiserin.
+     */
+    titles: z.array(text(100)).max(100).optional(),
+    /**
+     * ADR 0064 amendment 1 (rule A): the words that start a new clause, besides commas, semicolons and a spaced dash.
+     * Absent: after, when, before, until, while.
+     */
+    clauseWords: z.array(text(50)).max(30).optional(),
+    /**
+     * ADR 0064 amendment 1 (F): sections (by any heading above them) and chronology rows (by their text) holding one of
+     * these markers are non-current material inside current pages ("Author-Facing Pre-Rewrite History"). With
+     * `exclude` on, they are left out unless `include: ["pre-rewrite"]` asks for them, and labelled "Historical material
+     * differs" when included; with it off, nothing changes.
+     */
+    nonCurrent: z
+      .object({
+        markers: z.array(text(100)).max(30),
+        exclude: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type ConsistencyRules = z.infer<typeof consistencyRulesSchema>;

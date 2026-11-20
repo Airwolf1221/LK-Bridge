@@ -458,18 +458,25 @@ identity page's value first, then each disagreeing restatement with its page, li
 - **Unreadable** (a date the calendar cannot read, with its text: never guessed).
 
 Only the pack's phrasings are read ("Born …" in a Temporal Scope, "<name> was born on …", "<name> died in …", a dated
-line, a chronology row), and only when the sentence **names** the character (a name, alias or Canonical Display Name;
-never a pronoun), so it misses some restatements by design. Archived pages, the Legacy Canon Archive and the Design
-References are left out unless `include` names them; AU pages are compared only within their AU. A long run is stored:
-page through it with `runId` and `offset`.
+line, a chronology row by its columns), and only when the name **governing the verb** is the character's (a name, alias
+or Canonical Display Name; never a pronoun, never another name in the sentence: "Their son Murad al-Khalid was born…" on
+his father's page is Murad's birth), so it misses some restatements by design. The date is the first date-shaped text
+after the verb ("born in Falkenau on Jehet 27th, 4A 84 (… KCY)"); a dateless "Deceased" is a state, and "Deceased by
+<date>" a bound, never a death date. Identity values are compared by their principal value (before the first `;`, `(`
+or " - "). Archived pages, the Legacy Canon Archive, the Design References, and sections and chronology rows marked
+"Pre-Rewrite" or "Author-Facing" are left out unless `include` names them (`archived`, `legacy`, `design`,
+`pre-rewrite`); AU pages are compared only within their AU. A long run is stored: page through it with `runId` and
+`offset`.
 
 **Fixing is the owner's.** Tell the person what disagrees and show both values; the owner picks the right value on the
 dashboard ("Pick the right value"), and the bridge makes ONE proposal editing every page that disagrees (never the side
 picked). You may **suggest** a value with `arkona_consistency_suggest { findingId, value, reason }`: it is shown to the
 owner and applies nothing. Never edit the dates yourself to make the pages agree.
 
-**`arkona_as_of_coverage`**: how many characters have a birth the calendar can read, a recorded death, attested bounds,
-or none. A report for the owner, never a task list: an unrecorded birth is often deliberate; never invent a date.
+**`arkona_as_of_coverage`**: how many characters have a birth the calendar can read, a birth deliberately unestablished,
+attested bounds only, or nothing readable (one bucket each, adding up to the total), with a recorded death and an
+unreadable birth counted as flags. A report for the owner, never a task list: an unrecorded birth is often deliberate;
+never invent a date.
 
 ### Arkona fiction
 

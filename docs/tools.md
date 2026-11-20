@@ -2022,7 +2022,8 @@ also lists `namesakes`); a partial match is a note. `CHARACTER_EXISTS` is unchan
 [design/F4b-consistency-and-as-of.md](design/F4b-consistency-and-as-of.md). The agent guide's part is "Arkona consistency
 checks"; "How to decide" says: a character at a date → `arkona_as_of`; changing a date → `arkona_consistency` first. All
 four are listed while the Arkona pack is attached and its approved version has consistency rules
-(`arkona-2026-11-20-f4b` or later); none writes to LegendKeeper, and none picks a winner.
+(`arkona-2026-11-20-f4b` or later; `arkona-2026-11-20-f4b1` carries ADR 0064 amendment 1); none writes to LegendKeeper,
+and none picks a winner.
 
 **What is read** (pack data, `rules.consistency`: new phrasings are a new pack version, never code). Births, deaths and
 the bounds of an attested life from a Temporal Scope field (each `;` clause: "Born Camue 44th, 4A 360", "attested
@@ -2033,7 +2034,20 @@ and the identity facts Race / Species, Naming Culture, Life State, Personal / Gi
 whose Subject is the character restates them. A sentence is about someone only when it names them: a name, alias or
 Canonical Display Name (either order); a given name alone only on the character's own pages; a name two current
 characters share only on one's own pages; never a pronoun. Dates go through the calendar engine with their precision; one
-the engine cannot read is reported with the calendar's reason, never guessed. The facts are kept in the bridge's
+the engine cannot read is reported with the calendar's reason, never guessed.
+
+**Amendment 1** (ADR 0064, from the first live run): **rule A**, a sentence is about the name governing its verb in its
+own clause (the name directly before "was / is born", "died / dies", "was killed", with only titles and appositives
+between; clauses break at commas, semicolons, a spaced dash and after, when, before, until, while), never another name in
+the sentence, on the identity page too; **rule B**, the date is the first date-shaped text after the verb (a day, month
+or year form of the calendar; a leading place, "to <parents>" and a trailing "(… KCY)" are skipped): nothing date-shaped
+is no fact, and "unreadable" is kept for a date-shaped text the engine refuses; **rule C**, a table row is never read as
+its joined cells: the chronology's rows are read by their columns, attributed by rule A (a mention only when its text is
+the governing name); **D**, a dateless "Deceased" is a state, "Deceased by <date>" an upper bound on death, "death date
+unestablished" a gap; **E**, identity values are compared by their principal value (before the first `;`, `(` or a
+spaced dash); **F**, sections (by any heading above them) and chronology rows holding a marker of
+`rules.consistency.nonCurrent` ("Pre-Rewrite", "Author-Facing") are left out unless `include: ["pre-rewrite"]`, then
+labelled Historical material differs (switched on in `-f4b1`, the owner's ruling). The facts are kept in the bridge's
 database (`consistency_facts`, migration `3900`), read from the appraisal's overlay page by page and kept current from
 the change snapshots; rebuilt when the phrasings, the characters' names, the calendar or the chronology settings change.
 
@@ -2066,9 +2080,10 @@ death. Cost: none; `live: true` 1 read a character.
 
 ### `arkona_as_of_coverage`
 
-The current Main CANON characters with a birth the engine can read, an unreadable one, a deliberately unestablished
-one, a recorded death and attested bounds, and those with nothing readable (listed). A report, never a task list. Cost:
-none.
+The current Main CANON characters, each in ONE bucket so the buckets add up to the total (`counts`: a readable birth, a
+birth deliberately unestablished, attested bounds only, nothing readable; `sums` says so), with a recorded death and an
+unreadable birth counted as separate flags (`flags`); those with nothing readable are listed. A report, never a task
+list. Cost: none.
 
 ### `arkona_consistency_suggest`
 

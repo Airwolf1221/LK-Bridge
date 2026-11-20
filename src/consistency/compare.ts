@@ -16,6 +16,7 @@
 import type { Calendar } from '../calendar/index.js';
 import { nameKeyOf } from '../packs/naming/namesakes.js';
 import { overlaps, spanOf, type Span } from './dates.js';
+import { principalValue } from './extract.js';
 import type { StoredFact } from './facts-index.js';
 
 export type Lifecycle = 'Authoritative' | 'Working' | 'Archived';
@@ -126,6 +127,12 @@ export function labelOf(a: PageInfo, b: PageInfo): Label {
   return 'contradictory';
 }
 
+/**
+ * An identity value's principal part, normalised (ADR 0064 amendment 1, rule E): what comes before its first qualifier
+ * (`;`, `(`, a spaced dash), compared as `identityKey`. Differing qualifiers or wording after it are no conflict.
+ */
+export const principalKey = (v: string): string => identityKey(principalValue(v));
+
 /** An identity value, normalised: case, diacritics and punctuation ignored, its words in any order. */
 export const identityKey = (v: string): string =>
   nameKeyOf(v)
@@ -146,6 +153,11 @@ export interface CompareInput {
   readonly inheritedLabel?: string;
   /** Whether a chronology row relates to a page (the row mentions it, or the page links to the row's table). */
   readonly rowRelates: (row: StoredFact, pageId: string) => boolean;
+  /**
+   * ADR 0064 amendment 1 (F): a fact from a section or row marked non-current, brought in with `include`, is historical
+   * material: never the reference, and labelled "Historical material differs". False: such facts count as current.
+   */
+  readonly nonCurrentHistorical?: boolean;
 }
 
 const SOURCE_ORDER: Readonly<Record<StoredFact['source'], number>> = {
@@ -161,14 +173,16 @@ export function compareCharacter(o: CompareInput): Disagreement[] {
   const out: Disagreement[] = [];
   const span = (f: StoredFact): Span | null => (o.cal && f.date ? spanOf(o.cal, f.date, o.margin) : null);
   const conflict = (a: StoredFact, b: StoredFact): boolean | null => {
-    if (a.kind === 'identity') return identityKey(a.valueText) !== identityKey(b.valueText);
+    if (a.kind === 'identity') return principalKey(a.valueText) !== principalKey(b.valueText);
     const sa = span(a);
     const sb = span(b);
     return sa && sb ? !overlaps(sa, sb) : null;
   };
+  const hist = (f: StoredFact): boolean => o.nonCurrentHistorical === true && f.nonCurrent === true;
   const sorted = (list: readonly StoredFact[]) =>
     [...list].sort(
       (a, b) =>
+        Number(hist(a)) - Number(hist(b)) ||
         SOURCE_ORDER[a.source] - SOURCE_ORDER[b.source] ||
         lifecycleRank(o.page(a.pageId).lifecycle) - lifecycleRank(o.page(b.pageId).lifecycle) ||
         a.pageId.localeCompare(b.pageId) ||
@@ -185,7 +199,7 @@ export function compareCharacter(o: CompareInput): Disagreement[] {
   ) => {
     const own = sorted(group.filter((f) => f.pageId === o.identityPageId && f.source !== 'chronology'));
     const others = sorted(group.filter((f) => !own.includes(f)));
-    const ownValue = own.find((f) => f.gap || f.date !== null || f.kind === 'identity');
+    const ownValue = own.find((f) => !hist(f) && (f.gap || f.date !== null || f.kind === 'identity'));
     let reference: StoredFact | null = ownValue ?? inheritedRef ?? null;
     let fromRestatement = false;
     if (!reference) {
@@ -193,6 +207,7 @@ export function compareCharacter(o: CompareInput): Disagreement[] {
         others.find(
           (f) =>
             o.page(f.pageId).lifecycle === 'Authoritative' &&
+            !hist(f) &&
             !f.gap &&
             (f.date !== null || f.kind === 'identity'),
         ) ?? null;
@@ -210,6 +225,11 @@ export function compareCharacter(o: CompareInput): Disagreement[] {
       if (f === reference) continue;
       if (f.unreadable) {
         add('unreadable', f);
+        continue;
+      }
+      if (hist(f)) {
+        // Non-current material brought in: historical whenever it differs (a value against a gap included).
+        if (f.gap !== reference.gap || (!f.gap && conflict(reference, f) === true)) add('historical', f);
         continue;
       }
       if (f.gap !== reference.gap) {
@@ -264,11 +284,12 @@ export function compareCharacter(o: CompareInput): Disagreement[] {
         continue;
       }
       if (f.gap) {
-        buckets.set('gap', [...(buckets.get('gap') ?? []), viewOf(f, o.page(f.pageId))]);
+        const l = hist(row) || hist(f) ? 'historical' : 'gap';
+        buckets.set(l, [...(buckets.get(l) ?? []), viewOf(f, o.page(f.pageId))]);
         continue;
       }
       if (conflict(row, f) !== true) continue;
-      const l = labelOf(rowPage, o.page(f.pageId));
+      const l = hist(row) || hist(f) ? 'historical' : labelOf(rowPage, o.page(f.pageId));
       buckets.set(l, [...(buckets.get(l) ?? []), viewOf(f, o.page(f.pageId))]);
     }
     for (const [label, restatements] of buckets)
