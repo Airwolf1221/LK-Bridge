@@ -68,7 +68,13 @@ that is the owner's.
    (board, map, timeline) compared by their metadata timestamps only, not their content". A body that cannot be read is
    reported as a difference, never taken as unchanged. **Corrected after the owner's sandbox run (X6)**: `updatedAt` does
    not move on a content edit, so board, map and timeline documents are now compared by their content as well; the
-   disposition says "each board, map and timeline document's content unchanged".
+   disposition says "each board, map and timeline document's content unchanged". **Confirmed by the owner's sandbox run
+   of assumptions-r4 (Y1, 20 November 2026)**: a board's, a map's and a timeline's own timestamps (in getResource's
+   document list and in getDocument) do not move when a shape, a feature or an event is edited, while the content read
+   shows the edit. The content comparison is kept as built; no cheaper timestamp comparison is possible. (Y2 of the
+   same run failed before testing anything: its table was built with `rows` and `cells` arrays, which the registry
+   refuses. It now uses the shape assumptions-r3's X2 confirmed, `tableRow` and `tableCell` children, from
+   `test/sandbox/r4-blocks.ts`, and `test/contract/sandbox-table-shape.test.ts` pins it against the mock.)
 
 9. **A large job waits for the budget instead of starting over** (R3-62, amends CR-2026-11-R2's R2-29 re-check). A
    check's or a read-back's reads, in a job holding no job-level lock, wait in their queue for the budget however long

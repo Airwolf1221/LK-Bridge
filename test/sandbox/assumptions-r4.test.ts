@@ -31,6 +31,7 @@ import { mintClientId, type OpParams, type StepOptions } from '../../src/jobs/in
 import { stableJson } from '../../src/jobs/sidebar-state.js';
 import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
 import { createSoakRuntime, type SoakRuntime } from './soak.js';
+import { y2Blocks } from './r4-blocks.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
@@ -170,30 +171,8 @@ async function runCheck(sb: SoakRuntime): Promise<Item[]> {
     );
 
     await check('Y2', 'the verify compares a label the bridge wrote (paragraph and table cell)', async () => {
-      const labelled = (text: string) => ({ mention: { resourceId: pageId!, text } });
-      const blocks = [
-        { id: mintClientId(), kind: 'paragraph', content: [{ text: 'See ' }, labelled('a custom label')] },
-        {
-          id: mintClientId(),
-          kind: 'paragraph',
-          content: [{ text: 'Plain ' }, { mention: { resourceId: pageId! } }],
-        },
-        {
-          id: mintClientId(),
-          kind: 'table',
-          rows: [
-            {
-              id: mintClientId(),
-              cells: [
-                {
-                  id: mintClientId(),
-                  children: [{ id: mintClientId(), kind: 'paragraph', content: [labelled('in a cell')] }],
-                },
-              ],
-            },
-          ],
-        },
-      ];
+      // The table as LegendKeeper takes it (X2's shape): rows and cells are `children` of kind `tableRow` and `tableCell`.
+      const blocks = y2Blocks(pageId!, () => mintClientId());
       await run('replaceDocumentBlocks', { path: main, body: { blocks } });
       const stored = ((await run('getDocumentBlocks', { path: main })).blocks ?? []) as Obj[];
       const cmp = compareStoredBlocks(blocks, stored);
