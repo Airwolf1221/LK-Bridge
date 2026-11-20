@@ -11,7 +11,9 @@ export type AppraisalTool =
   | 'arkona_change_impact'
   | 'arkona_working_digest'
   | 'arkona_visual_hygiene'
-  | 'arkona_split_appraisal';
+  | 'arkona_split_appraisal'
+  /** v3 F4b (ADR 0064): the consistency check's stored runs (kept and paged like the appraisal's). */
+  | 'arkona_consistency';
 
 export const APPRAISAL_TOOLS: readonly AppraisalTool[] = [
   'arkona_appraise_owner',
@@ -36,7 +38,13 @@ export type Group =
   | 'working'
   | 'proposals'
   | 'unpromoted'
-  | 'contradictions';
+  | 'contradictions'
+  // v3 F4b (ADR 0064): the consistency check's labels (design D4).
+  | 'contradictory'
+  | 'differs'
+  | 'gaps'
+  | 'historical'
+  | 'unreadable';
 
 export const GROUP_LABEL: Readonly<Record<Group, string>> = {
   required: 'Required defects',
@@ -49,6 +57,11 @@ export const GROUP_LABEL: Readonly<Record<Group, string>> = {
   proposals: 'Pending and conflicted proposals',
   unpromoted: 'Approved but not promoted',
   contradictions: 'Declared contradictions',
+  contradictory: 'Contradictory',
+  differs: 'Proposal differs from canon',
+  gaps: 'Gaps',
+  historical: 'Historical material differs',
+  unreadable: 'Dates the calendar cannot read',
 };
 
 /** The groups each tool reports, in order. */
@@ -59,6 +72,8 @@ export const TOOL_GROUPS: Readonly<Record<AppraisalTool, readonly Group[]>> = {
   arkona_visual_hygiene: ['candidates', 'blocked'],
   // v3 F3e (ADR 0059): the split appraisal (A6) reports architectural candidates only (and what it could not read).
   arkona_split_appraisal: ['architectural', 'blocked'],
+  // v3 F4b (ADR 0064): Contradictory first (the audits report only these), then the rest the tool keeps.
+  arkona_consistency: ['contradictory', 'differs', 'gaps', 'historical', 'unreadable'],
 };
 
 /** Repository Automation's evidence terms. */
@@ -68,7 +83,11 @@ export type EvidenceClass =
   | 'Explicitly Unresolved'
   | 'Inaccessible'
   | 'Incomplete'
-  | 'Review signal';
+  | 'Review signal'
+  // v3 F4b (ADR 0064, design D4): the owner's evidence classes for a consistency finding.
+  | 'Contradictory'
+  | 'Proposal differs from canon'
+  | 'Gap';
 
 /** The governance rule a finding comes from: the page and its section (and the rule's own name, when it has one). */
 export interface GovernanceRule {

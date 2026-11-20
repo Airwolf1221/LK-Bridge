@@ -276,7 +276,7 @@ function mapBlocks(blocks: readonly unknown[], fn: (b: Obj) => Obj): Obj[] {
 }
 
 /** The blocks the write format cannot take back (a paragraph holding an inline icon): never edited. */
-function unwritableIds(blocks: readonly unknown[]): Set<string> {
+export function unwritableIds(blocks: readonly unknown[]): Set<string> {
   const out = new Set<string>();
   const walk = (list: readonly unknown[]) => {
     for (const b of list) {

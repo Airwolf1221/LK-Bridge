@@ -694,6 +694,114 @@ const rules: PackRules = packRulesSchema.parse({
     sections: [],
     presentationStandard: 'East Asian Personal Name Presentation Standard',
   },
+  // v3 F4b (ADR 0064; the owner-approved design docs/design/F4b-consistency-and-as-of.md): the consistency check and "as
+  // of a date". Deliberately narrow (D2: precision over recall): only these phrasings are read, the subject only by a
+  // name, alias or Canonical Display Name (never a pronoun), each date through the calendar engine with its precision.
+  // New phrasings are added here (a new pack version), never in code.
+  consistency: {
+    present: '5A 931',
+    approxMargin: 5,
+    temporalScope: 'Temporal Scope',
+    lifeState: 'Life State',
+    identityFields: [
+      'Race / Species',
+      'Naming Culture',
+      'Life State',
+      'Personal / Given Name',
+      'Family / Surname',
+    ],
+    unestablished: ['Unestablished', 'Unknown', 'Unrecorded'],
+    patterns: [
+      // Temporal Scope, one `;` clause at a time: "Born Camue 44th, 4A 360; alive and immortal in Fifth-Age present 5A 931",
+      // "Born 2A 73,511; attested through 5A 931", "Attested 5A 411–5A 931; birth date unestablished".
+      { id: 'birth.scope', source: 'temporalScope', kind: 'birth', regex: String.raw`^\s*born\s+(?<date>.+)$` },
+      { id: 'death.scope', source: 'temporalScope', kind: 'death', regex: String.raw`^\s*died\s+(?<date>.+)$` },
+      {
+        id: 'birth.scope.gap',
+        source: 'temporalScope',
+        kind: 'birth',
+        regex: String.raw`\bbirth(?:\s+date)?\s+(?:is\s+)?(?:unestablished|unknown|unrecorded)\b`,
+        gap: true,
+      },
+      {
+        id: 'death.scope.gap',
+        source: 'temporalScope',
+        kind: 'death',
+        regex: String.raw`\bdeath(?:\s+date)?\s+(?:is\s+)?(?:unestablished|unknown|unrecorded)\b`,
+        gap: true,
+      },
+      {
+        id: 'attested.scope.span',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`^\s*attested\s+(?!through\b|until\b|to\b)(?<date>.+)$`,
+        bound: 'both',
+      },
+      {
+        id: 'attested.scope.through',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`\battested\s+(?:through|until|to)\s+(?<date>.+)$`,
+        bound: 'to',
+      },
+      {
+        id: 'attested.scope.alive',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`\b(?:alive|active)\b(?<date>.*)$`,
+        date: 'first',
+        bound: 'both',
+      },
+      // A Life State of "Deceased" with a date.
+      {
+        id: 'death.lifestate',
+        source: 'lifeState',
+        kind: 'death',
+        regex: String.raw`^\s*deceased\b(?<date>.*)$`,
+        date: 'first',
+      },
+      // Prose, one sentence at a time: "Yasmin was born on Camue 1st, 4A 100", and a dated line on a nation page:
+      // "Azah 19th, 4A 51 (1,250,358 KCY) - Cornelia von Katzen is born in…".
+      {
+        id: 'birth.prose',
+        source: 'prose',
+        kind: 'birth',
+        regex: String.raw`{name}\s*,?\s+(?:was|is)\s+born\s+(?:on|in)\s+(?<date>.+)$`,
+      },
+      {
+        id: 'birth.prose.dated',
+        source: 'prose',
+        kind: 'birth',
+        regex: String.raw`^\s*(?<date>.+?)\s+[-–—]\s+{name}\s*,?\s+(?:was|is)\s+born\b`,
+      },
+      {
+        id: 'death.prose',
+        source: 'prose',
+        kind: 'death',
+        regex: String.raw`{name}\s*,?\s+(?:died|dies|was\s+killed|is\s+killed)\s+(?:on|in)\s+(?<date>.+)$`,
+      },
+      {
+        id: 'death.prose.dated',
+        source: 'prose',
+        kind: 'death',
+        regex: String.raw`^\s*(?<date>.+?)\s+[-–—]\s+{name}\s*,?\s+(?:died|dies|was\s+killed|is\s+killed)\b`,
+      },
+      // A chronology row: the kind of event and its subject from the Historical Event cell ("…al-Naim, is born in 4A
+      // 401"); the date is the row's own Date cell.
+      {
+        id: 'birth.chronology',
+        source: 'chronology',
+        kind: 'birth',
+        regex: String.raw`{name}\s*,?\s+(?:was|is)\s+born\b`,
+      },
+      {
+        id: 'death.chronology',
+        source: 'chronology',
+        kind: 'death',
+        regex: String.raw`{name}\s*,?\s+(?:died|dies|was\s+killed|is\s+killed)\b`,
+      },
+    ],
+  },
   rulings: [
     {
       key: 'au-status-tag',
@@ -716,9 +824,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // 18 November 2026; session F3e): the split appraisal's triggers and the split tool's audits (`splits`, D4). `-f3f`
   // (ADR 0060, 19 November 2026; session F3f): the retag rules (`retag`), the retag apply's switch, and the Tagging
   // Standard's "Excluded Routine Tags" pinned. `-f4a` (ADR 0063, 19 November 2026; session F4a): the governance drift
-  // audit's equivalence map and sections (`governanceAudit`) and the name check's culture index (`naming`).
-  seed: 'arkona-2026-11-19-f4a',
+  // audit's equivalence map and sections (`governanceAudit`) and the name check's culture index (`naming`). `-f4b` (ADR
+  // 0064, 20 November 2026; session F4b): the consistency check's phrasings, the present day and the "c." margin
+  // (`consistency`).
+  seed: 'arkona-2026-11-20-f4b',
   supersedes: [
+    'arkona-2026-11-19-f4a',
     'arkona-2026-11-19-f3f',
     'arkona-2026-11-18-f3e',
     'arkona-2026-11-16',

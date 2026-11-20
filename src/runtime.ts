@@ -64,6 +64,8 @@ import { createAssets, type AssetService } from './assets/index.js';
 import { createImages, imageDataDir, type ImageService } from './images/service.js';
 import { Audits, SPLIT_CHECK, SPLIT_VERIFY, splitChecker, splitVerifier } from './audits/index.js';
 import { Appraisal } from './appraisal/index.js';
+import { Consistency } from './consistency/service.js';
+import { bridgePicker, PICK_TOOL } from './consistency/fix.js';
 import { BlockIdSweep } from './blockids/index.js';
 import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
@@ -159,6 +161,8 @@ export interface Runtime {
   readonly audits: Audits;
   /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (read-only; fixes are proposals). */
   readonly appraisal: Appraisal;
+  /** v3 F4b (ADR 0064): the consistency check and "as of a date" (read-only; the owner's pick is a proposal). */
+  readonly consistency: Consistency;
   /** v2 E1a: restore proposals (always proposals) and their follow-ups. */
   readonly restores: Restores;
   /** v2 E1a: restore rehearsals into a throwaway root of a sandbox project. */
@@ -768,6 +772,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const retagRef: { current: RetagService | null } = { current: null };
   // v3 F4a (ADR 0063): the governance check compares the governance pages with the bridge's tool list, made below.
   const toolsRef: { current: readonly McpToolProvider[] } = { current: [] };
+  // v3 F4b (ADR 0064): the consistency check (made below, over the appraisal's overlay) feeds the audits' category.
+  const consistencyRef: { current: Consistency | null } = { current: null };
   const audits: Audits = new Audits({
     db: o.db,
     snapshots,
@@ -793,6 +799,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         projectName: projectStore.byId(projectId)?.name ?? null,
         known: () => knownNamesOf(toolsRef.current),
       }),
+    // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
+    consistency: async (projectId) => (consistencyRef.current ? consistencyRef.current.auditItems(projectId) : null),
   });
   audits.start();
   // v3 F3c (ADR 0054): the appraisal tools and the full-text index, over the snapshot overlay, the audits, the asset tree
@@ -823,6 +831,20 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
   });
+  // v3 F4b (ADR 0064): the consistency check and "as of a date", over the appraisal's overlay, the chronology's tables
+  // and the calendar engine (free); the owner's pick is one proposal (src/consistency/fix.ts).
+  const consistency: Consistency = new Consistency({
+    db: o.db,
+    appraisal,
+    tree,
+    registry,
+    chronology,
+    piece: (sha) => snapshots.store.getJson(sha),
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    now: () => (o.clock ?? systemClock).now(),
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+  });
+  consistencyRef.current = consistency;
   // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation. Its candidates come from the appraisal's
   // snapshot overlay (no LegendKeeper read); each document is one P3 job with its own check and verify (two checkers).
   const blockIds = new BlockIdSweep({
@@ -993,7 +1015,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       afterRevert: (projectId, jobId, revertJobId) =>
         splitsRef.current?.afterRevert(projectId, jobId, revertJobId) ?? Promise.resolve(null),
     },
-    approvedRevertible: (projectId, jobId) => retagRef.current?.isApplyJob(projectId, jobId) ?? false,
+    // v3 F4b (ADR 0064, D6): the job of an owner's pick is revertible like an approved retag batch.
+    approvedRevertible: (projectId, jobId) =>
+      (retagRef.current?.isApplyJob(projectId, jobId) ?? false) ||
+      engine.queries.getJob(projectId, jobId)?.origin.tool === PICK_TOOL,
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReverts = reverts.start();
@@ -1216,6 +1241,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       packs,
       // v3 F3c (ADR 0054): the appraisal tools and the full-text index.
       appraisal,
+      // v3 F4b (ADR 0064): the consistency check and "as of a date".
+      consistency,
       // v3 F3d (ADR 0058): resuming a package or a rename that stopped part-way.
       resume,
       // v3 F3d (ADR 0058): arkona_rename's records and leftover reports.
@@ -1228,6 +1255,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   };
   // v3 F3e (ADR 0059, D2): phase 2 is archive_page's own plan, proposed by the bridge (it needs the tool layer's deps).
   splits.setArchiver(bridgeArchiver(toolDeps));
+  // v3 F4b (ADR 0064, D6): the owner's pick is one proposal, planned with the tool layer (the chronology's row tools).
+  consistency.setPicker(bridgePicker(toolDeps));
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.
@@ -1310,6 +1339,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     snapshots,
     audits,
     appraisal,
+    consistency,
     restores,
     rehearsals,
     offsite,

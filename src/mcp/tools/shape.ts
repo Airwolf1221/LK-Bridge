@@ -9,6 +9,7 @@
  * - failures become typed `{ error: { code, message, … } }` results, never thrown exceptions.
  */
 import type { Packs } from '../../packs/service.js';
+import type { Consistency } from '../../consistency/service.js';
 import type { Appraisal } from '../../appraisal/service.js';
 import type { BlockwiseUndo } from '../../pages/undo.js';
 import * as z from 'zod';
@@ -96,6 +97,8 @@ export interface DiscoverServices {
   readonly packs?: Packs;
   /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (read-only; fixes are proposals). */
   readonly appraisal?: Appraisal;
+  /** v3 F4b (ADR 0064): the consistency check and "as of a date" (read-only; the owner's pick is a proposal). */
+  readonly consistency?: Consistency;
   /** v3 F3d (ADR 0058): resuming a package or a rename that stopped part-way (bridge_job_resume). */
   readonly resume?: ResumeService;
   /** v3 F3d (ADR 0058): `arkona_rename`'s records, token versions and leftover reports. */

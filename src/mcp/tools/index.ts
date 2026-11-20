@@ -27,6 +27,7 @@ import { auditTools } from './audits.js';
 import { appraisalTools } from './appraisal.js';
 import { retagTools } from './retag.js';
 import { arkonaReadTools } from './arkona-reads.js';
+import { consistencyTools } from './consistency.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -64,6 +65,7 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     ...retagTools(deps),
     // v3 F4a (ADR 0063): the Arkona pack's name check and topic brief (read-only, free).
     ...arkonaReadTools(deps),
+    ...consistencyTools(deps),
     // v2 C2c (ADR 0035): the page lifecycle.
     ...lifecycleTools(deps),
     ...documentTools(deps),

@@ -496,6 +496,58 @@ export const namingRulesSchema = z
   .strict();
 export type NamingRules = z.infer<typeof namingRulesSchema>;
 
+/**
+ * v3 F4b (ADR 0064, design D2): one phrasing the consistency check reads. Deliberately narrow: precision over recall.
+ *
+ * - `source`: where it is read: `temporalScope` (each `;` clause of a Temporal Scope field), `lifeState` (the Life State
+ *   field: "Deceased" with a date), `prose` (each sentence of a block of a page's text) or `chronology` (a chronology
+ *   row's Historical Event cell: only the event's kind and subject are read there, its date is the row's Date cell).
+ * - `regex`: a regular expression source (matched case-insensitively, Unicode). Its named group `date` holds the text
+ *   the date is read from: the date must START that text (`leading`) or is the first date in it (`first`, up to the
+ *   clause's end); whatever follows the date is ignored. `{name}` stands for the subject: only a name, alias or Canonical
+ *   Display Name of a character (in either order), never a pronoun. A pattern of kind `gap` reads no date: it records
+ *   that the owner left the fact unestablished.
+ */
+export const consistencyPatternSchema = z
+  .object({
+    id: z.string().regex(/^[a-z][a-z0-9_.-]{0,59}$/),
+    source: z.enum(['temporalScope', 'lifeState', 'prose', 'chronology']),
+    /** `attested`: the bounds of a subject's attested life ("attested through", "alive at", "active at"). */
+    kind: z.enum(['birth', 'death', 'attested']),
+    regex: text(500),
+    /** How the date is read from the `date` group (absent: `leading`). */
+    date: z.enum(['leading', 'first']).optional(),
+    /** The bound an attested date gives: `to` (through, until: an open start), `from`, or `both` (a span, the default). */
+    bound: z.enum(['from', 'to', 'both']).optional(),
+    /** A deliberate gap ("birth date unestablished"): no date is read. */
+    gap: z.boolean().optional(),
+  })
+  .strict();
+export type ConsistencyPattern = z.infer<typeof consistencyPatternSchema>;
+
+/**
+ * v3 F4b (ADR 0064): the consistency check's and "as of a date"'s data (`arkona_consistency`, `arkona_as_of`). Report
+ * only, never a repair: a fix is the owner's pick, proposed for approval (design D6).
+ */
+export const consistencyRulesSchema = z
+  .object({
+    /** The present day (design D10): "now" in both tools, and what "alive at" the present attests up to. */
+    present: text(100),
+    /** The margin of a "c." date, in years each side (design D3). */
+    approxMargin: z.number().int().min(0).max(1000),
+    /** The sidebar field births, deaths and attested bounds are read from. */
+    temporalScope: text(100),
+    /** The sidebar field a dated "Deceased" is read from. */
+    lifeState: text(100),
+    /** The identity facts compared where another page restates them in a field of the same name (design D1). */
+    identityFields: z.array(text(100)).max(20),
+    /** Values meaning "deliberately not established": never a conflict, reported as a gap (design D3). */
+    unestablished: z.array(text(100)).max(20),
+    patterns: z.array(consistencyPatternSchema).min(1).max(100),
+  })
+  .strict();
+export type ConsistencyRules = z.infer<typeof consistencyRulesSchema>;
+
 /** An owner's ruling the pack follows that its governance pages do not record yet (design 1.5: the AU tag). */
 export const rulingSchema = z
   .object({
@@ -583,6 +635,8 @@ export const packRulesSchema = z
     governanceAudit: governanceAuditSchema.optional(),
     /** v3 F4a (ADR 0063): the name check's data (absent: no culture lookup; namesakes are still found). */
     naming: namingRulesSchema.optional(),
+    /** v3 F4b (ADR 0064): the consistency check and "as of a date" (absent: neither tool applies). */
+    consistency: consistencyRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
