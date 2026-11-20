@@ -25,7 +25,8 @@
 - **Write scope: no issue found.** The writing tools are direct at scope `write` exactly as the design's E5 says (routine
   narrative organisation, 32B), on the Review page and Revertible; every narrative job declares its pages as having no
   lifecycle (a marker with `to: null`), so the lifecycle guard still refuses any lifecycle change, and the canon guard
-  still judges every write. The audit's fixes are always ONE proposal. (Reading tools and promotion: the second half.)
+  still judges every write. The audit's fixes are always ONE proposal. The reading tools write nothing; promotion is a
+  canon proposal at every scope (a character or page made Authoritative, facts and texts `forceProposal`).
 
 ## E1, E9: the layout as pack data
 
@@ -136,10 +137,57 @@ no chapter is not a gap (a planned chapter); an act layer is empty only when its
 plan (a story planned but not yet drafted is not ceremonial); a backwards date compares each chapter with the one before
 it in number order; placeholder text is pack data (patterns such as "Link to the …", "Exact or an approximate range").
 
+## E6: the reading tools
+
+`src/mcp/tools/narrative-read.ts`.
+
+1. **`arkona_chapter_context`** (free: the snapshots through the appraisal's reader, the tree, the calendar; `live: true`
+   reads the pages now): the date (In-world Date, else the plan's Planned Date); `arkona_as_of` (in the story's
+   continuity) for the POV and Characters Present; `arkona_brief` for each of them and each Location (at most 12);
+   **chosen**: the chronology rows and the open contradictions are those the as-of answers give for its characters (a
+   general window around the date is not added); the plan's Canon Constraints and Question Gate; the previous chapter's
+   last section (or its last three blocks) and its plan's Closing State. Every part says its evidence class; the plan and
+   earlier chapters are "narrative (never canon)".
+2. **`arkona_chapter_check`** (read-only; **chosen**: the chapter is read LIVE by default, 2 reads, since it is checked
+   right after a save; `live: false` reads the snapshots): people through the as-of states (not yet born and recorded
+   deceased are `Contradicts canon`; nothing recording them alive is `Unestablished in canon`); **chosen**: presence
+   (listed but not in the prose, in the prose but not listed) is its own list, `presence`, unlabelled, since it is about
+   the chapter's own sidebar, not canon; births and deaths written in the prose by the pack's prose phrasings (by name,
+   never a pronoun) against the as-of values (`Contradicts canon` when the spans cannot both be true, `Not in canon
+(candidate)` when canon records none); ages by `rules.consistency.ages` when the approved pack has them (see "Waiting
+   for F4b.1"); names: F4a's run reader (`capitalisedRuns`) per sentence, the sentence's first word dropped, resolved
+   against every page's names, subjects, aliases and Canonical Display Names, every current character's names and name
+   parts, the pack's `notNames` and the calendar's month and era words; a name resolving only to Archived or Legacy
+   Canon Archive pages is `Unestablished in canon`, one resolving nowhere `Not in canon (candidate)` (capped at
+   `candidateCap`, the rest counted); Locations gone (`Not in canon (candidate)`) or only Archived. An AU chapter's as-of
+   is asked in its AU.
+
+## E7: promotion
+
+`arkona_promote_from_chapter { chapter, candidates: [{ candidate, as, … }] }` (at most 20). **Chosen, the shape**: a
+list of candidates, so several can be offered at once. `character` and `page` go through `arkona_create_character` and
+`create_resource` themselves, called with `status: "authoritative"` (so a canon proposal whatever the scope; the
+character tool's namesake warning is carried); each is its own proposal. `fact` and `text` (on an existing owner page) are
+planned as `set_facts` and `write_page` plan them (`append_to_section`) and submitted as ONE proposal of items
+(`forceProposal`), so the owner accepts some and rejects the rest. The chapter is cited in each proposal's note:
+**chosen**, the proposal's summary (the line the owner reads), through a new `annotate` of a pending proposal (no
+migration); never a Dependency or a Related Source. The agent supplies every value; nothing is taken from the prose by
+the tool, and nothing is ever applied by itself.
+
+## Waiting for F4b.1
+
+The coordination of 20 November 2026: the F4b.1 session owns `rules.consistency` and the extractor and comparison code.
+Three pieces of this work touch them and are held until F4b.1 is merged to main, then added on top of its pack seed:
+the age phrasings (`rules.consistency.ages`: "<Name> is / was <n> (years old)", "<Name>, aged <n>"), which
+`arkona_chapter_check` already reads when present; the bare-range attested phrasing (F4b decision 6: "5A 900 - 5A 931"
+as attested bounds, tested on Tsubame Hoshizora); and "Deceased by <date>" as an upper bound used only by
+`arkona_as_of` (Jahan-Timur). Until then the check reports no age item, and the session's report says so.
+
 ## Guidance and docs
 
-`get_bridge_guide` gains the part "Arkona fiction" (the layout, the tools, the Drafting Gate) and a line in "How to
-decide"; docs/tools.md, docs/audits.md and the CHANGELOG describe the rest. `plan-baisheng-stories` maps to the narrative
+`get_bridge_guide` gains the part "Arkona fiction" (the layout, the tools, the Drafting Gate, and the Workflow's working
+sequence: `arkona_chapter_context` → the Question Gate → draft → `arkona_chapter_save` → `arkona_chapter_check` →
+`arkona_promote_from_chapter`) and a line in "How to decide"; docs/tools.md, docs/audits.md and the CHANGELOG describe the rest. `plan-baisheng-stories` maps to the narrative
 tools in the governance audit's equivalence map.
 
 ## For the owner
@@ -151,3 +199,16 @@ tools in the governance audit's equivalence map.
 5. The audit's narrower readings: a planned number is not a gap; an act is empty only with no chapter and no plan.
 6. `unarchive_page` refuses narrative pages too; `create_resource` makes narrative pages (no prefix, no status).
 7. Continuity indexes directly under Narratives stay alphabetical.
+8. `arkona_chapter_check` reads the chapter live by default; presence is its own unlabelled list.
+9. Promotion takes a list of candidates; the citation is appended to the proposal's summary.
+10. In the AU test fixture, F4b's as-of reads Yasmin as Unestablished in Moonfall at 4A 120 (no AU birth taken from the
+    AU page that restates it, and no inherited one applied): possibly for F4b.1 to look at; the narrative tools only ask
+    in the right continuity.
+
+## The sandbox check (written, not run)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- narrative-f4c`
+(`test/sandbox/narrative-f4c.test.ts`): on the test world, Narratives found by name and Main CANON found or made (with
+the raw client), a throwaway story with one act, two plans and two chapters (each read back word for word), a chapter
+inserted at 2 and the renumbering read back live, the check and the audit, and clean-up of everything it made. It needs
+`arkona-2026-11-20-f4c` approved.

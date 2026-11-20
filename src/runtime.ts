@@ -1276,6 +1276,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       appraisal,
       // v3 F4b (ADR 0064): the consistency check and "as of a date".
       consistency,
+      // v3 F4c (ADR 0065, design E7): the chapter a promoted lore proposal comes from, in its note.
+      proposals: { annotate: (id: string, note: string) => policy.proposals.annotate(id, note) },
       // v3 F3d (ADR 0058): resuming a package or a rename that stopped part-way.
       resume,
       // v3 F3d (ADR 0058): arkona_rename's records and leftover reports.

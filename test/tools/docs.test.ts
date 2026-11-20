@@ -24,9 +24,10 @@ describe('docs/tools.md', () => {
     // arkona_split_appraisal and arkona_split_owner, and v3 F3f's arkona_retag_audit and arkona_retag_apply, and v3 F4a's
     // arkona_name_check and arkona_brief, and v3 F4b's arkona_consistency, arkona_as_of, arkona_as_of_coverage and
     // arkona_consistency_suggest, and v3 F4c's arkona_story_create, arkona_chapter_plan, arkona_chapter_save,
-    // arkona_chapter_insert and arkona_chapter_move.
-    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(89);
-    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(89 + 89);
-    expect(docs).toContain('178 tools');
+    // arkona_chapter_insert, arkona_chapter_move, arkona_chapter_context, arkona_chapter_check and
+    // arkona_promote_from_chapter.
+    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(92);
+    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(92 + 89);
+    expect(docs).toContain('181 tools');
   });
 });

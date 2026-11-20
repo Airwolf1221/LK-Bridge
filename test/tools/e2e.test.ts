@@ -92,6 +92,10 @@ describe('the MCP surface with the official client', () => {
         'arkona_chapter_save',
         'arkona_chapter_insert',
         'arkona_chapter_move',
+        // v3 F4c (ADR 0065): reading a chapter against canon, and promotion.
+        'arkona_chapter_context',
+        'arkona_chapter_check',
+        'arkona_promote_from_chapter',
         'bridge_job_resume',
         'create_document',
         'create_index',

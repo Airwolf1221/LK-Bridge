@@ -21,8 +21,17 @@ listed and the narrative audit reports nothing.
 - **The narrative audit** (category `narrative`, 25 `narrative_*` codes): structure, numbering, plans against chapters,
   open gates, datelines, backwards dates without `Flashback`, dates outside a span, placeholder text; "Propose a fix" for
   the mechanical ones (a continuity index, tags, a link, a number, a dateline, the order), always ONE proposal.
+- **Reading and promotion**: `arkona_chapter_context` (free: as-of states, briefs, chronology, contradictions, the
+  plan's constraints and gate, the previous chapter's closing state, each labelled by evidence class),
+  `arkona_chapter_check` (read-only: people at the date, presence, births and deaths in the prose, new-lore candidates,
+  Archived-only names and Locations; labelled Contradicts canon, Not in canon (candidate), Unestablished in canon) and
+  `arkona_promote_from_chapter` (canon proposals through the existing tools whatever the scope; facts and texts as ONE
+  proposal of items; the chapter cited in the proposal's note only).
 - Governance sources may be found by their page's name (any dash); `plan-baisheng-stories` maps to the narrative tools.
-- `get_bridge_guide` part "Arkona fiction".
+- `get_bridge_guide` part "Arkona fiction", with the Workflow's working sequence.
+- The sandbox check `narrative-f4c` (written, not run).
+- **Waiting for F4b.1** (it owns `rules.consistency`): the age phrasings, the bare-range attested phrasing and "Deceased
+  by <date>" are added on top of its pack seed once it is merged.
 
 ## Unreleased: connected sessions are told when their tool list changes (20 November 2026)
 

@@ -502,6 +502,14 @@ markdown, baseVersion? }`**: saves the prose (the Fiction Writing Reference, 32B
   later chapter and plan (names and Chapter Number; mentions follow; prose never changes). More than 10 pages is a
   proposal the owner approves item by item.
 
+**The working sequence** (the Workflow's): `arkona_chapter_context` (the canon this chapter needs, as of its date; free)
+→ the **Question Gate** (ask the plan's questions; record the answers; close the gate) → **draft** → `arkona_chapter_save`
+→ `arkona_chapter_check` (what the chapter says against canon at its date: `Contradicts canon`, `Not in canon
+(candidate)`, `Unestablished in canon`) → `arkona_promote_from_chapter` for the lore the owner should see. A story's
+inventions stay fiction until the owner accepts them: promotion makes **canon proposals** (a character, a page, a fact
+or a text) whatever your scope; you supply the content; the chapter is cited in the proposal's note; never promote by
+yourself, and never treat silence as acceptance. Fix a `Contradicts canon` item in the chapter, not in canon.
+
 A field a template lacks is never invented: a value you give for one is refused (`TEMPLATE_MISMATCH`, naming it);
 others are skipped and listed (`fieldsNotOnTemplate`). The nightly audit's `narrative` category reports structure,
 numbering, plans against chapters, open gates, datelines and dates; its fixes are the owner's.

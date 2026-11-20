@@ -99,6 +99,8 @@ export interface DiscoverServices {
   readonly appraisal?: Appraisal;
   /** v3 F4b (ADR 0064): the consistency check and "as of a date" (read-only; the owner's pick is a proposal). */
   readonly consistency?: Consistency;
+  /** v3 F4c (ADR 0065): a note on a pending proposal (where promoted lore came from). */
+  readonly proposals?: { annotate(id: string, note: string): boolean };
   /** v3 F3d (ADR 0058): resuming a package or a rename that stopped part-way (bridge_job_resume). */
   readonly resume?: ResumeService;
   /** v3 F3d (ADR 0058): `arkona_rename`'s records, token versions and leftover reports. */
