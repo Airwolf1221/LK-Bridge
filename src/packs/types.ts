@@ -423,6 +423,79 @@ export const retagRulesSchema = z
   .strict();
 export type RetagRules = z.infer<typeof retagRulesSchema>;
 
+// ============================================================================================ v3 F4a: drift and names
+
+/**
+ * v3 F4a (ADR 0063): one entry of the governance drift audit's equivalence map: a name the governance pages may still use
+ * (an old bridge call such as `write_lk`, or a kebab-case skill such as `format-baisheng-owners`) and the bridge's
+ * equivalent, which the finding suggests as the replacement to copy into a `write_page` edit by hand. Data, never code:
+ * the owner changes it with a new pack version.
+ */
+export const governanceEquivalentSchema = z
+  .object({
+    /** The name as the governance pages write it. */
+    name: z.string().regex(/^[a-z][a-z0-9_-]{1,99}$/),
+    /** Arguments the call must carry for this equivalent (`{ job_action: 'guide' }`); absent: any. */
+    when: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,59}$/), text(100)).optional(),
+    /** The bridge's equivalent: a tool's name, or the words for one (`the chronology audit`). */
+    use: text(300),
+    /** More about it: where it lives, or what a partial equivalent leaves out. */
+    note: z.string().trim().max(500).optional(),
+    /** The equivalent covers only part of what the name did (the finding says so). */
+    partial: z.boolean().optional(),
+  })
+  .strict();
+export type GovernanceEquivalent = z.infer<typeof governanceEquivalentSchema>;
+
+/**
+ * v3 F4a (ADR 0063): the governance drift audit's data (the audits' `governance` category). It reads the governance
+ * root's tabs from the snapshots and reports, never repairs: governance edits are the owner's.
+ */
+export const governanceAuditSchema = z
+  .object({
+    /** The old bridge's call shapes, flagged wherever they appear as a whole word (`write_lk`, `read_lk`, `job_action`). */
+    legacyNames: z.array(z.string().regex(/^[a-z][a-z0-9_]{1,60}$/)).max(30),
+    /** The equivalence map (an old call or an external skill → the bridge's equivalent). */
+    equivalents: z.array(governanceEquivalentSchema).max(200),
+    /**
+     * Missing references are looked for only in sections whose heading holds one of these (`Startup`, `Related
+     * Guidance`, `Source Boundaries`, `Dependencies`): anywhere else a capitalised phrase is too often not a name.
+     */
+    referenceSections: z.array(text(100)).min(1).max(20),
+    /**
+     * How generously a short name resolves before anything is reported (the owner's review of v3 F4a). Besides a page's
+     * name, subject, aliases and tags and every tab's name, a page's name resolves with its lifecycle prefix, a `leading`
+     * project prefix (`Arkona - `, any dash) and a trailing `generic` word (`Reference`, `Standard`, `Workflow`, `Index`)
+     * removed ("Fiction Writing" for "Arkona – Fiction Writing Reference"), and a name in the text is also tried without
+     * its trailing generic word. Absent: no leading prefix, and those four generic words.
+     */
+    resolution: z
+      .object({
+        leading: z.array(text(100)).max(20),
+        generic: z.array(z.string().regex(/^[\p{L}][\p{L}\p{N}'’-]{0,39}$/u)).max(40),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type GovernanceAuditRules = z.infer<typeof governanceAuditSchema>;
+
+/**
+ * v3 F4a (ADR 0063): the name check's data (`arkona_name_check`). It reports; it never suggests or infers a naming
+ * culture, race or nationality from a name, and never proposes a rename (Character Architecture).
+ */
+export const namingRulesSchema = z
+  .object({
+    /** The index whose subtree holds the culture owners a Naming Culture resolves to (`Arkonan Cultures`). */
+    culturesIndex: text(200),
+    /** Sections of a culture owner returned besides those whose heading matches "name" or "naming". */
+    sections: z.array(text(200)).max(20),
+    /** The governance tab that sets out how a personal name is presented (its order), pointed to in every answer. */
+    presentationStandard: text(200).optional(),
+  })
+  .strict();
+export type NamingRules = z.infer<typeof namingRulesSchema>;
+
 /** An owner's ruling the pack follows that its governance pages do not record yet (design 1.5: the AU tag). */
 export const rulingSchema = z
   .object({
@@ -506,6 +579,10 @@ export const packRulesSchema = z
     splits: splitsRulesSchema.optional(),
     /** v3 F3f (ADR 0060): the retag audit and apply (absent: no retag tools). */
     retag: retagRulesSchema.optional(),
+    /** v3 F4a (ADR 0063): the governance drift audit's data (absent: the `governance` category reports nothing). */
+    governanceAudit: governanceAuditSchema.optional(),
+    /** v3 F4a (ADR 0063): the name check's data (absent: no culture lookup; namesakes are still found). */
+    naming: namingRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {

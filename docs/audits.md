@@ -194,3 +194,42 @@ A mention with a custom label in an index's routing section ("How to Use This In
 renamed; a plain mention always shows the page's current name. The bridge's own routing-line writers emit plain mentions
 since v3 F3f. `arkona_appraise_owner` reports a labelled one as **optional polish** with follow-up `none`: "change it in
 the app". LegendKeeper's API cannot change a mention's custom label (ADR 0058 amendment, D), so no fix is offered.
+
+## Governance drift (category Governance; v3 F4a)
+
+[ADR 0063](adr/0063-v3-f4a-governance-drift-names-and-briefs.md). On a project whose pack has drift rules (Arkona with
+`arkona-2026-11-19-f4a`, once approved), every run also reads the **governance documents**: every tab of the page the
+pack's governance sources sit on (Arkona's AI REPOSITORY root), the pinned sections included, from the snapshots like
+every other page, and compares them with the bridge. Report only: no finding offers "Propose a fix"; governance edits are
+the owner's, made by hand. Each finding names the tab and the sections, and suggests a replacement to copy into a
+`write_page` edit: the pack's equivalence map's (or a retired tool's successor), in the evidence as
+`suggestedReplacement`; for a near miss, the closest known name, also in the evidence; for an unknown tool with no
+equivalent, the bridge tool nearest in spelling, in the message only (so a bridge upgrade never re-opens a finding); or
+what to do when nothing is near.
+
+- `governance_unknown_tool` (warning): a name in tool form the bridge's tool registry does not have. Tool form is a
+  snake_case identifier in code formatting, or right after "call", "invoke" or "use". The old bridge's call shapes
+  (`write_lk`, `read_lk`, `job_action`) are flagged wherever they appear; an old call's argument is read and folded into
+  the call (`write_lk {"job_action":"guide"}` is one finding, with `get_bridge_guide` suggested). A retired tool name is
+  flagged with the tool that took over. The bridge's own argument names, finding codes and statuses are not tools and
+  are never flagged.
+- `governance_external_name` (info): a kebab-case skill name of three words or more in tool form (`format-baisheng-owners`),
+  or any name the equivalence map lists, with its equivalent where there is one (a partial one is said so). These may be
+  real skills used elsewhere: **Allow this name** on the finding (after a confirmation; audited `audits.allow_name`)
+  adds it to the audit settings' allowed names, and it is never reported again. The allowed names are listed, and can be
+  removed, in the audit settings (saving them asks for the step-up).
+- `governance_missing_reference` (info): a capitalised name of two words or more, in a section whose heading holds
+  Startup, Related Guidance, Source Boundaries or Dependencies (pack data; elsewhere a capitalised phrase is too often
+  not a name), that resolves to nothing however generously it is read (the owner's review). A short name resolves if it
+  matches a page's subject with its lifecycle prefix, a leading "Arkona -" (any dash) and a trailing generic word
+  (Reference, Standard, Workflow, Index) removed, a tab's name, an alias or a tag, of any page in any area: "Fiction
+  Writing" is the Design References page "Arkona – Fiction Writing Reference" and is never reported. Page names,
+  subjects, Canonical Display Names, templates and the governance headings resolve too, and a name in the text is also
+  tried without its own generic word. A name close to a known one is reported as a **near miss** with the closest match
+  suggested ("LK Bootstrap" → the root's tab "AI Bootstrap", in the evidence as `nearMiss` and
+  `suggestedReplacement`). Acknowledge it when it is right as it is; its evidence is the tab, section and name (and a
+  near miss's closest match), so the acknowledgement survives a reworded sentence.
+
+"Re-check now" is not offered for these: a governance finding depends on the whole repository and the bridge's tools, so
+the next run (after the edited page reaches the snapshots) checks it again. A run with and without the drift rules
+leaves every other category's findings exactly as they were.

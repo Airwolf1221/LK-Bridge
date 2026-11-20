@@ -186,6 +186,22 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'character brief',
       'character art',
     ],
+    // v3 F4a (ADR 0063): the topic brief (the first step for any subject) and the name check.
+    'Arkona briefs and names': [
+      'Brief on any Arkona subject (or a character)',
+      'Brief on any Arkona subject',
+      "Check a character's name before an intake or rename",
+      'Know a subject first (free, no read)',
+      'Check a name: namesakes, naming culture (free)',
+      'arkona_brief',
+      'arkona_name_check',
+      'topic brief',
+      'subject brief',
+      'name check',
+      'namesake',
+      'namesakes',
+      'naming culture',
+    ],
     // v3 F3c (ADR 0054): the appraisal part (read-only reports, fixes are proposals).
     'Arkona appraisal': [
       'Appraise Arkona pages, or see what a change breaks',

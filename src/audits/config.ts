@@ -88,6 +88,11 @@ const settingsShape = {
    * above knows is flagged.
    */
   strictReferenceTypes: z.boolean(),
+  /**
+   * v3 F4a (ADR 0063): external skill names the owner allowed (real skills used elsewhere): the governance check never
+   * reports them again (`governance_external_name`). Compared without case.
+   */
+  governanceAllowedNames: z.array(z.string().trim().min(1).max(100)).max(500),
 };
 
 /** The settings as stored: every field present (a missing one takes its default). */
@@ -98,6 +103,7 @@ export const auditSettingsSchema = z
     manualOrderIndexes: settingsShape.manualOrderIndexes.default([]),
     knownReferenceTypes: settingsShape.knownReferenceTypes.default([]),
     strictReferenceTypes: settingsShape.strictReferenceTypes.default(false),
+    governanceAllowedNames: settingsShape.governanceAllowedNames.default([]),
   })
   .strict();
 /** The settings as the dashboard sends them: any field may be left out (and is then kept, never reset). */
@@ -110,6 +116,7 @@ export const DEFAULT_AUDIT_SETTINGS: AuditSettings = Object.freeze({
   manualOrderIndexes: [],
   knownReferenceTypes: [],
   strictReferenceTypes: false,
+  governanceAllowedNames: [],
 });
 
 /** What the dashboard saves: the rules (or null: back to the seeded defaults), the tag source and the settings. */

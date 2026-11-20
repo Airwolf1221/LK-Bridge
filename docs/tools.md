@@ -214,7 +214,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (167 tools in all with the Arkona pack's fifteen tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner` and v3 F3f's `arkona_retag_audit` and `arkona_retag_apply`, and v3 F3d's `bridge_job_resume`; 169 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (169 tools in all with the Arkona pack's seventeen tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, and v3 F3d's `bridge_job_resume`; 171 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -1949,6 +1949,56 @@ ADR 0061 part B decision 5 its name and parent, as the job left them) work. With
 `nothing_to_propose` or `nothing_remaining`). Cost: none to propose; the job 3 reads for the governance, then 3 reads and
 1 write a page.
 
+## Setting packs: briefs and names (v3 F4a)
+
+[ADR 0063](adr/0063-v3-f4a-governance-drift-names-and-briefs.md). The agent guide's part is "Arkona briefs and names"
+(under "Setting packs (Arkona)"), and "How to decide" puts both first: a question about a subject starts with
+`arkona_brief`, and every character intake and rename includes `arkona_name_check`. Both are read-only and free (the
+bridge's tree and stored sidebars, the snapshots, the chronology's tables, the proposals and the findings), listed while
+the Arkona pack is attached to a project the bridge serves, and neither writes anything or guesses.
+
+### `arkona_brief`
+
+`{ subject, include?, live?, detail? }`: the brief on any subject (a nation, polity, culture, religion, place, event,
+magic system, item), generalising `arkona_character_brief`, to which a character is delegated (`delegated` says so).
+`subject` is a name, alias, path or id, resolved in the default scope: a page in the Legacy Canon Archive or the Design
+References only with `include` (`SUBJECT_NOT_CURRENT` otherwise); one character's pages, or an index with its own pages,
+are one subject; a name the registry does not know is looked for as a page's subject ("Lumen Strand" finds "Lumen Strand -
+Polity Reference"); several subjects are refused with the candidates (`AMBIGUOUS`), as `get_resource` refuses them.
+
+| Part                                               | What it holds                                                                                                                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `owners`                                           | the index and its pages, or the single owner: each with `lifecycle` (Authoritative, Working, Archived; `au`), Reference Type, Scope, Last Major Revision, tags, and `factsFrom`  |
+| `owners[].dependencies`                            | one level, each with its lifecycle and Scope; a `flag` on a Dependency on a Working or Archived page, historical material, or a page no longer there (Project Navigation's rule) |
+| `owners[].incomingDependencies`                    | the count, and the first ten (a hundred with `detail: "full"`)                                                                                                                   |
+| `owners[].sourceBoundaries`, `…unresolvedMaterial` | the sections as Markdown from the snapshots, cut at 1,500 characters (20,000 full) with a `handle` for `bridge_result_page`                                                      |
+| `owners[].relatedSources`                          | each with its lifecycle                                                                                                                                                          |
+| `chronology`                                       | the age-table rows naming the subject (a mention, its name or an alias): age, table, date, KCY, how it matched                                                                   |
+| `workInProgress`                                   | Working pages that mention or depend on it; pending proposals touching its pages                                                                                                 |
+| `findings`                                         | the open audit findings on its pages                                                                                                                                             |
+| `freshness`, `leftOut`                             | how old each source is; what the non-current areas held that was left out                                                                                                        |
+
+Every item carries its lifecycle; owners and items are listed apart and never merged across lifecycles. Cost: none;
+`live: true` re-reads the head owner's sidebar (1 read).
+
+### `arkona_name_check`
+
+`{ name?, givenName?, surname?, aliases?, namingCulture?, exclude?, detail? }`. **Namesakes**: the current characters
+(Authoritative, Working and AU, each labelled; never Archived, nor in a non-current area) sharing the full name, the given
+name, the surname or an alias, each with its identity page, Naming Culture, Life State and what matched. Names are
+compared without case, accents or prefixes; a full name in either order ("Asagiri Miyabi" finds "Miyabi Asagiri"). An
+exact full-name match is a `warning`, a partial one `info`; nothing is refused. `exclude` (names or ids) leaves
+characters out. **The naming culture** (`namingCulture`, a value the owner gave): through the approved culture map to its
+owner under Arkonan Cultures, that owner's naming sections (cut at 2,500 characters with a handle) and the characters
+recorded with it; an unmapped value is reported as such. Every answer points to the East Asian Personal Name Presentation
+Standard's tab and states the rule: **never an inference** of a culture, race or nationality from a name, and never a
+proposed rename. Cost: none.
+
+**In `arkona_create_character` and `arkona_rename`.** A new character's name, and a character's new name (the subject
+left out), are checked the same way, free. An exact full-name match is a `NAMESAKE` warning in the preview and the
+answer and in the proposal the owner sees (its summary: "namesake: … already goes by this name"; a rename's operation
+also lists `namesakes`); a partial match is a note. `CHARACTER_EXISTS` is unchanged.
+
 ## The calendar and the timelines (v2 D1)
 
 Last Major Revision (v3 F2, v3 F3c): a chronology row added or removed, or its Date or description cell changed
@@ -2426,7 +2476,10 @@ with the dashboard's "Propose a fix".
 Categories: `rules` (no rule matches a page, several do), `template` (a page's sidebar and tabs against its template's),
 `tags`, `references` (missing, deleted or inaccessible links; an Authoritative page linking to an Archived one),
 `unclassified`, `ordering`, `taxonomy`, `facts`, `lifecycle`, `keep_regions` (paragraphs with line breaks, inline icons,
-`unsupported` blocks, collections), `chronology` and `audit` (about the audit itself: a stale snapshot).
+`unsupported` blocks, collections), `chronology`, `assets`, `governance` (v3 F4a: the governance pages against the bridge:
+an unknown tool or old bridge call, an external skill, a missing reference; report only, with the suggested replacement:
+[audits.md](audits.md#governance-drift-category-governance-v3-f4a)) and `audit` (about the audit itself: a stale
+snapshot).
 
 **How an agent acts on a finding.** A finding is a report, not an instruction, and it may be out of date.
 

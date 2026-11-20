@@ -58,7 +58,8 @@ export function mainDocument(docs: readonly OverlayDocument[]): OverlayDocument 
   );
 }
 
-function collectionsOf(sidebar: unknown): Collection[] {
+/** A sidebar piece's link collections (v3 F4a: also the topic brief's, for a page read live with no snapshot yet). */
+export function collectionsOf(sidebar: unknown): Collection[] {
   const list = isObj(sidebar) && Array.isArray(sidebar.properties) ? (sidebar.properties as unknown[]) : [];
   const out: Collection[] = [];
   for (const p of list) {

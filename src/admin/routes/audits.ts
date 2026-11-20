@@ -30,6 +30,7 @@ const STATUS: Readonly<Record<string, number>> = {
   RECHECK_UNSUPPORTED: 409,
   NO_SNAPSHOT: 409,
   CHECK_FAILED: 500,
+  NOT_ALLOWABLE: 409,
 };
 
 const idParam = z.object({ id: z.coerce.number().int().min(1) });
@@ -180,6 +181,19 @@ export const registerAudits: Register = (api, ctx) => {
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
     const p = ctx.project(b.project);
     return { finding: await wrap(() => audits().unacknowledge('owner', p.id, id)) };
+  });
+
+  /**
+   * v3 F4a (ADR 0063): "Allow this name" on a governance finding naming an external skill: the name joins the audit
+   * settings' allowed names and is never reported again (its open findings go now). Audited `audits.allow_name`. Like an
+   * acknowledgement it silences a report and changes nothing else, so it asks no step-up; removing an allowed name is a
+   * settings change, which does.
+   */
+  api.post('/audits/findings/:id/allow-name', async (req) => {
+    const { id } = parseInput(idParam, req.params);
+    const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
+    const p = ctx.project(b.project);
+    return wrap(() => audits().allowName('owner', p.id, id));
   });
 
   /** "Propose a fix": re-reads the target live, then one ordinary proposal for the owner to approve. */

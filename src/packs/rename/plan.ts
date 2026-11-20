@@ -65,6 +65,13 @@ import type { PackBasis } from '../run.js';
 import type { PackRules } from '../types.js';
 import { reviewList, reviewParts, type ReviewList, type ReviewOccurrence } from './review.js';
 import {
+  currentCharacters,
+  namesakeLine,
+  namesakesOf,
+  namesakeView,
+  usableName,
+} from '../naming/namesakes.js';
+import {
   blockKey,
   RENAME_CHECKS,
   RENAME_REBASERS,
@@ -200,6 +207,8 @@ export interface RenamePlan {
    * the custom mention labels holding the old name, for the owner to look at.
    */
   readonly review: ReviewList;
+  /** v3 F4a (ADR 0063): the new name's namesakes among the current characters (a character's rename only). */
+  readonly namesakes?: readonly Record<string, unknown>[];
 }
 
 export interface RenameEnv {
@@ -385,6 +394,54 @@ export async function planRename(
     return refused(pd, [issue('INVALID_INPUT', `“${oldName}” is too short to find safely in text.`)]);
   const keepAlias = input.keepOldAsAlias !== false;
   const renameId = `rn_${randomBytes(8).toString('hex')}`;
+
+  // v3 F4a (ADR 0063): the new name's namesakes among the current characters (the subject itself left out), free from
+  // the tree. An exact full-name match is a warning, in the preview and in the proposal's summary the owner reads; a
+  // partial one (a given name or surname the owner gave) a note. Never a refusal: names may be shared.
+  let namesakeNote: string | null = null;
+  let namesakeList: Record<string, unknown>[] = [];
+  if (kind === 'character' && !followUp) {
+    const scan = currentCharacters({ ctx, rules, lifecycle: basis.lifecycle });
+    const found = namesakesOf(
+      scan,
+      { name: newName, givenName: input.given ?? null, surname: input.family ?? null },
+      usableName(rules),
+      new Set([identity.id]),
+    );
+    const exact = found.filter((n) => n.severity === 'warning');
+    const partial = found.filter((n) => n.severity === 'info');
+    namesakeList = found.slice(0, 10).map(namesakeView);
+    if (exact.length > 0) {
+      warnings.push(
+        issue(
+          'NAMESAKE',
+          `Another current character already goes by “${newName}”: ${exact
+            .slice(0, 5)
+            .map(namesakeLine)
+            .join(
+              '; ',
+            )}. Names may be shared, so nothing is refused: tell the owner before the rename is approved (Character Architecture's naming-culture review). arkona_name_check lists every namesake.`,
+          { namesakes: exact.slice(0, 10).map(namesakeView) },
+        ),
+      );
+      namesakeNote = `namesake: ${exact
+        .slice(0, 3)
+        .map(
+          (n) =>
+            `${n.character.subject} (${[n.character.lifecycle, ...(n.character.au ? ['AU'] : [])].join(', ')})`,
+        )
+        .join(
+          ', ',
+        )}${exact.length > 3 ? ` and ${exact.length - 3} more` : ''} already ${exact.length === 1 ? 'goes' : 'go'} by this name`;
+    }
+    if (partial.length > 0)
+      notes.push(
+        `Namesakes of the new name (info: a given name, surname or alias in common): ${partial
+          .slice(0, 5)
+          .map(namesakeLine)
+          .join('; ')}${partial.length > 5 ? `; and ${partial.length - 5} more (arkona_name_check)` : ''}.`,
+      );
+  }
 
   // ---------------------------------------------------------------------------------------------- the set
   const lifecycleIds = new Set(
@@ -2036,7 +2093,7 @@ export async function planRename(
   }
   const sorted = sortItems(items);
   const { writes, reads: jobReads } = jobCost(steps);
-  const summary = `${RENAME_TOOL}: ${followUp ? `what is left of “${oldName}”` : `“${oldName}” → “${newName}”`} (${kind}): ${sorted.length} item${sorted.length === 1 ? '' : 's'}, ${sorted.filter((i) => i.selected).length} ticked`;
+  const summary = `${RENAME_TOOL}: ${followUp ? `what is left of “${oldName}”` : `“${oldName}” → “${newName}”`} (${kind}): ${sorted.length} item${sorted.length === 1 ? '' : 's'}, ${sorted.filter((i) => i.selected).length} ticked${namesakeNote ? `; ${namesakeNote}` : ''}`;
   notes.push(
     'Every edit is its own item: untick what should keep the old name; an item that needs an unticked one is dropped with it, and the page says which before you approve.',
   );
@@ -2068,6 +2125,7 @@ export async function planRename(
       lmr: { mode, pages: lmrPages, minor: lmrMinor, switchedOff: !basis.lmrOnChanges },
       summary,
       prefetched,
+      ...(namesakeList.length > 0 ? { namesakes: namesakeList } : {}),
     },
   };
 }

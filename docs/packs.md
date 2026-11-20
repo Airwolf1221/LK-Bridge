@@ -504,6 +504,32 @@ changed in the snapshots since its verdict is marked stale and audited again: a 
 **Routing lines** (part D): the pack's routing-line writers (F3a's drafted index text and appended lines, F3b's
 repointed line, F3e's index lines) emit plain mentions, which always show the page's current name.
 
+## Governance drift, names and briefs (v3 F4a)
+
+[ADR 0063](adr/0063-v3-f4a-governance-drift-names-and-briefs.md). The tools: [tools.md](tools.md#setting-packs-briefs-and-names-v3-f4a);
+the audit: [audits.md](audits.md#governance-drift-category-governance-v3-f4a). Two sections are new in
+`arkona-2026-11-19-f4a`, which the owner approves on the Packs page before they apply (both are read from the approved
+version):
+
+| Key                                 | Arkona's value                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `governanceAudit.legacyNames`       | `write_lk`, `read_lk`, `job_action`: the old bridge's call shapes, flagged wherever they appear                                                                                                                                                                                                                                                                        |
+| `governanceAudit.equivalents`       | the equivalence map: `write_lk` with `job_action: guide` → `get_bridge_guide`; `format-baisheng-owners` → `arkona_appraise_owner`; `audit-baisheng-change-impact` → `arkona_change_impact`; `audit-baisheng-chronology` → the chronology audit; `intake-baisheng-visuals` → `arkona_visual_hygiene`; `resume-baisheng-workstreams` → `arkona_working_digest` (partial) |
+| `governanceAudit.referenceSections` | Startup, Related Guidance, Source Boundaries, Dependencies: the headings whose sections are checked for missing references                                                                                                                                                                                                                                             |
+| `governanceAudit.resolution`        | leading `Arkona -` (any dash), generic Reference, Standard, Workflow, Index: a page's subject also resolves with these removed ("Fiction Writing" is "Arkona – Fiction Writing Reference"), and a name in the text is also tried without its generic word (the owner's review; absent: the four generic words only)                                                    |
+| `naming.culturesIndex`              | Arkonan Cultures: where a Naming Culture's owner is looked for (by the culture map's token, or the value, as a page's subject, name or alias)                                                                                                                                                                                                                          |
+| `naming.sections`                   | none: a culture owner's sections whose heading matches "name" or "naming" are returned; more can be listed                                                                                                                                                                                                                                                             |
+| `naming.presentationStandard`       | East Asian Personal Name Presentation Standard: the governance tab every name check points to (not pinned; names are matched in both orders)                                                                                                                                                                                                                           |
+
+An equivalence entry is `{ name, when?, use, note?, partial? }`: `when` names the arguments a call must carry (the most
+specific entry that matches wins), `use` is the suggested replacement, and `partial` says the equivalent covers only part
+of what the name did. The owner changes the map with a new pack version; a name that is a real external skill is better
+allowed on the Audits page than mapped.
+
+**Never an inference.** The name check reports namesakes and a culture's own sections and members; it never suggests or
+infers a naming culture, race or nationality from a name, and never proposes a rename. The brief labels every item by
+lifecycle and never merges across lifecycles.
+
 ## Types as data, and what F3b extends
 
 The engine never assumes it is making a character: a type's rules say what it makes, and a hook (`src/packs/hooks.ts`)

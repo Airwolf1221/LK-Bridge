@@ -27,7 +27,14 @@ const SNAPSHOT_PAGES = 40;
 export async function characterBrief(
   pd: ProjectDeps,
   mctx: McpToolContext,
-  o: { readonly packId: string; readonly tool: string; readonly character: string; readonly live: boolean },
+  o: {
+    readonly packId: string;
+    readonly tool: string;
+    readonly character: string;
+    readonly live: boolean;
+    /** v3 F4a (ADR 0063): `arkona_brief` delegated a character subject here (said in the answer). */
+    readonly delegatedFrom?: string;
+  },
 ): Promise<McpToolResult> {
   const packs = pd.services?.packs;
   if (!packs)
@@ -221,6 +228,15 @@ export async function characterBrief(
     }
 
   const body = {
+    ...(o.delegatedFrom
+      ? {
+          delegated: {
+            from: o.delegatedFrom,
+            to: 'arkona_character_brief',
+            note: 'A character: this is the character brief (its identity fields, set pages, relationships, art, findings and Unresolved Material).',
+          },
+        }
+      : {}),
     character: {
       subject,
       identityPage: { id: hit.identity.id, name: hit.identity.rawName, role: hit.role },

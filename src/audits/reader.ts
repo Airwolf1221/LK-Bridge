@@ -66,6 +66,11 @@ export interface AuditModel {
   /** The project's templates from the base snapshot, or null when it holds none. */
   readonly templates: ReadonlyMap<string, AuditPage> | null;
   readonly unreadable: number;
+  /**
+   * v3 F4a (ADR 0063): the blocks of the page documents of the pages asked for (`keepBlocksOf`: the governance root),
+   * by document id; a document whose piece could not be read is absent. Every other page keeps only its scan.
+   */
+  readonly blocks?: ReadonlyMap<string, readonly unknown[]>;
 }
 
 export type ModelResult =
@@ -83,6 +88,8 @@ export interface ReaderOptions {
   readonly propertiesName: string;
   /** The tag-definition document, whose `json` code blocks are kept. */
   readonly tagSource?: { readonly pageId: string; readonly documentId: string } | null;
+  /** v3 F4a (ADR 0063): pages whose page documents' blocks are kept whole (the governance root). */
+  readonly keepBlocksOf?: ReadonlySet<string>;
   /** Concurrent store reads. */
   readonly concurrency?: number;
 }
@@ -166,6 +173,7 @@ export async function buildModel(
 
   let unreadable = 0;
   const conc = o.concurrency ?? 8;
+  const kept = new Map<string, readonly unknown[]>();
   const load = async (w: Working, keepCodeFor: (docId: string) => boolean): Promise<AuditPage> => {
     const unreadablePieces: string[] = [];
     let tags: string[] = [];
@@ -201,6 +209,7 @@ export async function buildModel(
       });
       scans.push(scan);
       refs.push(...r);
+      if (o.keepBlocksOf?.has(w.entry.id)) kept.set(d.id, Array.isArray(piece.blocks) ? piece.blocks : []);
     }
     unreadable += unreadablePieces.length;
     const { kind: classified, displayName } = classifyName(w.entry.name);
@@ -257,6 +266,7 @@ export async function buildModel(
       deleted,
       templates,
       unreadable,
+      ...(o.keepBlocksOf ? { blocks: kept } : {}),
     },
   };
 }

@@ -24,6 +24,7 @@ export type Category =
   | 'keep_regions' // line breaks, inline icons, unsupported blocks, collections
   | 'chronology' // D1's chronology check, folded in
   | 'assets' // v3 F2: the asset library (duplicate folders)
+  | 'governance' // v3 F4a: the governance documents against the bridge (old tool names, external skills, missing names)
   | 'audit'; // about the run itself (a stale snapshot, a missing template read)
 
 export const CATEGORIES: readonly Category[] = [
@@ -39,6 +40,7 @@ export const CATEGORIES: readonly Category[] = [
   'keep_regions',
   'chronology',
   'assets',
+  'governance',
   'audit',
 ];
 
@@ -443,6 +445,22 @@ export const CODES = {
     category: 'audit',
     severity: 'info',
     title: 'The chronology has not been checked yet',
+  },
+  // ---- governance (v3 F4a, ADR 0063): report only, never a fix (governance edits are the owner's)
+  governance_unknown_tool: {
+    category: 'governance',
+    severity: 'warning',
+    title: 'A governance page names a tool the bridge does not have (or an old bridge call)',
+  },
+  governance_external_name: {
+    category: 'governance',
+    severity: 'info',
+    title: 'A governance page names an external skill (allow it if it is real)',
+  },
+  governance_missing_reference: {
+    category: 'governance',
+    severity: 'info',
+    title: 'A governance page names a page, tab or standard the AI REPOSITORY does not have',
   },
   // ---- the run itself
   stale_snapshot: {

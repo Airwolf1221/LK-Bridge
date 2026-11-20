@@ -21,6 +21,11 @@ tasks come first and the reference after. The last section, **Operations**, list
 5. **Do not invent.** Names and ids come from `search`, `browse_repository_tree` and `get_resource`; dates from
    `calendar_date`; operation ids from the Operations list. A name that matches several pages is never guessed: pass the id.
 
+**A question about a subject → `arkona_brief` first** (free: its owners, Dependencies, boundaries, chronology and work
+in progress, each labelled by lifecycle); then `search` and `read_document` only for what it points to.
+
+**Every character intake and rename → `arkona_name_check`** (namesakes and the naming culture; never a guessed culture).
+
 **Rename a subject → `arkona_rename` (never `update_resource`).** It renames a pack's character, culture, race or other
 subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 
@@ -29,52 +34,51 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 
 **Which tool?**
 
-| You want to…                                        | Use                                                                     | Not                                               |
-| --------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------- |
-| Find a page when you know part of its name or a tag | `search`                                                                | `browse_repository_tree` of the whole root        |
-| See how a part of the repository is laid out        | `browse_repository_tree`                                                | many `get_resource` calls                         |
-| Look at one page's facts, links, tags               | `get_resource` (`resources` for several, up to 25)                      | `read_document`, `lk_api_read`                    |
-| Read a page's text (or one section)                 | `read_document` (`outline`, `section`)                                  | `lk_api_read` `getDocumentBlocks`                 |
-| Change a page's text                                | `write_page`, section modes                                             | `replace` of the whole page, `lk_api_write`       |
-| Change facts or links                               | `set_facts` (all changes in one call)                                   | `lk_api_write` on properties                      |
-| Rename, tag, alias, hide, lock                      | `update_resource` (a subject's rename: `arkona_rename`)                 | `lk_api_write`                                    |
-| Make a character                                    | `create_character` (Working), then `create_resource` for its pages      | `create_many_resources`                           |
-| Make an Arkona character, or add pages to one       | `arkona_create_character` (one package; projects with the pack)         | `create_character` and `create_resource` calls    |
-| Make any other Arkona owner page (polity, race…)    | `arkona_create_owner` (one package; its home checked)                   | `create_resource` and `set_facts` calls           |
-| Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`                | separate creates; `upload_image` to a destination |
-| Recall who an Arkona character is                   | `arkona_character_brief` (free: the bridge's own records)               | many `get_resource` and `read_document` calls     |
-| Rename an Arkona character or owner everywhere      | `arkona_rename` (one canonical proposal, approved item by item)         | `update_resource` and `write_page` page by page   |
-| Split an Arkona owner into several owners           | `arkona_split_appraisal`, then `arkona_split_owner` (one proposal)      | `write_page` and the create tools by hand         |
-| Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact` (free, read-only)       | reading every page yourself                       |
-| Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` (rare: see Create a page)  |
-| Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                     |
-| Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                              | `delete_resource`, `move_resource` to the archive |
-| Make Working work canon                             | `promote_page` (`subtree: true` for a set)                              | `set_facts` Status                                |
-| Delete (and undo)                                   | `delete_resource`, `restore_resource`                                   | `lk_api_write`                                    |
-| Check or convert a date                             | `calendar_date`                                                         | working it out yourself                           |
-| Add, change, remove a chronology event              | `create_`, `update_`, `delete_timeline_event`                           | `write_page` on a table; `lk_api_*`               |
-| Add or move a map pin, region, path                 | `create_map_feature`, `update_map_feature` (pixels from the image)      | `lk_api_write` `createFeature`                    |
-| Put an image in the library                         | `upload_image` (staged first at `propose`)                              | `lk_upload_image` (older; usually not shown)      |
-| See older states of a page and bring one back       | `list_snapshots`, `snapshot_diff`, `restore_snapshot` (always proposal) | rewriting the text with `write_page`              |
-| See what the audits found                           | `audit_findings`                                                        | scanning pages yourself                           |
-| Know how much budget is left, or if work fits       | `bridge_budget`, `bridge_estimate`                                      | reading pages to find out                         |
-| Know what happened to a proposal or job             | `bridge_proposal_status`, `bridge_job_status` (`wait_seconds` waits)    | repeating the write                               |
-| Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations                        |                                                   |
+| You want to…                                        | Use                                                         | Not                                           |
+| --------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------- |
+| Find a page when you know part of its name or a tag | `search`                                                    | `browse_repository_tree` of the whole root    |
+| See how a part of the repository is laid out        | `browse_repository_tree`                                    | many `get_resource` calls                     |
+| Look at one page's facts, links, tags               | `get_resource` (`resources` for several, up to 25)          | `read_document`, `lk_api_read`                |
+| Read a page's text (or one section)                 | `read_document` (`outline`, `section`)                      | `lk_api_read` `getDocumentBlocks`             |
+| Change a page's text                                | `write_page`, section modes                                 | `replace` of the whole page, `lk_api_write`   |
+| Change facts or links                               | `set_facts` (all changes in one call)                       | `lk_api_write` on properties                  |
+| Rename, tag, alias, hide, lock                      | `update_resource` (a subject's rename: `arkona_rename`)     | `lk_api_write`                                |
+| Make a character                                    | `create_character`, then `create_resource` (Working)        | `create_many_resources`                       |
+| Make an Arkona character, or add pages to one       | `arkona_create_character` (one package)                     | `create_character`, `create_resource` calls   |
+| Make any other Arkona owner page (polity, race…)    | `arkona_create_owner` (one package; its home checked)       | `create_resource` and `set_facts` calls       |
+| Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`    | separate creates; a placed `upload_image`     |
+| Brief on any Arkona subject (or a character)        | `arkona_brief` (free; a character: delegated)               | many `get_resource` and `read_document` calls |
+| Check a character's name before an intake or rename | `arkona_name_check` (free; never infers)                    | guessing a culture from the name              |
+| Rename an Arkona character or owner everywhere      | `arkona_rename` (one proposal, item by item)                | `update_resource`, `write_page` page by page  |
+| Split an Arkona owner into several owners           | `arkona_split_appraisal`, `arkona_split_owner`              | `write_page` and the create tools by hand     |
+| Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact`             | reading every page yourself                   |
+| Make any other page                                 | `create_resource` (template), `create_index` for a category | `create_bare_resource` (rare)                 |
+| Move a page                                         | `move_resource`                                             | `lk_api_write` `moveResource`                 |
+| Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                  | `delete_resource`; a move to the archive      |
+| Make Working work canon                             | `promote_page` (`subtree: true` for a set)                  | `set_facts` Status                            |
+| Delete (and undo)                                   | `delete_resource`, `restore_resource`                       | `lk_api_write`                                |
+| Check or convert a date                             | `calendar_date`                                             | working it out yourself                       |
+| Add, change, remove a chronology event              | `create_`, `update_`, `delete_timeline_event`               | `write_page` on a table; `lk_api_*`           |
+| Add or move a map pin, region, path                 | `create_map_feature`, `update_map_feature`                  | `lk_api_write` `createFeature`                |
+| Put an image in the library                         | `upload_image` (staged first at `propose`)                  | `lk_upload_image` (older; usually not shown)  |
+| See older states of a page and bring one back       | `list_snapshots`, `snapshot_diff`, `restore_snapshot`       | rewriting the text with `write_page`          |
+| See what the audits found                           | `audit_findings`                                            | scanning pages yourself                       |
+| Know how much budget is left, or if work fits       | `bridge_budget`, `bridge_estimate`                          | reading pages to find out                     |
+| Know what happened to a proposal or job             | `bridge_proposal_status`, `bridge_job_status`               | repeating the write                           |
+| Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations            |                                               |
 
-**What your scope means.** The tools you are shown depend on your connection's scope. `read` shows read tools only.
-`propose` shows every tool, but a write becomes a **proposal**: nothing is written; the owner sees your change on the
-dashboard and approves or rejects it. `write` writes directly, except for rule 4's always-proposal changes and
-`restore_snapshot`. `bridge_info` tells you which you have. Every result names its project and ends with its budget line.
+**What your scope means.** `read` shows read tools only. At `propose` a write becomes a **proposal** the owner approves
+or rejects on the dashboard; nothing is written. `write` writes directly, except rule 4's always-proposal changes and
+`restore_snapshot`. `bridge_info` says which you have. Every result names its project and ends with its budget line.
 
-**Sections to ask for.** `get_bridge_guide` takes `section`. Ask for one of these exact names (a near miss is matched
-loosely when the match is clear; each miss costs a call):
+**Sections to ask for** (`get_bridge_guide` with `section`; a near miss is matched loosely when the match is clear):
 
 - `How to decide` (this section)
 - `Find and read a page`
 - `Edit a page's text`
 - `Change facts and links`
 - `Create a page or a character (Working first)`
-- `Setting packs (Arkona)`, and under it `Arkona characters`, `Arkona owners`,
+- `Setting packs (Arkona)`, and under it `Arkona briefs and names`, `Arkona characters`, `Arkona owners`,
   `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`, `Arkona retagging`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
@@ -85,7 +89,7 @@ loosely when the match is clear; each miss costs a call):
 - `Audit findings`
 - `Budgets, jobs and proposals`
 - `Canon and approval`
-- `At write scope` (what is made at once, what is still a proposal)
+- `At write scope` (what is direct, what is still a proposal)
 - `When the low-level tools are right`
 - `Reference`, and under it `What the bridge is`, `Projects`, `The repository tree`, `The tools you are shown`,
   `When something goes wrong`
@@ -322,10 +326,12 @@ whose answer was lost: it may have been made, so read the pages before anything 
 A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates, homes and tags,
 taken from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list
 only when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`,
-naming the projects they work on). The Arkona pack has fifteen tools. Ask for the part you need:
+naming the projects they work on). The Arkona pack has seventeen tools. Ask for the part you need:
 
 | You want                                           | Use                          | Part to ask for                           |
 | -------------------------------------------------- | ---------------------------- | ----------------------------------------- |
+| Know a subject first (free, no read)               | `arkona_brief`               | `Arkona briefs and names`                 |
+| Check a name: namesakes, naming culture (free)     | `arkona_name_check`          | `Arkona briefs and names`                 |
 | Make an Arkona character, or add pages to one      | `arkona_create_character`    | `Arkona characters`                       |
 | Make any other Arkona owner page                   | `arkona_create_owner`        | `Arkona owners`                           |
 | Relate two existing Arkona characters              | `arkona_create_relationship` | `Arkona relationships, art and the brief` |
@@ -369,6 +375,49 @@ naming the projects they work on). The Arkona pack has fifteen tools. Ask for th
   (and of the sections its rules come from). If one has changed since, or the pack's rules were edited, nothing is
   computed and every call is refused with `PACK_NOT_CURRENT`, naming what changed, until the owner checks the rules and
   approves again on the dashboard. Tell the person; there is nothing to retry.
+
+### Arkona briefs and names
+
+Two free reads (the bridge's own tree, snapshots and records; no LegendKeeper read). Neither writes anything, and neither
+guesses: they report what the records say, and you ask the owner.
+
+**`arkona_brief { subject }`: the first step for any question about a subject** (a nation, polity, culture, religion,
+place, event, magic system or item), before `search` and `read_document`: one call instead of reading five pages
+(Project Navigation's "Smallest Sufficient Retrieval"). `subject` is a name, alias, path or id; a name meaning several
+subjects is refused with the candidates (`AMBIGUOUS`): pass the id. A character is answered by `arkona_character_brief`
+(the answer says `delegated`). It returns:
+
+- **the owner**: the subject's `[INDEX]` and the pages directly in it, or its single owner page, each with its
+  `lifecycle` (Authoritative, Working, Archived; `au` for an alternate universe), Reference Type, Scope, Last Major
+  Revision and tags;
+- each owner's **Dependencies** (one level, each with its lifecycle and Scope; a Dependency on a Working or Archived page,
+  or on historical material, carries a `flag` quoting Project Navigation: "Current authority must not depend on Working,
+  historical material or an unrelated AU"), its **incoming Dependencies** (the count and the first ten), its **Source
+  Boundaries** and **Unresolved Material** (a long section is cut, with a `handle` for `bridge_result_page`), and its
+  **Related Sources**;
+- the **chronology** rows that name it (by a mention, its name or an alias), with their date, KCY and age table;
+- the **work in progress**: Working pages that mention it or depend on it, and pending proposals touching its pages;
+- its open **audit findings**, and how fresh each source is.
+
+Every item carries its lifecycle: **established canon and Working material are listed apart, never merged**. Never treat
+a Working page's material as canon. The Legacy Canon Archive and the Design References are left out (and counted) unless
+`include: ["legacy", "design"]` names them. `live: true` re-reads the head owner's sidebar (one read); `detail: "full"`
+gives longer lists and sections. Then read only what the brief points to.
+
+**`arkona_name_check`: part of every character intake and rename** (Character Architecture: the naming-culture review
+is mandatory). Characters share names. Give `name` (and `givenName`, `surname`, `aliases` when known): it lists the
+current characters (Authoritative, Working, AU; never Archived) sharing the full name, the given name, the surname or an
+alias, each with the page holding its identity, its Naming Culture and Life State, and what matched. Names are compared
+without case, accents or prefixes, and a full name in either order ("Asagiri Miyabi" finds "Miyabi Asagiri"). An exact
+full-name match is a `warning`, a partial one `info`; **names may be shared, so nothing is ever refused**. `exclude`
+leaves a character out (the one you are renaming). With `namingCulture` (a value the owner gave), it resolves the culture
+through the pack's culture map to its owner under Arkonan Cultures and returns that owner's naming sections and the
+characters recorded with that culture, for consistency; an unmapped culture is said so.
+
+**It never suggests or infers a naming culture, race or nationality from a name, a surname or its etymology, and never
+proposes a rename.** Bring what it reports to the owner and ask; record only what the owner decides. `arkona_create_character`
+and `arkona_rename` run the namesake part themselves: an exact full-name match is a `NAMESAKE` warning in the preview and
+in the proposal's summary the owner reads; tell the person about it.
 
 ### Arkona characters
 
@@ -1148,7 +1197,7 @@ Use a restore to undo a mistake, not to edit: to change a page, write it.
 
 The bridge audits each project after every nightly full snapshot (pages against their templates, links that point
 nowhere, unclassified pages, ordering, the taxonomy, facts, the page lifecycle, paragraphs with line breaks, inline
-icons, the chronology) and keeps the findings. **`audit_findings`** (free: no request to LegendKeeper) reads them:
+icons, the chronology, and the governance pages against the bridge) and keeps the findings. **`audit_findings`** (free: no request to LegendKeeper) reads them:
 filter by `category`, `code`, `severity`, `page` (an id, or part of a name or path), `new` (first seen in the latest
 audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's evidence.
 
@@ -1166,6 +1215,14 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
   `write_page` cannot change it as text: tell the owner (the dashboard splits it, block by block). A page with inline
   icons (`inline_icon_page`) is refused by `write_page`: do not try to rewrite it.
 - Acknowledged findings are hidden by default (the owner decided they are fine as they are); do not "fix" them.
+- **Governance findings** (`category: "governance"`, on a project whose pack governs it) compare the governance pages
+  with the bridge: a tool name it does not have, or an old bridge call (`governance_unknown_tool`, with the bridge's
+  equivalent where the pack knows one: the old write_lk with job_action guide is `get_bridge_guide`), an external skill name
+  (`governance_external_name`), and a page, tab or standard named in a Startup, Related Guidance, Source Boundaries or
+  Dependencies section that resolves to nothing, read generously (`governance_missing_reference`; a near miss names the
+  closest match). They are the owner's: never
+  edit a governance page to make one go away. Tell the person; the finding's `suggestedReplacement` is what the owner may
+  copy into the page by hand.
 
 ## Budgets, jobs and proposals
 

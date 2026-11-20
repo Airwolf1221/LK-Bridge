@@ -15,6 +15,7 @@ import type { AuditModel } from './reader.js';
 import { SnapshotTree } from './snapshot-tree.js';
 import type { FindingDraft, FindingSource } from './types.js';
 import type { AssetLibrary } from './checks/assets.js';
+import type { GovernanceAuditInput } from './checks/governance.js';
 import type { ClassificationRecord, RetagContext } from '../packs/retag/engine.js';
 
 /** A lifecycle record or set record that stopped part-way (the audit reports it with its pages). */
@@ -75,6 +76,11 @@ export interface AuditContext {
    * from it (the same verdicts as `arkona_retag_audit`), never from the tag-definition document.
    */
   readonly retag?: RetagAuditHook | null;
+  /**
+   * v3 F4a (ADR 0063): the governance documents (the governance root's tabs, from the snapshots), the pack's drift rules,
+   * the bridge's tool names and the names the owner allowed; null or absent: no governance check for this project.
+   */
+  readonly governance?: GovernanceAuditInput | null;
 }
 
 /** v3 F3f: what the audits need of the retag engine (src/packs/retag): its context and each page's records. */
