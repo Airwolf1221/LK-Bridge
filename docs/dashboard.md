@@ -1140,3 +1140,11 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
 - **Proposals**: a package from `arkona_create_character` is one proposal, shown page by page (each new page with its
   facts and tags, each change to an existing page, each image and the folders it creates). It is canonical ("Approve and
   accept as canon") when it makes canon.
+
+## Pick the right value (v3 F4b)
+
+On the Audits page, a finding of the **Consistency** category has **Pick the right value**: the identity page's value and
+each restatement side by side (page, lifecycle, where, excerpt), each with **Pick this value**, a field to type the
+right value, the agents' suggestions (shown, never applied) and the earlier picks. A pick asks for the step-up (ADR 0062:
+a pack-level decision), then makes ONE proposal editing every page that disagrees; approve it on the Proposals page
+(selectively if wanted; more than 10 pages asks for the step-up again). The job is revertible from the Jobs page.

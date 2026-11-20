@@ -76,7 +76,9 @@ const canon = {
   Inheritance: 'None',
 };
 
-export async function f4bWorld(): Promise<F4bWorld> {
+export async function f4bWorld(
+  o: { readonly seed?: NonNullable<Parameters<typeof f4aWorld>[0]>['seed'] } = {},
+): Promise<F4bWorld> {
   const w = await f4aWorld({
     seed: (world) => {
       const r = world.repo;
@@ -157,6 +159,7 @@ export async function f4bWorld(): Promise<F4bWorld> {
         referenceType: 'General Source',
         tags: ['AU'],
       });
+      o.seed?.(world);
     },
   });
   const r = w.repo;

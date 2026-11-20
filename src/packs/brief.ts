@@ -9,6 +9,7 @@
  * - the open audit findings on those pages, and each page's Unresolved Material headings (from the snapshots);
  * - how fresh each source is. `live: true` re-reads the identity page's sidebar (one read) for the six fields.
  */
+import { consistencyLine } from '../consistency/brief-line.js';
 import { sidebarFrom } from '../facts/index.js';
 import type { McpToolContext, McpToolResult } from '../mcp/server.js';
 import { ago, finish, liveRead, repoContext, treeInfo } from '../mcp/tools/repo.js';
@@ -261,6 +262,12 @@ export async function characterBrief(
     })),
     art,
     findings,
+    // v3 F4b (ADR 0064, D5): the open contradictions on the character's dates and identity facts.
+    consistency: consistencyLine(
+      audits,
+      ctx.projectId,
+      new Set([...(index ? [index.id] : []), ...pages.map((n) => n.id)]),
+    ),
     unresolved,
     freshness: {
       tree: treeInfo(ctx.meta, ctx.now),

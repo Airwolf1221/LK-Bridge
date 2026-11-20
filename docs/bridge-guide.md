@@ -26,6 +26,8 @@ in progress, each labelled by lifecycle); then `search` and `read_document` only
 
 **Every character intake and rename → `arkona_name_check`** (namesakes and the naming culture; never a guessed culture).
 
+**A character at a date → `arkona_as_of`; changing a date → `arkona_consistency` first** (free; never picks a value).
+
 **Rename a subject → `arkona_rename` (never `update_resource`).** It renames a pack's character, culture, race or other
 subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 
@@ -326,12 +328,16 @@ whose answer was lost: it may have been made, so read the pages before anything 
 A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates, homes and tags,
 taken from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list
 only when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`,
-naming the projects they work on). The Arkona pack has seventeen tools. Ask for the part you need:
+naming the projects they work on). The Arkona pack has twenty-one tools. Ask for the part you need:
 
 | You want                                           | Use                          | Part to ask for                           |
 | -------------------------------------------------- | ---------------------------- | ----------------------------------------- |
 | Know a subject first (free, no read)               | `arkona_brief`               | `Arkona briefs and names`                 |
 | Check a name: namesakes, naming culture (free)     | `arkona_name_check`          | `Arkona briefs and names`                 |
+| A character at a date (free)                       | `arkona_as_of`               | `Arkona consistency checks`               |
+| Dates and identity facts that disagree (free)      | `arkona_consistency`         | `Arkona consistency checks`               |
+| Which characters have readable dates (free)        | `arkona_as_of_coverage`      | `Arkona consistency checks`               |
+| Suggest the right value to the owner               | `arkona_consistency_suggest` | `Arkona consistency checks`               |
 | Make an Arkona character, or add pages to one      | `arkona_create_character`    | `Arkona characters`                       |
 | Make any other Arkona owner page                   | `arkona_create_owner`        | `Arkona owners`                           |
 | Relate two existing Arkona characters              | `arkona_create_relationship` | `Arkona relationships, art and the brief` |
@@ -418,6 +424,50 @@ characters recorded with that culture, for consistency; an unmapped culture is s
 proposes a rename.** Bring what it reports to the owner and ask; record only what the owner decides. `arkona_create_character`
 and `arkona_rename` run the namesake part themselves: an exact full-name match is a `NAMESAKE` warning in the preview and
 in the proposal's summary the owner reads; tell the person about it.
+
+### Arkona consistency checks
+
+Free reads of the bridge's snapshots, full-text index, chronology tables and calendar engine (no LegendKeeper read unless
+`live: true`). They report; they never repair, and never decide which side is right (Repository Automation's Default
+Boundary).
+
+**`arkona_as_of { characters, date }`: before you write about a character at a date** (a chapter, a scene, a history).
+`date` is a date of the calendar (`Camue 1st, 4A 100`, `c. 4A 640`, `4A 100`) or `now` (the pack's present, 5A 931). For
+each character (at most 25) it returns where its birth is recorded (or "birth unestablished"); the **elapsed calendar
+years** (a number when both dates are exact days, a range when either is approximate or coarser, "not yet born" before
+the birth, none when the birth is unknown); the **state recorded**: Alive (recorded) between its birth and a recorded
+death or inside its attested span, Deceased (recorded) after a recorded death, **Unestablished** otherwise; the
+chronology rows naming it nearest the date on each side (`window`, default 3); and any open **contradiction** on its birth
+or death. **It never gives apparent or biological age**: Arkona's races mature and age differently, so read the race
+reference it links. An attested life never proves survival past it: never write a character as alive where the answer
+says Unestablished without asking the owner. `continuity` (an AU's name) uses the AU's own pages first, else Main CANON's
+values labelled "inherited from Main CANON".
+
+**`arkona_consistency { subject | under | all }`: before you change a date** (a birth, a death, a chronology row) or an
+identity fact (Race / Species, Naming Culture, Life State, given and family names). It compares what the character's
+identity page (its Core or Compact Reference) records with every page that restates it, and a chronology row with the
+same event on a page it mentions. Dates are read with their precision; two values conflict only when they cannot both be
+true (`4A 100` and `Camue 1st, 4A 100` agree; a "c." date has a margin of five years each side). Each finding shows the
+identity page's value first, then each disagreeing restatement with its page, lifecycle, section and excerpt, labelled:
+
+- **Contradictory** (Authoritative against Authoritative; also in the nightly audit, category `consistency`);
+- **Proposal differs from canon** (a Working page: allowed to differ);
+- **Gap** ("Unestablished" against a value: never a conflict);
+- **Unreadable** (a date the calendar cannot read, with its text: never guessed).
+
+Only the pack's phrasings are read ("Born …" in a Temporal Scope, "<name> was born on …", "<name> died in …", a dated
+line, a chronology row), and only when the sentence **names** the character (a name, alias or Canonical Display Name;
+never a pronoun), so it misses some restatements by design. Archived pages, the Legacy Canon Archive and the Design
+References are left out unless `include` names them; AU pages are compared only within their AU. A long run is stored:
+page through it with `runId` and `offset`.
+
+**Fixing is the owner's.** Tell the person what disagrees and show both values; the owner picks the right value on the
+dashboard ("Pick the right value"), and the bridge makes ONE proposal editing every page that disagrees (never the side
+picked). You may **suggest** a value with `arkona_consistency_suggest { findingId, value, reason }`: it is shown to the
+owner and applies nothing. Never edit the dates yourself to make the pages agree.
+
+**`arkona_as_of_coverage`**: how many characters have a birth the calendar can read, a recorded death, attested bounds,
+or none. A report for the owner, never a task list: an unrecorded birth is often deliberate; never invent a date.
 
 ### Arkona characters
 

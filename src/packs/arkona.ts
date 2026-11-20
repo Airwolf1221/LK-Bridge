@@ -714,8 +714,18 @@ const rules: PackRules = packRulesSchema.parse({
     patterns: [
       // Temporal Scope, one `;` clause at a time: "Born Camue 44th, 4A 360; alive and immortal in Fifth-Age present 5A 931",
       // "Born 2A 73,511; attested through 5A 931", "Attested 5A 411–5A 931; birth date unestablished".
-      { id: 'birth.scope', source: 'temporalScope', kind: 'birth', regex: String.raw`^\s*born\s+(?<date>.+)$` },
-      { id: 'death.scope', source: 'temporalScope', kind: 'death', regex: String.raw`^\s*died\s+(?<date>.+)$` },
+      {
+        id: 'birth.scope',
+        source: 'temporalScope',
+        kind: 'birth',
+        regex: String.raw`^\s*born\s+(?<date>.+)$`,
+      },
+      {
+        id: 'death.scope',
+        source: 'temporalScope',
+        kind: 'death',
+        regex: String.raw`^\s*died\s+(?<date>.+)$`,
+      },
       {
         id: 'birth.scope.gap',
         source: 'temporalScope',

@@ -65,7 +65,7 @@ import { createImages, imageDataDir, type ImageService } from './images/service.
 import { Audits, SPLIT_CHECK, SPLIT_VERIFY, splitChecker, splitVerifier } from './audits/index.js';
 import { Appraisal } from './appraisal/index.js';
 import { Consistency } from './consistency/service.js';
-import { bridgePicker, PICK_TOOL } from './consistency/fix.js';
+import { bridgePicker } from './consistency/fix.js';
 import { BlockIdSweep } from './blockids/index.js';
 import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
@@ -800,7 +800,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         known: () => knownNamesOf(toolsRef.current),
       }),
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
-    consistency: async (projectId) => (consistencyRef.current ? consistencyRef.current.auditItems(projectId) : null),
+    consistency: async (projectId) =>
+      consistencyRef.current ? consistencyRef.current.auditItems(projectId) : null,
   });
   audits.start();
   // v3 F3c (ADR 0054): the appraisal tools and the full-text index, over the snapshot overlay, the audits, the asset tree
@@ -843,6 +844,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
     now: () => (o.clock ?? systemClock).now(),
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    auditKnows: (projectId, consistencyId) =>
+      audits.store
+        .list(projectId, { category: ['consistency'], acknowledged: 'include', limit: 1000 })
+        .findings.some((f) => f.evidence.consistencyId === consistencyId),
+    jobOfProposal: (proposalId) => policy.proposals.get(proposalId)?.jobId ?? null,
   });
   consistencyRef.current = consistency;
   // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation. Its candidates come from the appraisal's
@@ -1017,8 +1023,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     // v3 F4b (ADR 0064, D6): the job of an owner's pick is revertible like an approved retag batch.
     approvedRevertible: (projectId, jobId) =>
-      (retagRef.current?.isApplyJob(projectId, jobId) ?? false) ||
-      engine.queries.getJob(projectId, jobId)?.origin.tool === PICK_TOOL,
+      (retagRef.current?.isApplyJob(projectId, jobId) ?? false) || consistency.isPickJob(projectId, jobId),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReverts = reverts.start();

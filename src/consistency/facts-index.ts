@@ -406,7 +406,7 @@ export class FactIndex {
 function unitOf(r: Obj): Unit {
   return {
     unit: String(r.unit),
-    text: String(r.text ?? ''),
+    text: typeof r.text === 'string' ? r.text : '',
     documentId: (r.document_id as string | null) ?? null,
     blockId: (r.block_id as string | null) ?? null,
     field: (r.field as string | null) ?? null,

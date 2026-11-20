@@ -92,7 +92,8 @@ export interface AuditContext {
 export interface ConsistencyAuditItem {
   /** Its stable id (`cf_…`), the same in the tool, the audits and the dashboard. */
   readonly id: string;
-  readonly code: 'consistency_birth' | 'consistency_death' | 'consistency_identity' | 'consistency_chronology';
+  readonly code:
+    'consistency_birth' | 'consistency_death' | 'consistency_identity' | 'consistency_chronology';
   readonly pageId: string;
   readonly message: string;
   readonly evidence: Readonly<Record<string, unknown>>;

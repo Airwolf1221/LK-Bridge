@@ -34,7 +34,7 @@ import type { ConsistencyRules, PackRules } from '../packs/types.js';
 import type { ProjectTypes } from '../registry/index.js';
 import { sidebarPiece } from '../snapshots/canonical.js';
 import { treeSettingsFrom } from '../tree/classify.js';
-import type { TreeMeta, TreeNode, TreeQueries } from '../tree/index.js';
+import type { TreeNode, TreeQueries } from '../tree/index.js';
 import {
   compareCharacter,
   FINDING_CODE,
@@ -107,6 +107,10 @@ export interface ConsistencyDeps {
     before?: unknown,
     after?: unknown,
   ) => void;
+  /** Whether the audits hold a consistency finding with this id (a suggestion may name one the tool never stored). */
+  readonly auditKnows?: (projectId: string, consistencyId: string) => boolean;
+  /** The job an approved proposal ran as (Revert recognises a pick's job by its proposal). */
+  readonly jobOfProposal?: (proposalId: string) => string | null;
 }
 
 /** A live read (`live: true`): the tool's own governed read. */
@@ -184,6 +188,13 @@ export class Consistency {
     this.picker = p;
   }
 
+  /** The edits of a pick made into ONE proposal (what `pick` calls; also the tests' way to the chronology rows). */
+  propose(o: Parameters<Picker>[0]): ReturnType<Picker> {
+    if (!this.picker)
+      throw new ConsistencyError('PICK_UNAVAILABLE', 'The pick is not available in this bridge build.');
+    return this.picker(o);
+  }
+
   constructor(readonly d: ConsistencyDeps) {
     this.facts = new FactIndex(d.db, d.now);
   }
@@ -214,7 +225,7 @@ export class Consistency {
       projectId,
       tree: this.d.tree.queries,
       types: this.d.registry.forProject(projectId),
-      meta: this.d.tree.queries.status(projectId) as TreeMeta,
+      meta: this.d.tree.queries.status(projectId),
       now: this.d.now(),
     };
   }
@@ -625,7 +636,7 @@ export class Consistency {
           : `${label}: ${cf.character.subject}’s ${what} is ${d.reference.value} on “${d.reference.page.name}”${d.referenceFromRestatement ? ' (the identity page records none)' : ''}, but ${d.restatements.map((r) => `${r.value} on “${r.page.name}”`).join('; ')}.`;
     return {
       id: x.id,
-      tool: CONSISTENCY_TOOL as AppraisalFinding['tool'],
+      tool: CONSISTENCY_TOOL,
       check: FINDING_CODE[d.kind],
       group: GROUP_OF[d.label],
       evidence:
@@ -712,7 +723,7 @@ export class Consistency {
       continuity: o.continuity ?? 'each character’s own',
     };
     const report: AppraisalReport = {
-      tool: CONSISTENCY_TOOL as AppraisalReport['tool'],
+      tool: CONSISTENCY_TOOL,
       runId: newRunId(),
       scope,
       createdAt: iso(this.d.now()),
@@ -757,13 +768,13 @@ export class Consistency {
    */
   private async readLive(w: World, characters: readonly CharacterRecord[], read: LiveRead): Promise<number> {
     const list = characters.slice(0, MAX_LIVE);
-    const propertiesName = treeSettingsFrom(this.d.projectSettings(w.projectId) as never).propertiesName;
+    const propertiesName = treeSettingsFrom(this.d.projectSettings(w.projectId)).propertiesName;
     for (const c of list) {
       const res = (await read('getResource', { path: { resourceId: c.identity.id } })) as Obj | null;
       if (!res) continue;
       const x = extractPage(
         {
-          rawName: String(res.name ?? c.identity.name),
+          rawName: typeof res.name === 'string' ? res.name : c.identity.name,
           displayName: c.identity.name,
           resource: res,
           sidebar: sidebarPiece(res.properties ?? []),
@@ -1378,6 +1389,15 @@ export class Consistency {
     };
   }
 
+  /** Whether a job ran an owner's pick (approved): Revert applies to it, as to an approved retag batch. */
+  isPickJob(projectId: string, jobId: string): boolean {
+    if (!this.d.jobOfProposal) return false;
+    const rows = this.d.db
+      .prepare('SELECT proposal_id FROM consistency_picks WHERE project_id = ? AND proposal_id IS NOT NULL')
+      .all(projectId) as { proposal_id: string }[];
+    return rows.some((r) => this.d.jobOfProposal!(r.proposal_id) === jobId);
+  }
+
   /** The owner's earlier picks of a finding (newest first). */
   picks(projectId: string, findingId: string): Obj[] {
     return (
@@ -1405,7 +1425,10 @@ export class Consistency {
     readonly principalId: string;
   }): Obj {
     const f = this.d.appraisal.store.finding(o.projectId, o.findingId);
-    if (!f || f.finding.tool !== (CONSISTENCY_TOOL as AppraisalFinding['tool']))
+    const known =
+      (f !== null && f.finding.tool === (CONSISTENCY_TOOL as AppraisalFinding['tool'])) ||
+      this.d.auditKnows?.(o.projectId, o.findingId) === true;
+    if (!known)
       throw new ConsistencyError(
         'FINDING_NOT_FOUND',
         `No consistency finding ${o.findingId} in this project (run arkona_consistency first).`,

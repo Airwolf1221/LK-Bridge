@@ -110,7 +110,7 @@ export const registerConsistency: Register = (api, ctx) => {
       service().pick({
         projectId: p.id,
         identityPageId: f.pageId!,
-        continuity: String(f.evidence.continuity ?? 'Main CANON'),
+        continuity: typeof f.evidence.continuity === 'string' ? f.evidence.continuity : 'Main CANON',
         findingId: f.evidence.consistencyId as string,
         ...(b.side !== undefined ? { side: b.side } : {}),
         ...(b.value !== undefined ? { value: b.value } : {}),

@@ -46,6 +46,7 @@ import { errorResult, type ProjectDeps } from '../mcp/tools/shape.js';
 import { cleanPrefixes } from '../registry/names.js';
 import { sidebarPiece } from '../snapshots/canonical.js';
 import type { SidebarBlock, TreeNode } from '../tree/index.js';
+import { consistencyLine } from '../consistency/brief-line.js';
 import { characterBrief } from './brief.js';
 import { textKey } from './engine/text.js';
 import { nameKeyOf, splitAliases, subjectPart, treeLabeller } from './naming/namesakes.js';
@@ -390,6 +391,8 @@ export async function topicBrief(
       ...(proposals.length > cap ? { moreProposals: proposals.length - cap } : {}),
     },
     findings,
+    // v3 F4b (ADR 0064, D5): the open contradictions (dates, identity facts) restated on the subject's pages.
+    consistency: consistencyLine(audits, ctx.projectId, subjectIds),
     ...(leftOut.size > 0
       ? {
           leftOut: Object.fromEntries([...leftOut].map(([k, v]) => [AREA_LABEL[k], v.size])),

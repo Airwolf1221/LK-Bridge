@@ -72,12 +72,10 @@ export function readLeading(
     try {
       const whole = cal.parser.parse(body, style);
       return { ok: true, reading: fromParsed(whole, clause, approx !== null) };
-    } catch (e) {
-      const why =
-        e instanceof Error && /days|does not occur|no year|outside/i.test(e.message) ? ` (${e.message})` : '';
+    } catch {
       return {
         ok: false,
-        reason: `the calendar cannot read a date at the start of “${clip(clause, 120)}”${why}`,
+        reason: `the calendar cannot read a date at the start of “${clip(clause, 120)}”${calendarReason(cal, body, style)}`,
       };
     }
   }
@@ -116,6 +114,29 @@ export function readLeading(
   }
   const text = `${approx ? approx[0] : ''}${used}`.trim();
   return { ok: true, reading: { ...reading, text } };
+}
+
+/**
+ * The calendar's own reason a date-shaped start is not a date (`Camue has 50 days; there is no day 51.`): its leading
+ * words tried as a whole date, longest first. Empty when no start looks like a date.
+ */
+function calendarReason(cal: Calendar, body: string, style: DateTextStyle): string {
+  const words = body.split(' ');
+  for (let k = Math.min(8, words.length); k >= 1; k--) {
+    try {
+      cal.parser.parse(
+        words
+          .slice(0, k)
+          .join(' ')
+          .replace(/[,.;:]+$/u, ''),
+        style,
+      );
+    } catch (e) {
+      if (e instanceof Error && /days|does not occur|no year|outside|not a year/i.test(e.message))
+        return ` (${e.message})`;
+    }
+  }
+  return '';
 }
 
 /**

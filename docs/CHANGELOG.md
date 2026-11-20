@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased: v3 F4b, the consistency check and "as of a date" (ADR 0064, 20 November 2026)
+
+From the owner-approved design [design/F4b-consistency-and-as-of.md](design/F4b-consistency-and-as-of.md) (D1 to D10).
+Report only (Repository Automation's Default Boundary); the one write is the owner's own pick, as one proposal.
+Migration `3900_consistency.sql`. **After deploying, approve the new pack version `arkona-2026-11-20-f4b` on the Packs
+page** (it carries the phrasings, the present day and the "c." margin); until then the four tools are not listed and the
+audits' consistency category reports nothing.
+
+- **`arkona_consistency`** (free): births, deaths and identity facts the identity page states one way and another page
+  another, and chronology rows against the same event on a page they mention; labelled Contradictory, Proposal differs
+  from canon, Gap, Historical or Unreadable; never a winner. Stored runs, paged with `runId`.
+- **`arkona_as_of`** (free): characters at a date (or `now`, the pack's present 5A 931): born where, elapsed calendar
+  years (exact, a range, "not yet born", or none), the state recorded (Alive, Deceased or Unestablished: an attested life
+  never proves survival), the chronology rows around it, and open contradictions. Never apparent age.
+- **`arkona_as_of_coverage`** (free): who has a readable birth, a recorded death, attested bounds or none; never a task
+  list. **`arkona_consistency_suggest`**: an agent's suggested value, shown to the owner, applying nothing.
+- **The audits' `consistency` category**: Contradictory pairs only, codes `consistency_birth`, `consistency_death`,
+  `consistency_identity`, `consistency_chronology`. **`arkona_brief`** (and the character brief) gain a `consistency`
+  line.
+- **Pick the right value** (the Audits page, a step-up): ONE proposal, one item per disagreeing page (a field's date, a
+  sentence's date, a chronology row through `update_timeline_event`'s plan); the side picked untouched; Revert works.
+- `update_timeline_event`'s planning is now `planEventChange` (shared with the pick; behaviour unchanged, tested).
+- The sandbox check `consistency-f4b` (written, not run).
+- Also: the sandbox check assumptions-r4's Y2 builds its table as LegendKeeper takes it (`tableRow` and `tableCell`
+  children), pinned by `test/contract/sandbox-table-shape.test.ts`; ADR 0061 decision 8 records Y1 (board, map and
+  timeline timestamps do not move on an edit: the content comparison stays).
+
 ## Unreleased: v3 F4a, the governance drift audit, the name check and the topic brief (ADR 0063, 19 November 2026)
 
 From the owner's repository check of 19 November 2026 ([ADR 0063](adr/0063-v3-f4a-governance-drift-names-and-briefs.md)).

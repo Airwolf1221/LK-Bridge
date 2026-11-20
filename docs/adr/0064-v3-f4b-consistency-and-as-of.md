@@ -1,0 +1,218 @@
+# ADR 0064: v3 F4b: the consistency check and "as of a date"
+
+- Status: **Proposed** (v3 F4b, 20 November 2026). It builds the owner-approved design
+  [design/F4b-consistency-and-as-of.md](../design/F4b-consistency-and-as-of.md) (APPROVED 20 November 2026: D1 to D10 as
+  written), copied into the repository unchanged as this session's first commit. Where the design was silent the choice
+  is marked **chosen**, for the owner to confirm; the one place the build departs from the design's words is marked
+  **departure**, with its reason.
+- Every decision is implemented and tested against the mock LegendKeeper and fixtures modelled on the design's own
+  phrasings (`test/consistency/world.ts`), never fetched. Nothing in this session touched a live system: no
+  LegendKeeper, no bridge connector, no dashboard, no sandbox, soak, spike, rehearsal or round-trip script. The sandbox
+  check below is written, not run.
+- Builds on [ADR 0048](0048-chronology-ii.md) and [ADR 0049](0049-v3-f2-last-major-revision-default-project-and-staging.md)
+  (the calendar engine, KCY, the qualified reader, the chronology's tables and ties),
+  [ADR 0054](0054-arkona-appraisal-tools-and-full-text-search.md) (the snapshot overlay, the full-text index, stored runs,
+  the non-current areas), [ADR 0055](0055-write-scope-review-revert-rails.md) and
+  [ADR 0057](0057-cr-2026-11-r2-owner-decisions.md) (write scope, Review, Revert, the rails),
+  [ADR 0058](0058-v3-f3d-renames-selective-approval-resume.md) (a proposal made of items, selective approval),
+  [ADR 0062](0062-dashboard-sessions-and-step-up.md) (the step-up) and
+  [ADR 0063](0063-v3-f4a-governance-drift-names-and-briefs.md) (the name normalisation, `arkona_brief`).
+- Migration: **`3900_consistency.sql`** (the facts index and its pages and state; agents' suggestions; the owner's picks).
+- Pack version: **`arkona-2026-11-20-f4b`** (`rules.consistency`: the phrasings, the present day, the "c." margin, the
+  fields). It supersedes `arkona-2026-11-19-f4a`; the owner approves it on the Packs page. Until then the four tools are
+  not listed and the audits' consistency category reports nothing (they read the APPROVED version's rules).
+- Numbered 0064, the next free number.
+- **Write scope: no issue found.** None of the read tools writes anything (to LegendKeeper or a proposal); the one
+  write, "Pick the right value", is the owner's step-up action and is always ONE proposal (`forceProposal`), never a
+  direct write at any scope; agents can only record a suggestion in the bridge's own database. Every write of a pick's
+  job is covered by a job-level lock, so the engine checks and writes each page under its lock.
+
+## D1, D2: what is read, and how narrowly
+
+1. **The phrasings are pack data** (`rules.consistency.patterns`, `src/packs/arkona.ts`), each with its `source`:
+   `temporalScope` (each `;` clause of the Temporal Scope field), `lifeState` (a dated "Deceased" Life State: **chosen**,
+   a fourth source, since D2 names that phrasing), `prose` (each sentence of a page's text) or `chronology` (a row's
+   Historical Event cell). Each is a regular expression whose named group `date` holds the text the date is read from
+   (`leading`: the date starts it; `first`: the first date in it, for "alive and immortal in Fifth-Age present 5A 931");
+   `{name}` stands for the subject. A deliberate gap ("birth date unestablished") is a pattern with `gap: true`. Seeded
+   from the design: "Born …", "Died …", "birth date unestablished", "Attested 5A 411–5A 931", "attested through …",
+   "alive / active at …", "Deceased <date>", "<name> was / is born on / in …", "<name> died / dies / was killed on / in
+   …", the dated line "<date> - <name> is born…", and in a chronology row "<name> is born" / "<name> dies". New
+   phrasings are a new pack version, never a code change.
+2. **The facts are a closed list** (D1): births, deaths and attested bounds; and the identity facts Race / Species,
+   Naming Culture, Life State, Personal / Given Name and Family / Surname (`rules.consistency.identityFields`).
+   **Chosen: a page restates an identity fact when its own Subject (or its name's subject part) is the character's**
+   (a Biography whose Subject is the character, a second identity page); a relationship page's sidebar is not read as
+   one character's, because its subject is the pair. Narrow, as D2 asks.
+3. **Who it is about** (D2): a name, an alias or a Canonical Display Name of a current character, matched with F4a's
+   normalisation (`nameKeyOf`: case, accents, apostrophes, punctuation, prefixes), and the given and family names together
+   in either order (F4a's East Asian order). Never a pronoun. **Chosen, three narrowings**:
+   - a **given name alone** ("Yasmin was born on Camue 1st, 4A 100", the design's own biography example) counts only on
+     the character's own pages (its set), never elsewhere;
+   - a **name two current characters share** (in the same continuity) counts only on one's own pages; elsewhere it is
+     not attributed, and the run counts such sentences (`inspected.ambiguousNames`);
+   - **an appositive** ("Yasmin al-Naim, daughter of Karim al-Naim, is born") is read for the name before its first comma;
+     a name inside the appositive is never taken for the subject. A chronology row with no name read is attributed to
+     the one page it mentions, if exactly one (resolved to the character whose set holds it).
+4. **Dates** go through the calendar engine (`src/consistency/dates.ts`): one of the calendar's forms at the start of
+   the text, an optional "c." / "approximately", and `– <date>` or `– <year>` for a range ("c. 4A 640–645",
+   "5A 411–5A 931"); a chronology Date cell as the chronology reads it (plain, else the qualified reader, by its anchor).
+   **Precision is kept**: a day, a month, a year, approximate, a range, an open bound. An unreadable date is kept as
+   unreadable with the calendar's own reason ("Camue has 50 days; there is no day 51") and its text; never guessed.
+5. **The facts index** (`src/consistency/facts-index.ts`, `consistency_facts`): the extractor run over the appraisal's
+   overlay (its full-text units: the page's name, its sidebar facts by key, each block of text) and the chronology's
+   tables (from the snapshot store). Free. **Incremental** like the F3c indexes: each page's stamp (its name and its
+   pieces' hashes) is kept, and a change snapshot re-reads only the pages it took. **Rebuilt** when the key changes (the
+   approved phrasings, the characters' names, the calendar's definition, the chronology's settings) or the overlay was
+   rebuilt from a newer full snapshot. **Bounded and streaming** (R3's per-event retention): one cursor over the units,
+   page by page, keeping only each page's candidate units (its name, its facts, text holding a life-event verb) until
+   the page is done, and only the facts until they are written; nothing is cached between requests. Measured
+   (`test/consistency/index.test.ts`, 1,500 Arkona-shaped pages of 30 paragraphs): the heap after a full collection was
+   65.3 MB before and 65.2 to 65.3 MB after each of six full extractions.
+
+## D3, D4: the comparison and its labels
+
+1. **Spans** (`spanOf`): a day is that day, a month that month, `4A 100` that whole year, a range from its first unit to
+   its last; a "c." date widened by `approxMargin` years each side (pack data, default 5); an open bound runs to the
+   calendar's edge. **Two values conflict only when their spans do not overlap**. Tested at the margin's edge on both
+   sides (c. 4A 640 agrees with 4A 635 and 4A 645, conflicts with 4A 634 and 4A 646).
+2. **Identity values** are compared normalised: `nameKeyOf`, with the words in any order (East Asian order). A value in
+   `rules.consistency.unestablished` (`Unestablished`, `Unknown`, `Unrecorded`) is a gap, never a conflict.
+3. **Where it starts** (D4): the identity page's value (its Temporal Scope first, then its Life State, its sidebar, its
+   prose), then each disagreeing restatement, each with page, lifecycle, section, excerpt and precision. **Chosen**: when
+   the identity page records none, the first Authoritative restatement is shown first, and the finding says so
+   (`referenceNote`).
+4. **Labels**, one finding per label: **Contradictory** (Authoritative against Authoritative, `warning`), **Proposal
+   differs from canon** (a Working page, `info`), **Gap** (`info`), and **chosen**: **Historical material differs**
+   (`info`) for an Archived page or a non-current area brought in with `include`, never Contradictory; **Unreadable**
+   (`info`) for a date the calendar cannot read. A Working page against a Working page is "Proposal differs from canon"
+   too (**chosen**: neither is canon, and neither is reported to the audits).
+5. **Chronology** (D1): a row's date against the same kind of event, for the same subject, on a page the row mentions,
+   **chosen**: or a page that links to the row's table (D1's "links the page"). Code `consistency_chronology`.
+6. **Departure: attested bounds are read but never compared.** D1 lists "the bounds of a subject's attested life" among
+   the facts checked. Comparing them across pages would report a page whose Temporal Scope is the time its source covers
+   (a biography of five years) as contradicting the identity page, which Character Architecture forbids ("Do not …
+   treat the time covered by a source as equivalent to a person's complete lifespan"). They are read, and used by "as of
+   a date" (the attested span) and the coverage report. **For the owner**: keep this, or compare only the identity
+   pages' own bounds against each other (a Core and a Compact Reference of one character), or compare a recorded death
+   against an attested "alive at" a later date.
+7. **Archived pages and the Legacy Canon Archive** (and the Design References) are left out unless `include` names them
+   (`archived`, `legacy`, `design`); the run lists what it left out. **AU pages** are compared only within their AU
+   (D9): a page's continuity is its Continuity fact when its Continuity Type is the pack's AU type, else Main CANON.
+
+## D5: where it shows up
+
+1. **`arkona_consistency { subject | under | all, include?, continuity?, live? }`**: free; every run is stored as the
+   appraisal's are (the latest per scope, `runId`, paged with `offset`, `limit`, `group`; `apr_` ids; the tool is
+   `arkona_consistency` in the appraisal's run store). Each finding's id is a fingerprint (`cf_…`, the same in every run,
+   in the audits and on the dashboard). Its `followUp` is the owner's pick (a judgement), never a fix.
+2. **The nightly audit's `consistency` category**: Contradictory pairs only, codes `consistency_birth`,
+   `consistency_death`, `consistency_identity`, `consistency_chronology`, keyed by the consistency id on the identity
+   page. **Chosen**: the consistency service computes them from the same snapshots (its facts index over the appraisal's
+   overlay) and hands them to the audit through a hook (`AuditDeps.consistency`), so the check
+   (`src/audits/checks/consistency.ts`) stays a pure function of its context. A finding clears when the pages agree.
+   No "Propose a fix" and no "Re-check now".
+3. **`arkona_brief`** (and `arkona_character_brief`, to which a character is delegated) gains `consistency`: the open
+   Contradictory findings involving the subject's pages, from the audits' store (free), with "do not write on these
+   values until the owner picks the right one".
+
+## D6: "Pick the right value"
+
+1. **On the Audits page**, a consistency finding has **Pick the right value**: its values side by side (page,
+   lifecycle, where, excerpt; the identity page's first), **Pick this value** on each, a field to type the right one, the
+   agents' suggestions and the earlier picks (`GET /api/admin/audits/findings/:id/consistency`). The pick
+   (`POST …/consistency-pick { side | value, confirm: true }`) is a **step-up action** (ADR 0062, as a pack-level
+   decision), audited `consistency.pick`, recorded in `consistency_picks`.
+2. **ONE proposal of items** (F3d), one per page that disagrees with the pick (`src/consistency/fix.ts`), each page read
+   live first, editing only the restated value: a sidebar field's date replaced inside the field, the rest of the field
+   kept (`set_facts`' planner); an identity field's whole value; a sentence's date replaced in its one text run
+   (`write_page`'s block-by-block path); a chronology row's date through **`update_timeline_event`'s own plan**,
+   refactored out of the tool as `planEventChange` (behaviour unchanged: the chronology suite passes), so its Date and KCY
+   cells and its timeline event change together. **Chosen**: a date split by a mention or formatting, a field holding a
+   mention, or a value changed since the snapshot is not planned and is listed (`notPlanned`); a value that agrees with
+   the pick (spans overlap) is untouched; **the side picked is never edited**; a deliberate gap and a value inherited from
+   Main CANON are never edited (`leftAsTheyAre`). A typed value must read, whole, as one date of the calendar
+   (`VALUE_UNREADABLE` otherwise).
+3. **Always a proposal** (`forceProposal`), by the owner's system principal, whatever any scope. Every write is covered
+   by the job's locks (the first page's lock, the other fact pages' as `holdMore`, the documents as `holdDocuments`).
+   Approval and selective approval work as usual; **more than 10 pages asks for the step-up at approval** (the guarded
+   rails' size, ADR 0062, judged on the proposal's operations); Last Major Revision follows the engine's rule (a date's
+   few characters are measured like any edit). **Revert** applies to an approved pick's job (**chosen**: as to an
+   approved retag batch; recognised through the pick's recorded proposal, `approvedRevertible`).
+4. **Agents suggest, never pick**: `arkona_consistency_suggest { findingId, value, reason }` records a suggestion (a
+   `cf_…` id from the tool or the audits), shown on the dashboard; it applies and proposes nothing. **Chosen**: its access
+   is `write` (it writes the bridge's own record), so a read-scope connection cannot add one. No agent tool picks.
+
+## D7 to D10: "as of a date", coverage, AU, the present
+
+1. **`arkona_as_of { characters (≤ 25), date, continuity?, window?, live? }`**: born (the identity page's value and
+   where; **chosen**: else the Authoritative restatements when they all agree; else "birth unestablished"); elapsed
+   **calendar** years: a whole number when both dates are exact days (an anniversary not reached does not count), a range
+   `{ min, max }` when either is approximate or coarser, "not yet born" when the date ends before the birth can begin,
+   none when the birth is unknown; never apparent or biological age, and the race reference is linked (its Race / Species
+   value's page, found by subject and a "Race" or "Species" Reference Type; never guessed, a note when none or several
+   match).
+2. **The state** (D7): Deceased (recorded) after a recorded death; Alive (recorded) between a recorded birth and a
+   recorded death, or inside the attested span; Unestablished otherwise. **Chosen**: the attested span runs from the
+   recorded birth (born, and attested alive later, the life is attested in between) or, with no birth, from the
+   attestation's own start, to the latest attestation; an attestation of the present ("alive at 5A 931") runs to the
+   present (D10). A date before the recorded birth is Unestablished, with "before the recorded birth" (the elapsed years
+   say "not yet born"). Never Alive past what is recorded.
+3. **Around the date**: the chronology rows naming the character (a mention of one of its pages, or one of its names as
+   whole words), the nearest `window` each side (default 3), and those overlapping the date. **Contradictions**: the open
+   Contradictory findings on its birth or death (a chronology one included), with a warning.
+4. **Coverage** (D8, `arkona_as_of_coverage`, **chosen** as its own tool): the current Main CANON characters, from their
+   identity pages: a readable birth, an unreadable one, a deliberately unestablished one, a recorded death, attested
+   bounds, and those with nothing readable (listed). Its note says absence is often deliberate and that it is not a task
+   list. On the test fixtures: 24 characters; 8 with a readable birth, 1 with a recorded death, 3 with attested bounds,
+   the rest (the F3a to F4a fixtures' characters, which record no birth) listed as nothing readable.
+5. **AU** (D9): `continuity` defaults to Main CANON; for an AU, its own pages' facts first, else the Main CANON value
+   labelled "inherited from Main CANON" (birth, death and identity facts, from the Main identity page). Nothing about the
+   AU's inheritance is assumed beyond that label (Project Navigation's "a separate relation").
+6. **The present** (D10) is pack data, `present: "5A 931"`; `date: "now"` means it.
+
+## Costs
+
+| Call                                                          | LegendKeeper requests                                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` | 0                                                                        |
+| … with `live: true`                                           | 1 per identity page re-read (at most 25)                                 |
+| `arkona_consistency_suggest`; the audits' category; the brief | 0                                                                        |
+| Pick the right value (planning)                               | 1 per page edited (its sidebar or document); a chronology row: about 9   |
+| The approved pick's job                                       | each page's check, writes and read-back, as `set_facts` and `write_page` |
+
+## Consequences
+
+- After deploying: approve `arkona-2026-11-20-f4b`; the next nightly audit (or "Run an audit now") reports the
+  consistency category; agents call `arkona_as_of` before writing about a character at a date and `arkona_consistency`
+  before changing one (the bridge guide's "How to decide" and its part "Arkona consistency checks").
+- The sandbox check (written, not run): `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test --
+consistency-f4b` (`test/sandbox/consistency-f4b.test.ts`): on the test world, a throwaway Character Core and a page
+  restating its birth differently, a full snapshot, the check, the owner's pick, approval, the page read back, the check
+  again, and clean-up (the throwaway index deleted with everything under it). It copies the project's settings, tree
+  and packs from the bridge's database read-only, as the write-scope rehearsal does, and needs the chronology's calendar
+  confirmed on the test world.
+- **Unverified on a real project**: the pick's writes are the ones existing sandbox rounds check (a block replaced with
+  its ids kept, a sidebar row updated, a chronology row and its event in step); the sandbox check exercises them together.
+
+## For the owner
+
+1. The **departure** (D3, D4 decision 6): attested bounds are not compared. Keep, or one of the two alternatives.
+2. The **chosen** narrowings of D2: a given name alone only on the character's own pages; a shared name only on one's
+   own pages; the appositive rule; a page restates identity facts only when its Subject is the character.
+3. Whether a Working page against a Working page should be reported at all (it is "Proposal differs from canon" now),
+   and the label "Historical material differs" for Archived material brought in with `include`.
+4. The attested span starting at the recorded birth (D7 decision 2), and a date before the birth reading Unestablished.
+5. `approxMargin` stays 5 years (D3's question), and `present` stays 5A 931 until the owner moves it.
+
+## Tests
+
+`test/consistency/`: `extract.test.ts` (each seeded phrasing; an alias; a pronoun never read; an unreadable date with
+the calendar's reason; precision kept), `compare.test.ts` (a day against its year; non-overlapping spans; "c." at the
+margin's edges; a gap; Working; Archived; identity normalised; attested never compared), `tools.test.ts` (the run's
+labels, exclusions, AU and paging; every as-of case; coverage; no request without `live`, one a character with it),
+`audit-pick.test.ts` (only Contradictory pairs, stable codes, cleared when the pages agree; the brief's line; the step-up;
+one proposal, one item per page, the side picked untouched; a suggestion shown and applying nothing; Revert; a typed
+value; more than 10 pages asks for the step-up at approval), `pick-chronology.test.ts` (a row through the row tools: its
+Date, KCY and event together), `index.test.ts` (incremental from a change snapshot; rebuilt on a new key; the heap back
+to its baseline after repeated extractions); and the guide's (`test/discover`).
