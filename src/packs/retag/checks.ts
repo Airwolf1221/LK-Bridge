@@ -14,8 +14,8 @@
  * - **`retag.verify`** (per page, after its write): an independent read-back: the exact final array in order, and the
  *   name, aliases, parent and place, documents and sidebar exactly as before the write. CR-2026-11-R3 (fix C): a page
  *   document's body is compared by its real version (`getDocumentBlocks`, read before the write by `retag.page` and again
- *   here: one read each); any other document only by the metadata `getResource` lists (its `updatedAt` is a metadata
- *   timestamp, which LegendKeeper's governance warns may not move with the body), and the read-back says so.
+ *   here: one read each). The owner's sandbox run (X6) showed `updatedAt` does not move on a content edit, so a board,
+ *   map or timeline document is compared by its content too (`bodyVersions`), never by a timestamp.
  *
  * A skipped page's reason starts with its disposition (`held:`, `already compliant:`, `conflicted:`, `inaccessible:`),
  * which the service reads back from the job to record each page's outcome.
@@ -28,6 +28,8 @@ import type { RebaseContext, RebaseResult } from '../../jobs/rebase.js';
 import { stableJson, type StateDifference } from '../../jobs/sidebar-state.js';
 import { sidebarPiece } from '../../snapshots/canonical.js';
 import type { RetagPolicy } from './engine.js';
+import type { OpParams } from '../../jobs/types.js';
+import { documentPieceOf } from '../../snapshots/capture.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -100,28 +102,45 @@ export interface VerifyInput {
 }
 
 /**
- * CR-2026-11-R3 (fix C): each live page document's body version, read now (`getDocumentBlocks`, one read each): the
- * version LegendKeeper answers, else a hash of the blocks. `unreadable` when the read fails: never taken as unchanged.
- * Other documents (board, map, timeline, blank) are not read: they are compared by their metadata only.
+ * CR-2026-11-R3 (fix C), and the owner's sandbox run (X6: `getResource`'s `updatedAt` does not move on a content edit):
+ * each live document's content, read now. A page document by its real version (`getDocumentBlocks`, one read; else a
+ * hash of its blocks); a board (`getBoardContent`, one read), a map (`getDocument` and `listFeatures`, two) and a
+ * timeline (`getDocument`, `listLanes`, `listEvents` per 100 events) by a hash of their content as the snapshots take it
+ * (ids, timestamps and versions left out: `documentPieceOf`), never by a timestamp. A blank document holds no content.
+ * `unreadable` when a read fails, `gone` when the document is: never taken as unchanged.
  */
 export async function bodyVersions(ctx: RegisteredCheckContext, pageId: string, res: Obj): Promise<Obj> {
   const out: Obj = {};
   const docs = (Array.isArray(res.documents) ? (res.documents as unknown[]) : []).filter(isObj);
+  const read = async (op: string, params: OpParams): Promise<unknown> => {
+    const r = await ctx.read(op, params);
+    return r.exists ? r.body : undefined;
+  };
   for (const d of docs) {
-    if (d.type !== 'page' || (d.deletedAt ?? null) !== null || typeof d.id !== 'string') continue;
+    if ((d.deletedAt ?? null) !== null || typeof d.id !== 'string') continue;
+    const type = typeof d.type === 'string' ? d.type : 'blank';
+    if (type !== 'page' && type !== 'board' && type !== 'map' && type !== 'time') continue;
     try {
-      const r = await ctx.read('getDocumentBlocks', { path: { resourceId: pageId, documentId: d.id } });
-      if (!r.exists || !isObj(r.body)) {
-        out[d.id] = 'gone';
+      if (type === 'page') {
+        const r = await ctx.read('getDocumentBlocks', { path: { resourceId: pageId, documentId: d.id } });
+        if (!r.exists || !isObj(r.body)) {
+          out[d.id] = 'gone';
+          continue;
+        }
+        const v = r.body.version;
+        out[d.id] =
+          typeof v === 'string' || typeof v === 'number'
+            ? `version ${String(v)}`
+            : `blocks ${createHash('sha1')
+                .update(stableJson(r.body.blocks ?? null))
+                .digest('hex')}`;
         continue;
       }
-      const v = r.body.version;
+      const piece = await documentPieceOf(read, pageId, d);
       out[d.id] =
-        typeof v === 'string' || typeof v === 'number'
-          ? `version ${String(v)}`
-          : `blocks ${createHash('sha1')
-              .update(stableJson(r.body.blocks ?? null))
-              .digest('hex')}`;
+        piece === undefined
+          ? 'gone'
+          : `content ${createHash('sha1').update(stableJson(piece)).digest('hex')}`;
     } catch (e) {
       const status = (e as { lk?: { status?: number } } | null)?.lk?.status;
       const code = (e as { code?: unknown } | null)?.code;
@@ -142,7 +161,8 @@ export function fingerprint(res: Obj, bodies?: Obj): Obj {
     rank: d.rank ?? null,
     isHidden: d.isHidden ?? null,
     deletedAt: d.deletedAt ?? null,
-    updatedAt: d.updatedAt ?? null,
+    // X6 (the owner's sandbox run): no timestamp here: `updatedAt` does not move on a content edit. Content is compared
+    // by `bodyVersions`.
   }));
   return {
     name: res.name ?? null,
@@ -427,14 +447,14 @@ async function verifyCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheck
               : k === 'parentId' || k === 'rank'
                 ? 'parentage and place'
                 : k === 'documents'
-                  ? "documents' metadata (id, name, type, place, flags, metadata timestamp)"
+                  ? "documents' metadata (id, name, type, place, flags)"
                   : k
           } unchanged`,
           expected: before[k] ?? null,
           actual: after[k] ?? null,
         });
-    // CR-2026-11-R3 (fix C): each page document's body by its real version, read again now. A body that could not be
-    // read on either side is reported, never taken as unchanged.
+    // CR-2026-11-R3 (fix C), X6: each document's content (a page's by its real version; a board's, map's or timeline's
+    // by its content), read again now. One that could not be read on either side is reported, never taken as unchanged.
     const was = isObj(before.bodies) ? before.bodies : null;
     if (was) {
       const now = await bodyVersions(ctx, input.pageId, r.res);
@@ -443,7 +463,7 @@ async function verifyCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheck
         const cur = now[docId] ?? 'gone';
         if (v === 'unreadable' || cur === 'unreadable' || cur !== v)
           diffs.push({
-            path: `${input.name}: document ${docId} body unchanged (by its version)`,
+            path: `${input.name}: document ${docId} ${String(v).startsWith('content ') ? 'content unchanged' : 'body unchanged (by its version)'}`,
             expected: v,
             actual: cur,
           });
@@ -451,7 +471,7 @@ async function verifyCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheck
     } else
       diffs.push({
         path: `${input.name}: document bodies`,
-        expected: 'their versions as read before the write',
+        expected: 'their content as read before the write',
         actual: '(not recorded)',
       });
   } else

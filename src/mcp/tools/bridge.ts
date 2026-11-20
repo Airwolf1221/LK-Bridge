@@ -777,7 +777,8 @@ function otherTools(deps: ToolDeps) {
           .describe(
             'Also finds every resource a createManyResources created. A property, row, link-item or block id is unique ' +
               'only within its page (copies of one template share them): give resourceId with it, or only page and ' +
-              'document targets match.',
+              'document targets match. A block id is unique only within its document (two documents of one page can ' +
+              'share one): give documentId too.',
           ),
         operationId: z.string().max(100).optional(),
         jobId: z.string().max(100).optional(),

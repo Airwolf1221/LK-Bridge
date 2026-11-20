@@ -1805,13 +1805,13 @@ pointer to A6). Nothing is ever written.
 `{ report, project? }`. `access: write`; **always ONE canonical proposal** at every scope (D7); not subject to the bulk
 rail.
 
-| Argument       | Meaning                                                                                                                                                                                                                                                                                                                                                          |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`       | The owner page to split (name, alias, path or id): an Authoritative or Working page, not an index or an Archived page.                                                                                                                                                                                                                                           |
-| `retire`       | D2: archive the source once phase 1 has verified (a separate canonical proposal by the bridge). Default `false`: it survives.                                                                                                                                                                                                                                    |
-| `destinations` | Each `{ key, kind, … }`: `new` (`role`, `title`, `referenceType`, `specialistTag` for a character's page; `type`, `name`, `descriptor`, `home`, `nation`, `temporalScope` for any other owner; `scope` and `purpose` required), `existing` (`page`, `under`), `relationship` (`page`, or `with` and `label` for a new one), `universal` (`owner`, `text`, `in`). |
-| `map`          | Each `{ section, to }` (a heading's text or block id, or `(preamble)`; a key or `stays`), or `{ section, blocks: [{ ids, to, summary?, under? }] }` to divide a section block by block; `summary` (required for each section that leaves a surviving source) and `under`.                                                                                        |
-| `dependencies` | D5: each `{ page, to, keepSource? }`: a page that depends on the source, to the destination it needs (every one when `retire`).                                                                                                                                                                                                                                  |
+| Argument       | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `source`       | The owner page to split (name, alias, path or id): an Authoritative or Working page, not an index or an Archived page.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `retire`       | D2: archive the source once phase 1 has verified (a separate canonical proposal by the bridge). Default `false`: it survives.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `destinations` | Each `{ key, kind, … }`: `new` (`role`, `title`, `referenceType`, `specialistTag` for a character's page; `type`, `name`, `descriptor`, `home`, `nation`, `temporalScope` for any other owner; `scope` and `purpose` required), `existing` (`page`, `under`), `relationship` (`page`, or `with` and `label` for a new one), `universal` (`owner`, `text`, `in`). A new owner also answers for the source's Source Boundaries and Unresolved Material (`sourceBoundaries`, `unresolvedMaterial`, or `notApplicable: { … : reason }`, unless items of them move there) and its Dependencies (`dependencies`, or `noDependencies: { reason }`): ADR 0059 amendment 1. |
+| `map`          | Each `{ section, to }` (a heading's text or block id, or `(preamble)`; a key or `stays`), or `{ section, blocks: [{ ids, to, summary?, under? }] }` to divide a section block by block; `summary` (required for each section that leaves a surviving source) and `under`.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `dependencies` | D5: each `{ page, to, keepSource? }`: a page that depends on the source, to the destination it needs (every one when `retire`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 **Refusals before anything is proposed** (each with its list; `refusals` holds them all, `preview` what the plan saw):
 `SPLIT_COVERAGE` (`unassigned`, `twice`: block, section, excerpt, destinations), `SPLIT_DUPLICATED_AUTHORITY`
@@ -1824,7 +1824,9 @@ Compact Character Reference first, `arkona_create_character` with `target` and `
 `SPLIT_SECTION_NOT_FOUND` (`headings`), `SPLIT_SECTION_AMBIGUOUS`, `SPLIT_BLOCK_NOT_IN_SECTION`, `SPLIT_MAP_ENTRY`,
 `SPLIT_DESTINATION_KEY`, `SPLIT_DESTINATION_UNKNOWN`, `SPLIT_DESTINATION_EMPTY`, `SPLIT_DESTINATION_PAGE`,
 `SPLIT_DESTINATION_SOURCE`, `SPLIT_DESTINATION_NOT_OWNER`, `SPLIT_LIFECYCLE_MISMATCH`, `SPLIT_UNDER_REQUIRED`,
-`SPLIT_PURPOSE_REQUIRED`, `SPLIT_SCOPE_REQUIRED`, `SPLIT_OWNER_TYPE`, `SPLIT_NOT_A_RELATIONSHIP`,
+`SPLIT_PURPOSE_REQUIRED`, `SPLIT_SCOPE_REQUIRED`, `SPLIT_SECTIONS_UNADDRESSED` (`unaddressed`: destination and section;
+`fields`), `SPLIT_DEPENDENCIES_UNADDRESSED` (`destinations`, `suggested`: the source's own Dependencies),
+`SPLIT_COMPLETENESS_CONFLICT` (`conflicts`), `SPLIT_OWNER_TYPE`, `SPLIT_NOT_A_RELATIONSHIP`,
 `SPLIT_RELATIONSHIP_NOT_CHARACTER`, `SPLIT_RELATIONSHIP_WITH`, `SPLIT_SOURCE_INDEX`, `SPLIT_SOURCE_ARCHIVED`,
 `SPLIT_SOURCE_UNCLASSIFIED`, `SPLIT_NO_PAGE_DOCUMENT`, `SPLIT_BLOCK_IDS_PENDING` (a legacy page: the block-id sweep
 first), `SPLIT_IMPACT_UNAVAILABLE` (retiring needs the incoming Dependencies), `SPLIT_RULES_MISSING`, `PACK_NOT_CURRENT`,
@@ -1835,7 +1837,20 @@ and F3a's and F3b's own refusals for a new page (`DOMAIN_EXISTS`, `REFERENCE_TYP
 **The plan** (`dryRun`, and the proposal's operation): `sections` (each and where it goes), `destinations` (each with its
 item, page, sections, blocks, words, images), `interfaceSummaries`, `indexEntries`, `dependencies` (`remapped`,
 `unmapped`, `chronologyRows`), `items` (each with `ifLeftOut`: what leaving it out means), `blockIds`,
-`lastMajorRevision`, `warnings`, `notes` and `cost` (`planReads` as made; the job's estimate).
+`lastMajorRevision`, `warnings`, `notes` and `cost` (`planReads` as made; the job's estimate). ADR 0059 amendment 1:
+`completeness` (the source's own Dependencies as `suggestedDependencies`, each new owner's starting list; for each new
+owner, how it addresses each section, `moved`, `supplied`, both or `not applicable` with the reason, and its
+Dependencies, a count or the none with its reason; each reason is also on the destination's item, so the owner reads it)
+and `nextSteps` (also in `report`): what is still owed once the split has run, each `{ page, what, tool }`: a section a
+surviving source gave away whole (`write_page`), a page that depends on a surviving source and was not remapped
+(`set_facts`), and each new owner's not-applicable sections and none, to revisit if they change.
+
+**Completeness** (ADR 0059 amendment 1). When the source has Source Boundaries or Unresolved Material, each new owner
+(a new owner or a new relationship owner) addresses each one: by items of it moved there (blocks moved without their
+heading or an `under` go under the section's own heading), by the agent's text (`sourceBoundaries`,
+`unresolvedMaterial`: Markdown, the heading added when it has none, after any moved items), or as not applicable with a
+reason. The bridge never writes these sections' content itself. A new owner's Dependencies start from the source's own;
+a universal owner whose application text goes there counts; an empty list needs `noDependencies: { reason }`.
 
 **The Character Core** (CR-2026-11-R3, R3-66). A character with an index and several owners has a Character Core: a
 Compact Character Reference that the split leaves at the head of several owners (new ones the split makes, or ones its
@@ -1867,11 +1882,12 @@ it part-way); a source holding an inline icon is refused (`SPLIT_NOT_WRITABLE`),
 material (`SPLIT_VISUAL`).
 
 **Verified** (CR-2026-11-R3, R3-67) is the job's own verification, never the split's: every read-back of the job's
-writes and its final verification (a mention compared by its target, `resourceId` and `documentId`; the name and label
-LegendKeeper fills in are display fields). A job that ran to its end but read back a difference makes the split
-`unverified`: nothing is retired, and `report` says `verified: false` with the job to look at. So does a split resumed
-after a write that read back a difference, even once that is put right by hand (its job's verification keeps it): the
-owner retires the source with `archive_page` once satisfied.
+writes and its final verification (a mention compared by its target, `resourceId` and `documentId`, and by its label
+where the bridge wrote one: X2 showed a label sent is kept; the name, and a label LegendKeeper fills in where none was
+sent, are not compared). A job that ran to its end but read back a difference makes the split `unverified`: nothing is
+retired, and `report` says `verified: false` with the job to look at. A split resumed after a write that read back a
+difference reads that write back again first (ADR 0061 part B decision 6): put right by hand since, it counts as
+verified.
 
 **Phase 2**: with `retire`, once phase 1 has verified and nothing was left out or skipped, the bridge proposes
 archiving the source with `archive_page`'s own plan (a separate canonical proposal, owner-forced). Never a delete.
@@ -1941,7 +1957,8 @@ The job: the policy and its governance checked first (one read per source; chang
 since the audit; audit again"); per page a fresh read (conflicted, held, already compliant or inaccessible pages are
 skipped and recorded), the write inside the page's lock (judged again there), and an independent read-back (the exact
 array in order; name, aliases, parentage and sidebar unchanged; each page document's body at the same version, read
-before and after the write; other documents compared by their metadata timestamps only: CR-2026-11-R3, fix C). Each page's disposition is recorded:
+before and after the write, and each board, map and timeline document's content the same way: CR-2026-11-R3, fix C, and the
+owner's sandbox run X6, which showed `updatedAt` does not move on a content edit). Each page's disposition is recorded:
 `applied` (verified or not), `already_compliant`, `held`, `conflicted`, `inaccessible`. Last Major Revision is never set.
 Resume (owner, Jobs page) and Revert (the exact prior array, only where nothing changed since: the page's tags, and since
 ADR 0061 part B decision 5 its name and parent, as the job left them) work. With

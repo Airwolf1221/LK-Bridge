@@ -29,7 +29,7 @@ import type { ProposalView } from '../../policy/types.js';
 import { contentPrint, textPrint } from './blocks.js';
 import { mainDocumentOf, SPLIT_CHECKS, type MadeCheckInput, type VerifyCheckInput } from './checks.js';
 import { EXPECT_STEP } from '../../jobs/internal-steps.js';
-import { SPLIT_TOOL, type SplitUpgrade } from './plan.js';
+import { SPLIT_TOOL, type SplitNextStep, type SplitUpgrade } from './plan.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -61,6 +61,8 @@ export interface SplitRecordPlan {
   readonly unmapped: readonly { readonly id: string; readonly name: string }[];
   /** CR-2026-11-R3 (R3-66): the source upgraded to its Character Core by the split (put back with the pages it made). */
   readonly upgrade?: SplitUpgrade | null;
+  /** ADR 0059 amendment 1: what is still owed once the split has run (sections, Dependencies), each with its tool. */
+  readonly nextSteps?: readonly SplitNextStep[];
 }
 
 export interface SplitPhase2 {

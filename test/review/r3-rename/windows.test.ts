@@ -71,7 +71,9 @@ describe('RN windows: writes LegendKeeper does not version', () => {
       // Safe: their name stands, or the rename re-applies its change to it ("Laila … Great Reading Room"); never the
       // planned name over theirs without a word.
       expect(
-        name === THEIRS || name === THEIRS.replace(OLD, NEW) || skipped.includes(`chronology:${R.rowLinked}`),
+        name === THEIRS ||
+          name === THEIRS.replace(OLD, NEW) ||
+          skipped.some((x: string) => x.startsWith('chronology:') && x.endsWith(`:${R.rowLinked}`)),
         String(name),
       ).toBe(true);
     } finally {
@@ -101,7 +103,8 @@ describe('RN windows: a chronology row written from the plan', () => {
     const skipped = w.stack.runtime.engine.skippedItems(PROJECT, done.jobId!).map((s) => s.item);
     // Safe: the bold run is still there (renamed or not), or the item was skipped as changed meanwhile.
     expect(
-      now.some((r) => r.bold === true) || skipped.includes(`chronology:${R.rowLinked}`),
+      now.some((r) => r.bold === true) ||
+        skipped.some((x: string) => x.startsWith('chronology:') && x.endsWith(`:${R.rowLinked}`)),
       JSON.stringify(now),
     ).toBe(true);
   });

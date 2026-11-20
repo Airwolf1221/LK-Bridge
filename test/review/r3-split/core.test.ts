@@ -13,7 +13,7 @@ import { SidebarModel } from '../../resources/world.js';
 import { OWNER_KEYS } from '../../packs/owners-world.js';
 import { TPL } from '../../packs/world.js';
 import { C, PROJECT, S, splitWorld, type SplitWorld } from '../../packs/split-world.js';
-import { zahraSplit } from '../../packs/split-inputs.js';
+import { ANSWERED, zahraSplit } from '../../packs/split-inputs.js';
 import { approveSplit, named, recordOf, refusal, rowsOf, settle, split } from '../../packs/split-helpers.js';
 import { heading, para, propose, setBody } from './helpers.js';
 
@@ -178,6 +178,7 @@ describe('R3-66: a character already headed by a Compact Character Reference wit
           referenceType: 'Character Powers & Mechanics Reference',
           scope: 'Thin Lamp: his knack with flame',
           purpose: 'What Thin Lamp can do with a flame.',
+          ...ANSWERED,
         },
       ],
       map: [

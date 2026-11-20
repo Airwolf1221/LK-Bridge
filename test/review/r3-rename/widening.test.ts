@@ -280,7 +280,9 @@ describe('RN widening: a chronology row whose only occurrence is quoted (D1 (a))
       given: 'Laila',
       dryRun: true,
     });
-    const item = dryItems(dry.body).find((i) => i.id === `chronology:${R.rowEarly}`)!;
+    const item = dryItems(dry.body).find(
+      (i) => i.id.startsWith('chronology:') && i.id.endsWith(`:${R.rowEarly}`),
+    )!;
     expect(item, 'the row item').toBeTruthy();
     const id = await proposeNadira(w);
     const done = await approveAs(w, id);

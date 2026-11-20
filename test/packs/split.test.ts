@@ -20,7 +20,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { C, O, P, PROJECT, S, splitWorld, zahraBody, type SplitWorld } from './split-world.js';
 import { ROOT } from '../discover/world.js';
 import { TPL } from './world.js';
-import { statutesSplit, zahraSplit } from './split-inputs.js';
+import { ANSWERED, NO_DEPENDENCIES, NOT_APPLICABLE, statutesSplit, zahraSplit } from './split-inputs.js';
 import {
   adminGet,
   approveMeasured,
@@ -172,9 +172,12 @@ describe('arkona_split_owner: the checks before anything is proposed', () => {
       'not a current universal owner',
     );
     // Restating the rule into a character's owner (no universal assignment) is flagged.
+    // ADR 0059 amendment 1: with no universal assignment, the Powers page lists its own Dependency on the magic owner.
     const migrated = await dry({
       ...base,
-      destinations: (base.destinations as Obj[]).filter((d) => d.key !== 'magic'),
+      destinations: (base.destinations as Obj[])
+        .filter((d) => d.key !== 'magic')
+        .map((d) => (d.key === 'powers' ? { ...d, dependencies: [S.sorcery] } : d)),
       map: map.map((e) =>
         e.section === 'Powers' ? { section: 'Powers', to: 'powers', summary: 'Her sorcery.' } : e,
       ),
@@ -234,10 +237,10 @@ describe('arkona_split_owner: the checks before anything is proposed', () => {
       ]),
     );
     expect(list.find((i) => i.id === 'dest:bio').ifLeftOut).toBe(
-      `If left out, “Biography” stays in ${ZAHRA} (nothing is lost).`,
+      `If left out, “Biography” stays in ${ZAHRA} (nothing is lost). The agent's answers, for the owner to judge: “Source Boundaries” not applicable: “${NOT_APPLICABLE.sourceBoundaries}”; “Unresolved Material” not applicable: “${NOT_APPLICABLE.unresolvedMaterial}”; no Dependencies: “${NO_DEPENDENCIES.reason}”.`,
     );
     expect(list.find((i) => i.id === 'dest:wardrobe').ifLeftOut).toBe(
-      `If left out, “Wardrobe”, “Unresolved Material” stay in ${ZAHRA} (nothing is lost).`,
+      `If left out, “Wardrobe”, “Unresolved Material” stay in ${ZAHRA} (nothing is lost). The agent's answers, for the owner to judge: “Source Boundaries” not applicable: “${NOT_APPLICABLE.sourceBoundaries}”; no Dependencies: “${NO_DEPENDENCIES.reason}”.`,
     );
     expect(list.find((i) => i.id === `dep:${P.nadiraBio}`).dependsOn).toContain('dest:rel');
     // The remapped Dependency, the one left (the source survives), and the chronology row reported.
@@ -644,6 +647,7 @@ describe('arkona_split_owner: a new page’s line in an EXISTING character index
           referenceType: 'Character Personality & Lifestyle Reference',
           scope: 'Zahra al-Rashid: her temperament and habits',
           purpose: 'How Zahra al-Rashid deals with people, and the habits she keeps.',
+          ...ANSWERED,
         },
       ],
       map: [

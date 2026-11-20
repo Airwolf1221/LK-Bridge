@@ -212,6 +212,10 @@ to LegendKeeper; every apply is a proposal approved on the Proposals page.
    so: "written and read back: the tags exactly as proposed; name, aliases, parentage and sidebar unchanged; each page
    document's body at the same version as before the write; other documents (board, map, timeline) compared by their
    metadata timestamps only, not their content". Cost: two reads more per page document of each page applied.
+   Amended again after the owner's sandbox run of CR-2026-11-R3's checks (X6: `getResource`'s `updatedAt` does not move
+   on a content edit): board, map and timeline documents are compared by their content too (a hash of what the
+   snapshots take of each: `getBoardContent`; `getDocument` and `listFeatures`; `getDocument`, `listLanes` and
+   `listEvents`), read before and after the write; no timestamp is a content signal anywhere. Cost: those reads, twice.
 4. **A split's new pages are not recorded** (decision 6): they get their tags from F3a's and F3b's planners inside the
    split's own job; their current tags are their evidence.
 5. **The routing-line finding has no fix** (decision 7), as the brief allowed.

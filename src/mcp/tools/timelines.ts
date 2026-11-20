@@ -53,7 +53,7 @@ import {
   eventOf,
   type TimelineEvent,
 } from '../../chronology/check.js';
-import { buildJob, replaceCells, type WriteContext } from '../../chronology/plan.js';
+import { buildJob, replaceCells, rowKey, type WriteContext } from '../../chronology/plan.js';
 import { planSync, syncRequestKey, SYNC_TOOL, type SyncRef } from '../../chronology/sync.js';
 import { factValueRuns, FactValueError } from '../../facts/values.js';
 import { mintClientId } from '../../jobs/ids.js';
@@ -1036,7 +1036,7 @@ function createTimelineEventTool(deps: ToolDeps): McpToolProvider {
               now,
               ins
                 ? {
-                    [ins.rowId]: {
+                    [rowKey(ins.documentId, ins.rowId)]: {
                       sortKey: sortKey(date),
                       date: { start: date.start, end: date.end, detail: date.detail },
                       description: desc.text,
@@ -1409,12 +1409,12 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
                 texts,
                 block,
               });
-              rowsCtx[row.id!] = {
+              rowsCtx[rowKey(age.tableDocumentId, row.id!)] = {
                 sortKey: sortKey(newDate),
                 date: { start: newDate.start, end: newDate.end, detail: newDate.detail },
                 description: desc.text,
               };
-              if (dateChanged) moves.add(row.id!);
+              if (dateChanged) moves.add(rowKey(age.tableDocumentId, row.id!));
             }
             if (dateChanged && event.end !== null && newDate.end === null) {
               // LegendKeeper cannot take an end away: the event is made again (same lane, link and name).
@@ -1540,7 +1540,7 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
               rowId: age.mainRowId,
               delta: -1,
             });
-            rowsCtx[ids.row] = {
+            rowsCtx[rowKey(newAge.tableDocumentId, ids.row)] = {
               sortKey: sortKey(newDate),
               date: { start: newDate.start, end: newDate.end, detail: newDate.detail },
               description: desc.text,
@@ -1902,12 +1902,13 @@ async function resumeChange(
     if (w.kind !== 'row.insert' && w.kind !== 'row.replace') continue;
     try {
       const d = cal.parser.parse(w.texts.date, ch.config.style.date);
-      rows[w.rowId] = {
+      rows[rowKey(w.documentId, w.rowId)] = {
         sortKey: sortKey(d),
         date: { start: d.start, end: d.end, detail: d.detail },
         description: w.texts.description,
       };
-      if (w.kind === 'row.replace' && w.before.date !== w.texts.date) moves.add(w.rowId);
+      if (w.kind === 'row.replace' && w.before.date !== w.texts.date)
+        moves.add(rowKey(w.documentId, w.rowId));
     } catch (e) {
       return { kind: 'answer', result: calendarError(pd, e) };
     }

@@ -19,7 +19,7 @@
  */
 import { createHash } from 'node:crypto';
 import { inRankOrder } from '../lk/row-order.js';
-import { mentionTarget, normaliseRuns } from './verify-blocks.js';
+import { normaliseRuns, sameRuns } from './verify-blocks.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -240,12 +240,12 @@ export function compareRows(
 }
 
 /**
- * CR-2026-11-R3 (R3-67): whether two values (normalised runs) are the same as the verify judges them: a mention by its
- * target only (its name and label are display fields LegendKeeper fills in on read-back).
+ * CR-2026-11-R3 (R3-67) and X2: whether a row's content `actual` is the content `expected` (what the bridge wrote or
+ * expects) as the verify judges it: a mention by its target, and by its label when `expected` carries one; a label
+ * LegendKeeper filled in never counts (`sameRuns`).
  */
-export function sameContent(a: readonly Obj[], b: readonly Obj[]): boolean {
-  const byTarget = (r: Obj): Obj => (isObj(r.mention) ? { ...r, mention: mentionTarget(r.mention) } : r);
-  return stableJson(a.map(byTarget)) === stableJson(b.map(byTarget));
+export function sameContent(expected: readonly Obj[], actual: readonly Obj[]): boolean {
+  return sameRuns(expected, actual);
 }
 
 /** The indexes of `pos` that are not on one longest increasing run (the rows that moved). */

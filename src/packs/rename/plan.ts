@@ -31,7 +31,7 @@
  * touched.
  */
 import { randomBytes } from 'node:crypto';
-import { buildJob, type WriteContext } from '../../chronology/plan.js';
+import { buildJob, rowKey, type WriteContext } from '../../chronology/plan.js';
 import { readAgeTable, sortKey, type AgeRow } from '../../chronology/table.js';
 import type { TargetWrite } from '../../chronology/store.js';
 import { expandFacts } from '../../facts/expand.js';
@@ -97,6 +97,8 @@ type Obj = Record<string, unknown>;
 type Change = { what: string; before: string | null; after: string | null };
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+/** A step's document id (X5: chronology rows are keyed by document and row), or '' when it has none. */
+const docIdOf = (v: unknown): string => str(v) ?? '';
 
 export const RENAME_TOOL = 'arkona_rename';
 
@@ -1257,10 +1259,11 @@ export async function planRename(
           });
           continue;
         }
-        const item = `chronology:${row.id}`;
+        // X5: a row id is unique only within its table document (each age has its own).
+        const item = `chronology:${rowKey(doc, row.id)}`;
         if (!ages.includes(age.name)) ages.push(age.name);
         const block = renameTextRuns(row.row.block, oldName, newName);
-        planned.set(row.id, {
+        planned.set(rowKey(doc, row.id), {
           block: row.row.block,
           description: before,
           where: `${age.name} row “${row.dateText}”`,
@@ -1276,7 +1279,7 @@ export async function planRename(
           block,
         });
         writeItems.push([item]);
-        rows[row.id] = {
+        rows[rowKey(doc, row.id)] = {
           sortKey: sortKey(date),
           date: { start: date.start, end: date.end, detail: date.detail },
           description: after,
@@ -1365,7 +1368,7 @@ export async function planRename(
       const i = writes.indexOf(w);
       return i >= 0 ? writeItems[i]! : [];
     };
-    const itemOfRow = (rowId: string) => [`chronology:${rowId}`];
+    const itemOfRow = (documentId: string, rowId: string) => [`chronology:${rowKey(documentId, rowId)}`];
     const itemOfEvent = (eventId: string) => {
       const i = writes.findIndex((w) => w.kind === 'event.update' && w.eventId === eventId);
       return i >= 0 ? writeItems[i]! : [];
@@ -1407,7 +1410,7 @@ export async function planRename(
               cs.push({
                 ...c,
                 input: { ...cin, ops: k === 0 ? [...loose, ...ops] : ops },
-                skipItems: itemOfRow(rowId),
+                skipItems: itemOfRow(docIdOf(c.documentId), rowId),
               }),
             );
           } else if (c.kind === 'event' && itemOfEvent(String(c.eventId)).length > 0) {
@@ -1430,7 +1433,7 @@ export async function planRename(
                 ? [
                     ...new Set(
                       (t.input.rows as Obj[]).flatMap((r) =>
-                        typeof r.rowId === 'string' ? itemOfRow(r.rowId) : [],
+                        typeof r.rowId === 'string' ? itemOfRow(docIdOf(t.documentId), r.rowId) : [],
                       ),
                     ),
                   ]
@@ -1442,7 +1445,7 @@ export async function planRename(
             partsOut.push({
               path: `body.targets.${k}.input.rows`,
               items: (t.input.rows as Obj[]).map((r) =>
-                typeof r.rowId === 'string' ? itemOfRow(r.rowId) : [],
+                typeof r.rowId === 'string' ? itemOfRow(docIdOf(t.documentId), r.rowId) : [],
               ),
             });
         });
@@ -1455,8 +1458,9 @@ export async function planRename(
         });
       } else if (s.op === 'replaceBlock') {
         const rowId = String(s.params?.path?.blockId ?? '');
-        its = itemOfRow(rowId);
-        const was = planned.get(rowId);
+        const docId = String(s.params?.path?.documentId ?? '');
+        its = itemOfRow(docId, rowId);
+        const was = planned.get(rowKey(docId, rowId));
         // ADR 0058 amendment (A): the table changed since the check: the row renamed again on its text as it is, if that
         // text is exactly as planned; otherwise the row's item is skipped.
         if (was)
@@ -1468,7 +1472,7 @@ export async function planRename(
                 oldName,
                 newName,
                 fingerprint: fingerprint(was.block, oldName, newName),
-                item: `chronology:${rowId}`,
+                item: `chronology:${rowKey(docId, rowId)}`,
                 before: was.description,
                 where: was.where,
               },

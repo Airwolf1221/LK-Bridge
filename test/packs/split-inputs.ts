@@ -3,6 +3,19 @@
  */
 import { O, OSTRAND, P, S } from './split-world.js';
 
+/**
+ * ADR 0059 amendment 1: a new owner's answers for the source's Source Boundaries and Unresolved Material, and for its
+ * Dependencies, as an agent gives them when neither applies (the fixtures' new owners hold neither; the completeness
+ * tests, test/review/r4/split-completeness.test.ts, move and supply them).
+ */
+export const NOT_APPLICABLE = {
+  sourceBoundaries: 'Its material comes from one source, already bounded by the source page.',
+  unresolvedMaterial: 'Nothing about this domain is unresolved.',
+} as const;
+export const NO_DEPENDENCIES = { reason: 'It relies on no other owner beyond its own character.' } as const;
+/** Both sections not applicable and no Dependencies: the answers most fixture owners give. */
+export const ANSWERED = { notApplicable: NOT_APPLICABLE, noDependencies: NO_DEPENDENCIES } as const;
+
 /** Zahra's monolith split, the source surviving with an interface summary for each section that leaves it. */
 export function zahraSplit(more: Record<string, unknown> = {}) {
   return {
@@ -16,6 +29,7 @@ export function zahraSplit(more: Record<string, unknown> = {}) {
         referenceType: 'Character Biography',
         scope: 'Zahra al-Rashid: her life on the caravan roads',
         purpose: 'The life of Zahra al-Rashid, from her first caravan to the fall of the house.',
+        ...ANSWERED,
       },
       {
         key: 'looks',
@@ -25,6 +39,7 @@ export function zahraSplit(more: Record<string, unknown> = {}) {
         referenceType: 'Character Physical & Visual Reference',
         scope: 'Zahra al-Rashid: how she looks',
         purpose: 'How Zahra al-Rashid looks, with her reference images and what each establishes.',
+        ...ANSWERED,
       },
       {
         key: 'art',
@@ -32,6 +47,7 @@ export function zahraSplit(more: Record<string, unknown> = {}) {
         role: 'art',
         scope: 'Zahra al-Rashid: her wardrobe images',
         purpose: 'The visual references of Zahra al-Rashid’s wardrobe.',
+        ...ANSWERED,
       },
       {
         key: 'wardrobe',
@@ -41,6 +57,8 @@ export function zahraSplit(more: Record<string, unknown> = {}) {
         referenceType: 'Character Wardrobe & Personal Presentation Reference',
         scope: 'Zahra al-Rashid: what she wears',
         purpose: 'What Zahra al-Rashid wears on the road and at court.',
+        notApplicable: { sourceBoundaries: NOT_APPLICABLE.sourceBoundaries },
+        noDependencies: NO_DEPENDENCIES,
       },
       {
         key: 'rel',
@@ -48,6 +66,7 @@ export function zahraSplit(more: Record<string, unknown> = {}) {
         with: 'Nadira al-Khalid',
         scope: 'Zahra al-Rashid and Nadira al-Khalid: their bond',
         purpose: 'The bond between Zahra al-Rashid and Nadira al-Khalid.',
+        ...ANSWERED,
       },
       {
         key: 'powers',
@@ -57,6 +76,7 @@ export function zahraSplit(more: Record<string, unknown> = {}) {
         referenceType: 'Character Powers & Mechanics Reference',
         scope: 'Zahra al-Rashid: her sorcery',
         purpose: 'What Zahra al-Rashid can do with her fire-binding.',
+        notApplicable: { sourceBoundaries: NOT_APPLICABLE.sourceBoundaries },
       },
       {
         key: 'magic',
@@ -128,6 +148,7 @@ export function statutesSplit(more: Record<string, unknown> = {}) {
         scope: 'The statutes and assize courts of Ostrand',
         temporalScope: '4A 100 - 5A 931',
         purpose: 'The statutes of Ostrand and how its assize courts apply them.',
+        ...ANSWERED,
       },
       { key: 'rite', kind: 'existing', page: S.sunRite, under: 'Worship under the Statutes' },
     ],

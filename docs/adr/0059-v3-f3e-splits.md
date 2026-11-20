@@ -20,6 +20,8 @@
 - Pack version: `arkona-2026-11-18-f3e` (the split rules as data; supersedes `arkona-2026-11-17-f3d` and
   `arkona-2026-11-17-f3-4`). The owner approves it on the Packs page before either tool works.
 - Numbered 0059, the next free number.
+- **Amended** 19 November 2026 ([amendment 1](#amendment-1-a-splits-new-owners-are-complete)): a split's new owners
+  address the source's Source Boundaries, Unresolved Material and Dependencies, and the result lists what is still owed.
 
 ## Context
 
@@ -219,3 +221,50 @@ version.
    guide, `write_page`'s refusal and both tools' descriptions; the low-level tools stay the documented last resort.
 10. **The deletion proposal after a Revert keeps a page that differs from what the split wrote**, whatever the reason (an
     edit since, or LegendKeeper not storing a block as sent): the owner decides about it.
+
+## Amendment 1: a split's new owners are complete
+
+Recorded 19 November 2026, from the owner's tests of the split after the third review (R3 merged and deployed). A split
+could make a new owner with no Source Boundaries, no Unresolved Material and no Dependencies, although the source had all
+three: the appraisal then flagged each new owner (`boundaries_missing`), and nothing told the agent or the owner that the
+split had left them owed. Decision 2 (the plan) gains three rules; nothing else changes.
+
+1. **Source Boundaries and Unresolved Material.** When the source has either section, each NEW owner (a new owner or a new
+   relationship owner; existing owners keep their own) addresses each one the source has, in one of three ways:
+   - **moved items**: blocks of the source's section assigned to it in the map. Blocks moved without their heading and
+     without an `under` go under the section's own heading there, so the new owner has the section;
+   - **supplied text**: the agent's own text for it, in new optional destination fields like `purpose`:
+     `sourceBoundaries` and `unresolvedMaterial` (Markdown; the heading is added when the text has none; with moved
+     items, the text follows them);
+   - **not applicable**: `notApplicable: { sourceBoundaries?: reason, unresolvedMaterial?: reason }`. The proposal shows
+     the owner each reason, on the destination's item (its label, and what leaving it out means).
+
+   A plan that leaves one unaddressed is refused, **`SPLIT_SECTIONS_UNADDRESSED`**, listing each destination and section
+   with the three ways. A destination that both answers a section and marks it not applicable is refused
+   (`SPLIT_COMPLETENESS_CONFLICT`). **The bridge never writes these sections' content itself**: only moved blocks and the
+   agent's text, which the owner approves with the rest of the proposal. The section names are the pack's
+   (`warnMissing` and `text.unresolved`).
+
+2. **Dependencies.** The plan suggests the source's own Dependencies as each new owner's starting list
+   (`completeness.suggestedDependencies`, in the dry run and in a refusal's preview); the agent keeps those the new owner
+   relies on (`dependencies`). A universal owner whose application text goes to the new owner counts. A new owner with an
+   empty list needs an explicit none with a reason, `noDependencies: { reason }`, which the proposal shows the owner;
+   otherwise the plan is refused, **`SPLIT_DEPENDENCIES_UNADDRESSED`** (with the suggested list). A list and a none
+   together are refused (`SPLIT_COMPLETENESS_CONFLICT`).
+3. **What is still owed.** The plan, the proposal and the split's `report` carry `nextSteps`, each with the page, what is
+   owed and the tool that does it:
+   - a section the surviving source gave away whole (`write_page`);
+   - the pages that depend on a surviving source and were not remapped, which may need the new owner instead
+     (`set_facts`);
+   - each new owner's not-applicable sections and its none, to revisit if that changes (`write_page`, `set_facts`).
+
+   The plan also carries `completeness`: how each new owner addresses each section (`moved`, `supplied`, both, or not
+   applicable with its reason) and its Dependencies (a count, or the none with its reason).
+
+**Tests** (against the mock LegendKeeper): `test/review/r4/split-completeness.test.ts`. The three refusals and the
+conflict; the suggested list; each reason shown on the item; `nextSteps` in the plan and in the report; a split whose new
+owner takes one section as moved items and the other as supplied text, written under their headings, then passing the
+appraisal's `boundaries_missing` rule when it reads the page live. A control: a new owner whose sections were marked not
+applicable is still flagged, because that rule is a judgement the owner keeps. The fixtures' new owners
+(`test/packs/split-inputs.ts`) now give their answers. Not applicable and none write nothing, so the measured costs
+above are unchanged.
