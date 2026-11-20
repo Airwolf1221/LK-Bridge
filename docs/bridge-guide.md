@@ -787,6 +787,13 @@ never a decision.
 - `summary` for each section that leaves a source that survives: a short interface summary; the bridge adds the exact link.
 - `dependencies`: each page that depends on the source, to the new owner it actually needs. `retire: true` (archive the
   source once phase 1 has verified) needs every one of them.
+- **Each new owner complete.** When the source has Source Boundaries or Unresolved Material, each new owner addresses
+  each one: move items of it there in the `map` (they go under that heading), give your own text (`sourceBoundaries`,
+  `unresolvedMaterial`, Markdown), or say it does not apply, with a reason the owner reads in the proposal
+  (`notApplicable: { "sourceBoundaries": "…" }`); never leave it out (`SPLIT_SECTIONS_UNADDRESSED`). The bridge never
+  writes these sections for you. Give each new owner its own Dependencies: start from the source's own (the dry run's
+  `completeness.suggestedDependencies`) and keep only those it relies on; when it has none, say why
+  (`noDependencies: { "reason": "…" }`; otherwise `SPLIT_DEPENDENCIES_UNADDRESSED`).
 
 **Refused before anything is proposed, with lists:** a block unassigned or assigned twice (`SPLIT_COVERAGE`), a section
 listed twice (`SPLIT_DUPLICATED_AUTHORITY`), images going to a page that is not an Art or visual owner (`SPLIT_VISUAL`),
@@ -809,7 +816,8 @@ owner resumes or reverts it on the dashboard. **Phase 2**, with `retire: true`, 
 left out: the bridge proposes archiving the source with `archive_page`, a separate canonical proposal. The split never
 deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it, and
 its `verified` is the job's own verification: a job that ran to its end but read back a difference leaves the split
-`unverified` (nothing is retired; tell the owner, who looks at the job's differences). A
+`unverified` (nothing is retired; tell the owner, who looks at the job's differences). Its `nextSteps` (also in the dry
+run and the proposal) list what is still owed afterwards, each with its tool: tell the owner, and do each only when asked. A
 destination the owner left out is not proposed again from the old plan: when the owner asks, split what is left as a
 new split, on the source as it is now. A source holding an inline icon cannot be split (`SPLIT_NOT_WRITABLE`: the split
 writes the source back whole); ask the owner to remove the icon first.
@@ -851,7 +859,7 @@ owner approves, the job first checks the policy is still the audit's (otherwise 
 audit; audit again"), then for each page reads it fresh: a page whose tags changed since the audit is **conflicted** and
 skipped (never rebased), one whose facts changed is **held**, one already right is **already compliant**, one gone is
 **inaccessible**; the rest are written and read back (the tags exactly; each page document's body by its version;
-other documents by their metadata timestamps only). Last Major Revision is never set.
+each board, map and timeline document by its content). Last Major Revision is never set.
 
 **Reconciliation**, for a long run of batches: `arkona_retag_audit { "reconciliation": "First pass", "all": true }`
 starts a named record (a first audit, free); `arkona_retag_apply { "reconciliation": "First pass" }` audits what remains

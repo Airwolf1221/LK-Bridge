@@ -30,12 +30,20 @@ import type { RowTexts, SortKey } from './table.js';
 
 type Obj = Record<string, unknown>;
 
+/**
+ * The owner's sandbox run (X5): one block id can be in two documents of one page, so a row is known by its table
+ * document and its id together, never by its id alone (each age has its own table document).
+ */
+export function rowKey(documentId: string, rowId: string): string {
+  return `${documentId}:${rowId}`;
+}
+
 /** What the plan needs to know about each write beyond the target (from the documents as read now). */
 export interface WriteContext {
   /** The table block id of each table document touched. */
   readonly tableIds: Readonly<Record<string, string>>;
   readonly mainTableId: string;
-  /** Per inserted or replaced row: its date's sort key and date, and its description's text. */
+  /** Per inserted or replaced row (by `rowKey`): its date's sort key and date, and its description's text. */
   readonly rows: Readonly<
     Record<
       string,
@@ -54,7 +62,7 @@ export interface WriteContext {
   readonly events: Readonly<Record<string, Obj>>;
   /** Resuming: the Main count each count write must still find (its write was not made). */
   readonly expectBefore?: Readonly<Record<string, number>>;
-  /** Rows whose date changes (their place may too): moved before they are replaced. */
+  /** Rows (by `rowKey`) whose date changes (their place may too): moved before they are replaced. */
   readonly moves?: ReadonlySet<string>;
   /**
    * CR-2026-11-R2 (R2-16): a revert's rows, whole: each row it deletes or replaces must still be exactly this block inside
@@ -205,8 +213,8 @@ export function buildJob(o: {
         break;
       }
       case 'row.insert': {
-        const r = o.ctx.rows[w.rowId]!;
-        const key = `row:${w.rowId}`;
+        const r = o.ctx.rows[rowKey(w.documentId, w.rowId)]!;
+        const key = `row:${rowKey(w.documentId, w.rowId)}`;
         pushTableOp(w.documentId, {
           op: 'insert',
           key,
@@ -232,7 +240,7 @@ export function buildJob(o: {
         break;
       }
       case 'row.delete': {
-        const block = o.ctx.rowBlocks?.[w.rowId];
+        const block = o.ctx.rowBlocks?.[rowKey(w.documentId, w.rowId)];
         pushTableOp(w.documentId, {
           op: 'delete',
           rowId: w.rowId,
@@ -254,9 +262,11 @@ export function buildJob(o: {
         break;
       }
       case 'row.replace': {
-        const r = o.ctx.rows[w.rowId]!;
-        const moveKey = o.ctx.moves?.has(w.rowId) ? `move:${w.rowId}` : undefined;
-        const block = o.ctx.rowBlocks?.[w.rowId];
+        const r = o.ctx.rows[rowKey(w.documentId, w.rowId)]!;
+        const moveKey = o.ctx.moves?.has(rowKey(w.documentId, w.rowId))
+          ? `move:${rowKey(w.documentId, w.rowId)}`
+          : undefined;
+        const block = o.ctx.rowBlocks?.[rowKey(w.documentId, w.rowId)];
         pushTableOp(w.documentId, {
           op: 'replace',
           rowId: w.rowId,

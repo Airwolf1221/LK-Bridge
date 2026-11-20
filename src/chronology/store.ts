@@ -629,7 +629,10 @@ export class ChronologyStore {
       if (!ev || ev.kind !== 'event.create') continue;
       const name = typeof ev.body.name === 'string' ? ev.body.name : '';
       const row = t.writes.find(
-        (w) => (w.kind === 'row.assert' || w.kind === 'row.insert') && w.rowId === l.rowId,
+        (w) =>
+          (w.kind === 'row.assert' || w.kind === 'row.insert') &&
+          w.rowId === l.rowId &&
+          w.documentId === l.tableDocumentId, // X5: a row id is its table document's
       );
       const cell = row && (row.kind === 'row.assert' || row.kind === 'row.insert') ? row.texts.date : null;
       const split = splitNameTail(name);

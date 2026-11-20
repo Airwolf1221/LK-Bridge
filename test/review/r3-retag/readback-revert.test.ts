@@ -34,6 +34,7 @@ const P = {
   revRenamed: 'r3rev002',
   revMoved: 'r3rev003',
   revTags: 'r3rev004',
+  board: 'r3brd001',
 } as const;
 
 let w: R3World;
@@ -46,6 +47,7 @@ beforeAll(async () => {
     [P.revRenamed]: 'Rev Renamed',
     [P.revMoved]: 'Rev Moved',
     [P.revTags]: 'Rev Tags',
+    [P.board]: 'Board Page',
   };
   w = await r3World(
     Object.entries(names).map(([id, n]) => ({
@@ -123,6 +125,37 @@ describe('the read-back: "documents unchanged"', () => {
     expect(d).toMatchObject({ outcome: 'applied', verified: false });
     // CR-2026-11-R3 fix C renamed the comparison "documents' metadata (…) unchanged" (and added the bodies by version).
     expect(d.differences?.join(' ')).toMatch(/documents' metadata .* unchanged|body unchanged/);
+  });
+});
+
+describe('the read-back of a board (the owner\u2019s sandbox run, X6)', () => {
+  it('RT-84: a board edited during the job, its timestamps unmoved (as LegendKeeper does), is noticed by its content', async () => {
+    // X6: getResource's updatedAt does not move on a content edit. The board's content is compared, not a timestamp.
+    const boardId = w.repo.outside.addDocument(P.board, 'Plot', 'board').id;
+    const board = {
+      version: 1,
+      content: { shapes: [{ id: 'sh1', type: 'note', text: 'Harbour' }], bindings: [], assets: [] },
+    };
+    w.overrides.set(new RegExp(`/docs/${boardId}/board$`), (req: MockRequest): MockResponse | undefined =>
+      req.method === 'GET'
+        ? { status: 200, body: { version: String(board.version), ...board.content } }
+        : undefined,
+    );
+    const p = await propose(w, runId, [P.board]);
+    let edited = false;
+    w.overrides.set(new RegExp(`/resources/${P.board}$`), (req) => {
+      if (!edited && req.method === 'PATCH') {
+        edited = true;
+        // An edit in the app between the fresh read and the read-back: a shape changed; nothing in getResource moves.
+        board.content = { ...board.content, shapes: [{ id: 'sh1', type: 'note', text: 'Harbour (burnt)' }] };
+      }
+      return undefined;
+    });
+    await approve(w, p.proposalId);
+    expect(edited).toBe(true);
+    const d = batchOf(w, p.proposalId)!.dispositions![P.board]!;
+    expect(d, JSON.stringify(d)).toMatchObject({ outcome: 'applied', verified: false });
+    expect(d.differences?.join(' ')).toContain(`document ${boardId} content unchanged`);
   });
 });
 

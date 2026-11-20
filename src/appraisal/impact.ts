@@ -160,7 +160,8 @@ export async function impactOf(ctx: ImpactContext, effect: PlannedEffect): Promi
       });
       continue;
     }
-    mentionedIn.add(`${r.from_page}:${r.from_block ?? ''}`);
+    // X5: one block id can be in two documents of a page: a block is its document's.
+    mentionedIn.add(`${r.from_page}:${r.from_document ?? ''}:${r.from_block ?? ''}`);
     const label = (r.label ?? '').trim();
     const chronology = r.from_document !== null && ctx.chronologyDocuments.has(r.from_document);
     const labelMatches = label !== '' && oldNames.has(textKey(label));
@@ -208,7 +209,7 @@ export async function impactOf(ctx: ImpactContext, effect: PlannedEffect): Promi
   const perPage = new Map<string, number>();
   for (const h of hits) {
     if (h.unit === 'name' || h.unit === 'alias') continue; // another page of the same name is not a restatement
-    if (mentionedIn.has(`${h.pageId}:${h.blockId ?? ''}`)) continue; // already listed as a mention
+    if (mentionedIn.has(`${h.pageId}:${h.documentId ?? ''}:${h.blockId ?? ''}`)) continue; // already listed as a mention
     const chronology = h.documentId !== null && ctx.chronologyDocuments.has(h.documentId);
     if (!chronology) {
       const n = perPage.get(h.pageId) ?? 0;

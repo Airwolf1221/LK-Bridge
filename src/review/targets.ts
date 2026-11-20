@@ -24,6 +24,7 @@ import type { JobView, OpParams, StepOptions } from '../jobs/types.js';
 import { BLOCKWISE_CHECK, applyBlockOps, stepOp, withoutVersions } from '../pages/blockwise.js';
 import type { ChronologyRecord, TargetWrite } from '../chronology/store.js';
 import { remadeEventBody } from '../chronology/event-body.js';
+import { rowKey } from '../chronology/plan.js';
 import { mintClientId } from '../jobs/ids.js';
 
 type Obj = Record<string, unknown>;
@@ -187,6 +188,7 @@ export interface ChronologyUnitTarget extends Common {
   /** The writes that put it back, in the chronology tools' own form (rows, events and counts, in step). */
   readonly inverse: readonly TargetWrite[];
   /** For each row the inverse writes back: the block it held before the job (its journal pre-image). */
+  /** By `rowKey(documentId, rowId)` (X5: a row id is unique only within its table document). */
   readonly oldRows: Readonly<Record<string, Obj>>;
   /** For each event the inverse updates: its fields before the job. */
   readonly oldEvents: Readonly<Record<string, Obj>>;
@@ -194,6 +196,7 @@ export interface ChronologyUnitTarget extends Common {
    * CR-2026-11-R2 (R2-16): for each row the job wrote (added or changed), its block as the job left it: Revert compares the
    * row whole (links, marks, inline icons), not only its words.
    */
+  /** By `rowKey(documentId, rowId)`. */
   readonly leftRows: Readonly<Record<string, Obj>>;
   /**
    * CR-2026-11-R2 (R2-16): for each event the job made or changed, the event as LegendKeeper answered the job's write (every
@@ -1036,12 +1039,18 @@ function chronologyUnit(
     switch (w.kind) {
       case 'row.delete': {
         // The row moved to another age: it comes back where it was, as it was (its block, kept by the delete).
-        const step = mine.find((s) => s.opId === 'deleteBlock' && s.params.path?.blockId === w.rowId);
+        // X5: one block id can be in two documents of a page: the row is its table document's.
+        const step = mine.find(
+          (s) =>
+            s.opId === 'deleteBlock' &&
+            s.params.path?.blockId === w.rowId &&
+            s.params.path?.documentId === w.documentId,
+        );
         const old = step ? preOf(step.stepNo) : null;
         if (!isObj(old))
           return refuse(`the table row ${w.rowId} as it was before the change is not in the journal`);
         const block = withoutVersions([old])[0]!;
-        oldRows[w.rowId] = block;
+        oldRows[rowKey(w.documentId, w.rowId)] = block;
         inverse.push({
           kind: 'row.insert',
           age: w.age,
@@ -1082,12 +1091,17 @@ function chronologyUnit(
         });
         break;
       case 'row.replace': {
-        const step = mine.find((s) => s.opId === 'replaceBlock' && s.params.path?.blockId === w.rowId);
+        const step = mine.find(
+          (s) =>
+            s.opId === 'replaceBlock' &&
+            s.params.path?.blockId === w.rowId &&
+            s.params.path?.documentId === w.documentId,
+        );
         const old = step ? preOf(step.stepNo) : null;
         if (!isObj(old))
           return refuse(`the table row ${w.rowId} as it was before the change is not in the journal`);
         const block = withoutVersions([old])[0]!;
-        oldRows[w.rowId] = block;
+        oldRows[rowKey(w.documentId, w.rowId)] = block;
         inverse.push({
           kind: 'row.replace',
           age: w.age,
@@ -1144,7 +1158,7 @@ function chronologyUnit(
   const leftEvents: Record<string, Obj | null> = {};
   for (const w of record.target.writes) {
     if ((w.kind === 'row.insert' || w.kind === 'row.replace') && isObj(w.block))
-      leftRows[w.rowId] = withoutVersions([w.block])[0]!;
+      leftRows[rowKey(w.documentId, w.rowId)] = withoutVersions([w.block])[0]!;
     if (w.kind === 'event.create' || w.kind === 'event.update') {
       const last = [...mine]
         .reverse()

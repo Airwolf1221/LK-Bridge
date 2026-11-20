@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased: split completeness, and the owner's run of the third review's sandbox checks (19 November 2026)
+
+Two items from the owner's tests, after R3 was merged and deployed. No migration; deploy normally. Agents' splits now
+answer for each new owner's Source Boundaries, Unresolved Material and Dependencies (below), so a map that worked before
+may be refused until it does.
+
+- **A split's new owners are complete** ([ADR 0059 amendment 1](adr/0059-v3-f3e-splits.md#amendment-1-a-splits-new-owners-are-complete)).
+  When the source has Source Boundaries or Unresolved Material, each new owner addresses each:
+  - items of it moved there, which go under that section's own heading;
+  - the agent's text, in new optional fields like `purpose`: `sourceBoundaries` and `unresolvedMaterial`;
+  - `notApplicable` with a reason, which the proposal shows the owner on the destination's item.
+
+  Otherwise the plan is refused with `SPLIT_SECTIONS_UNADDRESSED`. The bridge never writes these sections' content
+  itself. The plan suggests the source's own Dependencies as each new owner's starting list
+  (`completeness.suggestedDependencies`). An empty list needs `noDependencies: { reason }`; otherwise the plan is
+  refused with `SPLIT_DEPENDENCIES_UNADDRESSED`. Contradictory answers are refused with `SPLIT_COMPLETENESS_CONFLICT`.
+  The plan, the proposal and the split's `report` list what is still owed under `nextSteps`, each with its tool:
+  - a section the surviving source gave away whole (`write_page`);
+  - an unmapped page depending on the surviving source (`set_facts`);
+  - each new owner's "not applicable" and "none" answers.
+
+  A split's new owner passes the appraisal's `boundaries_missing` rule (tested, read live).
+
+- **X6: the retag read-back compares content, not timestamps.** `getResource`'s `updatedAt` does not move on a content
+  edit (the owner's run), so the read-back's fingerprint no longer uses any document timestamp:
+  - a page document is compared by its block version;
+  - a board, map or timeline document by a hash of its content, as the snapshots take it (2 more reads for a board,
+    4 for a map, 6 or more for a timeline).
+
+  This was the one check that used a resource-level timestamp as a content-change signal; the bridge's other
+  `updatedAt` uses are its own tables' or are left out of hashes. Corrects ADR 0060 and ADR 0061 decision 8.
+
+- **X2: a label the bridge wrote is compared.** A custom mention label inside a table cell is kept as sent, so the
+  generic verify (and the sidebar check) now ignores a mention's `name` always, and its `text` only where the bridge
+  sent none (LegendKeeper filled it in). A label the bridge wrote is compared. ADR 0061 decision 11's rationale is
+  corrected.
+- **X5: block lookups are per document.** One block id can exist in two documents of one page. Chronology rows and
+  moves, their Revert targets, the rename tool's chronology items (`chronology:<document>:<row>`) and the appraisal's
+  change impact are now keyed by (document, block), never by the block alone. The journal lookup's guidance asks for the
+  document too.
+- **New sandbox check** (written, not run): `test/sandbox/assumptions-r4.test.ts`, for the owner:
+  - Y1: whether a board's, a map's and a timeline's own timestamps move on an edit (NOTED), and that their content
+    shows it;
+  - Y2: a custom label, in a paragraph and in a table cell, kept and verified;
+  - Y3: one block id in two documents, read and edited per document.
+
+  Run it with:
+
+  ```bash
+  sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- assumptions-r4
+  ```
+
 ## Unreleased: ADR 0061 accepted, the third review's owner decisions built (19 November 2026)
 
 The owner confirmed all eleven choices of [ADR 0061](adr/0061-cr-2026-11-r3-decisions.md) part A and decided part B:

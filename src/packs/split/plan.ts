@@ -123,7 +123,24 @@ export interface SplitDestinationInput {
   readonly scope?: string | undefined;
   /** A new owner's Purpose (Markdown; `## Purpose` is added when it has no heading). */
   readonly purpose?: string | undefined;
+  /**
+   * A new owner's Dependencies. ADR 0059 amendment 1: the source's own Dependencies are its starting list (the plan
+   * suggests them; the agent keeps those it relies on); an empty list needs `noDependencies` with a reason.
+   */
   readonly dependencies?: readonly string[] | undefined;
+  /** ADR 0059 amendment 1: a new owner with no Dependencies says so, with a reason the proposal shows the owner. */
+  readonly noDependencies?: { readonly reason: string } | undefined;
+  /**
+   * ADR 0059 amendment 1: a new owner's Source Boundaries and Unresolved Material, supplied by the agent (Markdown; the
+   * section's heading is added when the text has none). With items moved to it from the source's own section, the text
+   * follows them. The bridge never writes these sections' content itself.
+   */
+  readonly sourceBoundaries?: string | undefined;
+  readonly unresolvedMaterial?: string | undefined;
+  /** ADR 0059 amendment 1: the section does not apply to this new owner, with a reason the proposal shows the owner. */
+  readonly notApplicable?:
+    | { readonly sourceBoundaries?: string | undefined; readonly unresolvedMaterial?: string | undefined }
+    | undefined;
   readonly related?: readonly string[] | undefined;
   // An existing owner, or an existing relationship owner: the page; the heading the material goes under.
   readonly page?: string | undefined;
@@ -227,6 +244,13 @@ export interface SplitPlan {
     readonly chronology: readonly { page: { id: string; name: string }; snippet: string | null }[];
   };
   readonly summaries: readonly { readonly section: string; readonly to: string; readonly text: string }[];
+  /**
+   * ADR 0059 amendment 1: how each new owner addresses the source's Source Boundaries and Unresolved Material, and its
+   * Dependencies; the source's own Dependencies, each new owner's starting list.
+   */
+  readonly completeness: SplitCompleteness;
+  /** ADR 0059 amendment 1: what is still owed once the split has run (sections, Dependencies), each with its tool. */
+  readonly nextSteps: readonly SplitNextStep[];
   readonly indexEntries: readonly { readonly index: string; readonly line: string }[];
   /** Block ids: how many moved blocks keep theirs, and those that cannot move (LegendKeeper cannot create them). */
   readonly ids: { readonly kept: number; readonly note: string };
@@ -245,6 +269,32 @@ export interface SplitPlan {
   readonly summary: string;
   readonly prefetched: { op: string; path: Record<string, string>; body: unknown }[];
   readonly operations: Obj[];
+}
+
+/** ADR 0059 amendment 1: the frame sections a new owner addresses (the input field, and the section's heading). */
+export type FrameField = 'sourceBoundaries' | 'unresolvedMaterial';
+
+export interface SplitCompleteness {
+  /** The source's own Dependencies: each new owner's starting list (the agent keeps those it relies on). */
+  readonly suggestedDependencies: readonly { readonly id: string; readonly name: string }[];
+  readonly owners: readonly {
+    readonly key: string;
+    readonly page: { readonly id: string; readonly name: string } | null;
+    readonly sections: readonly {
+      readonly section: string;
+      /** `moved` (items from the source's own section), `supplied` (the agent's text), both, or not applicable. */
+      readonly by: 'moved' | 'supplied' | 'moved and supplied' | 'not applicable';
+      readonly reason?: string;
+    }[];
+    readonly dependencies: { readonly count: number } | { readonly none: string };
+  }[];
+}
+
+export interface SplitNextStep {
+  readonly page: { readonly id: string; readonly name: string } | null;
+  readonly what: string;
+  /** The tool that does it. */
+  readonly tool: string;
 }
 
 /** CR-2026-11-R3 (R3-66): a split's in-place upgrade of its Compact source to the Character Core (what Revert undoes). */
@@ -1194,8 +1244,121 @@ export async function planSplit(
       ),
     );
 
+  // ---------------------------------------------------------------------------------------------- completeness
+  // ADR 0059 amendment 1 (the owner's tests, 19 November 2026). Source Boundaries and Unresolved Material: when the source
+  // has either section, each new owner addresses it, by items moved to it from that section (they go under the section's
+  // own heading), by text the agent supplies, or as not applicable with a reason the proposal shows the owner. The bridge
+  // never writes these sections' content itself. Dependencies: the source's own are each new owner's starting list; an
+  // empty list is an explicit "none" with a reason.
+  const warnAll = [
+    ...(rules.owners?.text.warnMissing ?? []),
+    ...rules.types.flatMap((t) => t.roles.flatMap((r) => r.warnMissing)),
+  ];
+  const frame: { field: FrameField; title: string }[] = [
+    {
+      field: 'sourceBoundaries',
+      title: warnAll.find((h) => textKey(h) !== textKey(unresolvedHeading)) ?? 'Source Boundaries',
+    },
+    { field: 'unresolvedMaterial', title: unresolvedHeading },
+  ];
+  const frameHeadings = (title: string) => o.headings.filter((h) => textKey(h.title) === textKey(title));
+  const frameBlocks = (title: string) => new Set(frameHeadings(title).flatMap((h) => h.blockIds));
+  const newOwners = [...dests.values()].filter((r) => r.isNew && r.d.kind !== 'universal');
+  // A frame section's blocks moved to a new owner without their heading (and without an `under`) go under the section's
+  // own heading there, so the new owner has the section.
+  for (const f of frame) {
+    const heads = frameHeadings(f.title).map((h) => h.id);
+    for (const id of frameBlocks(f.title)) {
+      const list = assigned.get(id);
+      const a = list?.[0];
+      if (!a || (a.under ?? '').trim() !== '') continue;
+      const r = dests.get(a.to);
+      if (!r || !newOwners.includes(r) || heads.some((h) => toOf(h) === a.to)) continue;
+      assigned.set(id, [{ ...a, under: f.title }, ...list.slice(1)]);
+    }
+  }
+  /** Whether the source's section `f` reaches the new owner `key` as a section (its heading, or blocks under it). */
+  const movedFrame = (key: string, f: { title: string }): boolean => {
+    const heads = new Set(frameHeadings(f.title).map((h) => h.id));
+    return [...frameBlocks(f.title)].some(
+      (id) =>
+        toOf(id) === key &&
+        ([...heads].some((h) => toOf(h) === key) ||
+          textKey(assigned.get(id)?.[0]?.under ?? '') === textKey(f.title)),
+    );
+  };
+  const nodeName = (id: string) => ctx.tree.node(projectId, id).data?.rawName ?? id;
+  const suggestedDependencies = [...depIds].map((id) => ({ id, name: nodeName(id) }));
+  const completenessOwners: SplitCompleteness['owners'][number][] = [];
+  const unaddressed: { destination: string; section: string }[] = [];
+  const noDeps: string[] = [];
+  const conflicts: string[] = [];
+  for (const r of newOwners) {
+    const key = r.d.key;
+    const sections: SplitCompleteness['owners'][number]['sections'][number][] = [];
+    for (const f of frame) {
+      const moved = movedFrame(key, f);
+      const supplied = (r.d[f.field] ?? '').trim() !== '';
+      const na = (r.d.notApplicable?.[f.field] ?? '').trim();
+      if (na !== '' && (moved || supplied)) {
+        conflicts.push(
+          `${key}: “${f.title}” is marked not applicable but ${moved ? 'items of it move there' : 'its text is given'}`,
+        );
+        continue;
+      }
+      if (na !== '') sections.push({ section: f.title, by: 'not applicable', reason: na });
+      else if (moved || supplied)
+        sections.push({
+          section: f.title,
+          by: moved && supplied ? 'moved and supplied' : moved ? 'moved' : 'supplied',
+        });
+      else if (frameBlocks(f.title).size > 0) unaddressed.push({ destination: key, section: f.title });
+    }
+    const listed =
+      (r.d.dependencies ?? []).length +
+      [...dests.values()].filter((u) => u.d.kind === 'universal' && u.universalIn === key && u.universalOwner)
+        .length;
+    const none = (r.d.noDependencies?.reason ?? '').trim();
+    if (listed > 0 && none !== '')
+      conflicts.push(`${key}: Dependencies are listed and also said to be none (noDependencies)`);
+    else if (listed === 0 && none === '') noDeps.push(key);
+    completenessOwners.push({
+      key,
+      page: null,
+      sections,
+      dependencies: none !== '' && listed === 0 ? { none } : { count: listed },
+    });
+  }
+  if (unaddressed.length > 0) {
+    const titles = [...new Set(unaddressed.map((u) => u.section))];
+    refusals.push(
+      issue(
+        'SPLIT_SECTIONS_UNADDRESSED',
+        `${node.rawName} has ${titles.map((t) => `“${t}”`).join(' and ')}, and each new owner addresses ${titles.length === 1 ? 'it' : 'each'}: ${unaddressed.map((u) => `${u.destination} (${u.section})`).join(', ')} ${unaddressed.length === 1 ? 'does' : 'do'} not. For each: move its items from the source to the new owner (map; they go under that heading), give its text (${frame.map((f) => f.field).join(' / ')}, Markdown), or mark it not applicable with a reason the owner reads in the proposal (notApplicable: { ${frame[0]!.field}: "…" }). The bridge never writes these sections itself.`,
+        { unaddressed, fields: Object.fromEntries(frame.map((f) => [f.title, f.field])) },
+      ),
+    );
+  }
+  if (noDeps.length > 0)
+    refusals.push(
+      issue(
+        'SPLIT_DEPENDENCIES_UNADDRESSED',
+        `${noDeps.join(', ')} would have no Dependencies. Start from ${node.rawName}'s own (${suggestedDependencies.map((d) => d.name).join(', ') || 'none listed'}) and keep those the new owner relies on (dependencies), or say there are none, with a reason the owner reads in the proposal (noDependencies: { reason }).`,
+        { destinations: noDeps, suggested: suggestedDependencies },
+      ),
+    );
+  if (conflicts.length > 0)
+    refusals.push(
+      issue(
+        'SPLIT_COMPLETENESS_CONFLICT',
+        `${conflicts.join('; ')}. Give one answer for each: the material, or the reason it does not apply.`,
+        { conflicts },
+      ),
+    );
+
   const partial = (): Obj => ({
     source: { id: node.id, name: node.rawName, kind: character ? 'character' : 'owner' },
+    suggestedDependencies,
     retire,
     sections: o.headings
       .filter((h) => h.top === h.id)
@@ -1353,6 +1516,8 @@ export async function planSplit(
     const universal: string[] = [];
     const heads = new Set<string>();
     const doneUniversal = new Set<string>();
+    /** Where the last block moved from each frame section ends in `out`. */
+    const lastFrame = new Map<FrameField, number>();
     for (const id of o.order) {
       const to = toOf(id);
       const u = dests.get(to);
@@ -1376,6 +1541,21 @@ export async function planSplit(
       }
       out.push(copy(o.byId.get(id)!));
       moved.push(id);
+      for (const f of frame) if (frameBlocks(f.title).has(id)) lastFrame.set(f.field, out.length);
+    }
+    // ADR 0059 amendment 1: the agent's text for a frame section, after the items moved under it, else at the end under
+    // the section's heading (added when the text has none). Later positions first, so the earlier ones still hold.
+    const dest = dests.get(key);
+    if (dest && newOwners.includes(dest)) {
+      const given = frame
+        .map((f) => ({ f, text: (dest.d[f.field] ?? '').trim(), at: lastFrame.get(f.field) ?? -1 }))
+        .filter((x) => x.text !== '');
+      for (const x of given.filter((g) => g.at >= 0).sort((a, b) => b.at - a.at))
+        out.splice(x.at, 0, ...md(x.text, `${key}: ${x.f.field}`));
+      for (const x of given.filter((g) => g.at < 0))
+        out.push(
+          ...md(/^#{1,6}\s/.test(x.text) ? x.text : `## ${x.f.title}\n\n${x.text}`, `${key}: ${x.f.field}`),
+        );
     }
     return { blocks: out, moved, universal };
   };
@@ -2036,6 +2216,61 @@ export async function planSplit(
   const allLabels = ['check', ...labels];
 
   // ---------------------------------------------------------------------------------------------- the items
+  /** ADR 0059 amendment 1: a new owner's "not applicable" and "no Dependencies" answers, with their reasons (shown). */
+  const choicesOf = (key: string): string => {
+    const c = completenessOwners.find((x) => x.key === key);
+    if (!c) return '';
+    const parts = [
+      ...c.sections
+        .filter((x) => x.by === 'not applicable')
+        .map((x) => `“${x.section}” not applicable: “${(x.reason ?? '').slice(0, 300)}”`),
+      ...('none' in c.dependencies ? [`no Dependencies: “${c.dependencies.none.slice(0, 300)}”`] : []),
+    ];
+    return parts.join('; ');
+  };
+  /**
+   * ADR 0059 amendment 1: what is still owed once the split has run, each with the tool that does it: a frame section
+   * the surviving source gave away whole, pages that depend on the surviving source and may need a new owner instead, and
+   * each new owner's "not applicable" and "no Dependencies" answers (to revisit if they change).
+   */
+  const nextStepsOf = (): SplitNextStep[] => {
+    const out: SplitNextStep[] = [];
+    const src = { id: node.id, name: node.rawName };
+    if (!retire)
+      for (const f of frame) {
+        const b = [...frameBlocks(f.title)];
+        if (b.length > 0 && b.every((id) => toOf(id) !== STAYS))
+          out.push({
+            page: src,
+            what: `${node.rawName} keeps no “${f.title}” (all of it moved): write its own for what stays, or leave it out where it no longer applies.`,
+            tool: 'write_page',
+          });
+      }
+    if (!retire)
+      for (const x of unmapped.slice(0, 20))
+        out.push({
+          page: x,
+          what: `${x.name} depends on ${node.rawName}: if it relies on material that moved, add the new owner to its Dependencies (and remove ${node.rawName} if nothing it relies on stayed).`,
+          tool: 'set_facts',
+        });
+    for (const c of completenessOwners) {
+      const page = dests.get(c.key)?.page ?? null;
+      const name = page?.name ?? c.key;
+      for (const x of c.sections.filter((y) => y.by === 'not applicable'))
+        out.push({
+          page,
+          what: `${name} has no “${x.section}” (not applicable: “${(x.reason ?? '').slice(0, 300)}”): add it if that changes.`,
+          tool: 'write_page',
+        });
+      if ('none' in c.dependencies)
+        out.push({
+          page,
+          what: `${name} has no Dependencies (“${c.dependencies.none.slice(0, 300)}”): add them when it comes to rely on another owner.`,
+          tool: 'set_facts',
+        });
+    }
+    return out;
+  };
   const destItems: PlanItem[] = [];
   for (const r of dests.values()) {
     const sections = [...new Set((blocksTo.get(r.d.key) ?? []).map((id) => titleOfTop(topOf(id))))];
@@ -2077,7 +2312,7 @@ export async function planSplit(
       id: r.d.item,
       kind: r.isNew ? 'split_new_owner' : 'split_existing_owner',
       group: SPLIT_GROUPS.destinations,
-      label: `${kindWord} ${r.page?.name ?? r.d.key}: ${sections.map((x) => `“${x}”`).join(', ')} (${n} block${n === 1 ? '' : 's'}, ${w} words)`,
+      label: `${kindWord} ${r.page?.name ?? r.d.key}: ${sections.map((x) => `“${x}”`).join(', ')} (${n} block${n === 1 ? '' : 's'}, ${w} words)${choicesOf(r.d.key) ? `; ${choicesOf(r.d.key)}` : ''}`,
       page: r.page,
       diff: {
         before: null,
@@ -2087,6 +2322,7 @@ export async function planSplit(
           .slice(0, 8000),
         context:
           leftOut +
+          (choicesOf(r.d.key) ? ` The agent's answers, for the owner to judge: ${choicesOf(r.d.key)}.` : '') +
           removedHere
             .map(
               (u) =>
@@ -2230,6 +2466,11 @@ export async function planSplit(
       summaries: [...summaries]
         .sort((a, b) => a.at - b.at)
         .map(({ section, to, text }) => ({ section, to, text })),
+      completeness: {
+        suggestedDependencies,
+        owners: completenessOwners.map((c) => ({ ...c, page: dests.get(c.key)?.page ?? null })),
+      },
+      nextSteps: nextStepsOf(),
       indexEntries,
       ids: {
         kept:

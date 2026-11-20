@@ -57,15 +57,14 @@ import {
 
 type Obj = Record<string, unknown>;
 /**
- * CR-2026-11-R3 (fix C): a page's disposition when its read-back found nothing different, saying exactly what was
- * compared. A page document's body is compared by its real version (read before and after the write); any other
- * document only by the metadata `getResource` lists, whose `updatedAt` LegendKeeper's governance warns may describe
- * creation or metadata time rather than the body.
+ * CR-2026-11-R3 (fix C), and X6 (the owner's sandbox run: `updatedAt` does not move on a content edit): a page's
+ * disposition when its read-back found nothing different, saying exactly what was compared. A page document's body by
+ * its real version, a board's, map's or timeline's by its content, each read before and after the write.
  */
 export const READ_BACK_VERIFIED =
   'written and read back: the tags exactly as proposed; name, aliases, parentage and sidebar unchanged; each page ' +
-  "document's body at the same version as before the write; other documents (board, map, timeline) compared by " +
-  'their metadata timestamps only, not their content';
+  "document's body at the same version as before the write; each board, map and timeline document's content " +
+  'unchanged';
 
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -650,7 +649,7 @@ export class RetagService {
       });
       labels.push(
         `${v.name}: read back (the array in order; name, aliases, parentage and sidebar unchanged; each page ` +
-          "document's body at the same version; other documents compared by their metadata timestamps only)",
+          "document's body at the same version; each board, map and timeline document's content unchanged)",
       );
       items.push({
         id: item,
@@ -822,8 +821,7 @@ export class RetagService {
         : [];
       out[p.pageId] = {
         outcome: 'applied',
-        // CR-2026-11-R3 (fix C): what the read-back compared, said exactly (a document's updatedAt is a metadata
-        // timestamp, so a board, map or timeline document's body is not claimed unchanged).
+        // CR-2026-11-R3 (fix C), X6: what the read-back compared, said exactly (every document by its content).
         reason:
           status === 'verified'
             ? READ_BACK_VERIFIED

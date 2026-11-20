@@ -66,7 +66,9 @@ that is the owner's.
    a document), not only getResource's metadata: "written and read back: the tags exactly as proposed; name, aliases,
    parentage and sidebar unchanged; each page document's body at the same version as before the write; other documents
    (board, map, timeline) compared by their metadata timestamps only, not their content". A body that cannot be read is
-   reported as a difference, never taken as unchanged.
+   reported as a difference, never taken as unchanged. **Corrected after the owner's sandbox run (X6)**: `updatedAt` does
+   not move on a content edit, so board, map and timeline documents are now compared by their content as well; the
+   disposition says "each board, map and timeline document's content unchanged".
 
 9. **A large job waits for the budget instead of starting over** (R3-62, amends CR-2026-11-R2's R2-29 re-check). A
    check's or a read-back's reads, in a job holding no job-level lock, wait in their queue for the budget however long
@@ -83,13 +85,22 @@ that is the owner's.
     proposal of the pages it made (canon, approved as canon), after them, and only when every page the split made goes.
     Alternative: refuse every such split until the owner upgrades the Reference first (more steps for the same result).
 11. **A split is verified only by its job's verification** (R3-67, the owner's report; amends ADR 0059 decisions 3.10
-    and 4, the verification and what triggers phase 2), and the generic verify compares a mention by its target (`resourceId`, `documentId`), its `name`
-    and `text` being display fields LegendKeeper fills in (amends the ignored fields of ADR 0031 and ADR 0032's generic
-    verify). A job that ran to its end but read back a difference leaves the split `unverified` (new state, migration
-    3800): nothing is retired. Consequence: a mention's custom label is no longer compared by the verify (LegendKeeper's
-    API cannot change a label anyway; the appraisal still reports labelled routing lines). A read-back's property names
-    the Last Major Revision row a step of the same job dates (`datedRowId`), which that step judges. A split resumed
-    after a write that read back a difference stays `unverified` (part B, decision 6).
+    and 4, the verification and what triggers phase 2), and the generic verify compares a mention by its target
+    (`resourceId`, `documentId`), ignoring the display fields LegendKeeper fills in (amends the ignored fields of ADR
+    0031 and ADR 0032's generic verify). A job that ran to its end but read back a difference leaves the split
+    `unverified` (new state, migration 3800): nothing is retired. A read-back's property names the Last Major Revision
+    row a step of the same job dates (`datedRowId`), which that step judges.
+
+    **Rationale corrected after the owner's sandbox run (X2, 19 November 2026).** As first written, this decision said a
+    mention's `text` was a display field LegendKeeper fills in, so a custom label was no longer compared, "LegendKeeper's
+    API cannot change a label anyway". X2 showed that a custom label the bridge sends (inside a table cell too) is kept
+    as sent: the label is content, not a display field. LegendKeeper fills in `name` always (the page's current name,
+    read-only) and `text` only where none was sent. So the verify ignores `name`, ignores `text` only where the bridge
+    sent none (paired in order among the mentions of each list of runs, as LegendKeeper merges text runs), and compares
+    a label the bridge itself wrote (`src/jobs/verify-blocks.ts`; sidebar rows the same way, `sameContent`). R3-67's
+    split still verifies: its job's mentions sent without a label are not compared by one. Test:
+    `test/review/r4/mention-labels.test.ts`. (The "split resumed after a write that read back a difference stays
+    `unverified`" of this decision was changed by part B decision 6.)
 
 ## Part B: the owner's decisions (decided 19 November 2026, built the same day; their tests pass)
 
