@@ -51,7 +51,12 @@ export function governanceAuditHook(o: {
     const rules = reportRulesOf(pack, o.rulesAt);
     if (!rules.governanceAudit) continue;
     const roots = [
-      ...new Set(pack.governance.filter((g) => g.project.toLowerCase() === here).map((g) => g.resourceId)),
+      // v3 F4c: a source found by its page's name (a Design References page) is not on the governance root.
+      ...new Set(
+        pack.governance
+          .filter((g) => g.project.toLowerCase() === here && g.resourceId !== '')
+          .map((g) => g.resourceId),
+      ),
     ];
     if (roots.length === 0) continue;
     const known = o.known();

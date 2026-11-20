@@ -19,7 +19,8 @@
  * reported and never moved; the fix is `move_resource` under the same parent.
  */
 import { outOfOrderAmong } from '../../registry/ordering.js';
-import { contentPages, fact, pathOf, type AuditContext } from '../context.js';
+import { narrativeCompare, parseNarrativeName } from '../../narrative/names.js';
+import { contentPages, isNarrativePage, ownedPages, fact, pathOf, type AuditContext } from '../context.js';
 import type { AuditPage, Ref } from '../model.js';
 import { childrenByRank } from '../snapshot-tree.js';
 import type { FindingDraft } from '../types.js';
@@ -134,7 +135,8 @@ export function referencesCheck(ctx: AuditContext): FindingDraft[] {
 // ============================================================================================ unclassified
 
 export function unclassifiedCheck(ctx: AuditContext): FindingDraft[] {
-  return contentPages(ctx)
+  // v3 F4c: a narrative page has no prefix by design (E2): it is classified by where it sits.
+  return ownedPages(ctx)
     .filter((p) => p.kind === 'unclassified')
     .map((p) => ({
       code: 'unclassified_page' as const,
@@ -150,8 +152,12 @@ export function orderingCheck(ctx: AuditContext): FindingDraft[] {
   const out: FindingDraft[] = [];
   const manual = new Set(ctx.settings.manualOrderIndexes);
   const kids = childrenByRank(ctx.model);
+  // v3 F4c (ADR 0065, design E1): inside Narratives, the Story Map first, then acts and chapters by NUMBER, plans under
+  // their maps by number (a page may be a parent there: the Story Map, an Act Map). Not reported against the ordinary rule.
+  const narrative = ctx.narrative ? narrativeCompare(ctx.narrative.rules) : null;
   for (const parent of ctx.model.pages.values()) {
-    if (parent.kind !== 'index' || manual.has(parent.id)) continue;
+    const inNarratives = narrative !== null && isNarrativePage(ctx, parent.id);
+    if ((parent.kind !== 'index' && !inNarratives) || manual.has(parent.id)) continue;
     const siblings = kids.get(parent.id) ?? [];
     if (siblings.length < 2) continue;
     const orderable = siblings.map((s) => ({
@@ -159,15 +165,21 @@ export function orderingCheck(ctx: AuditContext): FindingDraft[] {
       displayName: s.displayName,
       kind: s.kind as 'index',
     }));
-    const bad = outOfOrderAmong(orderable);
+    const bad = inNarratives ? outOfOrderAmong(orderable, narrative) : outOfOrderAmong(orderable);
     const byId = new Map(siblings.map((s) => [s.id, s]));
     for (const b of bad) {
       const page = byId.get(b.node.id) as AuditPage;
+      // v3 F4c: a Story Map not first is the narrative audit's own finding (narrative_story_map_not_first).
+      if (
+        inNarratives &&
+        parseNarrativeName(ctx.narrative!.rules, page.displayName, false)?.kind === 'storyMap'
+      )
+        continue;
       const now = siblings.findIndex((s) => s.id === page.id);
       out.push({
         code: 'out_of_order',
         pageId: page.id,
-        message: `“${page.rawName}” is out of alphabetical order under “${parent.displayName}”: it belongs ${b.belongsAfter ? `after “${b.belongsAfter.displayName}”` : 'first'}.`,
+        message: `“${page.rawName}” is out of ${inNarratives ? 'narrative order (the Story Map first, then acts and chapters by number)' : 'alphabetical order'} under “${parent.displayName}”: it belongs ${b.belongsAfter ? `after “${b.belongsAfter.displayName}”` : 'first'}.`,
         evidence: {
           parent: { id: parent.id, name: parent.rawName },
           position: now + 1,
@@ -178,8 +190,10 @@ export function orderingCheck(ctx: AuditContext): FindingDraft[] {
         },
         fix: {
           kind: 'move_resource',
-          args: { pageId: page.id, parentId: parent.id },
-          summary: `Re-place ${page.displayName} alphabetically under ${parent.displayName}.`,
+          args: { pageId: page.id, parentId: parent.id, ...(inNarratives ? { order: 'narrative' } : {}) },
+          summary: inNarratives
+            ? `Re-place ${page.displayName} in narrative order under ${parent.displayName}.`
+            : `Re-place ${page.displayName} alphabetically under ${parent.displayName}.`,
         },
       });
     }

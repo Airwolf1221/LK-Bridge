@@ -1,7 +1,12 @@
 import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
+import { findPageByName } from './packs/find-page.js';
 import { ToolListWatch } from './mcp/tool-list.js';
+import { inNarratives, narrativeRulesOf, narrativeScope } from './narrative/scope.js';
+import { narrativeCalendar } from './narrative/calendar.js';
+import { narrativeBlindAppraisal } from './narrative/authority.js';
+import { narrativeCompare } from './narrative/names.js';
 import { governanceAuditHook } from './packs/governance-audit.js';
 import { knownNamesOf } from './mcp/tools/known-names.js';
 import { textRemovalReader } from './policy/text-removal.js';
@@ -416,6 +421,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine,
     projects,
     registry,
+    // v3 F4c (ADR 0065): a governance source given by its page's name (any dash), found in the tree.
+    findPage: (projectId, name) => findPageByName(tree.queries, projectId, name),
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
@@ -425,6 +432,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   } catch (err) {
     log.warn({ err }, 'the setting packs could not be seeded');
   }
+  // v3 F4c (ADR 0065, design E1): inside Narratives, the Story Map comes first and acts and chapters follow by number
+  // (never alphabetically): every tool that places a page there asks the registry for the parent's order.
+  registry.setSiblingOrder((projectId, parentId) => {
+    const scope = narrativeScope(packs, tree.queries, projectId);
+    if (!scope) return null;
+    return inNarratives(scope, tree.queries.node(projectId, parentId).data)
+      ? narrativeCompare(scope.rules)
+      : null;
+  });
   const unregisterPackEngine = registerPackEngine(engine, {
     packs,
     registry,
@@ -805,6 +821,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
     consistency: async (projectId) =>
       consistencyRef.current ? consistencyRef.current.auditItems(projectId) : null,
+    // v3 F4c (ADR 0065): the narrative audit (the `narrative` category) and the narrative pages' exemptions.
+    narrative: (projectId) => {
+      const rules = narrativeRulesOf(packs, projectId);
+      return rules ? { rules, ...narrativeCalendar(chronology, projectId) } : null;
+    },
   });
   audits.start();
   // v3 F3c (ADR 0054): the appraisal tools and the full-text index, over the snapshot overlay, the audits, the asset tree
@@ -839,7 +860,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // and the calendar engine (free); the owner's pick is one proposal (src/consistency/fix.ts).
   const consistency: Consistency = new Consistency({
     db: o.db,
-    appraisal,
+    // v3 F4c (ADR 0065, design E2): the facts index never reads a narrative page (fiction is never canon evidence).
+    appraisal: narrativeBlindAppraisal(
+      appraisal,
+      (projectId) => narrativeRulesOf(packs, projectId)?.indexes.narratives ?? null,
+    ),
     tree,
     registry,
     chronology,

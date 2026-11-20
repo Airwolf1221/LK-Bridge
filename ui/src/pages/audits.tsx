@@ -59,6 +59,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   assets: 'Asset library',
   governance: 'Governance',
   consistency: 'Consistency (dates and identity facts)',
+  narrative: 'Narratives (stories, plans and chapters)',
   audit: 'The audit itself',
 };
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased: v3 F4c, fiction (ADR 0065, 20 November 2026)
+
+From the owner-approved design [design/F4c-fiction.md](design/F4c-fiction.md) (E1 to E10). No migration. **After
+deploying, approve the new pack version `arkona-2026-11-20-f4c` on the Packs page** (it carries the narrative layout, the
+narrative tools' switches and the two fiction Design References pinned by name); until then the narrative tools are not
+listed and the narrative audit reports nothing.
+
+- **The layout as pack data** (`rules.narrative`): Narratives, Continuities and Main CANON found by name; a story's Story
+  Map first; acts `Act <n> - <Title>` with their `Act <n> Map`; chapters `Chapter <n> - <Title>` numbered across the story;
+  plans `Chapter <n> Plan`; inside Narratives the Story Map first, then by number (Act 10 after Act 9), in every tool that
+  places a page and in the ordering audit.
+- **Narrative pages**: no [BSRC] or [BWRK] prefix, no lifecycle (the lifecycle tools refuse them), tagged `Narrative`, the
+  kind and `AU`; exempt from the owner body rules, the completion gate, the split triggers, the tagging grammar and the
+  audits' rules checks; never canon evidence (the facts index never reads them; `arkona_brief` refuses one).
+- **Writing tools** (direct at scope `write`, proposals at `propose`): `arkona_story_create`, `arkona_chapter_plan`,
+  `arkona_chapter_save` (the dateline written from In-world Date; the date read by the calendar; revised in place with
+  `baseVersion`; the Drafting Gate, `overrideGate` with its reason on the Review page; read back word for word),
+  `arkona_chapter_insert` and `arkona_chapter_move` (renumbering as items; more than 10 pages a proposal).
+- **The narrative audit** (category `narrative`, 25 `narrative_*` codes): structure, numbering, plans against chapters,
+  open gates, datelines, backwards dates without `Flashback`, dates outside a span, placeholder text; "Propose a fix" for
+  the mechanical ones (a continuity index, tags, a link, a number, a dateline, the order), always ONE proposal.
+- Governance sources may be found by their page's name (any dash); `plan-baisheng-stories` maps to the narrative tools.
+- `get_bridge_guide` part "Arkona fiction".
+
 ## Unreleased: connected sessions are told when their tool list changes (20 November 2026)
 
 From the owner's report: after approving `arkona-2026-11-20-f4b`, a Claude session connected before the approval kept

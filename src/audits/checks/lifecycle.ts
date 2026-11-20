@@ -36,7 +36,7 @@ import {
   leadingProblem,
   statusTagFor,
 } from '../../lifecycle/tags.js';
-import { contentPages, fact, factAmbiguous, type AuditContext } from '../context.js';
+import { contentPages, ownedPages, fact, factAmbiguous, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
 import { nameKey } from '../model.js';
 import type { FindingCode, FindingDraft } from '../types.js';
@@ -72,7 +72,8 @@ export function lifecycleCheck(ctx: AuditContext): FindingDraft[] {
   const rules = ctx.lifecycleTags ?? DEFAULT_TAG_RULES;
   const au = rules.au;
 
-  for (const p of contentPages(ctx)) {
+  // v3 F4c: narrative pages have no lifecycle (E2).
+  for (const p of ownedPages(ctx)) {
     const node = ctx.snapshotTree.node(p.id);
     if (!node) continue;
     const area = confirmed ? areaOf(node, ids) : null;

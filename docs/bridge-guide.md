@@ -21,12 +21,13 @@ tasks come first and the reference after. The last section, **Operations**, list
 5. **Do not invent.** Names and ids come from `search`, `browse_repository_tree` and `get_resource`; dates from
    `calendar_date`; operation ids from the Operations list. A name that matches several pages is never guessed: pass the id.
 
-**A question about a subject → `arkona_brief` first** (free: its owners, Dependencies, boundaries, chronology and work
-in progress, each labelled by lifecycle); then `search` and `read_document` only for what it points to.
+**A question about a subject → `arkona_brief` first** (free; items labelled by lifecycle); then `search` and `read_document` only for what it points to.
 
 **Every character intake and rename → `arkona_name_check`** (namesakes and the naming culture; never a guessed culture).
 
 **A character at a date → `arkona_as_of`; changing a date → `arkona_consistency` first** (free; never picks a value).
+
+**A story or chapter → part `Arkona fiction`** (save prose with `arkona_chapter_save`).
 
 **Rename a subject → `arkona_rename` (never `update_resource`).** It renames a pack's character, culture, race or other
 subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
@@ -81,7 +82,8 @@ or rejects on the dashboard; nothing is written. `write` writes directly, except
 - `Change facts and links`
 - `Create a page or a character (Working first)`
 - `Setting packs (Arkona)`, and under it `Arkona briefs and names`, `Arkona characters`, `Arkona owners`,
-  `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`, `Arkona retagging`
+  `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`, `Arkona retagging`,
+  `Arkona fiction`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -468,6 +470,41 @@ owner and applies nothing. Never edit the dates yourself to make the pages agree
 
 **`arkona_as_of_coverage`**: how many characters have a birth the calendar can read, a recorded death, attested bounds,
 or none. A report for the owner, never a task list: an unrecorded birth is often deliberate; never invent a date.
+
+### Arkona fiction
+
+Stories live under **Narratives** (found by name), in **Main CANON** or in one index per AU defined under
+**Continuities**. A story is an index; its **first child is its Story Map**; with acts, one act index `Act <n> - <Title>`
+holds its chapters and one `Act <n> Map` under the Story Map holds its plans; without acts, chapters sit in the story and
+plans in the Story Map. **Chapter numbers run across the whole story** (Act 1 holds 1–3, Act 2 holds 4–6), and inside
+Narratives pages are ordered Story Map first, then by number (Act 10 after Act 9). Narrative pages take **no [BSRC] or
+[BWRK] prefix and no lifecycle** (the lifecycle tools refuse them: `NARRATIVE_NO_LIFECYCLE`); they are tagged
+`Narrative`, their kind, and `AU` in an AU's story. They are **never canon evidence**: the briefs and the consistency
+check never read them.
+
+Routine organisation follows your scope (direct at `write`, on the Review page and Revertible; a proposal at `propose`):
+
+- **`arkona_story_create { continuity, title, acts?, span?, principalCharacters? }`**: the story index, its Story Map and
+  (with acts) the act indexes and Act Maps. A continuity index that does not exist yet is refused (the narrative audit
+  proposes it to the owner).
+- **`arkona_chapter_plan { story, number, act?, title?, plannedDate?, pov?, questionGate? }`**: a Chapter Plan under the
+  right map, or that plan's fields updated. Its body is the template's chapter-plan headings: write the planning text
+  with `write_page`. A new plan's **Question Gate** starts `Open`.
+- **The Drafting Gate**: ask the plan's questions, record the answers, then close the gate (`questionGate: "closed"`).
+- **`arkona_chapter_save { story, number, title, inWorldDate, place?, pov, charactersPresent, locations, draftStatus,
+markdown, baseVersion? }`**: saves the prose (the Fiction Writing Reference, 32B). The tool writes the **dateline**
+  itself as the first line (`Isar 27th, 4A 645 · <Place>`): leave yours out (one you put first is replaced).
+  `inWorldDate` must be a date the calendar reads, exact or approximate (`c. 4A 640-645`). A new number makes the chapter
+  and links it with its plan both ways; an existing one is revised **in place**: read it with `read_document` and pass
+  its version as `baseVersion`. An Open Question Gate is refused unless `overrideGate: { reason }` (shown on the Review
+  page). The answer's `readBack` says whether the chapter read back word for word.
+- **`arkona_chapter_insert { story, at, title }`** and **`arkona_chapter_move { story, from, to, act? }`**: renumber every
+  later chapter and plan (names and Chapter Number; mentions follow; prose never changes). More than 10 pages is a
+  proposal the owner approves item by item.
+
+A field a template lacks is never invented: a value you give for one is refused (`TEMPLATE_MISMATCH`, naming it);
+others are skipped and listed (`fieldsNotOnTemplate`). The nightly audit's `narrative` category reports structure,
+numbering, plans against chapters, open gates, datelines and dates; its fixes are the owner's.
 
 ### Arkona characters
 

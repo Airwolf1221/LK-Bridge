@@ -36,8 +36,10 @@ import {
   type AuditContext,
   type Check,
   type IncompleteRecord,
+  type NarrativeAuditInput,
   type RetagAuditHook,
 } from './context.js';
+import { narrativeCompare } from '../narrative/names.js';
 import { AuditError } from './errors.js';
 import { proposeFix as proposeFixVia, type FixResult } from './fixes.js';
 import {
@@ -54,6 +56,7 @@ import { sidebarPiece } from '../snapshots/canonical.js';
 import { classifyName } from '../tree/classify.js';
 import { AuditStore, evidenceHashOf, fingerprintOf, type FindingFilter, type StoredDraft } from './store.js';
 import { consistencyCheck } from './checks/consistency.js';
+import { narrativeCheck } from './checks/narrative.js';
 import type { ConsistencyAuditItem } from './context.js';
 import {
   CODES,
@@ -80,6 +83,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'governance', run: governanceCheck },
   // v3 F4b (ADR 0064): dates and identity facts restated differently on Authoritative pages (Contradictory only).
   { id: 'consistency', run: consistencyCheck },
+  // v3 F4c (ADR 0065): Narratives' layout, numbering, plans and chapters, datelines (report only; mechanical fixes).
+  { id: 'narrative', run: narrativeCheck },
 ];
 
 /**
@@ -131,6 +136,11 @@ export interface AuditDeps {
    * apply here). Free: the consistency service's facts index over the same snapshots.
    */
   readonly consistency?: (projectId: string) => Promise<readonly ConsistencyAuditItem[] | null>;
+  /**
+   * v3 F4c (ADR 0065): the narrative rules of the project's approved pack and the chronology's calendar (null: no
+   * narrative audit; Narratives is then ordinary content).
+   */
+  readonly narrative?: (projectId: string) => NarrativeAuditInput | null;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -463,7 +473,15 @@ export class Audits {
           : c;
     } else {
       r = await proposeFixVia(
-        { engine: this.d.engine as never, now: this.d.now, ...(opts.origin ? { origin: opts.origin } : {}) },
+        {
+          engine: this.d.engine as never,
+          now: this.d.now,
+          ...(opts.origin ? { origin: opts.origin } : {}),
+          narrativeOrder: (() => {
+            const n = this.narrativeInput(projectId);
+            return n ? narrativeCompare(n.rules) : null;
+          })(),
+        },
         projectId,
         f,
         {
@@ -662,6 +680,20 @@ export class Audits {
     }
   }
 
+  /** v3 F4c (ADR 0065): the narrative audit's input for a project, or null. */
+  narrativeInput(projectId: string): NarrativeAuditInput | null {
+    if (!this.d.narrative) return null;
+    try {
+      return this.d.narrative(projectId);
+    } catch (e) {
+      this.d.log?.warn(
+        { err: e, projectId },
+        'the narrative rules could not be read; the narrative audit is skipped',
+      );
+      return null;
+    }
+  }
+
   /** v3 F4a (ADR 0063): the governance check's hook for a project, or null (none, or it could not be worked out). */
   private governanceHook(projectId: string): GovernanceAuditHook | null {
     if (!this.d.governance) return null;
@@ -741,9 +773,11 @@ export class Audits {
         pages: (safeJson(r.pages) as { id: string; name: string }[] | null) ?? [],
       },
     }));
+    const narrative = this.narrativeInput(projectId);
     return makeContext({
       projectId,
       model,
+      ...(narrative ? { narrative } : {}),
       now: this.d.now(),
       treeSettings,
       lifecycle: lifecycleFrom(settings),

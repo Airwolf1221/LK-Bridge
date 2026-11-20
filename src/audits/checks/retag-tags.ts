@@ -16,7 +16,7 @@
 import { canonExemptionOfPage, areaOf } from '../../lifecycle/settings.js';
 import { retagPage, type RetagVerdict } from '../../packs/retag/engine.js';
 import { sameTag } from '../../lifecycle/tags.js';
-import { contentPages, type AuditContext } from '../context.js';
+import { ownedPages, type AuditContext } from '../context.js';
 import type { FindingDraft } from '../types.js';
 
 /** The engine's verdict for every content page of the audit's model (free: the snapshots). */
@@ -26,7 +26,8 @@ export function retagVerdicts(ctx: AuditContext): RetagVerdict[] {
   const lc = ctx.lifecycle;
   const ids = { workingIndexId: lc.workingIndexId, archiveIndexId: lc.archiveIndexId };
   const out: RetagVerdict[] = [];
-  for (const p of contentPages(ctx)) {
+  // v3 F4c: the tagging grammar leaves Narratives alone (E2: the tools set narrative tags).
+  for (const p of ownedPages(ctx)) {
     const node = ctx.snapshotTree.node(p.id);
     if (!node) continue;
     const area = areaOf(node, ids);

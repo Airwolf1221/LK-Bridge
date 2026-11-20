@@ -27,6 +27,7 @@
  * References (ADR 0054's non-current areas) are left out unless `include` names them, and what was left out is counted.
  * A name that resolves to several subjects is refused with the candidates, as `get_resource` refuses one.
  */
+import { inNarratives, narrativeScope } from '../narrative/scope.js';
 import { sidebarFrom } from '../facts/index.js';
 import { collectionsOf, type Collection, type PageReader } from '../appraisal/reader.js';
 import type { AreaKey } from '../appraisal/scope.js';
@@ -99,8 +100,11 @@ export async function topicBrief(
   const include = new Set(o.input.include);
   // The pages left out, by area (each counted once however many owners point at it).
   const leftOut = new Map<AreaKey, Set<string>>();
+  // v3 F4c (ADR 0065, design E2): narrative pages are never authority: never an owner, a dependency or a source here.
+  const narrative = narrativeScope(pd.services?.packs, ctx.tree, ctx.projectId);
   const inScope = (n: TreeNode | null | undefined): boolean => {
     if (!n) return true;
+    if (inNarratives(narrative, n)) return false;
     const a = labels(n).area;
     if (a === null || include.has(a)) return true;
     leftOut.set(a, (leftOut.get(a) ?? new Set<string>()).add(n.id));
@@ -111,6 +115,14 @@ export async function topicBrief(
   const r = resolveSubject(ctx, o.input.subject, labels, include);
   if (!r.ok) return r.result;
   const node = r.node;
+  if (inNarratives(narrative, node))
+    return errorResult(
+      {
+        code: 'NARRATIVE_NOT_AUTHORITY',
+        message: `“${node.displayName}” is a narrative page (under Narratives): fiction is never canon authority (the Fiction Writing Reference, 35). For a chapter’s canon, use arkona_chapter_context; to check a chapter against canon, arkona_chapter_check.`,
+      },
+      pd,
+    );
   const character = ctx.types.characterOfPage(node.id);
   if (character.ok)
     return characterBrief(pd, mctx, {

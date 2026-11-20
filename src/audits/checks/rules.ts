@@ -19,7 +19,7 @@ import * as z from 'zod';
 import { templateBaseKey } from '../../registry/names.js';
 import type { RegistryType } from '../../registry/index.js';
 import type { AuditRule } from '../config.js';
-import { contentPages, fact, factAmbiguous, pathOf, type AuditContext } from '../context.js';
+import { ownedPages, fact, factAmbiguous, pathOf, type AuditContext } from '../context.js';
 import { nameKey, type AuditPage, type PropertySummary } from '../model.js';
 import type { FindingDraft } from '../types.js';
 import { retagTagFindings } from './retag-tags.js';
@@ -395,7 +395,8 @@ export function tagDefinitionOf(ctx: AuditContext): TagDefinition | null {
 export function rulesCheck(ctx: AuditContext): FindingDraft[] {
   const out: FindingDraft[] = [];
   const rules = ctx.rules.filter((r) => r.enabled);
-  const pages = contentPages(ctx).filter((p) => p.kind !== 'unclassified');
+  // v3 F4c: narrative pages follow no owner rule (E2).
+  const pages = ownedPages(ctx).filter((p) => p.kind !== 'unclassified');
 
   // The rule-level problems, once each.
   for (const r of rules) {

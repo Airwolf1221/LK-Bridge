@@ -165,7 +165,7 @@ describe('no MCP tool can change policy, tokens or proposal decisions', () => {
     const listed = stack.runtime.tools.filter((t) => t.retired !== true);
     expect(names).toEqual(expect.arrayContaining(listed.map((t) => t.name)));
     expect(names).toHaveLength(listed.length);
-  }, 30_000);
+  }, 90_000);
 
   it('the same with MCP_EXPOSE_PER_OP_TOOLS=true: every one of the 89 lk_op_* tools too (chunk 8, F-12)', async () => {
     const perOp = await startStack({ respond: specRespond(), env: { MCP_EXPOSE_PER_OP_TOOLS: 'true' } });

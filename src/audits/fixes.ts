@@ -27,10 +27,10 @@ import { sidebarFrom } from '../facts/index.js';
 import { planFacts, FactsPlanError } from '../facts/plan.js';
 import { rowTextRuns } from '../facts/values.js';
 import { mintClientId } from '../jobs/ids.js';
-import { SYSTEM_PRINCIPAL, type JobOrigin, type StepSpec } from '../jobs/index.js';
+import { SYSTEM_PRINCIPAL, type JobOrigin, type LifecycleMarker, type StepSpec } from '../jobs/index.js';
 import { EXPECT_STEP, VERIFY_STEP, type DocumentChecker, type VerifyTarget } from '../jobs/internal-steps.js';
 import { stableJson } from '../jobs/sidebar-state.js';
-import { slotAmong } from '../registry/ordering.js';
+import { slotAmong, type SiblingCompare } from '../registry/ordering.js';
 import { classifyName, nameKey as treeNameKey } from '../tree/classify.js';
 import { isKnownRun, runsHashOf, runsText, splitRunsAtBreaks } from './model.js';
 import { AuditError } from './errors.js';
@@ -60,6 +60,8 @@ export interface FixDeps {
    * order and tags over to these fixes, and its proposal is the agent's own (still ONE proposal, whatever its scope).
    */
   readonly origin?: JobOrigin;
+  /** v3 F4c (ADR 0065): the order inside Narratives (an ordering fix whose args say `order: 'narrative'`). */
+  readonly narrativeOrder?: SiblingCompare | null;
 }
 
 export type FixResult =
@@ -71,18 +73,18 @@ export type FixResult =
     }
   | { readonly status: 'nothing_to_do'; readonly message: string };
 
-const stale = (what: string, details: Obj = {}): AuditError =>
+export const stale = (what: string, details: Obj = {}): AuditError =>
   new AuditError(
     'FIX_STALE',
     `${what} The finding is out of date; nothing was proposed. Re-check it (or wait for the next audit).`,
     details,
   );
 
-function read(d: FixDeps, projectId: string, op: string, params: Obj): Promise<unknown> {
+export function read(d: FixDeps, projectId: string, op: string, params: Obj): Promise<unknown> {
   return d.engine.internalRead(projectId, op, params, { priority: 'P1' });
 }
 
-async function propose(
+export async function propose(
   d: FixDeps,
   projectId: string,
   spec: {
@@ -95,6 +97,8 @@ async function propose(
     readonly pageParts: readonly string[];
     readonly prefetched?: readonly Obj[];
     readonly fix: FixKind;
+    /** v3 F4c: the lifecycle marker (a narrative page: no lifecycle, `to: null`). */
+    readonly lifecycle?: LifecycleMarker;
   },
 ): Promise<FixResult> {
   const r = await d.engine.submit({
@@ -109,6 +113,7 @@ async function propose(
     ...(spec.holdDocuments ? { holdDocuments: spec.holdDocuments } : {}),
     internal: true,
     forceProposal: true,
+    ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
     proposal: {
       operation: spec.operation,
       operations: [
@@ -178,10 +183,15 @@ async function fixMove(d: FixDeps, projectId: string, f: Finding): Promise<FixRe
   const { kind, displayName } = classifyName(name);
   const kids = await listChildren(d, projectId, parentId);
   const others = kids.filter((k) => k.id !== pageId).map((k) => ({ id: k.id, ...classifyName(k.name) }));
+  // v3 F4c: inside Narratives, the narrative order (E1); never the alphabetical rule there.
+  const narrative = f.fix!.args.order === 'narrative';
+  if (narrative && !d.narrativeOrder)
+    throw stale('The narrative rules are not available now, so the narrative order cannot be worked out.');
   const slot = slotAmong(
     others.map((o) => ({ id: o.id, displayName: o.displayName, kind: o.kind })),
     displayName,
     kind,
+    narrative ? d.narrativeOrder! : undefined,
   );
   const cur = kids.findIndex((k) => k.id === pageId);
   const here = {
@@ -190,8 +200,11 @@ async function fixMove(d: FixDeps, projectId: string, f: Finding): Promise<FixRe
   };
   const then = neighboursAfterInsert(kids, pageId, slot);
   if (here.after === then.after && here.before === then.before)
-    return { status: 'nothing_to_do', message: 'The page is already in its alphabetical place.' };
-  const title = `Re-place ${name} alphabetically under its parent`;
+    return {
+      status: 'nothing_to_do',
+      message: `The page is already in its ${narrative ? 'narrative' : 'alphabetical'} place.`,
+    };
+  const title = `Re-place ${name} ${narrative ? 'in narrative order' : 'alphabetically'} under its parent`;
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,
@@ -705,6 +718,8 @@ export async function proposeFix(
       throw new AuditError('USE_CHRONOLOGY', 'This fix goes through the chronology module.');
     case 'merge_asset_folders':
       return fixMergeFolders(d, projectId, f);
+    case 'narrative':
+      return fixNarrative(d, projectId, f, c.propertiesName);
   }
 }
 
@@ -755,4 +770,238 @@ async function fixMergeFolders(d: FixDeps, projectId: string, f: Finding): Promi
     pageParts: ['asset folders'],
     fix: 'merge_asset_folders',
   });
+}
+
+// ============================================================================================ v3 F4c: narrative
+
+/**
+ * v3 F4c (ADR 0065, design E4 and E8): the narrative audit's mechanical fixes, each re-read live and compared with what
+ * the audit saw (else FIX_STALE), then ONE proposal for the owner. Never the prose: a dateline fix changes only the
+ * chapter's first block (or puts one before the text), every other block echoed exactly as read.
+ */
+async function fixNarrative(
+  d: FixDeps,
+  projectId: string,
+  f: Finding,
+  propertiesName: string,
+): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const marker = (id: string): LifecycleMarker => ({
+    tool: 'audits.propose_fix',
+    canonical: false,
+    pages: [{ id, to: null }],
+  });
+  switch (a.action) {
+    case 'index': {
+      const parentId = String(a.parentId);
+      const name = String(a.name);
+      const tags = (a.tags as string[]) ?? [];
+      const kids = await listChildren(d, projectId, parentId);
+      if (kids.some((k) => treeNameKey(classifyName(k.name).displayName) === treeNameKey(name)))
+        return { status: 'nothing_to_do', message: `“${name}” exists now.` };
+      const id = mintClientId();
+      const raw = `[INDEX] ${name}`;
+      const slot = slotAmong(
+        kids.map((k) => ({ id: k.id, ...classifyName(k.name) })),
+        name,
+        'index',
+      );
+      const steps: StepSpec[] = [
+        {
+          op: EXPECT_STEP,
+          params: {
+            body: {
+              checks: [
+                { label: 'siblings', kind: 'children', resourceId: parentId, ids: kids.map((k) => k.id) },
+              ],
+            },
+          },
+        },
+        {
+          op: 'createResource',
+          params: { body: { id, name: raw, parentId, tags, ...slot } },
+          journalOperation: { tool: 'create_index', page: { id, name: raw }, from: 'audits.propose_fix' },
+        },
+        {
+          op: VERIFY_STEP,
+          params: {
+            body: {
+              targets: [
+                {
+                  kind: 'resource',
+                  label: raw,
+                  resourceId: id,
+                  fields: { name: raw, parentId, tags },
+                } satisfies VerifyTarget,
+              ],
+            },
+          },
+        },
+      ];
+      return propose(d, projectId, {
+        steps,
+        title: `Make the continuity index ${raw} under Narratives`,
+        operation: { tool: 'create_index', fromAudit: f.code, name: raw, tags },
+        page: { id, name: raw },
+        pageParts: ['a new continuity index'],
+        fix: 'narrative',
+        lifecycle: marker(id),
+      });
+    }
+    case 'tags': {
+      const pageId = String(a.pageId);
+      const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as
+        Obj | undefined;
+      if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+      const now = Array.isArray(res.tags) ? (res.tags as string[]) : [];
+      if (stableJson(now) !== stableJson(a.expected))
+        throw stale('The page’s tags changed since the audit.', { tags: now });
+      const tags = a.tags as string[];
+      const name = String(res.name);
+      return propose(d, projectId, {
+        steps: [
+          {
+            op: EXPECT_STEP,
+            params: {
+              body: { checks: [{ label: 'page', kind: 'resource', resourceId: pageId, tags: now }] },
+            },
+          },
+          {
+            op: 'updateResource',
+            params: { path: { resourceId: pageId }, body: { tags } },
+            journalOperation: {
+              tool: 'update_resource',
+              page: { id: pageId, name },
+              from: 'audits.propose_fix',
+            },
+          },
+          {
+            op: VERIFY_STEP,
+            params: {
+              body: {
+                targets: [
+                  {
+                    kind: 'resource',
+                    label: name,
+                    resourceId: pageId,
+                    fields: { tags },
+                  } satisfies VerifyTarget,
+                ],
+              },
+            },
+          },
+        ],
+        title: `Tag ${name}: ${tags.join(', ')}`,
+        holdLock: { resourceId: pageId },
+        operation: { tool: 'update_resource', fromAudit: f.code, tags },
+        page: { id: pageId, name },
+        pageParts: ['tags'],
+        fix: 'narrative',
+        lifecycle: marker(pageId),
+      });
+    }
+    case 'link': {
+      const pageId = String(a.pageId);
+      const field = String(a.field);
+      const path = { resourceId: pageId };
+      const props = await read(d, projectId, 'listProperties', { path });
+      const sidebar = sidebarFrom(props);
+      const res = (await read(d, projectId, 'getResource', { path })) as Obj | undefined;
+      const name = isObj(res) ? String(res.name) : pageId;
+      let plan;
+      try {
+        plan = planFacts({
+          resourceId: pageId,
+          sidebar,
+          propertyTitle: propertiesName,
+          facts: [
+            {
+              key: field,
+              value: [{ mention: { resourceId: String(a.targetId), text: String(a.targetName) } }],
+            },
+          ],
+          links: [],
+          templateKeys: null,
+        });
+      } catch (e) {
+        if (e instanceof FactsPlanError) throw new AuditError('FIX_NOT_APPLICABLE', `${name}: ${e.message}`);
+        throw e;
+      }
+      if (plan.empty) return { status: 'nothing_to_do', message: `${name}’s ${field} already points there.` };
+      const job = expandFacts(plan, { id: pageId, name }, sidebar, { facts: {}, links: {} });
+      return propose(d, projectId, {
+        steps: job.steps,
+        title: `Point ${name}’s ${field} at ${String(a.targetName)}`,
+        holdLock: { resourceId: pageId },
+        operation: job.operation,
+        page: { id: pageId, name },
+        pageParts: job.pageParts,
+        prefetched: [{ op: 'listProperties', path, body: props }],
+        fix: 'narrative',
+        lifecycle: marker(pageId),
+      });
+    }
+    case 'dateline': {
+      const pageId = String(a.pageId);
+      const documentId = String(a.documentId);
+      const path = { resourceId: pageId, documentId };
+      const doc = (await read(d, projectId, 'getDocumentBlocks', { path })) as
+        { version?: unknown; blocks?: unknown } | undefined;
+      if (!doc || typeof doc.version !== 'string' || !Array.isArray(doc.blocks))
+        throw stale('The chapter’s document is gone.');
+      const blocks = doc.blocks as Obj[];
+      const first = blocks[0];
+      const firstText =
+        isObj(first) && Array.isArray(first.content)
+          ? runsText(first.content as unknown[])
+              .replace(/\s+/g, ' ')
+              .trim()
+          : '';
+      if (firstText !== String(a.expectedFirst).replace(/\s+/g, ' ').trim())
+        throw stale('The chapter’s first line changed since the audit.');
+      const dateline = String(a.dateline);
+      // The first block is a (wrong) dateline when it is a short line with no sentence end; else a dateline is put first.
+      const isDateline =
+        isObj(first) &&
+        first.kind === 'paragraph' &&
+        firstText.length <= 160 &&
+        !/[.!?]["”’]?$/.test(firstText);
+      const next: Obj[] = isDateline
+        ? [{ ...first, content: rowTextRuns(dateline) }, ...blocks.slice(1)]
+        : [{ id: mintClientId(), kind: 'paragraph', content: rowTextRuns(dateline) }, ...blocks];
+      const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as
+        Obj | undefined;
+      const name = isObj(res) ? String(res.name) : pageId;
+      return propose(d, projectId, {
+        steps: [
+          {
+            op: 'replaceDocumentBlocks',
+            params: { path, ifMatch: doc.version, body: { blocks: next } },
+            verifyAfterWrite: true,
+            journalOperation: {
+              tool: 'write_page',
+              page: { id: pageId, name },
+              from: 'audits.propose_fix',
+              write: 'the dateline',
+            },
+          },
+        ],
+        title: `${name}: its dateline “${dateline}”`,
+        holdDocuments: [documentId],
+        operation: {
+          tool: 'write_page',
+          fromAudit: f.code,
+          dateline,
+          replaced: isDateline ? firstText : null,
+        },
+        page: { id: pageId, name },
+        pageParts: [isDateline ? 'the first line (the dateline) replaced' : 'a dateline put first'],
+        prefetched: [{ op: 'getDocumentBlocks', path, body: doc }],
+        fix: 'narrative',
+        lifecycle: marker(pageId),
+      });
+    }
+    default:
+      throw new AuditError('FIX_NOT_APPLICABLE', 'This narrative finding offers no fix.');
+  }
 }

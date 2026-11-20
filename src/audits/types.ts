@@ -26,6 +26,7 @@ export type Category =
   | 'assets' // v3 F2: the asset library (duplicate folders)
   | 'governance' // v3 F4a: the governance documents against the bridge (old tool names, external skills, missing names)
   | 'consistency' // v3 F4b: dates and identity facts restated differently on Authoritative pages (Contradictory only)
+  | 'narrative' // v3 F4c: Narratives' layout, numbering, plans and chapters, datelines (the Narrative Integrity audit)
   | 'audit'; // about the run itself (a stale snapshot, a missing template read)
 
 export const CATEGORIES: readonly Category[] = [
@@ -43,6 +44,7 @@ export const CATEGORIES: readonly Category[] = [
   'assets',
   'governance',
   'consistency',
+  'narrative',
   'audit',
 ];
 
@@ -73,7 +75,14 @@ export type FixKind =
    * v3 F3d (ADR 0053): `update_resource` with the page's own tags in a new order, the lifecycle tag first; nothing added,
    * removed or renamed (a status tag a Working or Archived page still carries is left for the owner).
    */
-  | 'reorder_tags';
+  | 'reorder_tags'
+  /**
+   * v3 F4c (ADR 0065, design E4 and E8): a mechanical narrative fix, always ONE proposal (`args.action`): `index` (a
+   * missing continuity index made), `tags` (the page's tags set to the narrative grammar, others kept), `dateline` (the
+   * chapter's first block made the dateline written from In-world Date) or `link` (a plan's Chapter or a chapter's
+   * Chapter Plan field set to the page it belongs with). Never the prose.
+   */
+  | 'narrative';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -485,6 +494,134 @@ export const CODES = {
     category: 'consistency',
     severity: 'warning',
     title: 'A chronology row’s date differs from the same event on an Authoritative page (Contradictory)',
+  },
+  // ---- v3 F4c: the Narrative Integrity audit (design E4, E8)
+  narrative_root_missing: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'The narrative rules are approved but no single Narratives index is found by name',
+  },
+  narrative_main_index_missing: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'Narratives has no Main CANON index',
+    fix: 'narrative',
+  },
+  narrative_au_index_missing: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'An AU defined under Continuities has no index under Narratives',
+    fix: 'narrative',
+  },
+  narrative_unknown_continuity: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'An index under Narratives is neither Main CANON nor an AU defined under Continuities',
+  },
+  narrative_reserved_word: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A narrative index other than Main CANON carries “CANON” in its name',
+  },
+  narrative_story_map_missing: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A story has no Story Map',
+  },
+  narrative_story_map_not_first: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A story’s Story Map is not its first child',
+    fix: 'move_resource',
+  },
+  narrative_empty_act: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'An act index holds no chapter and its Act Map no plan (a ceremonial layer)',
+  },
+  narrative_wrong_act: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A chapter’s Act field names another act than the one it sits in',
+  },
+  narrative_continuity_mismatch: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A narrative page’s Continuity field names another continuity than the index it sits in',
+  },
+  narrative_tags: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'A narrative page lacks Narrative, its kind, or AU in an AU story',
+    fix: 'narrative',
+  },
+  narrative_unnamed: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'A page inside a story is named by none of the narrative patterns',
+  },
+  narrative_number_gap: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'A chapter number is skipped (no chapter and no plan holds it)',
+  },
+  narrative_number_duplicate: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'Two chapters (or two plans) of a story have the same number',
+  },
+  narrative_number_mismatch: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A page’s Chapter Number field disagrees with the number in its name',
+    fix: 'set_facts',
+  },
+  narrative_chapter_without_plan: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'A chapter has no Chapter Plan',
+  },
+  narrative_plan_drafted_without_chapter: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A plan marked Drafted has no chapter',
+  },
+  narrative_link_broken: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A chapter and its plan do not link to each other both ways',
+    fix: 'narrative',
+  },
+  narrative_gate_open: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A chapter exists while its plan’s Question Gate is Open (the Drafting Gate)',
+  },
+  narrative_dateline_mismatch: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A chapter’s first line is not the dateline its In-world Date gives',
+    fix: 'narrative',
+  },
+  narrative_date_unreadable: {
+    category: 'narrative',
+    severity: 'warning',
+    title: 'A chapter’s In-world Date is missing or the calendar cannot read it',
+  },
+  narrative_date_backwards: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'A chapter is dated earlier than the one before it, without the Flashback tag',
+  },
+  narrative_date_outside_span: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'A chapter’s date is outside its Act Span or Story Span',
+  },
+  narrative_placeholder: {
+    category: 'narrative',
+    severity: 'info',
+    title: 'A narrative page’s field still holds the template’s placeholder text',
   },
   // ---- the run itself
   stale_snapshot: {

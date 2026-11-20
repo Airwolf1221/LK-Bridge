@@ -86,6 +86,12 @@ describe('the MCP surface with the official client', () => {
         'arkona_as_of',
         'arkona_as_of_coverage',
         'arkona_consistency_suggest',
+        // v3 F4c (ADR 0065): the narrative writing tools.
+        'arkona_story_create',
+        'arkona_chapter_plan',
+        'arkona_chapter_save',
+        'arkona_chapter_insert',
+        'arkona_chapter_move',
         'bridge_job_resume',
         'create_document',
         'create_index',
