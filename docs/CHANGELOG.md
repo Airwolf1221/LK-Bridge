@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased: connected sessions are told when their tool list changes (20 November 2026)
+
+From the owner's report: after approving `arkona-2026-11-20-f4b`, a Claude session connected before the approval kept
+the old tool list until the bridge restarted. Every `tools/list` was already worked out afresh per request; the client
+had simply never been told to ask again.
+
+- The server advertises `tools.listChanged`. A watch (`src/mcp/tool-list.ts`) follows everything that can change a list
+  (a pack's rules or approval, a project served or not, a profile's scope or its low-level switch) and compares a
+  fingerprint of what would be listed; when it moved, every connected 2026-07-28 session listening on
+  `subscriptions/listen` gets `notifications/tools/list_changed` at once. A change that lists the same tools sends
+  nothing.
+- A 2025-era session (stateless serving: no stream a change could be pushed on) is told on its NEXT request: the bridge
+  remembers the list each caller was last given, and sends the notification on that request's own response stream
+  before its answer (once). Its next `tools/list` shows the new list.
+- `test/tools/tool-list-changed.test.ts`: a pack approval that lists a new tool, a profile's scope change, a 2025-era
+  session told on its next call, and a change that lists the same tools sending nothing.
+
 ## Unreleased: the consistency-f4b sandbox check makes its probe with the raw client (20 November 2026)
 
 From the owner's sandbox run of `consistency-f4b`: F2 failed because the check made its throwaway Authoritative

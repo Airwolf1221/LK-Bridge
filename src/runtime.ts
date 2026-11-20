@@ -1,6 +1,7 @@
 import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
+import { ToolListWatch } from './mcp/tool-list.js';
 import { governanceAuditHook } from './packs/governance-audit.js';
 import { knownNamesOf } from './mcp/tools/known-names.js';
 import { textRemovalReader } from './policy/text-removal.js';
@@ -184,6 +185,8 @@ export interface Runtime {
   /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
   readonly retag: RetagService;
   readonly tools: readonly McpToolProvider[];
+  /** Tells connected MCP sessions when what is listed changes (`notifications/tools/list_changed`). */
+  readonly toolList: ToolListWatch;
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
   readonly instructions: string;
@@ -1282,6 +1285,30 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   };
   syncPackTools();
   const detachPackTools = packs.onChange(syncPackTools);
+  // The owner's report (20 November 2026): a pack approval (or any setting) that changes what is listed tells every
+  // connected session (`notifications/tools/list_changed`, sent by the transport); each list is worked out afresh.
+  const toolList = new ToolListWatch({
+    listed: () =>
+      tools
+        .filter((t) => {
+          if (t.retired === true) return false;
+          try {
+            return t.listed?.() !== false;
+          } catch {
+            return false;
+          }
+        })
+        .map((t) => t.name),
+    profiles: () =>
+      policy.store
+        .listProfiles()
+        .map((p) => ({ id: p.id, scope: p.scope, showLowLevelTools: p.showLowLevelTools })),
+  });
+  const detachToolList = [
+    packs.onChange(() => toolList.poke()),
+    projects.onChange(() => toolList.poke()),
+    policy.store.onChange(() => toolList.poke()),
+  ];
   // v2 E3 (ADR 0045): the tool-call log. Its budget probe sums every project's hourly request and write counters, so a
   // call's budget use is how far they moved while it ran (approximate: another call in the same moment counts too).
   const toolCalls = new ToolCallLog({
@@ -1356,6 +1383,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits,
     retag,
     tools,
+    toolList,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
     config,
@@ -1461,6 +1489,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     detachRestores();
     unregisterPackEngine();
     detachPackTools();
+    for (const off of detachToolList) off();
     await run('the repository tree', tree.stop(), w.treesMs);
     detachRegistry();
     await run('the asset tree', assets.stop(), w.treesMs);

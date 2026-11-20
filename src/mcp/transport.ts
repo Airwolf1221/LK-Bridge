@@ -55,6 +55,11 @@ export interface McpTransportOptions {
   readonly observer?: McpToolCallObserver;
   /** Largest request body accepted (default: the SDK's 4 MiB). See {@link mcpMaxBodyBytes}. */
   readonly maxBodyBytes?: number;
+  /**
+   * Told when what any session would list changes (a pack approved, a profile's scope changed): every connected session
+   * listening for it gets `notifications/tools/list_changed` and asks for its list again (src/mcp/tool-list.ts).
+   */
+  readonly toolsChanged?: { subscribe(fn: () => void): () => void };
 }
 
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/;
@@ -80,7 +85,17 @@ export function mcpTransportPlugin(app: FastifyInstance, opts: McpTransportOptio
   const maxRequestBodySize = opts.maxBodyBytes ?? MCP_DEFAULT_MAX_BODY_BYTES;
   const handler = createMcpHandler(factory, { legacy: 'stateless', onerror, maxRequestBodySize });
   const serve = toNodeHandler(handler, { onerror, maxRequestBodySize });
+  // Every open `subscriptions/listen` stream that asked for tool-list changes is told; each list is worked out afresh
+  // per request, so the session's next tools/list shows the new one.
+  const offToolsChanged = opts.toolsChanged?.subscribe(() => {
+    try {
+      handler.notify.toolsChanged();
+    } catch (err) {
+      app.log.warn({ err }, 'MCP: the tool-list change could not be sent');
+    }
+  });
   app.addHook('onClose', async () => {
+    offToolsChanged?.();
     await handler.close();
   });
 
