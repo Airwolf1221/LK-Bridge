@@ -1098,7 +1098,7 @@ export interface TargetVerification {
 /** What the generic verify step may ignore, by target kind (listed in every verification). */
 export const SIDEBAR_IGNORED_FIELDS: readonly string[] = [
   'rank and text of a row (the order of the rows, and the runs, are compared)',
-  'a mention’s name and text (display fields LegendKeeper fills in: the page’s current name, its label): a mention is compared by its target (resourceId, documentId)',
+  'a mention’s name (filled in by LegendKeeper), and its text where the bridge sent none (the label LegendKeeper fills in); a label the bridge wrote is compared, and so is the target (resourceId, documentId)',
   'runs normalised as LegendKeeper does on write (empty text runs dropped, neighbouring runs with the same marks merged)',
   'the id LegendKeeper gives a row or item the bridge created',
   'properties the plan did not name',

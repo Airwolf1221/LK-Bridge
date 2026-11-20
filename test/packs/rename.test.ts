@@ -89,6 +89,9 @@ describe('arkona_rename: a character', () => {
     expect(r.body.subject).toMatchObject({ id: C.nadira, kind: 'character' });
     const all = items(r.body);
     const byId = new Map(all.map((i) => [i.id, i]));
+    // X5: a chronology row's item names its table document too (`chronology:<document>:<row>`).
+    const rowItem = (rowId: string) =>
+      all.find((i) => i.id.startsWith('chronology:') && i.id.endsWith(`:${rowId}`));
     const ids = all.map((i) => i.id);
     // Page names: the index, the Core, the three children, both relationships (one each way round).
     for (const id of [
@@ -137,11 +140,11 @@ describe('arkona_rename: a character', () => {
     // The index's routing line is a labelled mention (review only, above): no routing item.
     expect(all.filter((i) => i.group === 'Index routing')).toHaveLength(0);
     // Chronology: the linked row with its event, and the row before the effective date unticked.
-    expect(byId.get(`chronology:${R.rowLinked}`)).toMatchObject({ ticked: true });
-    expect(String(byId.get(`chronology:${R.rowLinked}`)!.label)).toContain(
+    expect(rowItem(R.rowLinked)).toMatchObject({ ticked: true });
+    expect(String(rowItem(R.rowLinked)!.label)).toContain(
       'its event “Nadira al-Khalid founds the reading room” renamed with it',
     );
-    expect(byId.get(`chronology:${R.rowEarly}`)).toMatchObject({
+    expect(rowItem(R.rowEarly)).toMatchObject({
       ticked: false,
       why: 'the row is dated before the rename’s effective date (4A 900)',
     });
@@ -314,7 +317,10 @@ describe('arkona_rename: a character', () => {
     const all = items(r.body);
     expect(all.some((i) => i.group === 'Page names' || i.group === 'Identity facts')).toBe(false);
     expect(all.map((i) => i.id)).toEqual(
-      expect.arrayContaining([`chronology:${R.rowEarly}`, expect.stringMatching(/:qs5:0$/)]),
+      expect.arrayContaining([
+        expect.stringMatching(new RegExp(`^chronology:[^:]+:${R.rowEarly}$`)),
+        expect.stringMatching(/:qs5:0$/),
+      ]),
     );
     expect(all.some((i) => i.id.endsWith(':qs4:0'))).toBe(false);
   });

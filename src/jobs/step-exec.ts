@@ -3045,7 +3045,7 @@ export function matchCopy(
       }
       want.forEach((w, i) => {
         const g = got[i]!;
-        if (g.key !== w.key || !sameContent(g.content, w.content)) {
+        if (g.key !== w.key || !sameContent(w.content, g.content)) {
           differences.push({
             path: `${where} rows[${i}]`,
             expected: w,
@@ -3089,7 +3089,7 @@ function compareFacts(t: Extract<VerifyTarget, { kind: 'facts' }>, res: Obj, dif
       for (let i = 0; i < n; i++) {
         const g = got[i];
         const w = want[i];
-        if (!g || !w || g.key !== w.key || !sameContent(g.content, w.content)) {
+        if (!g || !w || g.key !== w.key || !sameContent(w.content, g.content)) {
           diffs.push({
             path: `${t.label} ${t.property.title} rows[${i}]${w ? ` “${w.key}”` : ''}`,
             expected: w ?? '(no row)',

@@ -52,6 +52,8 @@ export function splitPreview(plan: SplitPlan): Obj {
     })),
     interfaceSummaries: plan.summaries,
     indexEntries: plan.indexEntries,
+    completeness: plan.completeness,
+    ...(plan.nextSteps.length ? { nextSteps: plan.nextSteps } : {}),
     dependencies: {
       remapped: plan.dependencies.mapped.map((m) => ({ page: m.page, to: m.to, keepSource: m.keepSource })),
       unmapped: plan.dependencies.unmapped,
@@ -205,6 +207,8 @@ export async function runSplit(
             sections: plan.sections,
             interfaceSummaries: plan.summaries,
             indexEntries: plan.indexEntries,
+            completeness: plan.completeness,
+            ...(plan.nextSteps.length ? { nextSteps: plan.nextSteps } : {}),
             dependencies: preview.dependencies,
             ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
             cost: preview.cost,
@@ -238,6 +242,7 @@ export async function runSplit(
             newPages: plan.destinations.filter((d) => d.isNew && d.page).map((d) => d.page!),
             unmapped: plan.dependencies.unmapped,
             upgrade: plan.upgrade,
+            nextSteps: plan.nextSteps,
           },
         });
       return { kind: 'job', head, labels: plan.labels, ...out };
@@ -274,6 +279,7 @@ export function splitReport(pd: ProjectDeps, mctx: McpToolContext, ref: string):
       jobId: rec.jobId,
       destinations: rec.plan.destinations,
       phase2: rec.phase2 ?? (rec.retire ? 'proposed once phase 1 has verified' : 'none: the source survives'),
+      ...(rec.plan.nextSteps?.length ? { nextSteps: rec.plan.nextSteps } : {}),
       ...(rec.revert ? { revert: rec.revert } : {}),
     },
     pd,

@@ -72,7 +72,8 @@ describe('CR-2026-11-R3 fix C: the retag read-back compares document bodies by t
       verified: true,
       reason: READ_BACK_VERIFIED,
     });
-    expect(READ_BACK_VERIFIED).toContain('metadata timestamps only');
+    // X6: a board's, map's or timeline's content is compared too, never a timestamp.
+    expect(READ_BACK_VERIFIED).toContain("each board, map and timeline document's content unchanged");
     expect(READ_BACK_VERIFIED).not.toMatch(/read back exactly/);
     // The page's one page document was read before the write and compared after it (one read each, besides the change
     // snapshot's own reads after the job).

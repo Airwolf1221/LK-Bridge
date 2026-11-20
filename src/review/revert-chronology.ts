@@ -8,7 +8,7 @@
  * events and counts. It records itself as a chronology change (`job_revert`), like any other.
  */
 import type { Calendar } from '../calendar/index.js';
-import { buildJob, EVENT_STORED_FIELDS, type WriteContext } from '../chronology/plan.js';
+import { buildJob, EVENT_STORED_FIELDS, rowKey, type WriteContext } from '../chronology/plan.js';
 import type { ChronologyConfig } from '../chronology/settings.js';
 import type { ChronologyTarget } from '../chronology/store.js';
 import {
@@ -155,7 +155,7 @@ export async function planChronology(
   for (const w of t.inverse) {
     if (w.kind === 'row.delete') {
       const row = tables.get(w.documentId)?.rows.find((r) => r.id === w.rowId) ?? null;
-      const asLeft = row !== null && sameRow(row, t.leftRows[w.rowId]);
+      const asLeft = row !== null && sameRow(row, t.leftRows[rowKey(w.documentId, w.rowId)]);
       atBefore.push(row === null);
       atLeft.push(asLeft);
       if (row && !asLeft)
@@ -168,8 +168,8 @@ export async function planChronology(
         });
     } else if (w.kind === 'row.replace') {
       const row = tables.get(w.documentId)?.rows.find((r) => r.id === w.rowId) ?? null;
-      const asLeft = row !== null && sameRow(row, t.leftRows[w.rowId]);
-      const asBefore = row !== null && sameRow(row, t.oldRows[w.rowId]);
+      const asLeft = row !== null && sameRow(row, t.leftRows[rowKey(w.documentId, w.rowId)]);
+      const asBefore = row !== null && sameRow(row, t.oldRows[rowKey(w.documentId, w.rowId)]);
       atBefore.push(asBefore);
       atLeft.push(asLeft);
       if (!row)
@@ -185,7 +185,9 @@ export async function planChronology(
     } else if (w.kind === 'row.insert') {
       // A row the change moved to another age: gone from its old table now, back there once reverted.
       const row = tables.get(w.documentId)?.rows.find((r) => r.id === w.rowId) ?? null;
-      atBefore.push(row !== null && (sameRow(row, t.oldRows[w.rowId]) || same(row, w.texts)));
+      atBefore.push(
+        row !== null && (sameRow(row, t.oldRows[rowKey(w.documentId, w.rowId)]) || same(row, w.texts)),
+      );
       atLeft.push(row === null);
       if (row && !same(row, w.texts))
         diffs.push({
@@ -247,19 +249,20 @@ export async function planChronology(
   for (const w of t.inverse) {
     if (w.kind !== 'row.replace' && w.kind !== 'row.insert') continue;
     const table = tables.get(w.documentId)!;
-    const old = t.oldRows[w.rowId];
+    const old = t.oldRows[rowKey(w.documentId, w.rowId)];
     if (!old) return notRevertible(t, `the row ${w.rowId} as it was is not recorded`);
     const synthetic = { ...table.table.block, children: [table.table.header.block, old] };
     const parsed = readAgeTable([synthetic], cal.parser, config.style.date, config.columns)?.rows[0];
     const date = parsed?.date ?? parsed?.eventDate ?? null;
     if (!parsed || !date)
       return notRevertible(t, `the row’s old date “${w.texts.date}” cannot be read by the calendar`);
-    rows[w.rowId] = {
+    rows[rowKey(w.documentId, w.rowId)] = {
       sortKey: sortKey(date),
       date: { start: date.start, end: date.end, detail: date.detail },
       description: parsed.description,
     };
-    if (w.kind === 'row.replace' && w.texts.date.trim() !== w.before.date.trim()) moves.add(w.rowId);
+    if (w.kind === 'row.replace' && w.texts.date.trim() !== w.before.date.trim())
+      moves.add(rowKey(w.documentId, w.rowId));
   }
   const tableIds: Record<string, string> = {};
   for (const [doc, table] of tables) tableIds[doc] = table.table.id ?? '';
@@ -277,7 +280,7 @@ export async function planChronology(
   for (const w of t.inverse) {
     if (w.kind !== 'row.delete' && w.kind !== 'row.replace') continue;
     const row = tables.get(w.documentId)?.rows.find((r) => r.id === w.rowId);
-    if (row) rowBlocks[w.rowId] = withoutVersions([row.row.block])[0]!;
+    if (row) rowBlocks[rowKey(w.documentId, w.rowId)] = withoutVersions([row.row.block])[0]!;
   }
   const ctx: WriteContext = {
     rowBlocks,

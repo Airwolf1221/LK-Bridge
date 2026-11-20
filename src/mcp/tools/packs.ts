@@ -728,6 +728,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         'Use this, and only this, to split an existing owner page of the Arkona pack (a character monolith, any owner covering several domains): never by hand with write_page and the create tools (write_page refuses removing substantial sections from a pack page with USE_ARKONA_SPLIT). Splitting is a deliberate, owner-approved decision (“do not split merely because a character has many facts”): appraise first with arkona_split_appraisal, bring its candidates, the Anti-Fragmentation note and the questions to the owner, and split only when the owner asks. ' +
         'You give the DESTINATION MAP: every section of the source (and, where a section must be divided, each block id in it: read_document with format "json" shows them) goes to exactly one destination: `new` (a new owner: a character’s page by F3a’s rules, role/title/referenceType, landing in the character’s index; any other owner by F3b’s, type/name/home; each with its scope and purpose), `existing` (an existing owner page; the material is appended under the heading you give, `under`), `relationship` (an existing relationship page, or a new one `with` the other character), `stays`, or `universal` (material an existing universal owner already owns, e.g. a magic rule: NOT migrated; give `owner` and the subject-specific application `text` that replaces it; the universal owner becomes a Dependency). ' +
         'Refused before anything is proposed: a block unassigned or assigned twice (SPLIT_COVERAGE, with the list), a section listed twice (SPLIT_DUPLICATED_AUTHORITY), images going to a page that is not an Art or visual owner (SPLIT_VISUAL), content LegendKeeper cannot create (unsupported blocks only stay), a missing interface summary for a moved section when the source survives (SPLIT_SUMMARY_REQUIRED), when the source is to be retired, any page depending on it not remapped (`dependencies`: each page to the new owner it actually needs; SPLIT_DEPENDENCIES_UNMAPPED), and a map that would leave a character with an index and several owners but no Character Core (SPLIT_CORE_REQUIRED: upgrade its Compact Character Reference first with arkona_create_character, target and upgradeToCore). A Compact Character Reference split into several owners becomes the character’s Character Core in the same proposal (renamed “<Name> - Character Core”, Reference Type Character Core; its id, text and identity facts kept). A section about one other character not going to a relationship owner is a warning for the owner. ' +
+        'Completeness (each NEW owner): when the source has Source Boundaries or Unresolved Material, each new owner addresses each, by items of it moved there (they go under that heading), by your text (sourceBoundaries, unresolvedMaterial), or notApplicable { section: reason }; otherwise SPLIT_SECTIONS_UNADDRESSED. The bridge never writes these sections itself. Its Dependencies start from the source’s own (suggested in the plan; keep those it relies on); an empty list needs noDependencies { reason } (SPLIT_DEPENDENCIES_UNADDRESSED). The owner reads every reason in the proposal, and nextSteps lists what is still owed afterwards, each with its tool. ' +
         'Always ONE canonical proposal, whatever your scope; never resubmit it, follow it with bridge_proposal_status. The owner approves it whole or destination by destination: a destination left out keeps its sections in the source. Phase 1 (one job) makes and extends the owners with the blocks moved verbatim (ids kept), checks every destination holds them BEFORE anything leaves the source, writes the interface summaries, index lines and remapped Dependencies, and verifies (a re-read of every page touched); a failure stops it before phase 2 (Resume and Revert stay available). With `retire: true`, once phase 1 has verified the bridge proposes archiving the source (archive_page): a separate canonical proposal. The split never deletes the source. `report` (the split’s id, proposal or job) says what became of it (free), and `verified` is its job’s own verification (a job that ran to its end but read back a difference is `unverified`, and nothing is retired). dryRun shows the whole plan first. ' +
         'Cost, measured on the test fixtures: a character monolith (a Compact Character Reference, upgraded to its Core) split into six new owners (and a new index for them) with one remapped Dependency: 26 requests to propose (10 of them the plan’s reads), then a job of 248 requests (89 writes); an owner split into one new owner and one existing owner with two remapped Dependencies: 12 to propose, then 84 (22 writes), then phase 2 is archive_page’s own cost. A conflict on an existing owner’s append costs one more read and the write again. dryRun states the plan’s reads as made and its estimate of the job (the writes exactly, the reads within about a tenth).',
       inputSchema: z.object({
@@ -786,7 +787,39 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
                   .max(20_000)
                   .optional()
                   .describe('A new owner’s Purpose (Markdown; required).'),
-                dependencies: z.array(z.string().max(500)).max(50).optional(),
+                dependencies: z
+                  .array(z.string().max(500))
+                  .max(50)
+                  .optional()
+                  .describe(
+                    'A new owner’s Dependencies: start from the source’s own (dryRun lists them, completeness.suggestedDependencies) and keep those it relies on. None at all needs noDependencies.',
+                  ),
+                noDependencies: z
+                  .object({ reason: z.string().min(1).max(500) })
+                  .optional()
+                  .describe('A new owner with no Dependencies: why (shown to the owner in the proposal).'),
+                sourceBoundaries: z
+                  .string()
+                  .max(20_000)
+                  .optional()
+                  .describe(
+                    'A new owner’s Source Boundaries, in your words (Markdown; the heading is added when it has none). Follows any items of the section moved to it.',
+                  ),
+                unresolvedMaterial: z
+                  .string()
+                  .max(20_000)
+                  .optional()
+                  .describe('A new owner’s Unresolved Material, as sourceBoundaries.'),
+                notApplicable: z
+                  .object({
+                    sourceBoundaries: z.string().min(1).max(500).optional(),
+                    unresolvedMaterial: z.string().min(1).max(500).optional(),
+                  })
+                  .strict()
+                  .optional()
+                  .describe(
+                    'A section that does not apply to a new owner, with the reason (shown to the owner in the proposal).',
+                  ),
                 related: z.array(z.string().max(500)).max(50).optional(),
                 page: z
                   .string()

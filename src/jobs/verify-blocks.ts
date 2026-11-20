@@ -8,9 +8,11 @@
  * `VERIFY_IGNORED_FIELDS` and taken from its spec (3.0.0):
  *
  * 1. `version` on a block: the spec's `Versioned…Block` answers carry a read-only version per block.
- * 2. A mention's display fields: `name` ("the resource's current name; it is read-only", spec `Run`) and `text` (its
- *    label, which LegendKeeper fills in on read-back): a mention is compared by its target, `resourceId` and
- *    `documentId` (CR-2026-11-R3, R3-67: a split's job read its own mentions back as "not verified").
+ * 2. A mention's display fields, only where LegendKeeper fills them in: `name` ("the resource's current name; it is
+ *    read-only", spec `Run`) always, and `text` (its label) when the bridge sent none (CR-2026-11-R3, R3-67: a split's
+ *    job read its own mentions back as "not verified"). A label the bridge itself wrote is kept as sent (the owner's
+ *    sandbox run, X2, in a table cell too) and is compared. A mention is otherwise compared by its target, `resourceId`
+ *    and `documentId`.
  * 3. Run normalisation: "a run whose `text` is empty is dropped, and adjacent runs carrying identical marks are merged
  *    into one" (spec `Run`). Both sides are normalised the same way before they are compared.
  * 4. The id of a block sent without one: "A block without an id is given a new id" (spec `DocumentBlocksWrite`). The
@@ -23,7 +25,7 @@
 /** The fields LegendKeeper may change on a write without it being a difference (documented in the result). */
 export const VERIFY_IGNORED_FIELDS: readonly string[] = [
   'version on each block (read-only)',
-  'a mention’s name and text (display fields LegendKeeper fills in: the page’s current name, its label): a mention is compared by its target (resourceId, documentId)',
+  'a mention’s name (the page’s current name, filled in by LegendKeeper), and its text when the bridge sent none (the label LegendKeeper fills in); a label the bridge wrote is compared, and so is the target (resourceId, documentId)',
   'runs normalised as LegendKeeper does on write (empty text runs dropped, neighbouring runs with the same marks merged)',
   'the id LegendKeeper gives a block sent without one',
   'the document’s own version, text and schema (only the blocks are compared)',
@@ -61,15 +63,69 @@ const marksOf = (r: Obj): string =>
   );
 
 /**
- * CR-2026-11-R3 (R3-67): a mention as the verify compares it: its target only (`resourceId`, and `documentId` when it has
- * one). Its `name` and `text` are display fields LegendKeeper fills in on read-back (the page's current name, the label
- * shown). Only comparisons use this: a state the bridge stores (to check against, or to put back) keeps the label.
+ * CR-2026-11-R3 (R3-67): a mention's target (`resourceId`, and `documentId` when it has one), as the verify compares
+ * it. Only comparisons use this: a state the bridge stores (to check against, or to put back) keeps the label.
  */
 export function mentionTarget(m: Obj): Obj {
   return {
     resourceId: m.resourceId,
     ...(m.documentId !== undefined && m.documentId !== null ? { documentId: m.documentId } : {}),
   };
+}
+
+/** A label the bridge sent with a mention (a non-empty `text`), or null: LegendKeeper fills one in then. */
+const labelOf = (m: unknown): string | null =>
+  isObj(m) && typeof m.text === 'string' && m.text !== '' ? m.text : null;
+
+/**
+ * The owner's sandbox run (X2): a mention as the verify compares it: its target, and its label (`text`) when it has one.
+ * The stored side's label is dropped first where the bridge sent none (`dropFilled`), so a label LegendKeeper filled in
+ * never counts, and a label the bridge wrote always does.
+ */
+function mentionCompared(m: Obj): Obj {
+  const label = labelOf(m);
+  return { ...mentionTarget(m), ...(label !== null ? { text: label } : {}) };
+}
+
+/**
+ * The runs `stored` holds, with the label of each mention dropped where the corresponding mention `sent` (paired in
+ * order among the mentions of the list: LegendKeeper merges neighbouring text runs, so positions may shift) carried
+ * none. A mention with no counterpart keeps its label.
+ */
+function dropFilledLabels(sent: readonly unknown[], stored: readonly unknown[]): unknown[] {
+  const sentMentions = sent.filter((r) => isObj(r) && isObj(r.mention)) as Obj[];
+  let k = 0;
+  return stored.map((r) => {
+    if (!isObj(r) || !isObj(r.mention)) return r;
+    const twin = sentMentions[k++];
+    if (!twin || labelOf(twin.mention) !== null) return r;
+    return { ...r, mention: withoutKey(r.mention, 'text') };
+  });
+}
+
+/**
+ * CR-2026-11-R3 (R3-67) and X2: whether two lists of runs are the same as the verify judges them: a mention by its
+ * target, and by its label when `expected` (what the bridge wrote or expects) carries one; a label LegendKeeper filled
+ * in (none expected) never counts. Runs normalised on both sides.
+ */
+export function sameRuns(expected: readonly Obj[], actual: readonly Obj[]): boolean {
+  const e = normaliseRuns(expected).map((r) =>
+    isObj(r.mention) ? { ...r, mention: mentionCompared(r.mention) } : r,
+  );
+  const a = normaliseRuns(dropFilledLabels(expected, actual) as Obj[]).map((r) =>
+    isObj(r.mention) ? { ...r, mention: mentionCompared(r.mention) } : r,
+  );
+  return JSON.stringify(sortKeys(e)) === JSON.stringify(sortKeys(a));
+}
+
+function sortKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (!isObj(v)) return v;
+  return Object.fromEntries(
+    Object.keys(v)
+      .sort()
+      .map((k) => [k, sortKeys(v[k])]),
+  );
 }
 
 /**
@@ -108,7 +164,7 @@ function normalise(v: unknown, depth = 0): unknown {
   for (const [k, x] of Object.entries(v)) {
     if (block && k === 'version') continue;
     if (k === 'mention' && isObj(x)) {
-      out[k] = mentionTarget(x);
+      out[k] = mentionCompared(x);
       continue;
     }
     out[k] =
@@ -128,8 +184,9 @@ export function normaliseForCompare(v: unknown): unknown {
 }
 
 /**
- * Drops the stored id of every block the plan sent without one (LegendKeeper gave it an id), walking both trees in
- * parallel by position.
+ * Drops what LegendKeeper fills in where the plan sent nothing, walking both trees in parallel by position: the stored id
+ * of every block the plan sent without one (LegendKeeper gave it an id), and (X2) the label of every mention the plan
+ * sent without one (paired in order within each list of runs).
  */
 function dropMintedIds(planned: unknown, stored: unknown, depth = 0): unknown {
   if (depth > 200) return stored;
@@ -140,6 +197,10 @@ function dropMintedIds(planned: unknown, stored: unknown, depth = 0): unknown {
   const out: Obj = {};
   for (const [k, x] of Object.entries(stored)) {
     if (k === 'id' && typeof planned.kind === 'string' && planned.id === undefined) continue;
+    if (k === 'content' && isRuns(x) && isRuns(planned[k])) {
+      out[k] = dropFilledLabels(planned[k], x);
+      continue;
+    }
     out[k] = k in planned ? dropMintedIds(planned[k], x, depth + 1) : x;
   }
   return out;

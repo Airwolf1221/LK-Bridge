@@ -188,6 +188,21 @@ FAIL, INCONCLUSIVE or NOTED with what LegendKeeper answered; the run fails if an
   W18 (each check FAILs, notes or is INCONCLUSIVE where it should, and the clean-up still works). It also checks that
   another project is refused before anything is written.
 
+## Round 4: after the owner's run of the third review's checks (19 November 2026)
+
+`npm run test:sandbox -- assumptions-r4` (on the server `deploy/sandbox-test.sh --project test -- assumptions-r4`) runs
+`assumptions-r4.test.ts` alone, with the same guard as the smoke. Written for the owner; never run by an agent or in CI.
+
+- **Y1** (X6's follow-up): whether a board's, a map's and a timeline's own `updatedAt` (in `getResource`'s document list
+  and in `getDocument`) moves on a content edit, NOTED; PASS when the content read shows the edit. The retag read-back
+  compares their content now, so it is right either way.
+- **Y2** (X2's follow-up): a custom mention label, in a paragraph and in a table cell, reads back as sent, and the generic
+  verify finds the document as sent (a mention sent without a label is filled in by LegendKeeper and ignored).
+- **Y3** (X5's follow-up): one block id in two documents of one page: `getBlock` answers each document's own, and
+  `updateBlock` on one leaves the other as it was.
+- **What it creates and cleans up:** one throwaway page `lk-bridge r4 check <time>` with two page documents, a board, a
+  map and a timeline; deleted (cascade) at the end, even after a failure. About 25 writes and 30 reads.
+
 ## The chronology (v2 D1)
 
 `npm run test:sandbox` (on the server `deploy/sandbox-test.sh --project test`) also runs `chronology.test.ts`;
