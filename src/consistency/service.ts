@@ -155,6 +155,8 @@ export interface CharacterFacts {
   readonly inherited: ReadonlyMap<string, StoredFact>;
   /** Facts naming a name two characters share, outside either's own pages: never attributed (D2). */
   readonly ambiguous: number;
+  /** ADR 0064 amendment 1 (F): facts left out because their section or row is marked non-current. */
+  readonly nonCurrentLeftOut?: number;
 }
 
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex');
@@ -264,6 +266,13 @@ export class Consistency {
       for (const row of found.table.rows) {
         if (!row.id) continue;
         const event = row.cells[found.columns.event];
+        // The event cell's mentions with their text (rule A: a mention counts only as the name governing the verb).
+        const subjects = (event?.runs ?? []).flatMap((r) => {
+          const m = r.mention as Obj | undefined;
+          if (!m || typeof m !== 'object' || typeof m.resourceId !== 'string') return [];
+          const text = typeof m.text === 'string' ? m.text : typeof m.name === 'string' ? m.name : '';
+          return text.trim() ? [{ resourceId: m.resourceId, text }] : [];
+        });
         out.push({
           pageId: page.id,
           documentId: doc.id,
@@ -271,6 +280,7 @@ export class Consistency {
           event: event?.text ?? '',
           date: row.cells[found.columns.date]?.text ?? '',
           mentions: [...new Set(row.cells.flatMap((c) => c.mentions.map((m) => m.resourceId)))],
+          ...(subjects.length ? { subjects } : {}),
         });
       }
     }
@@ -330,7 +340,7 @@ export class Consistency {
       ...[...names].map(([k, v]) => `n:${k}:${[...v].sort().join(',')}`),
       ...[...given].map(([k, v]) => `g:${k}:${[...v].sort().join(',')}`),
     ].sort();
-    const key = sha1(JSON.stringify({ rules, entries, cal: this.calendarKey(cal), chron, v: 1 }));
+    const key = sha1(JSON.stringify({ rules, entries, cal: this.calendarKey(cal), chron, v: 2 }));
     const nameIndex = {
       lookup: (k: string): MatchedAs | null => (names.has(k) ? 'name' : given.has(k) ? 'given' : null),
     };
@@ -462,6 +472,9 @@ export class Consistency {
       if (pageId === id || keys.has(list[0]?.subjectKey ?? '')) all.push(...list);
     const seen = new Set<string>();
     let ambiguous = 0;
+    let nonCurrentLeftOut = 0;
+    // ADR 0064 amendment 1 (F): non-current sections and rows inside current pages, left out while the switch is on.
+    const leaveOutNonCurrent = w.rules.nonCurrent?.exclude === true && !include.has('pre-rewrite');
     const facts: StoredFact[] = [];
     for (const f of all) {
       const k = `${f.pageId}:${f.seq}`;
@@ -470,6 +483,10 @@ export class Consistency {
       const p = w.page(f.pageId);
       if (p.area && !include.has(p.area)) continue;
       if (p.lifecycle === 'Archived' && !include.has('archived')) continue;
+      if (f.nonCurrent && leaveOutNonCurrent) {
+        nonCurrentLeftOut++;
+        continue;
+      }
       if (f.source !== 'chronology' && w.continuityOf(f.pageId) !== continuity) continue;
       if (f.source === 'chronology' && continuity !== MAIN) continue;
       const ownPage = w.ownerOf(f.pageId) === id;
@@ -489,7 +506,9 @@ export class Consistency {
         }
         // A page's own sidebar restates the character only when its subject IS the character (or it is one of its pages).
         if (f.matchedAs === 'page' && !ownPage && !keys.has(f.subjectKey)) continue;
-      } else if (f.matchedAs !== 'page' && f.source !== 'prose') continue;
+      } else if (f.matchedAs !== 'page' && !keys.has(f.subjectKey) && !givenKeys.has(f.subjectKey)) continue;
+      // ADR 0064 amendment 1 (rule A): on the identity page too, a sentence counts only when the name governing its
+      // verb is the character's own ("Their son Murad al-Khalid was born…" on Daryavan's page is Murad's birth).
       facts.push(f);
     }
     // D9: an AU without an identity page of its own shows Main CANON's identity facts, labelled.
@@ -503,7 +522,15 @@ export class Consistency {
       }
       identityPageId = id;
     }
-    return { character: c, continuity, identityPageId, facts, inherited, ambiguous };
+    return {
+      character: c,
+      continuity,
+      identityPageId,
+      facts,
+      inherited,
+      ambiguous,
+      ...(nonCurrentLeftOut > 0 ? { nonCurrentLeftOut } : {}),
+    };
   }
 
   /** Whether a chronology row relates to a page: the row mentions it, or the page links to the row's table (D1). */
@@ -536,6 +563,7 @@ export class Consistency {
       inherited: cf.inherited,
       inheritedLabel: 'inherited from Main CANON',
       rowRelates: this.rowRelates(w),
+      nonCurrentHistorical: w.rules.nonCurrent?.exclude === true,
     });
     return list.map((d) => ({ id: consistencyId(w.projectId, d, cf.identityPageId, cf.continuity), d }));
   }
@@ -701,10 +729,12 @@ export class Consistency {
     if (o.live) reads = await this.readLive(w, characters, o.live);
     const findings: AppraisalFinding[] = [];
     let ambiguous = 0;
+    let nonCurrentLeftOut = 0;
     for (const c of characters) {
       const continuity = o.continuity ?? w.continuityOf(c.identity.id);
       const cf = this.characterFacts(w, c, { continuity, include });
       ambiguous += cf.ambiguous;
+      nonCurrentLeftOut += cf.nonCurrentLeftOut ?? 0;
       if (continuity !== w.continuityOf(c.identity.id) && cf.facts.length === 0) continue;
       for (const x of this.disagreements(w, cf)) findings.push(this.toFinding(w, cf, x));
     }
@@ -740,6 +770,11 @@ export class Consistency {
           ...(include.has('archived') ? [] : ['Archived pages']),
           ...(include.has('legacy') ? [] : ['the Legacy Canon Archive']),
           ...(include.has('design') ? [] : ['the Design References']),
+          ...(w.rules.nonCurrent?.exclude === true && !include.has('pre-rewrite')
+            ? [
+                `sections and chronology rows marked ${w.rules.nonCurrent.markers.map((m) => `“${m}”`).join(' or ')}${nonCurrentLeftOut > 0 ? ` (${nonCurrentLeftOut} fact(s))` : ''}: include “pre-rewrite” to bring them in, labelled Historical material differs`,
+              ]
+            : []),
         ],
       },
       couldNotCheck: [
@@ -1155,53 +1190,65 @@ export class Consistency {
 
   // ============================================================================================ coverage (D8)
 
-  /** How many characters have a birth the engine can read, a recorded death, attested bounds, or none (D8). */
+  /**
+   * How many characters have a birth the engine can read, a recorded death, attested bounds, or none (D8). ADR 0064
+   * amendment 1 (G): one primary bucket per character, so the buckets add up to the total (a readable birth; a birth
+   * deliberately unestablished; attested bounds only; nothing readable); a recorded death and an unreadable birth are
+   * flags with their own counts.
+   */
   async coverage(o: { readonly projectId: string; readonly full?: boolean }): Promise<Obj> {
     const w = await this.world(o.projectId);
     const counts = {
       characters: 0,
       readableBirth: 0,
-      unreadableBirth: 0,
       birthUnestablished: 0,
-      recordedDeath: 0,
-      attestedBounds: 0,
+      attestedBoundsOnly: 0,
       nothingReadable: 0,
     };
+    const flags = { recordedDeath: 0, unreadableBirth: 0 };
     const nothing: Obj[] = [];
     const unreadable: Obj[] = [];
+    const leaveOutNonCurrent = w.rules.nonCurrent?.exclude === true;
     for (const c of w.characters) {
       if (w.continuityOf(c.identity.id) !== MAIN) continue;
       counts.characters++;
-      const own = this.facts.factsOn(w.projectId, [c.identity.id]).filter((f) => f.matchedAs === 'page');
+      const own = this.facts
+        .factsOn(w.projectId, [c.identity.id])
+        .filter((f) => f.matchedAs === 'page' && !(leaveOutNonCurrent && f.nonCurrent));
       const birth = own.filter((f) => f.kind === 'birth');
       const readable = birth.some((f) => f.date);
-      if (readable) counts.readableBirth++;
-      else if (birth.some((f) => f.unreadable)) {
-        counts.unreadableBirth++;
-        unreadable.push({
-          character: c.subject,
-          page: c.identity.name,
-          text: birth.find((f) => f.unreadable)!.valueText,
-          why: birth.find((f) => f.unreadable)!.unreadable,
-        });
-      }
-      if (birth.some((f) => f.gap) && !readable) counts.birthUnestablished++;
+      const gap = birth.some((f) => f.gap);
       const death = own.some((f) => f.kind === 'death' && f.date);
-      if (death) counts.recordedDeath++;
       const attested = own.some((f) => f.kind === 'attested' && f.date);
-      if (attested) counts.attestedBounds++;
-      if (!readable && !death && !attested) {
+      const bad = birth.find((f) => f.unreadable);
+      if (readable) counts.readableBirth++;
+      else if (gap) counts.birthUnestablished++;
+      else if (attested) counts.attestedBoundsOnly++;
+      else {
         counts.nothingReadable++;
         nothing.push({
           character: c.subject,
           identityPage: { id: c.identity.id, name: c.identity.name, lifecycle: c.lifecycle },
-          ...(birth.some((f) => f.gap) ? { recorded: 'birth deliberately unestablished' } : {}),
+          ...(death ? { flags: ['recorded death'] } : {}),
+          ...(bad ? { unreadableBirth: bad.valueText } : {}),
+        });
+      }
+      if (death) flags.recordedDeath++;
+      if (bad) {
+        flags.unreadableBirth++;
+        unreadable.push({
+          character: c.subject,
+          page: c.identity.name,
+          text: bad.valueText,
+          why: bad.unreadable,
         });
       }
     }
     const cap = o.full ? 1000 : 50;
     return {
       counts,
+      flags,
+      sums: `Each character is in one bucket: readableBirth + birthUnestablished + attestedBoundsOnly + nothingReadable = characters (${counts.readableBirth} + ${counts.birthUnestablished} + ${counts.attestedBoundsOnly} + ${counts.nothingReadable} = ${counts.characters}). The flags (recordedDeath, unreadableBirth) are counted separately and overlap the buckets.`,
       nothingReadable: nothing.slice(0, cap),
       ...(nothing.length > cap ? { more: nothing.length - cap } : {}),
       ...(unreadable.length ? { unreadableBirths: unreadable.slice(0, cap) } : {}),

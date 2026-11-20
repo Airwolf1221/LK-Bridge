@@ -30,11 +30,11 @@ import {
 
 const GROUPS = ['contradictory', 'differs', 'gaps', 'historical', 'unreadable'] as const;
 const include = z
-  .array(z.enum(['archived', 'legacy', 'design']))
-  .max(3)
+  .array(z.enum(['archived', 'legacy', 'design', 'pre-rewrite']))
+  .max(4)
   .optional()
   .describe(
-    'Bring in Archived pages (archived), the Legacy Canon Archive (legacy) or the Design References (design): left out by default.',
+    'Bring in Archived pages (archived), the Legacy Canon Archive (legacy), the Design References (design) or sections and chronology rows marked pre-rewrite or author-facing (pre-rewrite, labelled Historical material differs): left out by default.',
   );
 const continuity = z
   .string()
@@ -78,7 +78,7 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
       access: 'read',
       description:
         'The Arkona pack, read-only and free: run it BEFORE changing a date (a birth, a death, a chronology row) or an identity fact. For one subject (a character), a branch (under) or everything (all): births, deaths and identity facts (Race / Species, Naming Culture, Life State, Personal / Given Name, Family / Surname) that the subject’s identity page (its Core or Compact Reference) states one way and another page restates another, and chronology rows whose date differs from the same event on a page they mention. Dates are read by the calendar engine with their precision; two values conflict only when they cannot both be true (“4A 100” and “Camue 1st, 4A 100” agree; a “c.” date has a margin of years). ' +
-        'Each finding shows the identity page’s value first, then each disagreeing restatement with its page, lifecycle, section, excerpt and precision, labelled Contradictory (Authoritative against Authoritative), Proposal differs from canon (Working), Gap (“Unestablished” against a value: never a conflict) or Unreadable. It NEVER decides which side is right: tell the owner, who picks the value on the dashboard; you may suggest one with arkona_consistency_suggest. Only the pack’s phrasings are read: a sentence about someone is read only when it names them (never a pronoun). Archived pages, the Legacy Canon Archive and the Design References are left out unless include names them. ' +
+        'Each finding shows the identity page’s value first, then each disagreeing restatement with its page, lifecycle, section, excerpt and precision, labelled Contradictory (Authoritative against Authoritative), Proposal differs from canon (Working), Gap (“Unestablished” against a value: never a conflict) or Unreadable. It NEVER decides which side is right: tell the owner, who picks the value on the dashboard; you may suggest one with arkona_consistency_suggest. Only the pack’s phrasings are read: a sentence about someone is read only when the name governing its verb is theirs (never a pronoun, never another name in the sentence). Archived pages, the Legacy Canon Archive, the Design References and sections or chronology rows marked pre-rewrite are left out unless include names them. ' +
         'A long run is stored: page through it with runId and offset. Cost: none (the bridge’s snapshots, full-text index, chronology tables and calendar); live: true re-reads the identity pages’ sidebars (1 read each, at most 25).',
       inputSchema: z.object({
         subject: z.string().min(1).max(300).optional().describe('A character: a name, alias, page or id.'),
@@ -229,7 +229,7 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Which characters have dates the calendar can read (Arkona pack, read-only)',
       access: 'read',
       description:
-        'The Arkona pack, read-only and free: how many current characters have a birth the calendar engine can read, a recorded death, attested bounds, or none, from their identity pages; and which have nothing readable. A report for the owner, NEVER a task list: an unrecorded birth is often deliberate (“birth date unestablished”); never invent or ask for a date to fill a gap. Cost: none.',
+        'The Arkona pack, read-only and free: how many current characters have a birth the calendar engine can read, a birth deliberately unestablished, attested bounds only, or nothing readable, from their identity pages (one bucket each, so the buckets add up to the total), with a recorded death and an unreadable birth counted as separate flags; and which have nothing readable. A report for the owner, NEVER a task list: an unrecorded birth is often deliberate (“birth date unestablished”); never invent or ask for a date to fill a gap. Cost: none.',
       inputSchema: z.object({
         detail: z.enum(['summary', 'full']).optional().describe('"full": up to 1,000 characters listed.'),
         project: projectArg,

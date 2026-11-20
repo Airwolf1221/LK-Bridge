@@ -136,7 +136,7 @@ describe('the seeded phrasings (pack data, D2)', () => {
     expect(facts.find((f) => f.pattern === 'attested.scope.span')).toBeUndefined();
   });
 
-  it('Temporal Scope: "Born Sarias 28th, 1A 51,743; succession …; active at…" (the unreadable "active at…" is reported)', () => {
+  it('Temporal Scope: "Born Sarias 28th, 1A 51,743; succession …; active at…" ("active at…" holds nothing date-shaped: no fact)', () => {
     const { facts } = extractPageFacts(
       'titania',
       scope('Titania', 'Born Sarias 28th, 1A 51,743; succession Redfall 1st, 1A 62,313; active at…'),
@@ -148,9 +148,9 @@ describe('the seeded phrasings (pack data, D2)', () => {
     });
     // "succession …" matches no phrasing: never read.
     expect(facts.filter((f) => f.valueText.includes('Redfall'))).toEqual([]);
-    const active = facts.find((f) => f.pattern === 'attested.scope.alive')!;
-    expect(active.date).toBeNull();
-    expect(active.unreadable).toMatch(/cannot read a date/);
+    // ADR 0064 amendment 1 (rule B): "unreadable" is kept for a date-shaped text the calendar refuses; "active at…"
+    // holds none, so it is no fact at all.
+    expect(facts.find((f) => f.pattern === 'attested.scope.alive')).toBeUndefined();
   });
 
   it('Temporal Scope: "Attested 5A 411–5A 931; birth date unestablished" (a range, and a deliberate gap)', () => {
@@ -253,6 +253,15 @@ describe('the seeded phrasings (pack data, D2)', () => {
           date: 'c. 4A 563; exact date unresolved',
           mentions: ['corebody'],
         },
+        {
+          pageId: 'chron',
+          documentId: 't4',
+          rowId: 'r4',
+          event: 'Amira of the Reeds is born',
+          date: 'c. 4A 563; exact date unresolved',
+          mentions: ['corebody'],
+          subjects: [{ resourceId: 'corebody', text: 'Amira of the Reeds' }],
+        },
       ],
       ctx,
     );
@@ -264,8 +273,12 @@ describe('the seeded phrasings (pack data, D2)', () => {
       valueText: '4A 401',
       blockId: 'r1',
     });
-    // No name, one mention: the mention (resolved to its character where facts are compared); the cell read by its anchor.
+    // ADR 0064 amendment 1 (rule A): "A daughter is born" names nobody, so the row is not attributed, even with one
+    // mention. A mention whose text IS the name governing the verb is its page's (resolved to its character where facts
+    // are compared); the cell read by its anchor.
+    expect(rows.find((r) => r.blockId === 'r3')).toBeUndefined();
     expect(rows[1]).toMatchObject({
+      blockId: 'r4',
       subjectKey: 'page:corebody',
       matchedAs: 'mention',
       date: { approximate: true, precision: 'year' },
