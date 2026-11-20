@@ -436,7 +436,7 @@ async function chapterCheck(
         // "Deceased by <date>" (an upper bound on death, the Life State's): the state says which.
         ...(c.deceasedBy ? { deceasedBy: c.deceasedBy, state: state.value } : {}),
       });
-    else if (state.value === 'Unestablished')
+    else if (state.value?.startsWith('Unestablished'))
       items.push({
         label: LABELS.unestablished,
         kind: 'person',

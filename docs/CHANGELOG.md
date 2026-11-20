@@ -37,7 +37,10 @@ listed and the narrative audit reports nothing.
   `arkona_as_of` inheriting Main CANON's attested life and Life State too, the state labelled "inherited from Main
   CANON"; and D7 amended by the owner's ruling: a Life State of "Alive" (`aliveValues`) records the character alive at
   the present, so with a recorded birth they are Alive (recorded) from it to the present (Yasmin al-Naim at 4A 120, in
-  Main CANON and inherited in Moonfall).
+  Main CANON and inherited in Moonfall), with its guard: a recorded death always wins inside its own span (from a death
+  to the next recorded birth or return "Deceased (recorded)"; after the last death with no return, "Unestablished
+  (recorded death; current Life State Alive)", never Alive across the gap). A return ("Reborn / Returned / Reincarnated
+  <date>", `attested.scope.return`) is an attested start of life, never a second birth.
 
 ## Unreleased: connected sessions are told when their tool list changes (20 November 2026)
 

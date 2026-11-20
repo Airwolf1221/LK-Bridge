@@ -25,8 +25,10 @@ import {
 } from '../../src/consistency/extract.js';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import { packRulesSchema } from '../../src/packs/types.js';
+import { SidebarModel } from '../resources/world.js';
 import { F } from '../packs/f4a-world.js';
-import { liveRunWorld, type LiveWorld } from './live-world.js';
+import { IDENTITY_KEYS } from '../packs/world.js';
+import { L, liveRunWorld, type LiveWorld } from './live-world.js';
 
 vi.setConfig({ testTimeout: 120_000 });
 
@@ -110,6 +112,50 @@ beforeAll(async () => {
         content: [{ text: '5A 900 - 5A 931' }],
       });
   });
+  // The guard on the Life State ruling: a recorded death and a current Life State of "Alive" (modelled on Nahla's Sidhe
+  // rebirth and Yue Bailu's Kitsune rebirth, stand-in names and the fixture's own dates).
+  for (const [id, given, scope, life] of [
+    ['nahlast1', 'Nahla', 'Born Camue 5th, 4A 200; died Isar 10th, 4A 260', 'Alive'],
+    ['yuestnd1', 'Yue', 'Born 4A 100; died 4A 150; reborn 4A 300', 'Alive (Kitsune rebirth)'],
+  ] as const) {
+    const name = `${given} Stand-in`;
+    w.repo.seed({
+      id,
+      name: `[BSRC] ${name} - Character Reference`,
+      parentId: L.idx,
+      referenceType: 'Compact Character Reference',
+      canonical: name,
+      tags: ['CANON', 'Character', 'Human'],
+    });
+    const v: Record<string, string> = {
+      Status: 'Authoritative',
+      'Continuity Type': 'CANON',
+      Continuity: 'Main',
+      Inheritance: 'None',
+      Subject: name,
+      'Canonical Display Name': name,
+      'Personal / Given Name': given,
+      'Family / Surname': 'Stand-in',
+      'Naming Culture': 'Velaran',
+      'Reference Type': 'Compact Character Reference',
+      Scope: `${name}, a person of Arkona`,
+      'Race / Species': 'Human',
+      'Life State': life,
+      'Temporal Scope': scope,
+      'Last Major Revision': '2026-11-01',
+      Supersedes: 'None',
+    };
+    w.sidebars.page(id, [
+      SidebarModel.kv(
+        `kv${id}`.slice(0, 8),
+        'PROPERTIES',
+        IDENTITY_KEYS.map((k) => [k, v[k] ?? ''] as [string, string]),
+      ),
+      SidebarModel.links(`dp${id}`.slice(0, 8), 'Dependencies', []),
+      SidebarModel.links(`rl${id}`.slice(0, 8), 'Related Sources', []),
+      { id: `tg${id}`.slice(0, 8), kind: 'unsupported' as const, title: 'TAGS' },
+    ]);
+  }
   w.rebuildTree();
   await w.snapshot();
 }, 180_000);
@@ -206,5 +252,53 @@ describe('D9 in arkona_as_of: an AU with no identity page of its own inherits Ma
       'Unestablished',
     );
     expect((await asOf('Yasmin al-Naim', '5A 931')).state.value).toBe('Alive (recorded)');
+  });
+});
+
+describe('the guard on the Life State ruling: a recorded death wins inside its own span', () => {
+  const gap = 'Unestablished (recorded death; current Life State Alive)';
+
+  it('Nahla Stand-in (died Isar 10th, 4A 260; Life State "Alive"): alive before the death, never after it', async () => {
+    expect((await asOf('Nahla Stand-in', '4A 230')).state).toMatchObject({
+      value: 'Alive (recorded)',
+      why: 'between the recorded birth and the recorded death',
+    });
+    const after = await asOf('Nahla Stand-in', '4A 300');
+    expect(after.state.value).toBe(gap);
+    expect(after.state.why).toMatch(/never alive across the gap/);
+    // Up to the present, never Alive (recorded) across the gap.
+    expect((await asOf('Nahla Stand-in', 'now')).state.value).toBe(gap);
+    expect((await asOf('Nahla Stand-in', 'Isar 10th, 4A 260')).state.value).toBe(gap);
+  });
+
+  it('Yue Stand-in (died 4A 150, reborn 4A 300): Deceased (recorded) between the death and the return, alive after it', async () => {
+    expect((await asOf('Yue Stand-in', '4A 120')).state.value).toBe('Alive (recorded)');
+    const dead = await asOf('Yue Stand-in', '4A 200');
+    expect(dead.state).toMatchObject({ value: 'Deceased (recorded)' });
+    expect(dead.state.why).toMatch(/before the recorded return \(4A 300\)/);
+    const back = await asOf('Yue Stand-in', '4A 400');
+    expect(back.state).toMatchObject({ value: 'Alive (recorded)' });
+    expect(back.state.why).toMatch(/recorded return \(4A 300\) and the present/);
+  });
+
+  it('inherited into an AU (Moonfall), the same states, labelled "inherited from Main CANON"', async () => {
+    const moon = { continuity: 'Moonfall' };
+    expect((await asOf('Nahla Stand-in', '4A 300', moon)).state).toMatchObject({
+      value: gap,
+      label: 'inherited from Main CANON',
+    });
+    expect((await asOf('Yue Stand-in', '4A 200', moon)).state).toMatchObject({
+      value: 'Deceased (recorded)',
+      label: 'inherited from Main CANON',
+    });
+    expect((await asOf('Yue Stand-in', '4A 400', moon)).state).toMatchObject({
+      value: 'Alive (recorded)',
+      label: 'inherited from Main CANON',
+    });
+  });
+
+  it('a return is never a second birth: the consistency check reports nothing for either', async () => {
+    for (const subject of ['Nahla Stand-in', 'Yue Stand-in'])
+      expect((await call('arkona_consistency', { subject, detail: 'full' })).findings, subject).toEqual([]);
   });
 });

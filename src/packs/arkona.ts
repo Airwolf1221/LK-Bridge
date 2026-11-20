@@ -791,6 +791,18 @@ const rules: PackRules = packRulesSchema.parse({
         regex: String.raw`^\s*(?<date>(?:c\.\s*)?(?:[a-z]+\s+\d{1,3}(?:st|nd|rd|th),\s*)?\d{1,2}A\s+[\d,]+\s*[-–]\s*(?:[a-z]+\s+\d{1,3}(?:st|nd|rd|th),\s*)?(?:\d{1,2}A\s+)?[\d,]+)\s*$`,
         bound: 'both',
       },
+      // v3 F4c (ADR 0065; the owner's guard on the Life State ruling): a return after a recorded death ("Reborn 4A 300",
+      // "Returned …", "Reincarnated …": Mehrana al-Khalid's incarnations, Nahla's Sidhe rebirth, Yue Bailu's Kitsune
+      // rebirth) is an attested start of life, never a second birth, so never compared; arkona_as_of reads the death as
+      // ending at it.
+      {
+        id: 'attested.scope.return',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`^\s*(?:reborn|returned|reincarnated|resurrected)\b(?:\s+(?:on|in|at))?\s+(?<date>.+)$`,
+        date: 'scan',
+        bound: 'from',
+      },
       // A Life State of "Deceased" with a date. "Deceased" alone is a state (the Life State identity fact), not a date;
       // "Deceased by <date>" is an upper bound on death, never a death date (ADR 0064 amendment 1, D).
       {

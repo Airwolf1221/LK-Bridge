@@ -205,6 +205,19 @@ comparison code are unchanged; everything below is pack data or `arkona_as_of`.
    decision 10 below: Yasmin al-Naim (born Camue 1st, 4A 100 in Main CANON, Life State "Alive") is Alive (recorded) at 4A
    120 in Main CANON and, labelled "inherited from Main CANON", in Moonfall. F4b's test that Titania was Unestablished at
    4A 100 now reads her Alive (her Life State is "Alive"); before her birth she is still Unestablished.
+6. **The guard on that ruling (the owner, before merge): a recorded death always wins inside its own span.** When a
+   death is recorded before the present and the current Life State records the character alive (a rebirth, a
+   reincarnation, a return: Mehrana al-Khalid's incarnations, Nahla's Sidhe rebirth, Yue Bailu's Kitsune rebirth),
+   `arkona_as_of` reads the identity page's dated deaths and starts: before the first death, the other rules; from a
+   death to the next recorded birth or return, "Deceased (recorded)"; after the last death with no return after it, up to
+   the present, "Unestablished (recorded death; current Life State Alive)", never "Alive (recorded)" across the gap. A
+   return is recorded by a new Temporal Scope phrasing, `attested.scope.return` ("Reborn / Returned / Reincarnated /
+   Resurrected <date>"), as an attested start of life (`bound: from`), so it is never a second birth and never compared.
+   **Chosen**: after a recorded return, the Life State carries the life from the return to the present ("Alive
+   (recorded)", "between the recorded return and the present"); a date that straddles a death or a return is plain
+   Unestablished. In an AU with no identity page of its own, Main CANON's deaths and returns are used and the state is
+   labelled "inherited from Main CANON". Fixtures: two stand-ins modelled on those characters (a death with no return; a
+   death and a return), in Main CANON and inherited into Moonfall.
 
 ## Guidance and docs
 

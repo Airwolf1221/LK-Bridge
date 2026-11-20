@@ -438,7 +438,8 @@ Boundary).
 each character (at most 25) it returns where its birth is recorded (or "birth unestablished"); the **elapsed calendar
 years** (a number when both dates are exact days, a range when either is approximate or coarser, "not yet born" before
 the birth, none when the birth is unknown); the **state recorded**: Alive (recorded) between its birth and a recorded
-death, inside its attested span or, with a Life State of "Alive", up to the present; Deceased (recorded) after a recorded
+death, inside its attested span or, with a Life State of "Alive", up to the present (never across a recorded death: after
+a death with no recorded return it is "Unestablished (recorded death; current Life State Alive)"); Deceased (recorded) after a recorded
 death, or "Deceased (recorded by <date>)" at or after a Life State's "Deceased by <date>"; **Unestablished** otherwise; the
 chronology rows naming it nearest the date on each side (`window`, default 3); and any open **contradiction** on its birth
 or death. **It never gives apparent or biological age**: Arkona's races mature and age differently, so read the race

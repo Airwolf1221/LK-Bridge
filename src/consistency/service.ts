@@ -1094,10 +1094,31 @@ export class Consistency {
       lifeState !== undefined &&
       !lifeState.gap &&
       (w.rules.aliveValues ?? []).some((v) => textKey(v) === textKey(principalValue(lifeState.valueText)));
+    // v3 F4c (ADR 0065; the owner's guard on the Life State ruling): a recorded death always wins inside its own span. With
+    // a death recorded before the present and a current Life State recording the character alive (a rebirth, a return),
+    // the Life State never carries the life across the gap: from the death to the next recorded birth or return the
+    // character is Deceased (recorded); after the last death with no return, Unestablished (recorded death; current Life
+    // State …); after a return, alive from it to the present.
+    const afterDeath = aliveNow && presentSpan ? this.afterDeath(w, cf, id, at.span, presentSpan) : null;
     let state: string;
     let why: string;
     let inherited = false;
-    if (deathSpan && at.span.from > deathSpan.to) {
+    if (afterDeath) {
+      if (afterDeath.state === 'deceased') {
+        state = 'Deceased (recorded)';
+        why = `after the recorded death (${afterDeath.death.valueText}), before the recorded return (${afterDeath.next!.valueText})`;
+      } else if (afterDeath.state === 'returned') {
+        state = 'Alive (recorded)';
+        why = `between the recorded return (${afterDeath.next!.valueText}) and the present (${w.rules.present}): the Life State records the character “${lifeState!.valueText}”`;
+      } else if (afterDeath.state === 'gap') {
+        state = `Unestablished (recorded death; current Life State ${principalValue(lifeState!.valueText)})`;
+        why = `a death is recorded (${afterDeath.death.valueText}) and the Life State records the character “${lifeState!.valueText}” now, but no return is recorded after it: never alive across the gap`;
+      } else {
+        state = 'Unestablished';
+        why = `the date spans the recorded death (${afterDeath.death.valueText}) or a recorded return`;
+      }
+      inherited = afterDeath.inherited;
+    } else if (deathSpan && at.span.from > deathSpan.to) {
       state = 'Deceased (recorded)';
       why = `after the recorded death (${death!.fact.valueText})`;
       inherited = death!.inherited;
@@ -1209,6 +1230,61 @@ export class Consistency {
         : {}),
       ...(race ? { raceReference: race } : {}),
     };
+  }
+
+  /**
+   * The guard on a Life State of "Alive" after a recorded death (ADR 0065): null when the date does not reach the first
+   * recorded death (the other rules apply). The identity page's dated deaths and starts (births, and attested lives with
+   * an open end: a return), Main CANON's in an AU with no identity page of its own.
+   */
+  private afterDeath(
+    w: World,
+    cf: CharacterFacts,
+    id: string,
+    at: Span,
+    present: Span,
+  ): {
+    state: 'deceased' | 'returned' | 'gap' | 'spans';
+    death: StoredFact;
+    next: StoredFact | null;
+    inherited: boolean;
+  } | null {
+    const leaveOut = (f: StoredFact) => f.nonCurrent && w.rules.nonCurrent?.exclude === true;
+    let pool = cf.facts.filter((f) => f.pageId === id && f.source !== 'chronology' && f.date !== null);
+    let inherited = false;
+    if (pool.length === 0 && cf.inherited.size > 0) {
+      pool = this.facts
+        .factsOn(w.projectId, [id])
+        .filter(
+          (f) => f.matchedAs === 'page' && f.source !== 'chronology' && f.date !== null && !leaveOut(f),
+        );
+      inherited = pool.length > 0;
+    }
+    const cal = w.cal!;
+    const withSpan = (f: StoredFact) => ({ f, s: spanOf(cal, f.date!, w.rules.approxMargin) });
+    const deaths = pool
+      .filter((f) => f.kind === 'death')
+      .map(withSpan)
+      .filter((x) => x.s.to < present.from)
+      .sort((a, b) => a.s.from - b.s.from);
+    const first = deaths[0];
+    if (!first || at.to < first.s.from) return null;
+    const starts = pool
+      .filter((f) => f.kind === 'birth' || (f.kind === 'attested' && f.bound === 'from'))
+      .map(withSpan)
+      .sort((a, b) => a.s.from - b.s.from);
+    const last = deaths.filter((d) => d.s.from <= at.to).at(-1)!;
+    const next = starts.find((b) => b.s.from > last.s.to) ?? null;
+    const out = (state: 'deceased' | 'returned' | 'gap' | 'spans') => ({
+      state,
+      death: last.f,
+      next: next?.f ?? null,
+      inherited,
+    });
+    if (at.from < last.s.from) return out('spans');
+    if (!next) return out('gap');
+    if (at.to < next.s.from) return out('deceased');
+    return at.from > next.s.to && at.to <= present.to ? out('returned') : out('spans');
   }
 
   /** A Life State's upper bound on death ("Deceased by 5A 931"), by the pack's `deceasedBy` phrasings; null when none. */

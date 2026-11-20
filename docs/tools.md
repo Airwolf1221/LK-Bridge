@@ -2074,7 +2074,9 @@ at a time). Cost: none; `live: true` re-reads the identity pages' sidebars (1 re
 birth is unknown): **calendar years only, never apparent or biological age**, with the race reference linked for its
 maturation rules; `state`: **Alive (recorded)** between the birth and a recorded death, or inside the attested span (from
 the recorded birth, or the attestation's own start, to the latest attestation; "alive at" the present attests up to
-it; since F4c, a Life State of "Alive" records the life from the birth to the present), **Deceased (recorded)** after a
+it; since F4c, a Life State of "Alive" records the life from the birth, or from a recorded return ("Reborn <date>"),
+to the present, but never across a recorded death: after the last death with no return it is **Unestablished (recorded
+death; current Life State Alive)**, and between a death and a return **Deceased (recorded)**), **Deceased (recorded)** after a
 recorded death, **Deceased (recorded by <date>)** at or after a Life State's "Deceased by <date>" (with `deceasedBy`; an
 upper bound, never compared), **Unestablished** otherwise (an attested life never proves survival past it); in an AU
 with no identity page of its own, a state decided by Main CANON's values carries `label: "inherited from Main CANON"`; `around` (the chronology rows naming it, `window` each side, default 3); and `contradictions` on its birth or
