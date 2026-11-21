@@ -33,6 +33,7 @@ import { resolveImage } from '../../src/mcp/tools/upload-source.js';
 import type { Finding, Verdict } from './smoke.js';
 import type { HttpCounters } from './soak.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
+import { wholeError } from './whole.js';
 
 const fixture = (name: string): Buffer =>
   readFileSync(new URL(`../fixtures/images/${name}`, import.meta.url));
@@ -76,7 +77,7 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
       record(id, title, 'pass', `${await fn()}; ${cost(before)}`);
     } catch (e) {
       const inconclusive = e instanceof Unclear;
-      record(id, title, inconclusive ? 'inconclusive' : 'fail', `${(e as Error).message}; ${cost(before)}`);
+      record(id, title, inconclusive ? 'inconclusive' : 'fail', `${wholeError(e)}; ${cost(before)}`);
     }
   };
   const run = (op: string, params: Record<string, unknown>) =>
@@ -227,10 +228,10 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
       if (r.status === 502 || r.status === 0) {
         throw new Unclear(
           `${r.status || 'no answer'}: the bridge refuses before reading and closes the connection; the proxy reported ` +
-            `that instead of the refusal (${r.body.slice(0, 120)}). Send a real upload through prepare_image_upload to be sure.`,
+            `that instead of the refusal (${r.body}). Send a real upload through prepare_image_upload to be sure.`,
         );
       }
-      throw new Error(`answered ${r.status}: ${r.body.slice(0, 200)}`);
+      throw new Error(`answered ${r.status}: ${r.body}`);
     });
 
     await check('1.url', 'upload through a URL (LKB_SANDBOX_IMAGE_URL)', async () => {

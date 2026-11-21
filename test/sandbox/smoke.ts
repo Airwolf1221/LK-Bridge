@@ -10,6 +10,7 @@
 import type { JobEngine } from '../../src/jobs/index.js';
 import type { LkClient } from '../../src/lk/index.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
+import { wholeError } from './whole.js';
 
 /** `noted` is a fact about LegendKeeper the run records (never a failure of the bridge): a refusal the bridge works around. */
 export type Verdict = 'pass' | 'fail' | 'inconclusive' | 'skipped' | 'noted';
@@ -79,7 +80,7 @@ export async function runSmoke(
       `sent ${rid}, received ${echoed ?? '(none)'}`,
     );
   } catch (e) {
-    record('a', 'LK echoes a client-supplied x-request-id', 'inconclusive', (e as Error).message);
+    record('a', 'LK echoes a client-supplied x-request-id', 'inconclusive', wholeError(e));
   }
 
   // ---- the throwaway root -----------------------------------------------------------------------------------------
@@ -92,7 +93,7 @@ export async function runSmoke(
     try {
       record(id, title, 'pass', await fn());
     } catch (e) {
-      record(id, title, 'fail', (e as Error).message);
+      record(id, title, 'fail', wholeError(e));
     }
   };
 
@@ -405,12 +406,7 @@ export async function runSmoke(
       });
       record('cleanup', 'throwaway root deleted', 'pass', rootId);
     } catch (e) {
-      record(
-        'cleanup',
-        'throwaway root deleted',
-        'fail',
-        `${rootId}: ${(e as Error).message}. Delete it by hand.`,
-      );
+      record('cleanup', 'throwaway root deleted', 'fail', `${rootId}: ${wholeError(e)}. Delete it by hand.`);
     }
   }
 

@@ -1,8 +1,12 @@
 /**
  * CR-2026-11: the sandbox assumptions script's own logic (test/sandbox/assumptions.ts), run against the mock
- * LegendKeeper of the lifecycle test world (no real LegendKeeper involved). The mock models some of the assumptions
- * and not others, so this checks that the script runs every check to an answer, refuses another project, and cleans up
- * after itself; and that the checks the mock does model pass.
+ * LegendKeeper of the lifecycle test world (no real LegendKeeper involved): it refuses another project, runs every check
+ * to an answer, and cleans up after itself.
+ *
+ * CR-2026-11-R4 (the owner's request S): through the same runtime and harness as the owner's run (`createSoakRuntime`
+ * pointed at the faithful mock, test/sandbox-mock/: LegendKeeper as its spec and the owner's runs describe it, the
+ * upload host on loopback for LIM1), and every item must pass or be NOTED: anything else fails the build with the whole
+ * report printed (it used to print [FAIL] lines and pass).
  */
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
@@ -14,17 +18,22 @@ import { SandboxGuardError, type SmokeTarget } from '../sandbox/smoke.js';
 import { ASSET_ROUTE_TIERS, type MockRequest, type MockResponse } from '../contract/mock-lk.js';
 import { lifecycleWorld, type LifecycleWorld } from '../lifecycle/world.js';
 import { labelSizeListRefusal, labelSizeWriteRefusal } from '../maps/label-size-bug.js';
+import { makeFaithful } from '../sandbox-mock/faithful.js';
+import { expectEveryItemPasses, MOCK_LIMITS, type OnMock } from '../sandbox-mock/harness.js';
+import { sandboxOnMockWithHosts } from '../sandbox-mock/hosts.js';
 import { API_KEY, PROJECT } from './helpers.js';
 
 let w: LifecycleWorld;
+let on: OnMock;
 /** v2 E5.5 (LIM1): the upload host the signed PUT goes to (no rate headers, as a storage host answers). */
 let storage: Server;
 const stored: { method: string; bytes: number }[] = [];
+// The real run's target (test/sandbox/assumptions.test.ts): the sandbox runtime's engine, client, base URL and key.
 const target = (): SmokeTarget => ({
-  engine: w.stack.runtime.engine,
-  lk: w.stack.runtime.projects.client(PROJECT)!,
-  projectId: PROJECT,
-  baseUrl: w.stack.mock.url,
+  engine: on.sb.runtime.engine,
+  lk: on.sb.lk,
+  projectId: on.sb.projectId,
+  baseUrl: on.sb.runtime.config.lk.baseUrl,
   apiKey: API_KEY,
 });
 
@@ -42,18 +51,19 @@ beforeAll(async () => {
   });
   await new Promise<void>((r) => storage.listen(0, '127.0.0.1', r));
   const port = (storage.address() as AddressInfo).port;
+  const guard = {
+    resolve: (host: string) =>
+      Promise.resolve(host === 'storage.test' ? [{ address: '127.0.0.1', family: 4 as const }] : []),
+    ca: cert,
+    allowAddress: (a: string) => a === '127.0.0.1',
+    allowedPorts: parseOutboundPortAllowlist(`storage.test:${port}`),
+  };
   w = await lifecycleWorld({
-    env: { LK_TIER_LIMITS: JSON.stringify({ 'key-min': 5000, 'write-min': 2000 }) },
-    limits: { 'key-min': 5000, 'write-min': 2000 },
+    env: { LK_TIER_LIMITS: JSON.stringify(MOCK_LIMITS) },
+    limits: MOCK_LIMITS,
     // v2 E5.5 (LIM1): the asset routes' own tiers, as LegendKeeper evidently has them.
     opTiers: ASSET_ROUTE_TIERS,
-    uploadGuard: {
-      resolve: (host) =>
-        Promise.resolve(host === 'storage.test' ? [{ address: '127.0.0.1', family: 4 as const }] : []),
-      ca: cert,
-      allowAddress: (a) => a === '127.0.0.1',
-      allowedPorts: parseOutboundPortAllowlist(`storage.test:${port}`),
-    },
+    uploadGuard: guard,
   });
   // createImageUpload, as the spec describes it (the asset model has none): a signed URL on the upload host.
   w.overrides.set(/\/assets\/uploads$/, (req) =>
@@ -70,20 +80,6 @@ beforeAll(async () => {
         }
       : undefined,
   );
-  // saveResourceAsTemplate, as the spec describes it (the world's model has none): a template with the page's name
-  // (or the one given) and a copy of its sidebar, outside the tree.
-  w.overrides.set(/\/resources\/[^/]+\/save-as-template$/, (req) => {
-    if (req.method !== 'POST') return undefined;
-    const src = /\/resources\/([^/]+)\/save-as-template$/.exec(req.path.replace(/\/$/, ''))![1]!;
-    const s = w.repo.live(src);
-    if (!s) return { status: 404, body: { code: 'NOT_FOUND', message: 'not found' } };
-    const body = (req.body ?? {}) as { id?: string; name?: string };
-    const id = body.id ?? `tpl${Date.now().toString(36)}`.slice(0, 8);
-    const t = w.repo.seed({ id, name: body.name ?? s.name, parentId: null, props: false });
-    const sb = w.sidebars.pages.get(src);
-    if (sb) w.sidebars.pages.set(id, structuredClone(sb));
-    return { status: 201, body: w.repo.resourceView(t) };
-  });
   // v2 E5.4 (LS1): a map's features, with LegendKeeper's label-size bug (test/maps/label-size-bug.ts): a write takes
   // xs–3xl, and listFeatures refuses a map holding anything but small/medium/large.
   const features = new Map<string, Record<string, unknown>[]>();
@@ -108,9 +104,13 @@ beforeAll(async () => {
     }
     return undefined;
   });
+  // LegendKeeper as its spec and the owner's runs describe it (saveResourceAsTemplate among the routes it adds).
+  makeFaithful(w);
+  on = await sandboxOnMockWithHosts(w.stack, { uploadGuard: guard, assetHosts: [] });
 });
 afterAll(async () => {
-  await w.close();
+  await on?.close();
+  await w?.close();
   await new Promise<void>((r) => storage.close(() => r()));
 });
 
@@ -121,29 +121,25 @@ describe('sandbox assumptions script (dry run)', () => {
     expect(w.stack.mock.calls.filter((c) => c.method !== 'GET').length).toBe(writes);
   });
 
-  it('runs every check to an answer and deletes what it made', async () => {
+  it('every check passes or is noted, and it deletes what it made', async () => {
     const before = w.stack.mock.calls.length;
     const findings = await runAssumptions(target(), PROJECT, {
       searchWaitMs: 0,
       searchPollMs: 1,
       sleep: async () => {},
     });
-    const report = formatAssumptionsReport(findings);
     const calls = w.stack.mock.calls.slice(before);
     const writes = calls.filter((c) => c.method !== 'GET').length;
     const reads = calls.length - writes;
-    process.stdout.write(`${report}\nrequests against the mock: ${reads} reads, ${writes} writes\n`);
+    const report = `${formatAssumptionsReport(findings)}\nrequests against the mock: ${reads} reads, ${writes} writes\n`;
+    expectEveryItemPasses(findings, report);
     // The cost the review documents for the owner (docs/reviews/CR-2026-11.md, section 6; test/sandbox/README.md):
-    // about 100 writes and up to about 500 reads. The reads here include the test world's repository tree re-reading
-    // every page the script writes (the sandbox runtime has no tree), and the clean-up's guard reads: the canon guard
-    // lists and reads every page of a cascade at entry and again inside the lock (CR-09).
+    // about 100 writes and up to about 500 reads. The reads include the clean-up's guard reads: the canon guard lists
+    // and reads every page of a cascade at entry and again inside the lock (CR-09).
     // v2 E5.4: LS1 adds two writes (the label and its delete) and two reads.
     // v2 E5.5: LIM1 adds five (the folder, the upload, the asset, two deletes); its PUT goes to the upload host.
-    // CR-2026-11-R2: 531 → 589 reads, all getResource: the lifecycle guard reads a copy's template at entry and inside
-    // the lock (R2-13; two for each of the four copies, in the sandbox run too) and, in this world with its lifecycle
-    // indexes, where each created page lands (R2-14; the sandbox runtime confirms no lifecycle indexes, so none there).
-    expect(writes).toBeLessThanOrEqual(120);
-    expect(reads).toBeLessThanOrEqual(600); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
+    expect(writes, report).toBeLessThanOrEqual(120);
+    expect(reads, report).toBeLessThanOrEqual(600); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
     const ids = findings.map((f) => f.id);
     for (const id of [
       'A1',
@@ -195,7 +191,7 @@ describe('sandbox assumptions script (dry run)', () => {
     );
     expect(lim1.detail).toMatch(/the image and the folder were deleted$/);
     expect(stored).toEqual([{ method: 'PUT', bytes: 70 }]);
-    expect(w.stack.runtime.projects.client(PROJECT)!.governor.snapshot().tiers['write-min'].limit).toBe(2000);
+    expect(on.sb.lk.governor.snapshot().tiers['write-min'].limit).toBe(MOCK_LIMITS['write-min']);
     // v2 E5.4: the mock reproduces the label-size bug, so LS1 confirms it, and its clean-up makes the map listable.
     const ls1 = findings.find((f) => f.id === 'LS1')!;
     expect(ls1.verdict, report).toBe('pass');

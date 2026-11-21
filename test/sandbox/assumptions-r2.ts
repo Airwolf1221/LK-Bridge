@@ -68,6 +68,7 @@ import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { parseEtag } from '../../src/lk/governor/headers.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
 import { runSettled } from './wait.js';
+import { wholeError } from './whole.js';
 
 type Obj = Record<string, any>;
 
@@ -201,7 +202,7 @@ export async function runAssumptionsR2(
     }
   };
   const answered = (r: Answer) =>
-    `${r.status}${r.code ? ` ${r.code}` : ''}${r.errors ? ` ${JSON.stringify(r.errors).slice(0, 200)}` : ''}`;
+    `${r.status}${r.code ? ` ${r.code}` : ''}${r.errors ? ` ${JSON.stringify(r.errors)}` : ''}`;
   const ok2xx = (r: Answer) => r.status >= 200 && r.status <= 299;
   const check = async (
     id: string,
@@ -215,7 +216,7 @@ export async function runAssumptionsR2(
     } catch (e) {
       if (e instanceof Fails) record(id, title, 'fail', e.message);
       else if (e instanceof Unclear) record(id, title, 'inconclusive', e.message);
-      else record(id, title, 'inconclusive', `the check could not complete: ${(e as Error).message}`);
+      else record(id, title, 'inconclusive', `the check could not complete: ${wholeError(e)}`);
     }
   };
 
@@ -708,7 +709,7 @@ export async function runAssumptionsR2(
         const sent = [R.R1, R.R2, R.R3];
         if (!d1.table || !sent.every((r) => same(shapeOf(findBlock(d1.table!.children, r.id)), shapeOf(r)))) {
           const read = d1.table
-            ? JSON.stringify(((d1.table.children ?? []) as Obj[]).map(shapeOf)).slice(0, 300)
+            ? JSON.stringify(((d1.table.children ?? []) as Obj[]).map(shapeOf))
             : 'no table';
           tbl = null;
           throw new Unclear(`the table did not read back as replaceDocumentBlocks wrote it: ${read}`);
@@ -993,8 +994,7 @@ export async function runAssumptionsR2(
             path: tpath,
             query: { limit: 2, ...(cursor ? { cursor } : {}) },
           })) as Obj;
-          if (!Array.isArray(p?.data))
-            throw new Unclear(`listEvents answered no list: ${JSON.stringify(p).slice(0, 200)}`);
+          if (!Array.isArray(p?.data)) throw new Unclear(`listEvents answered no list: ${JSON.stringify(p)}`);
           pages.push(p);
           if (p.hasMore !== true || typeof p.nextCursor !== 'string') break;
           cursor = p.nextCursor;
@@ -1260,7 +1260,7 @@ export async function runAssumptionsR2(
         if (looked.status !== 404)
           fail(
             `getResource of "templates" answered ${answered(looked)}${
-              looked.body !== undefined ? ` (${JSON.stringify(looked.body).slice(0, 160)})` : ''
+              looked.body !== undefined ? ` (${JSON.stringify(looked.body)})` : ''
             }, not 404: the guards would read "templates" as a page in no lifecycle area. ${moveNote}`,
           );
         return ok2xx(moved)

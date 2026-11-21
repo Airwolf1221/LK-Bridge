@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { formatNarrativeReport, runNarrativeCheck } from '../sandbox/narrative-f4c.js';
 import { N, narrativeWorld, NT, type NarrativeWorld } from '../narrative/world.js';
+import { makeFaithful } from './faithful.js';
 import { expectEveryItemPasses, sandboxOnMock, type OnMock } from './harness.js';
 
 vi.setConfig({ testTimeout: 600_000, hookTimeout: 300_000 });
@@ -18,8 +19,9 @@ describe.each([
   let on: OnMock;
   beforeAll(async () => {
     w = await narrativeWorld({ main });
-    // Pages the check makes with the raw client get their sidebars modelled from their first property request.
-    w.sidebars.adoptNewPages = (id) => w.repo.live(id) !== undefined;
+    // LegendKeeper as the owner's runs established it (`makeFaithful`): blocks given ids, mentions' names filled in, the
+    // test world's own calendar, every page made during the run with its sidebar.
+    makeFaithful(w);
     // CR-2026-11-R4: a template copy as LegendKeeper makes one (its documents and their content, in an order it does not
     // state): the Chapter template has a second page document, listed first in a copy (N3's failure on the owner's run).
     w.repo.outside.addDocument(NT.chapter, 'Draft Notes', 'page');

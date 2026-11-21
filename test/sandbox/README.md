@@ -421,3 +421,32 @@ to the second with the id it has in the first keeps that id (its children theirs
 first page's own edit (the block taken out, an interface summary in its place) leaves the copy as it is. What
 LegendKeeper does with an id the destination already uses is recorded as NOTED (the split never sends one: it derives
 another id and says so in the job). Both pages are deleted at the end. Written for the owner to run; agents never run it.
+
+## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
+
+Each check's steps are an exported runner beside its thin `.test.ts` wrapper (the wrapper is the real run, unchanged in
+what it does and prints). The ordinary suite (`npm test`) runs every runner against the mock LegendKeeper through the
+same runtime as the real run (`createSoakRuntime` pointed at the mock on loopback, `test/sandbox-mock/harness.ts`; with
+the mock world's asset and upload hosts where a check uploads or downloads, `test/sandbox-mock/hosts.ts`), and **fails
+on any item that is not PASS or NOTED**, printing the whole report. A SKIPPED item passes only where the check itself
+always skips it and the run asserts its reason (the smoke's (c)).
+
+| Check                          | Its run on the mock                                         |
+| ------------------------------ | ----------------------------------------------------------- |
+| smoke                          | `test/tools/sandbox-dryrun.test.ts`                         |
+| assumptions                    | `test/tools/assumptions-dryrun.test.ts`                     |
+| assumptions-r2                 | `test/tools/assumptions-r2-dryrun.test.ts` (run 1)          |
+| assumptions-r3, assumptions-r4 | `test/sandbox-mock/assumptions-r3.test.ts`, `…-r4…`         |
+| audits                         | `test/audits/sandbox-dryrun.test.ts`                        |
+| chronology                     | `test/chronology/sandbox-dryrun.test.ts`                    |
+| concurrency                    | `test/e4/sandbox-concurrency-dryrun.test.ts`                |
+| consistency-f4b                | `test/sandbox-mock/consistency-f4b.test.ts`                 |
+| images                         | `test/images/sandbox-dryrun.test.ts`                        |
+| maps                           | `test/maps/sandbox-dryrun.test.ts`                          |
+| snapshots                      | `test/snapshots/sandbox-dryrun.test.ts`                     |
+| split-ids, assign-block-ids    | `test/sandbox-mock/split-ids.test.ts`, `…assign-block-ids…` |
+
+The mock answers as LegendKeeper does only with its **faithful** setting on (`test/sandbox-mock/faithful.ts`, which
+these runs turn on and nothing else does): each behaviour there names the owner's run or the part of the spec it comes
+from, and one no real run has established yet is modelled as the bridge assumes it and says so. A failing item's detail
+carries the whole answer (`whole.ts`), never a slice of it.

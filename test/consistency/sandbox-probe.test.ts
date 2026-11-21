@@ -108,7 +108,8 @@ describe('the consistency-f4b sandbox probe (the owner’s sandbox run)', () => 
   });
 
   it('the sandbox check makes no create, and no [BSRC] page, through the governed route', () => {
-    const src = readFileSync(new URL('../sandbox/consistency-f4b.test.ts', import.meta.url), 'utf8');
+    // CR-2026-11-R4: the check's steps are in its runner (consistency-f4b.ts); the .test.ts is the real run's wrapper.
+    const src = readFileSync(new URL('../sandbox/consistency-f4b.ts', import.meta.url), 'utf8');
     expect(src).not.toMatch(/run\(\s*['"]create(?:Many)?Resources?(?:FromTemplate)?['"]/);
     expect(src).not.toMatch(/run\(\s*['"]deleteResource['"]/);
     expect(src).toMatch(/createProbePages\(raw,/);

@@ -53,6 +53,10 @@ export const S = {
 
 export interface SnapshotsWorld extends ResourcesWorld {
   readonly port: number;
+  /** CR-2026-11-R4: the address guard the stack uses (the asset and storage hosts on loopback, their test certificate). */
+  readonly guard: GuardOptions;
+  /** CR-2026-11-R4: the asset hosts the stack downloads from (`assets.test`, `assets2.test`). */
+  readonly assetHosts: readonly string[];
   readonly dir: string;
   readonly snapshotDir: string;
   /** The Atlas page's documents by name. */
@@ -671,6 +675,16 @@ export async function snapshotsWorld(
     const body = (req.body ?? {}) as Obj;
     const docs = Array.isArray(body.documents) ? (body.documents as Obj[]) : null;
     if (!docs) return undefined;
+    // CR-2026-11-R4: with the model's faithful setting, a page's inline blocks are stored as LegendKeeper stores a write
+    // of them (ids given to blocks sent without one; the same id twice refused before anything is made).
+    const contents = new Map<number, unknown[]>();
+    if (w.repo.faithful)
+      for (const [i, spec] of docs.entries()) {
+        if (!Array.isArray(spec.blocks)) continue;
+        const written = w.repo.writtenBlocks(spec.blocks as unknown[], `documents.${i}.blocks`);
+        if (!Array.isArray(written)) return written;
+        contents.set(i, written);
+      }
     const r = w.repo.respond({ ...req, body: { ...body, documents: undefined } });
     if (!r || r.status !== 201) return r;
     const res = w.repo.live((r.body as Obj).id as string)!;
@@ -680,7 +694,7 @@ export async function snapshotsWorld(
       doc.name = typeof spec.name === 'string' ? spec.name : 'Main';
       doc.type = typeof spec.type === 'string' ? spec.type : Array.isArray(spec.blocks) ? 'page' : 'blank';
       if (Array.isArray(spec.blocks))
-        w.repo.blocks.set(doc.id, { version: 1, blocks: structuredClone(spec.blocks) });
+        w.repo.blocks.set(doc.id, { version: 1, blocks: contents.get(i) ?? structuredClone(spec.blocks) });
       if (typeof spec.calendarId === 'string') docExtra.set(doc.id, { calendarId: spec.calendarId });
     });
     return { status: 201, body: w.repo.resourceView(res) };
@@ -732,6 +746,8 @@ export async function snapshotsWorld(
     bugs,
     listHook: null as SnapshotsWorld['listHook'],
     port,
+    guard,
+    assetHosts: ['assets.test', 'assets2.test'],
     dir,
     snapshotDir,
     d,

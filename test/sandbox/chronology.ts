@@ -20,6 +20,8 @@
  * Two date styles (ADR 0039): LegendKeeper's, for everything compared with its event text; the table's, for the Date and
  * KCY cells. The report says what the owner sends back; anything it finds becomes a follow-up.
  */
+import Database from 'better-sqlite3';
+import { existsSync } from 'node:fs';
 import {
   createCalendar,
   describeReading,
@@ -46,6 +48,38 @@ import {
 } from '../../src/chronology/check.js';
 
 type Obj = Record<string, unknown>;
+
+/**
+ * Which chronology the check reads: the one the owner confirmed on the dashboard (the bridge's stored settings in the
+ * database at `dbPath`, opened read-only), else `LKB_CHRONOLOGY_RESOURCE`, else the test world's Universal Chronology
+ * (`h0gczxh7`, PLAN-v2 section 2). The real run (`chronology.test.ts`) and, CR-2026-11-R4, the ordinary suite's run
+ * against the mock (`test/chronology/sandbox-dryrun.test.ts`) resolve it the same way.
+ */
+export function chronologyResourceFor(
+  dbPath: string,
+  projectId: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  return storedChronologyResource(dbPath, projectId) ?? env.LKB_CHRONOLOGY_RESOURCE ?? 'h0gczxh7';
+}
+
+/** The confirmed chronology resource of the project in the bridge's database, if any. */
+export function storedChronologyResource(dbPath: string, projectId: string): string | null {
+  if (!existsSync(dbPath)) return null;
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const row = db.prepare('SELECT settings FROM projects WHERE id = ?').get(projectId) as
+      { settings?: string } | undefined;
+    const s = row?.settings
+      ? (JSON.parse(row.settings) as { chronology?: { resourceId?: string }; chronologyResourceId?: string })
+      : {};
+    return s.chronology?.resourceId ?? s.chronologyResourceId ?? null;
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
 
 export interface ChronologyReport {
   readonly text: string;

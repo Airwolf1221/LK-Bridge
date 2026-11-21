@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { writeFileSync } from 'node:fs';
 import { formatReport, runSmoke, SandboxGuardError, type SmokeTarget } from '../sandbox/smoke.js';
+import { expectEveryItemPasses, type OnMock } from '../sandbox-mock/harness.js';
+import { sandboxOnMockWithHosts } from '../sandbox-mock/hosts.js';
+import { sandboxWorld, type SandboxWorld } from '../sandbox-mock/world.js';
 import { API_KEY, PROJECT, startStack, type Stack } from './helpers.js';
 import { specRespond } from './spec-mock.js';
 
@@ -68,43 +70,8 @@ describe('sandbox smoke script (dry run)', () => {
     }
   });
 
-  it('runs every check and family to completion, and reports each', async () => {
-    const findings = await runSmoke(target(), PROJECT);
-    const ids = findings.map((f) => f.id);
-    for (const id of [
-      'a',
-      'b',
-      'c',
-      'd.resources',
-      'd.documents',
-      'd.blocks',
-      'd.infobox',
-      'd.properties',
-      'd.timeline',
-      'd.map',
-      'd.board',
-      'd.assets',
-      'd.calendars',
-      'e',
-      'f',
-      'cleanup',
-    ]) {
-      expect(ids, id).toContain(id);
-    }
-    expect(findings.find((f) => f.id === 'c')!.verdict).toBe('skipped');
-    // The mock does not echo x-request-id, so check (a) must say so rather than pass.
-    expect(findings.find((f) => f.id === 'a')!.verdict).toBe('fail');
-    expect(findings.find((f) => f.id === 'cleanup')!.verdict).toBe('pass');
-    const failed = findings.filter((f) => f.verdict === 'fail').map((f) => `${f.id}: ${f.detail}`);
-    writeFileSync('/tmp/dry.txt', formatReport(findings));
-    // Checks that need real LK data or semantics (an echoed request id, block ids and versions, a real signed URL)
-    // cannot pass against generated bodies; every other family must run clean.
-    // v2 D3 (ADR 0041): an asset delete keeps the file first, and the spec's example asset has no file on an asset host,
-    // so d.assets' delete is refused here (against LegendKeeper the file is on its asset host).
-    const needsRealLk = ['a:', 'b:', 'd.blocks:', 'd.infobox:', 'd.assets:', 'e:'];
-    expect(failed.filter((f) => !needsRealLk.some((p) => f.startsWith(p)))).toEqual([]);
-  });
-
+  // CR-2026-11-R4 (the owner's request S): the run that counts is the strict one below, on the faithful mock through the
+  // sandbox runtime; this spec-driven mock (generated bodies) only exercises the guard and the waits.
   // The owner's sandbox run of 12 November 2026: writes parked for budget were reported as failures and the throwaway
   // root was left behind. Here LegendKeeper throttles the first write and the clean-up for longer than the governor waits
   // inline (Retry-After 31 s), so both are PARKED (`waiting_budget`); the script must wait for them, not fail.
@@ -137,4 +104,72 @@ describe('sandbox smoke script (dry run)', () => {
       off();
     }
   }, 180_000);
+});
+
+/**
+ * CR-2026-11-R4 (the owner's request S): the smoke script run as the owner runs it (`createSoakRuntime` against the mock,
+ * test/sandbox-mock/harness.ts with the world's asset and upload hosts) on the faithful mock world (every entity family
+ * modelled as LegendKeeper answers it, test/sandbox-mock/), and every item must pass: (c) alone is SKIPPED, by design and
+ * with its reason; anything else not PASS fails the build with the whole report printed.
+ */
+describe('sandbox smoke script, on the faithful mock through the sandbox runtime', () => {
+  let w: SandboxWorld;
+  let on: OnMock;
+  beforeAll(async () => {
+    w = await sandboxWorld();
+    on = await sandboxOnMockWithHosts(w.stack, { uploadGuard: w.guard, assetHosts: w.assetHosts });
+  }, 120_000);
+  afterAll(async () => {
+    await on?.close();
+    await w?.close();
+  });
+
+  it('every check and family passes, (c) is skipped with its reason, and the throwaway root is gone', async () => {
+    // The real run's target (test/sandbox/smoke.test.ts): the sandbox runtime's engine, client, base URL and key.
+    const findings = await runSmoke(
+      {
+        engine: on.sb.runtime.engine,
+        lk: on.sb.lk,
+        projectId: on.sb.projectId,
+        baseUrl: on.sb.runtime.config.lk.baseUrl,
+        apiKey: API_KEY,
+      },
+      PROJECT,
+    );
+    const report = formatReport(findings);
+    // (c) is never run (it cannot be tested safely), on the real API too: SKIPPED, with exactly this reason.
+    const c = findings.find((f) => f.id === 'c');
+    expect(c, report).toMatchObject({
+      verdict: 'skipped',
+      detail:
+        'Not safely testable against a real project. The engine verifies every minted id after an ambiguous outcome and re-sends only the missing items (ADR 0010; test/jobs/batch-recovery.test.ts). LK’s own guide says the call is not atomic.',
+    });
+    expectEveryItemPasses(
+      findings.filter((f) => f.id !== 'c'),
+      report,
+    );
+    expect(
+      findings.map((f) => f.id),
+      report,
+    ).toEqual([
+      'a',
+      'b',
+      'd.resources',
+      'd.documents',
+      'd.blocks',
+      'd.infobox',
+      'd.properties',
+      'd.timeline',
+      'd.map',
+      'd.board',
+      'd.assets',
+      'd.calendars',
+      'd.reads',
+      'e',
+      'f',
+      'cleanup',
+      'c',
+    ]);
+    expect(w.liveNamed(/^lk-bridge smoke /), report).toEqual([]);
+  }, 300_000);
 });

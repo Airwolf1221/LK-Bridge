@@ -125,6 +125,13 @@ export class SidebarModel {
    * `page()` are modelled, as the older tests assume. The write-scope rehearsal's dry run makes its pages as it runs.
    */
   adoptNewPages: ((id: string) => boolean) | null = null;
+  /**
+   * CR-2026-11-R4 (the owner's request S; the mock's faithful setting, test/sandbox-mock/faithful.ts): a text field
+   * created with `children` keeps them (the spec's PropertyCreateRequest; the owner's assumptions run of 11 November 2026
+   * passed G30b, whose text field is created with its paragraph). Off by default: the older tests create text fields
+   * without children.
+   */
+  faithful = false;
 
   constructor(readonly names: (id: string) => string | undefined) {}
 
@@ -327,6 +334,9 @@ export class SidebarModel {
                 })),
                 ...(body.filter !== undefined ? { filter: body.filter } : {}),
               }
+            : {}),
+          ...(this.faithful && body.kind === 'textField'
+            ? { children: structuredClone((body.children as Obj[] | undefined) ?? []) }
             : {}),
         };
         sb.props.push(p);

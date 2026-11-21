@@ -30,6 +30,11 @@
  * 3. LegendKeeper answering otherwise where the second review's fixes rely on it: a copy that takes no tags (W13 FAIL), a
  *    batch that creates the items before a duplicate id (W14 FAIL), events read back with a field their answers lacked
  *    (W16 FAIL), a move answered without a rank (W17 FAIL), `templates` read as a resource (W18 FAIL).
+ *
+ * CR-2026-11-R4 (the owner's request S): the mock models' faithful settings are on (test/sandbox-mock/faithful.ts:
+ * blocks as a write stores them, mentions filled in on read-back, request ids echoed; this file models the routes
+ * itself), and run 1 is the check's run in the ordinary suite: every item must pass or be NOTED, or the build fails with
+ * the whole report printed.
  */
 import { Writable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -38,6 +43,8 @@ import { imagesWorld, type ImagesWorld } from '../images/world.js';
 import { formatAssumptionsR2Report, runAssumptionsR2 } from '../sandbox/assumptions-r2.js';
 import { SandboxGuardError, type Finding, type SmokeTarget } from '../sandbox/smoke.js';
 import { createSoakRuntime, type SoakRuntime } from '../sandbox/soak.js';
+import { makeFaithful } from '../sandbox-mock/faithful.js';
+import { expectEveryItemPasses } from '../sandbox-mock/harness.js';
 import { API_KEY } from './helpers.js';
 
 type Obj = Record<string, unknown>;
@@ -328,6 +335,8 @@ function modelWhatIsMissing(world: ImagesWorld): void {
 
 beforeAll(async () => {
   w = await imagesWorld({ bulk: 6, env: { LK_TIER_LIMITS: JSON.stringify(LIMITS) }, limits: LIMITS });
+  // The models' faithful settings; the routes LegendKeeper's answers are switched on below are this file's own.
+  makeFaithful(w, { routes: false });
   modelWhatIsMissing(w);
   // The sandbox test's own runtime, against the mock (the write-scope rehearsal's dry run does the same).
   rt = await createSoakRuntime({
@@ -359,6 +368,7 @@ const target = (): SmokeTarget => ({
  * before its duplicate).
  */
 async function dryRun(made = 11): Promise<{
+  findings: Finding[];
   by: Record<string, Finding>;
   report: string;
   cost: string;
@@ -379,7 +389,9 @@ async function dryRun(made = 11): Promise<{
   const writes = rt.counters.writes - before.writes;
   const report = formatAssumptionsR2Report(findings);
   const cost = `requests against the mock: ${reads} reads, ${writes} writes (counted at the transport); ${tally.downloads} downloads from the asset host and ${tally.puts} PUT to the upload host`;
-  process.stdout.write(`${report}${cost}\n`);
+  // CR-2026-11-R4: only the cost is printed; a report goes out with the assertion that fails on it (runs 2 and 3 FAIL
+  // items on purpose, and their [FAIL] lines must not read as the check's own failures in the suite's output).
+  process.stdout.write(`${cost}\n`);
   const by = Object.fromEntries(findings.map((f) => [f.id, f]));
   // Every check ran to an answer, in the order of the ids, and the clean-up last.
   expect(
@@ -403,7 +415,7 @@ async function dryRun(made = 11): Promise<{
     'the root, its pages and the template were made (and deleted)',
   ).toHaveLength(made);
   expect(tally.puts).toBe(1);
-  return { by, report, cost, writes, reads, downloads: tally.downloads };
+  return { findings, by, report, cost, writes, reads, downloads: tally.downloads };
 }
 
 describe('sandbox assumptions, round 2 (dry run)', () => {
@@ -416,7 +428,8 @@ describe('sandbox assumptions, round 2 (dry run)', () => {
   });
 
   it('as the spec describes LegendKeeper: every check passes but W4 (noted), and nothing is left', async () => {
-    const { by, report, writes, reads, downloads } = await dryRun();
+    const { findings, by, report, writes, reads, downloads } = await dryRun();
+    expectEveryItemPasses(findings, report);
     for (const id of IDS.filter((x) => x !== 'W4')) expect(by[id]!.verdict, `${id}\n${report}`).toBe('pass');
     expect(by.W4!.verdict, report).toBe('noted');
     expect(by.W4!.detail).toMatch(/F3 and its sub-folder F4 are both gone/);
