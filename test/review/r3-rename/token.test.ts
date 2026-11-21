@@ -64,38 +64,35 @@ describe('RN token: the approved version changing while the job runs', () => {
   });
   afterAll(() => w?.close());
 
-  // CR-2026-11-R3 (R3-60): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: left open (low, modelled): the token check is not repeated inside the tag writes' locks.
-  it.fails(
-    'RN-62 a character’s new tag is never written once the approved version no longer maps it (modelled)',
-    async () => {
-      const packs = w.stack.runtime.packs;
-      const oldCulture = { ...packs.get('arkona')!.rules.tags.culture };
-      const r = await w.call('arkona_rename', { subject: 'Velaran', newName: 'Velarine' });
-      const proposalId = String(r.body.proposalId);
-      await w.stack.runtime.policy.commands.approveAsCanon('owner', proposalId);
-      const jobId = w.stack.runtime.policy.proposals.get(proposalId)!.jobId!;
-      // Just as the first character's tag is about to be written (its own read inside its lock), the owner sets the pack
-      // back: a version with the old map, approved (the store's approval, as the dashboard's approve ends).
-      intercept(w, 'GET', new RegExp(`/resources/${R.characters[0]}$`), (n) => {
-        if (n === 0) {
-          const approved = packs.get('arkona')!.approved!;
-          const v = packs.commands.setTokens('owner', 'arkona', { culture: oldCulture });
-          packs.store.approve('arkona', {
-            version: v.version,
-            at: Date.now(),
-            by: 'owner',
-            sources: approved.sources,
-          });
-        }
-        return undefined;
-      });
-      await packs.commands.approve('owner', 'arkona');
-      const job = await settle(w, jobId);
-      const approvedMap = packs.get('arkona')!.rules.tags.culture;
-      expect(approvedMap.Velarine).toBeUndefined();
-      // Safe: no character carries a tag the approved pack does not map (the tag writes stop, or are skipped).
-      const tagged = tagsOf(w).filter((t) => t.includes('Velarine')).length;
-      expect({ status: job.status, tagged }).toMatchObject({ tagged: 0 });
-    },
-  );
+  // CR-2026-11-R3 (R3-60): built (docs/reviews/CR-2026-11-R3.md section 7; ADR 0058's second amendment): each tag write judges the approved token map inside its lock, and skips (saying so) when it no longer maps the new tag.
+  it('RN-62 a character’s new tag is never written once the approved version no longer maps it (modelled)', async () => {
+    const packs = w.stack.runtime.packs;
+    const oldCulture = { ...packs.get('arkona')!.rules.tags.culture };
+    const r = await w.call('arkona_rename', { subject: 'Velaran', newName: 'Velarine' });
+    const proposalId = String(r.body.proposalId);
+    await w.stack.runtime.policy.commands.approveAsCanon('owner', proposalId);
+    const jobId = w.stack.runtime.policy.proposals.get(proposalId)!.jobId!;
+    // Just as the first character's tag is about to be written (its own read inside its lock), the owner sets the pack
+    // back: a version with the old map, approved (the store's approval, as the dashboard's approve ends).
+    intercept(w, 'GET', new RegExp(`/resources/${R.characters[0]}$`), (n) => {
+      if (n === 0) {
+        const approved = packs.get('arkona')!.approved!;
+        const v = packs.commands.setTokens('owner', 'arkona', { culture: oldCulture });
+        packs.store.approve('arkona', {
+          version: v.version,
+          at: Date.now(),
+          by: 'owner',
+          sources: approved.sources,
+        });
+      }
+      return undefined;
+    });
+    await packs.commands.approve('owner', 'arkona');
+    const job = await settle(w, jobId);
+    const approvedMap = packs.get('arkona')!.rules.tags.culture;
+    expect(approvedMap.Velarine).toBeUndefined();
+    // Safe: no character carries a tag the approved pack does not map (the tag writes stop, or are skipped).
+    const tagged = tagsOf(w).filter((t) => t.includes('Velarine')).length;
+    expect({ status: job.status, tagged }).toMatchObject({ tagged: 0 });
+  });
 });

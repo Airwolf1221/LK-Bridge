@@ -55,7 +55,6 @@ import { liveRead } from '../../mcp/tools/repo.js';
 import type { McpToolContext, McpToolResult } from '../../mcp/server.js';
 import type { ProjectDeps } from '../../mcp/tools/shape.js';
 import { cleanPrefixes } from '../../registry/names.js';
-import { SiblingSim } from '../../resources/plan.js';
 import { classifyName, nameKey } from '../../tree/classify.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { Labels } from '../../appraisal/scope.js';
@@ -64,6 +63,7 @@ import { nameProblem, replaceDashes, textKey, type Replacement } from '../engine
 import type { PackBasis } from '../run.js';
 import type { PackRules } from '../types.js';
 import { reviewList, reviewParts, type ReviewList, type ReviewOccurrence } from './review.js';
+import { placeInSequence, type PlaceRename, type PlaceSibling, type Placement } from './place.js';
 import {
   currentCharacters,
   namesakeLine,
@@ -646,14 +646,15 @@ export async function planRename(
   /** The item every other depends on: the subject's own new name (none in a follow-up: it has it already). */
   const root = (): string[] => (items.some((i) => i.id === rootItem) ? [rootItem] : []);
 
-  // 1. Page names (and each page's place among its siblings), then the in-lock check of each page. Every name of the
-  // set changes at once in the simulation first, so a page is moved only when its place among its siblings (as they
-  // will all be named) really changes: renaming a whole set keeps its own order.
-  const sim = new SiblingSim(
-    (parentId) => ctx.tree.children(projectId, parentId).data,
-    (parentId) => ctx.types.orderFor?.(parentId) ?? null,
-  );
+  // 1. Page names (and each page's place among its siblings), then the in-lock check of each page. CR-2026-11-R3
+  // (R3-56): each page's re-placing move follows the names actually written, in sequence (src/packs/rename/place.ts):
+  // once renamed, the page belongs among its siblings whose names are final (never beside one the job renames later),
+  // and moves only when it stands outside that place; so when the pages the rename does not touch are in order, the
+  // parent ends in order, and a set already in order moves nothing. Where several pages of one parent are renamed, each
+  // gets a move that works its place out again inside its lock from the renames the owner approved (a name left out
+  // keeps its old one there), and sends nothing when the page is in its place.
   const renamed = new Map<string, { display: string; raw: string }>();
+  const renamesUnder = new Map<string, PlaceRename[]>();
   for (const p of pages) {
     const n = p.node;
     const display = classifyName(n.rawName).displayName;
@@ -661,12 +662,23 @@ export async function planRename(
     if (nextDisplay === display) continue;
     const prefix = n.rawName.slice(0, n.rawName.length - display.length);
     renamed.set(n.id, { display: nextDisplay, raw: `${prefix}${nextDisplay}` });
-    if (n.parentId) {
-      const list = sim.list(n.parentId);
-      const at = list.findIndex((x) => x.id === n.id);
-      if (at >= 0) list[at] = { ...list[at]!, displayName: nextDisplay };
-    }
+    if (n.parentId)
+      renamesUnder.set(n.parentId, [
+        ...(renamesUnder.get(n.parentId) ?? []),
+        { id: n.id, to: nextDisplay, item: `name:${n.id}` },
+      ]);
   }
+  const siblingsUnder = new Map<string, PlaceSibling[]>();
+  const placedUnder = new Map<string, Map<string, Placement>>();
+  for (const [parentId, group] of renamesUnder) {
+    const siblings = ctx.tree
+      .children(projectId, parentId)
+      .data.map((c) => ({ id: c.id, name: c.displayName, kind: c.kind }));
+    siblingsUnder.set(parentId, siblings);
+    placedUnder.set(parentId, placeInSequence(siblings, group, ctx.types.orderFor?.(parentId) ?? undefined));
+  }
+  /** The moves that, with every name ticked, find their page in its place (they send nothing then). */
+  let placesKept = 0;
   for (const p of pages) {
     const n = p.node;
     const next = renamed.get(n.id);
@@ -717,28 +729,44 @@ export async function planRename(
     bodyLabels.push(`rename ${n.rawName} to ${nextRaw}`);
     wrote(n.id, at);
     let moved = false;
-    if (parentId) {
-      const now = sim.neighbours(parentId, n.id);
-      sim.remove(parentId, n.id);
-      const slot = sim.slot(parentId, { displayName: nextDisplay, kind: n.kind });
-      sim.insert(parentId, { id: n.id, displayName: nextDisplay, kind: n.kind }, slot);
-      const then = sim.neighbours(parentId, n.id);
-      if (now.after !== then.after || now.before !== then.before) {
-        moved = true;
+    const placed = parentId ? placedUnder.get(parentId)?.get(n.id) : undefined;
+    if (parentId && placed) {
+      const group = renamesUnder.get(parentId) ?? [];
+      // Alone among its siblings, the page's place depends on its own new name only; with others renamed beside it, on
+      // which of their names are approved: a move for each, judged when it runs.
+      const several = group.length > 1;
+      moved = placed.moves;
+      if (moved || several) {
+        if (!moved) placesKept++;
         wrote(n.id, stepNo());
         body.push({
           op: 'moveResource',
-          params: { path: { resourceId: n.id }, body: { parentId, ...slot } },
+          params: { path: { resourceId: n.id }, body: { parentId, ...placed.slot } },
           judgedInLock: true,
           deferTreeReread: true,
           items: [item],
           // CR-2026-11-R3 (R3-36): never moves back a page the owner moved since the plan; and a move LegendKeeper
           // refuses (its anchor gone meanwhile) does not stop the rename: the name is written, the place reported.
-          rebase: { rebaser: RENAME_REBASERS.place, input: { parentId }, always: true },
+          // CR-2026-11-R3 (R3-56): beside other renamed pages, its place worked out again inside its lock, from the
+          // parent's children as planned and the approved renames among them, in the job's order.
+          rebase: {
+            rebaser: RENAME_REBASERS.place,
+            input: {
+              parentId,
+              ...(several
+                ? { pageId: n.id, siblings: siblingsUnder.get(parentId) ?? [], renames: group }
+                : {}),
+            },
+            always: true,
+          },
           followUp: 'placement_failed',
           journalOperation: journal({ id: n.id, name: nextRaw }, 're-placed after the rename'),
         });
-        bodyLabels.push(`re-place ${nextRaw} among its siblings`);
+        bodyLabels.push(
+          moved
+            ? `re-place ${nextRaw} among its siblings`
+            : `re-place ${nextRaw} among its siblings, if the approved names move it`,
+        );
       }
     }
     items.push({
@@ -1771,10 +1799,18 @@ export async function planRename(
             judgedInLock: true,
             deferTreeReread: true,
             items: [item],
-            // ADR 0058 amendment (A): the tag swapped on the page's tags as they are when it runs (inside its lock).
+            // ADR 0058 amendment (A): the tag swapped on the page's tags as they are when it runs (inside its lock);
+            // CR-2026-11-R3 (R3-60): and only while the APPROVED pack version maps the new value to the new tag, judged
+            // there too (skipped, and said, when it no longer does).
             rebase: {
               rebaser: RENAME_REBASERS.resource,
-              input: { kind: 'tags', from: token!.oldToken, to: token!.newToken, item },
+              input: {
+                kind: 'tags',
+                from: token!.oldToken,
+                to: token!.newToken,
+                item,
+                token: { packId: token!.packId, map: token!.map, value: newName },
+              },
               always: true,
             },
             journalOperation: journal(
@@ -2129,7 +2165,8 @@ export async function planRename(
       replacements,
       token,
       reads,
-      cost: { planReads: reads, jobWrites: writes, jobReads },
+      // CR-2026-11-R3 (R3-56): a move that finds its page in its place reads it and sends nothing.
+      cost: { planReads: reads, jobWrites: writes - placesKept, jobReads },
       lmr: { mode, pages: lmrPages, minor: lmrMinor, switchedOff: !basis.lmrOnChanges },
       summary,
       prefetched,

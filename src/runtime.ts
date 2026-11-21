@@ -62,6 +62,7 @@ import { RetagService } from './packs/retag/service.js';
 import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
 import { RenameService } from './packs/rename/service.js';
+import { subjectRenameRefusal } from './packs/rename/guard.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
@@ -851,6 +852,29 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     engine,
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    // CR-2026-11-R3 (R3-59): the rename steering's judgement of the em-dash name fix (it then says it is a plain rename).
+    subjectRename: (projectId, page, newName) =>
+      subjectRenameRefusal({
+        packs,
+        projectId,
+        node: page,
+        newName,
+        characterOf: (id) => {
+          try {
+            return registry.forProject(projectId).characterOfPage(id).ok;
+          } catch {
+            return false;
+          }
+        },
+        factKeys: page.factKeys,
+        childrenOf: (indexId) => {
+          try {
+            return tree.queries.children(projectId, indexId).data;
+          } catch {
+            return [];
+          }
+        },
+      }) !== null,
     assetHosts: imageSettings.assetHosts,
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
@@ -1108,11 +1132,23 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const detachResume = resume.start();
   // v3 F3d (ADR 0058): `arkona_rename`: its in-job checks, its record, the token change's pack version (the job waits for
   // the owner to approve it) and what a rename left, from the full-text index.
-  const unregisterRenameChecks = registerRenameChecks(engine, packs, (projectId, pageId) => {
-    // CR-2026-11-R3 (R3-29): the tree's view of a page (its name and path), for the rename's history check.
-    const n = tree.queries.node(projectId, pageId).data;
-    return n ? { rawName: n.rawName, path: n.path } : null;
-  });
+  const unregisterRenameChecks = registerRenameChecks(
+    engine,
+    packs,
+    (projectId, pageId) => {
+      // CR-2026-11-R3 (R3-29): the tree's view of a page (its name and path), for the rename's history check.
+      const n = tree.queries.node(projectId, pageId).data;
+      return n ? { rawName: n.rawName, path: n.path } : null;
+    },
+    // CR-2026-11-R3 (R3-56): a parent's own sibling order, for the re-placing moves worked out when they run.
+    (projectId, parentId) => {
+      try {
+        return registry.forProject(projectId).orderFor(parentId);
+      } catch {
+        return null;
+      }
+    },
+  );
   const renames = new RenameService({
     db: o.db,
     engine,

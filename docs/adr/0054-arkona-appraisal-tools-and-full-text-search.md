@@ -21,6 +21,10 @@
   test take its new finding in).
 - Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
   spike or round-trip script.
+- **Amended** on 21 November 2026 (CR-2026-11-R3, R3-59; decision 8): an em-dash name fix that changes a subject's name
+  (the rename steering's judgement, [ADR 0058](0058-v3-f3d-renames-selective-approval-resume.md) amendment C) says it is
+  a plain rename of that one page: `(plain rename: …)` in its summary and `plainRename` in its operation, or, run at once
+  at scope `write`, in the job's title and journal entry. It stays the owner's proposal; it is not refused.
 
 ## Context
 

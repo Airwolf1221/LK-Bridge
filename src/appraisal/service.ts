@@ -25,7 +25,7 @@ import type { SnapshotService } from '../snapshots/service.js';
 import { treeSettingsFrom } from '../tree/classify.js';
 import type { TreeNode } from '../tree/index.js';
 import { workingDigest } from './digest.js';
-import { proposeAppraisalFix, registerFixCheckers, type FixResult } from './fixes.js';
+import { proposeAppraisalFix, registerFixCheckers, type FixResult, type SubjectRenamePage } from './fixes.js';
 import { FullText } from './fts.js';
 import { effectsOfProposal, impactOf, type PlannedEffect } from './impact.js';
 import { AppraisalIndex, type IndexState } from './overlay.js';
@@ -96,6 +96,11 @@ export interface AppraisalDeps {
   readonly engine: Pick<JobEngine, 'internalRead' | 'submit'> &
     Partial<Pick<JobEngine, 'registerAsyncChecker'>>;
   readonly projectSettings: (projectId: string) => Readonly<ProjectSettings>;
+  /**
+   * CR-2026-11-R3 (R3-59): the rename steering (src/packs/rename/guard.ts) on a page the em-dash name fix renames:
+   * true when the new name changes a subject's name on a pack project, so the fix carries a plain-rename reason.
+   */
+  readonly subjectRename?: (projectId: string, page: SubjectRenamePage, newName: string) => boolean;
   readonly assetHosts: readonly string[];
   readonly audit: (
     actor: string,
@@ -1231,6 +1236,12 @@ export class Appraisal {
                   .prepare('SELECT id, name FROM asset_items WHERE project_id = ? AND folder_id = ?')
                   .all(o.projectId, folderId)) as { id: string; name: string }[],
           propertiesName: treeSettingsFrom(settings).propertiesName,
+          ...(this.d.subjectRename
+            ? {
+                subjectRename: (page: SubjectRenamePage, newName: string) =>
+                  this.d.subjectRename!(o.projectId, page, newName),
+              }
+            : {}),
         },
         f,
       );

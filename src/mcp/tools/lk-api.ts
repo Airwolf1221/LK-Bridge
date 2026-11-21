@@ -11,7 +11,13 @@ import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.j
 import { defineTool, READ_ANNOTATIONS } from './define.js';
 import { unknownOperationBody } from './discovery.js';
 import { canonicalBody } from './shape.js';
-import { subjectRenameRefusal } from '../../packs/rename/guard.js';
+import { sidebarFrom } from '../../facts/sidebar.js';
+import {
+  subjectRenameNeedsFacts,
+  subjectRenameRefusal,
+  type SubjectRenameContext,
+} from '../../packs/rename/guard.js';
+import { liveRead } from './repo.js';
 import { plainRenameArg } from './resources.js';
 import {
   costClass,
@@ -57,26 +63,62 @@ export interface ExecuteInput {
   readonly plainRename?: { readonly reason: string } | undefined;
 }
 
+/** CR-2026-11-R3 (R3-58): a page read live (`getResource`) by the steering, handed on so no guard reads it again. */
+export interface SteeringRead {
+  readonly op: 'getResource';
+  readonly path: { readonly resourceId: string };
+  readonly body: unknown;
+}
+
+/** What the rename steering decided for one operation. */
+export interface SubjectRenameVerdict {
+  /** The refusal body (`USE_ARKONA_RENAME`), or null. */
+  readonly refusal: Record<string, unknown> | null;
+  /**
+   * CR-2026-11-R3 (R3-58): the page's sidebar could not be read live: the result `update_resource` gives when its own
+   * read fails (`READ_DELAYED`, or LegendKeeper's error). Nothing is written or queued.
+   */
+  readonly failed?: McpToolResult;
+  /** CR-2026-11-R3 (R3-58): the page as the steering read it live, when it did. */
+  readonly read?: SteeringRead;
+}
+
+/** CR-2026-11-R3 (R3-58): the call the steering's live read is made for (in the tool's own name, counted in its cost). */
+export interface SteeringCaller {
+  readonly ctx: McpToolContext;
+  readonly tool: string;
+  /** Pages already read by this call (a batch reads each page once). */
+  readonly reads?: Map<string, SteeringRead>;
+}
+
 /**
  * ADR 0058 amendment (C): an `updateResource` that changes a subject's name on a project with an approved setting pack
  * is `arkona_rename`'s: the refusal body (`USE_ARKONA_RENAME`), or null.
+ *
+ * CR-2026-11-R3 (R3-58): the tree holds a page's sidebar only once its properties pass has read it, so a page made or
+ * changed since has none there and a Subject fact would not be seen. When the stored sidebar is unknown and the answer
+ * turns on it (the page is not already known to be a subject's: a character's set, a pack owner, the index of a
+ * subject's set), the page is read live ONCE (`getResource`, through the governor in the calling tool's name, counted
+ * in the call's cost), as `update_resource` reads it. A page that cannot be read is answered as `update_resource`
+ * answers it: the read's own result, nothing written; a page read without a sidebar has no Subject fact.
  */
-export function subjectRenameIn(
+export async function subjectRenameIn(
   pd: ProjectDeps,
   opId: string,
   params: OpParams,
-): Record<string, unknown> | null {
-  if (opId !== 'updateResource') return null;
+  caller?: SteeringCaller,
+): Promise<SubjectRenameVerdict> {
+  if (opId !== 'updateResource') return { refusal: null };
   const name = (params.body as { name?: unknown } | undefined)?.name;
   const id = params.path?.resourceId;
   const services = pd.services;
-  if (typeof name !== 'string' || typeof id !== 'string' || !services?.packs) return null;
+  if (typeof name !== 'string' || typeof id !== 'string' || !services?.packs) return { refusal: null };
   const projectId = pd.project.id;
   const node = services.tree.queries.node(projectId, id).data;
-  if (!node) return null;
+  if (!node) return { refusal: null };
   const types = services.registry.forProject(projectId);
   const sidebar = services.tree.queries.sidebars(projectId, [id]).data.get(id) ?? null;
-  return subjectRenameRefusal({
+  const context: SubjectRenameContext = {
     packs: services.packs,
     projectId,
     node,
@@ -90,7 +132,19 @@ export function subjectRenameIn(
     },
     factKeys: sidebar ? sidebar.flatMap((b) => (b.rows ?? []).map((r) => r.key)) : null,
     childrenOf: (indexId) => services.tree.queries.children(projectId, indexId).data,
-  });
+  };
+  if (!caller || !subjectRenameNeedsFacts(context)) return { refusal: subjectRenameRefusal(context) };
+  let read = caller.reads?.get(id);
+  if (!read) {
+    const r = await liveRead(pd, caller.ctx, caller.tool, 'getResource', { path: { resourceId: id } });
+    if (!r.ok) return { refusal: null, failed: r.result };
+    read = { op: 'getResource', path: { resourceId: id }, body: r.value };
+    caller.reads?.set(id, read);
+  }
+  const factKeys = sidebarFrom(read.body)
+    .filter((p) => p.kind === 'keyValue')
+    .flatMap((p) => (p.rows ?? []).map((row) => row.key));
+  return { refusal: subjectRenameRefusal({ ...context, factKeys }), read };
 }
 
 /**
@@ -124,9 +178,12 @@ export async function executeOne(
       deps,
     );
   }
+  let steeringRead: SteeringRead | undefined;
   if (!input.plainRename) {
-    const refusal = subjectRenameIn(deps, op.operationId, input.params);
-    if (refusal) return errorResult(refusal as { code: string; message: string }, deps);
+    const v = await subjectRenameIn(deps, op.operationId, input.params, { ctx, tool });
+    if (v.failed) return v.failed;
+    if (v.refusal) return errorResult(v.refusal as { code: string; message: string }, deps);
+    steeringRead = v.read;
   }
   try {
     const origin = mcpOrigin(ctx, tool);
@@ -135,6 +192,9 @@ export async function executeOne(
       origin,
       priority: 'P1',
       signal: ctx.signal,
+      // CR-2026-11-R3 (R3-58): the page the steering read live, so the guards and a proposal's capture use it as it is
+      // (a read this call made, as update_resource hands on its own).
+      ...(steeringRead ? { proposal: { prefetched: [steeringRead] } } : {}),
       // CR-2026-11-R3 (R3-49): the reason in the job's title AND its journal entry (ADR 0058 amendment C), as
       // update_resource records it.
       ...(input.plainRename
@@ -332,7 +392,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Run a LegendKeeper write',
     access: 'write',
     description:
-      'Runs ONE operation that changes data, by `operationId`. The low-level fallback, for what no high-level tool does: pages, facts, creates, moves, deletes, documents, timelines and maps all have their own tools, which keep the repository’s ordering, canon and lifecycle rules (this tool applies only the engine’s guards). Read first and pass the version as params.ifMatch; a stale one is refused. A read operation is refused (use lk_api_read). A replace or block delete that would lose "unsupported" blocks is refused (allowUnsupportedLoss overrides: ask the person first), and so is deleteResource with cascade unless confirm is "cascade". At scope propose, or when it touches protected canon, it becomes a proposal. If the result is queued, waiting_budget or proposal_captured the write is NOT lost: never retry it, follow it with bridge_job_status or bridge_proposal_status. Cost: 1 write.',
+      'Runs ONE operation that changes data, by `operationId`. The low-level fallback, for what no high-level tool does: pages, facts, creates, moves, deletes, documents, timelines and maps all have their own tools, which keep the repository’s ordering, canon and lifecycle rules (this tool applies only the engine’s guards). Read first and pass the version as params.ifMatch; a stale one is refused. A read operation is refused (use lk_api_read). A replace or block delete that would lose "unsupported" blocks is refused (allowUnsupportedLoss overrides: ask the person first), and so is deleteResource with cascade unless confirm is "cascade". At scope propose, or when it touches protected canon, it becomes a proposal. If the result is queued, waiting_budget or proposal_captured the write is NOT lost: never retry it, follow it with bridge_job_status or bridge_proposal_status. Cost: 1 write (an updateResource rename on a pack project may first read the page, 1 read, to see whether it renames a subject).',
     inputSchema: z.object({
       operationId: z.string().describe('For example "updateResource".'),
       params: paramsSchema.optional(),
@@ -415,13 +475,18 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
           );
         }
         // ADR 0058 amendment (C): a subject's rename on a pack project is arkona_rename's (unless plainRename says why).
+        // CR-2026-11-R3 (R3-58): a page whose sidebar the tree has not read is read live when the answer turns on it,
+        // once per page, before anything is queued.
         const plain: string[] = [];
+        const steering: SteeringCaller = { ctx, tool: 'lk_api_batch', reads: new Map() };
         for (const [i, c] of calls.entries()) {
           if (c.plainRename) {
             if (c.operationId === 'updateResource') plain.push(c.plainRename.reason);
             continue;
           }
-          const refusal = subjectRenameIn(pd, c.operationId, (c.params ?? {}) as OpParams);
+          const v = await subjectRenameIn(pd, c.operationId, (c.params ?? {}) as OpParams, steering);
+          if (v.failed) return v.failed;
+          const refusal = v.refusal;
           if (refusal)
             return errorResult(
               {
@@ -451,6 +516,10 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             onError: onError === 'continue' ? 'continue' : 'stop',
             origin: mcpOrigin(ctx, 'lk_api_batch'),
             priority: 'P2',
+            // CR-2026-11-R3 (R3-58): the pages the steering read live, for the guards and a proposal's capture.
+            ...(steering.reads && steering.reads.size > 0
+              ? { proposal: { prefetched: [...steering.reads.values()] } }
+              : {}),
             ...(batchTitle ? { title: batchTitle } : {}),
             ...(lastMajorRevision ? { lastMajorRevision } : {}),
           });

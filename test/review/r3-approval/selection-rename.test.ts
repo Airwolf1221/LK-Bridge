@@ -43,45 +43,39 @@ describe('selective approval of a rename', () => {
     expect(w.repo.live(R.characters[0])!.tags).toContain('Velaran');
   });
 
-  // CR-2026-11-R3 (R3-56): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: left for the next rename slice (low): re-place moves are not re-anchored for names left out.
-  it.fails(
-    'AP-16 the Art page’s new name left out: the Core is not placed after a page sorting after it',
-    async () => {
-      const w = (open = await renameWorld());
-      const id = await proposeRename(w);
-      const plan = itemsOf(w, id);
-      const art = `name:${P.nadiraArt}`;
-      const drop = new Set([art, `facts:${P.nadiraArt}`, `aliases:${P.nadiraArt}`]);
-      const keep = plan.items.filter((i) => i.selected && !drop.has(i.id)).map((i) => i.id);
-      const done = await approveItems(w, id, keep);
-      expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
-      expect(w.repo.live(P.nadiraArt)!.name).toBe('[BSRC] Nadira al-Khalid - Character Art');
-      const kids = w.repo.children(C.nadiraIndex);
-      const bare = (n: string) => n.replace(/^\[[A-Z]{4,5}\]\s*/, '');
-      const at = kids.findIndex((r) => r.id === C.nadira);
-      const prev = at > 0 ? bare(kids[at - 1]!.name) : null;
-      const core = bare(kids[at]!.name);
-      // SAFE: the Core's re-place (planned as "after the Art page, renamed too") is not kept when the Art page keeps its
-      // old name: the page now before the Core sorts before it.
-      expect(
-        prev === null || prev.localeCompare(core) < 0,
-        `the Core (${core}) was placed after “${prev}”: ${kids.map((r) => bare(r.name)).join(' | ')}`,
-      ).toBe(true);
-    },
-  );
+  // CR-2026-11-R3 (R3-56): built (docs/reviews/CR-2026-11-R3.md section 7; ADR 0058's second amendment): each re-place move is worked out inside its lock from the renames the owner approved, in sequence, so a name left out is never anchored on as renamed.
+  it('AP-16 the Art page’s new name left out: the Core is not placed after a page sorting after it', async () => {
+    const w = (open = await renameWorld());
+    const id = await proposeRename(w);
+    const plan = itemsOf(w, id);
+    const art = `name:${P.nadiraArt}`;
+    const drop = new Set([art, `facts:${P.nadiraArt}`, `aliases:${P.nadiraArt}`]);
+    const keep = plan.items.filter((i) => i.selected && !drop.has(i.id)).map((i) => i.id);
+    const done = await approveItems(w, id, keep);
+    expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
+    expect(w.repo.live(P.nadiraArt)!.name).toBe('[BSRC] Nadira al-Khalid - Character Art');
+    const kids = w.repo.children(C.nadiraIndex);
+    const bare = (n: string) => n.replace(/^\[[A-Z]{4,5}\]\s*/, '');
+    const at = kids.findIndex((r) => r.id === C.nadira);
+    const prev = at > 0 ? bare(kids[at - 1]!.name) : null;
+    const core = bare(kids[at]!.name);
+    // SAFE: the Core's re-place (planned as "after the Art page, renamed too") is not kept when the Art page keeps its
+    // old name: the page now before the Core sorts before it.
+    expect(
+      prev === null || prev.localeCompare(core) < 0,
+      `the Core (${core}) was placed after “${prev}”: ${kids.map((r) => bare(r.name)).join(' | ')}`,
+    ).toBe(true);
+  });
 
-  // CR-2026-11-R3 (R3-56): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: left for the next rename slice (low): re-place moves are computed against a simulated order.
-  it.fails(
-    'AP-19 every name ticked: the set ends in alphabetical order (its re-place moves in sequence)',
-    async () => {
-      const w = (open = await renameWorld());
-      const id = await proposeRename(w);
-      const done = await approve(w, id);
-      expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
-      const names = w.repo.children(C.nadiraIndex).map((r) => r.name.replace(/^\[[A-Z]{4,5}\]\s*/, ''));
-      expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
-    },
-  );
+  // CR-2026-11-R3 (R3-56): built (docs/reviews/CR-2026-11-R3.md section 7; ADR 0058's second amendment): the re-place moves follow the names written, in sequence (src/packs/rename/place.ts), so a whole approval ends in alphabetical order.
+  it('AP-19 every name ticked: the set ends in alphabetical order (its re-place moves in sequence)', async () => {
+    const w = (open = await renameWorld());
+    const id = await proposeRename(w);
+    const done = await approve(w, id);
+    expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
+    const names = w.repo.children(C.nadiraIndex).map((r) => r.name.replace(/^\[[A-Z]{4,5}\]\s*/, ''));
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+  });
 
   it('AP-17 a canonical rename’s left-out items, proposed again, still need canonical approval', async () => {
     const w = (open = await renameWorld());

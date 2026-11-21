@@ -843,7 +843,12 @@ by item. Renaming only the descriptor (after " - ") is never refused. **`plainRe
 characters) lets such a rename through, for a genuinely plain rename (a typo): the reason is shown with the proposal (its
 summary and operation) or, for a direct write, on the Review page (the job's title) and in the journal entry. The same
 refusal and the same `plainRename` apply to `updateResource` through `lk_api_write`, `lk_op_updateResource` and each call
-of `lk_api_batch` (a refused call refuses the whole batch, `callIndex` naming it).
+of `lk_api_batch` (a refused call refuses the whole batch, `callIndex` naming it). `update_resource` judges a Subject fact
+on the page as it reads it; the low-level routes on the sidebar the bridge's tree holds, and (CR-2026-11-R3, R3-58) when
+the tree has not read it yet (a page made or changed since its last properties pass) and the answer turns on it, they read
+the page live once (`getResource`, in the calling tool's name and counted in its cost; `lk_api_batch` reads each page
+once, before anything is queued), and the guards and a captured proposal use that read rather than read again. A page
+that cannot be read is answered as `update_resource` answers it: the read's error, and nothing sent.
 
 **`move_resource`** `{ page, to, dryRun?, project }`: the page and everything under it, to a new parent index inside
 the repository, in its alphabetical place there (one `moveResource`, journalled with the page as it was).
@@ -1633,6 +1638,14 @@ proposals, as the audits make them, and the Appraisal page's **Propose a fix** a
 | `related_noncurrent`                         | that one link removed from Related Sources (set_facts' plan)                                |
 | `sibling_order`, `tag_grammar` (from audits) | handed over to the audit's own "Propose a fix"                                              |
 
+**A name fix that changes a subject's name** (CR-2026-11-R3, R3-59): the dash replaced in a subject's page name changes
+the subject part the bridge reads ("Gata—Lund - Polity Reference" reads as "Gata", descriptor "Lund - Polity Reference",
+once it is "Gata - Lund - Polity Reference"), and the fix renames that page only. When the rename steering
+([`USE_ARKONA_RENAME`](#changing-moving-deleting-and-restoring)) would judge it a subject's rename, the fix is not refused
+(it is the owner's proposal, or reviewed afterwards): it says it is a plain rename, `(plain rename: the dash replaced in
+this page’s name only; nothing else that names “Gata—Lund” is renamed: arkona_rename renames a subject everywhere)` in its
+summary and `plainRename` in its operation, or, run at once at scope `write`, in the job's title and the journal entry.
+
 Last Major Revision follows ADR 0051's rule: a dash, a blank paragraph or a heading's link is not a major revision, and
 a name or Related Sources never counts, so the summary says `Last Major Revision skipped: …`. A finding whose follow-up
 is a `judgement` or `none` is `NO_FIX` (ask the owner); an unknown finding id, or one no longer in the latest run of its
@@ -1714,6 +1727,22 @@ points at them), Last Major Revision per page by ADR 0051's rule measured from w
 or a fact that only swaps the name never counts; a page with nothing else has no step at all; a skipped item's write is not
 measured), and the read-back of every page it touched (the skipped items left out).
 
+**Re-placing, in sequence (CR-2026-11-R3, R3-56).** Each renamed page's move follows the names actually written, in the
+job's order: once renamed, the page belongs among its siblings whose names are final (a page the rename does not touch, one
+whose rename the owner left out, and one already renamed; never beside a sibling the job renames later, whose name is
+still to change), and it moves only when it stands outside that place. So when the pages the rename does not touch are in
+order among themselves, the parent ends in order, and a set already in order moves none of its pages. Where several pages
+of one parent are renamed, each has a move that works its place out again inside its lock, from the parent's children as
+planned and the renames the owner approved ("Propose these again": with those the approved part wrote); it reads the page
+there and sends nothing when the page is in its place. A page the owner moved since the plan is left where it is, and a
+move LegendKeeper refuses (its neighbour gone) is reported (`placement_failed`) without stopping the rename.
+
+**The identity token, inside each tag write (CR-2026-11-R3, R3-60).** Each character's tag write judges, inside its lock,
+that the pack version the owner approved still maps the new value to the new tag (the job's first check judged it once,
+before any write). When the owner has approved another version meanwhile that no longer does, the tag is not written: the
+character's item is skipped, saying so ("the pack version the owner approved no longer maps …"); the rest of its rename
+(its fact) stands.
+
 **Locks and conflicts (ADR 0058 amendment A).** The job holds no lock for its whole run: each write takes its own page's,
 document's or asset's lock only for itself, and re-checks inside it. When a write finds its target changed (another
 version or state when it reads it inside its lock, or LegendKeeper answers 412), it is **rebased**: what the item edits
@@ -1736,10 +1765,11 @@ state and that list, free.
 
 **Costs (measured against the mock).** Planning reads each page of the set and each document holding the name once, plus
 the pack's three governance reads: 22 reads for the test character (seven pages, six other pages naming her, two
-chronology rows); its approved job (the plan's ticks: 7 items left out) 185 requests, 47 of them writes, its check,
+chronology rows); its approved job (the plan's ticks: 7 items left out) 185 requests, 46 of them writes, its check,
 read-back and change snapshot included (CR-2026-11-R3: history is judged again when the job runs, one read of each page
 with restatements; 177 before that, and 185 with 49 writes before the amendment, which no longer writes the two custom
-labels). The culture with six characters: 13 reads to plan, its job 95 requests, 20 of them writes (93 before R3; 98
+labels; R3-56's moves in sequence send one move fewer, 47 writes before, and two of the moves read their page and send
+nothing). The culture with six characters: 13 reads to plan, its job 95 requests, 20 of them writes (93 before R3; 98
 before the amendment). `dryRun` states the plan's own estimate (`cost`). A plan whose check or read-back would hold more
 than 5,000 entries in one step is refused before anything is proposed (`STEP_TOO_LARGE`).
 

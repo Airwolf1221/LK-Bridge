@@ -22,6 +22,8 @@
  *   none left it is dropped with its write;
  * - a new page placed beside a page that is no longer made takes that page's place (`after`/`before` re-anchored), and
  *   a read-back's expected neighbours are worked out the same way;
+ * - a rename's re-placing move replays only the kept items' renames (CR-2026-11-R3, R3-56: its place is worked out
+ *   again inside its lock from them; `keptItemsOnly`);
  * - any other reference to a dropped step is a planning error (`ITEM_FILTER`): nothing is approved.
  */
 import { LMR_STEP, VERIFY_STEP, EXPECT_STEP } from './internal-steps.js';
@@ -444,6 +446,11 @@ export function filterSteps(
      * left out that would make one does not make it "not made" (its links, mentions and places are kept).
      */
     readonly made?: ReadonlySet<string>;
+    /**
+     * CR-2026-11-R3 (R3-56): items the approved part has applied ("Propose these again"): a re-placing move replays
+     * their renames as written already.
+     */
+    readonly done?: ReadonlySet<string>;
   } = {},
 ): FilteredSteps {
   const kept = new Set(keptItems);
@@ -606,7 +613,7 @@ export function filterSteps(
     // A step shared by a kept and a left-out item (a block holding a ticked and an unticked restatement; a Last Major
     // Revision step over both) kept every item before: its rebaser re-applied the left-out item's edit on a conflict,
     // and "Propose these again" refused the step as naming an item it does not list.
-    s = keptItemsOnly(s, kept);
+    s = keptItemsOnly(s, kept, opts.done);
     // A read-back's expected neighbours: the next pages that are still made.
     const vbody = (s.params?.body ?? null) as Obj | null;
     if (s.op === VERIFY_STEP && vbody && Array.isArray(vbody.targets) && droppedSlots.size > 0) {
@@ -636,8 +643,12 @@ export function filterSteps(
 /**
  * CR-2026-11-R3 (R3-12, R3-24): a kept step's own items, and the item-named entries of its rebaser's input (an `edits`
  * list of `{ item }`, as a rename's block write carries), trimmed to the kept items.
+ *
+ * CR-2026-11-R3 (R3-56): likewise the `renames` a rename's re-placing move replays (the renames under its page's
+ * parent, src/packs/rename/place.ts): a name left out is never written, so its page keeps its old name there. With
+ * `done` ("Propose these again"), the renames the approved part has written stay, marked `done` (replayed first).
  */
-function keptItemsOnly(s: StepSpec, kept: ReadonlySet<string>): StepSpec {
+function keptItemsOnly(s: StepSpec, kept: ReadonlySet<string>, done?: ReadonlySet<string>): StepSpec {
   let out = s;
   if (out.items && out.items.length > 0) {
     const its = out.items.filter((i) => kept.has(i));
@@ -650,6 +661,19 @@ function keptItemsOnly(s: StepSpec, kept: ReadonlySet<string>): StepSpec {
     );
     if (edits.length !== input.edits.length)
       out = { ...out, rebase: { ...out.rebase, input: { ...input, edits } } };
+  }
+  const placing = out.rebase?.input;
+  if (out.rebase && isObj(placing) && Array.isArray(placing.renames)) {
+    // A rename marked done (written by the part approved first) stays, whatever is selected of the re-proposal.
+    const renames = (placing.renames as unknown[]).flatMap((e) =>
+      !isObj(e) || typeof e.item !== 'string' || e.done === true || kept.has(e.item)
+        ? [e]
+        : done?.has(e.item) === true
+          ? [{ ...e, done: true }]
+          : [],
+    );
+    if (JSON.stringify(renames) !== JSON.stringify(placing.renames))
+      out = { ...out, rebase: { ...out.rebase, input: { ...placing, renames } } };
   }
   return out;
 }

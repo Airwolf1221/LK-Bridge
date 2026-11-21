@@ -2048,10 +2048,13 @@ export class ProposalService implements ProposalSink {
     );
     let steps: StepSpec[];
     try {
-      steps = filterSteps(full, omitted, { made }).steps;
+      const approvedIds = set.items.map((i) => i.id).filter((x) => !set.omitted.includes(x));
+      // CR-2026-11-R3 (R3-56): what the approved part applied (approved, and not skipped when it ran): a re-placing move
+      // of the re-proposal replays those renames as written already.
+      const done = new Set(approvedIds.filter((x) => !omitted.has(x)));
+      steps = filterSteps(full, omitted, { made, done }).steps;
       // CR-2026-11-R3 (R3-37): the routing lines the partial approval left out of the approved writes, put back now that
       // the pages they name are made (each with the item that makes its page).
-      const approvedIds = set.items.map((i) => i.id).filter((x) => !set.omitted.includes(x));
       const approved = filterSteps(full, approvedIds);
       const sameJob =
         records.length === approved.steps.length && records.every((r, k) => r.opId === approved.steps[k]!.op);
