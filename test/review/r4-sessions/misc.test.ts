@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions), further attempts on the session model:
  *

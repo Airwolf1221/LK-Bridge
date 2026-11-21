@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any -- tool JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any -- tool JSON */
 /**
  * CR-2026-11-R4 (the lead; R4-06's fix and NA-43): canon filed under Narratives (the owner's approval of a move, or the
  * owner in the app) is canon still. R4-06's fix made `arkona_chapter_check` resolve a chapter's names against the pages

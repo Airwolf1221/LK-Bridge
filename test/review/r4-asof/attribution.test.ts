@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- parsed JSON tool results */
 /**
  * CR-2026-11-R4 pass 3: `arkona_consistency` and `arkona_as_of` attribute a sentence only to the name governing its
  * verb (ADR 0064 amendment 1, rule A: "never a pronoun, never another name in the sentence"), read the date of that

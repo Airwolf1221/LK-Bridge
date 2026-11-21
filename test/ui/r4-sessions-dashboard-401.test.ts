@@ -6,14 +6,15 @@
  * out"). The attempts: lose the change, or the owner's knowledge of what happened, by a mistyped current password, a
  * rate-limited step-up, a step-up the bridge refuses again after it succeeded, and a 401 of another kind.
  *
- * The real dashboard (`<App>`, jsdom) with a scripted admin API, as test/ui/sessions.test.tsx does. A `.ts` file:
- * vitest.config.ts includes only `test/review/**\/*.test.ts`.
+ * The real dashboard (`<App>`, jsdom) with a scripted admin API, as test/ui/sessions.test.tsx does. Written for
+ * test/review/r4-sessions and kept in test/ui (CR-2026-11-R4, the lead), where the UI tests' TypeScript project and
+ * ESLint's include it.
  */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, api, apiConfig } from '../../../ui/src/api';
-import { baseRoutes, installApi, renderApp, useDom, type Call } from '../../ui/helpers.js';
+import { ApiError, api, apiConfig } from '../../ui/src/api';
+import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers.js';
 
 useDom();
 

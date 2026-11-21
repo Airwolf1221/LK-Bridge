@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions), the step-up's second routes: the OAuth consent page (`/oauth/authorize`, then
  * `POST /oauth/consent`) is reached with the same owner session as the dashboard (ADR 0062 decision 1), and it can choose
@@ -58,7 +57,7 @@ async function consent(browser: Browser, redirectUri: string) {
     ),
   );
   if (page instanceof Response) throw new Error(`no consent page: ${page.status} ${await page.text()}`);
-  return { page: page as ConsentPage, clientId, pkce, redirectUri };
+  return { page: page, clientId, pkce, redirectUri };
 }
 
 const decideWith = (browser: Browser, page: ConsentPage, fields: Record<string, string>) =>
@@ -208,7 +207,7 @@ describe('what a stolen session cookie alone yields through the consent page', (
         scope: 'keep',
       }).toString(),
     });
-    const code = codeOf(consent as unknown as Response);
+    const code = codeOf(consent);
     let refresh: string | null = null;
     let access: string | null = null;
     if (code) {

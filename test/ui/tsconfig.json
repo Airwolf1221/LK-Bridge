@@ -3,12 +3,6 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": [
-    ".",
-    "../../ui/src",
-    "../admin/helpers.ts",
-    "../review/r4-sessions/idle-tab.test.ts",
-    "../review/r4-sessions/dashboard-401.test.ts"
-  ],
+  "include": [".", "../../ui/src", "../admin/helpers.ts"],
   "exclude": []
 }

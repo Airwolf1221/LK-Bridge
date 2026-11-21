@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions): ADR 0062 decision 5 asks for the step-up before "a project's settings (every key, but
  * ChatGPT's file source switched off ...)". A project's confirmed chronology (which documents are the Main table, each

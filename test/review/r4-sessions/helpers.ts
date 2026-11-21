@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- parsed JSON replies in tests */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions): shared helpers for the adversarial tests of ADR 0062's session model (the sliding
  * session, Sign out everywhere, the step-up and the three bounce pages). Each test asserts the SAFE behaviour: it passes

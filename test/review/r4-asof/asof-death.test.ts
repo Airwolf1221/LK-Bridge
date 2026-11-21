@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * CR-2026-11-R4 pass 3: `arkona_as_of` across a recorded death (ADR 0064 D7; ADR 0065 "On top of F4b.1" 3, 4 and 6;
  * ADR 0064 amendments 1 D and 2). Each test asserts the SAFE answer: passing means the attempt held, failing means the

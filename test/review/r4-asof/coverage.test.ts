@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
 /**
  * CR-2026-11-R4 pass 3: `arkona_as_of_coverage` agrees with `arkona_as_of` (ADR 0064 amendment 2, 1: "a character is in
  * 'readable birth' exactly when arkona_as_of finds a birth"; "a recorded death is flagged by the same resolver; attested

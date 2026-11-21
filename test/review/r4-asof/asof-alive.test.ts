@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * CR-2026-11-R4 pass 3: `arkona_as_of` never alive past what is recorded (ADR 0064 D7 decision 2: "Never Alive past
  * what is recorded"), except under the owner's "Alive / Living" Life State rule (ADR 0065 "On top of F4b.1" 5, amended

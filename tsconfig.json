@@ -21,10 +21,5 @@
     "checkJs": true
   },
   "include": ["src", "scripts", "test", "deploy/*.mjs", "vitest.config.ts", "vitest.sandbox.config.ts"],
-  "exclude": [
-    "ui",
-    "test/ui",
-    "test/review/r4-sessions/idle-tab.test.ts",
-    "test/review/r4-sessions/dashboard-401.test.ts"
-  ]
+  "exclude": ["ui", "test/ui"]
 }

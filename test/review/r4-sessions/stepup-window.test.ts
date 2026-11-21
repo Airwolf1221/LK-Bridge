@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions), the step-up's window (ADR 0062 decision 5: the authenticator code, or a recovery code,
  * on THIS session within the last 10 minutes; the password only without an authenticator). The attempts: a step-up
@@ -56,7 +56,7 @@ describe('the step-up belongs to one session, for ten minutes', () => {
     expect((await a.call('PUT', CONTACT, contact)).status).toBe(401);
     const browser = new Browser(s.bridge);
     expect((await browser.login()).status).toBe(200);
-    const fresh = ownerSession(s, s.bridge.publicUrl, browser.cookies.get(s.services.owner.sessionCookie)!);
+    const fresh = ownerSession(s, s.bridge.publicUrl, browser.cookies.get(s.services.owner.sessionCookie));
     expect(fresh.reauthAt()).toBeNull();
     asksStepUp(await fresh.call('PUT', CONTACT, contact), 'the new sign-in');
   });
@@ -85,7 +85,7 @@ describe('the step-up belongs to one session, for ten minutes', () => {
     const b = ownerSession(
       stack,
       stack.bridge.publicUrl,
-      browser.cookies.get(stack.services.owner.sessionCookie)!,
+      browser.cookies.get(stack.services.owner.sessionCookie),
     );
     const again = await b.call('POST', '/api/admin/security/reauth', { totp: code });
     expect({ status: again.status, code: again.json?.error?.code }).toEqual({
@@ -109,7 +109,7 @@ describe('the step-up belongs to one session, for ten minutes', () => {
     const b = ownerSession(
       stack,
       stack.bridge.publicUrl,
-      browser.cookies.get(stack.services.owner.sessionCookie)!,
+      browser.cookies.get(stack.services.owner.sessionCookie),
     );
     for (const form of [recovery[0]!, recovery[0]!.toLowerCase(), recovery[0]!.replace(/-/g, ' ')]) {
       const r = await b.call('POST', '/api/admin/security/reauth', { totp: form });

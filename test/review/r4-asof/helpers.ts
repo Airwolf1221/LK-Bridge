@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
 /**
  * CR-2026-11-R4, pass 3 (the "as of" and consistency pass): helpers for the adversarial attempts on `arkona_as_of`,
  * `arkona_as_of_coverage` and `arkona_consistency`. Every world is F4b.1's live-run world (test/consistency/live-world.ts,

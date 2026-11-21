@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions), the guarded rails at approval (ADR 0062 decision 5): "approving a proposal that deletes
  * anything ... judged by the rails' own rules at their defaults on the proposal's operations, however it came to be

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions), the guarded rails at approval through every approval route (ADR 0062 decision 5):
  * `POST /proposals/:id/approve` (with and without a selection), `/approve-as-canon`, and `/proposals/bulk` ("Approve

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * CR-2026-11-R4 pass 3: the non-current exclusion (ADR 0064 amendment 1, F: "Pre-Rewrite" and "Author-Facing" sections
  * and rows, switched on by the owner's ruling) never hides current canon, and never lets pre-rewrite material through as

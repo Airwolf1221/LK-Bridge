@@ -15,20 +15,23 @@
  *
  * Set-up notes: this file runs in the node environment and installs vitest's own jsdom globals itself, AFTER the bridge
  * has started (under a jsdom docblock Vite rewrites `new URL('./migrations/', import.meta.url)` for a browser and the
- * bridge cannot start). The page modules are imported only once the globals exist. A `.ts` file: vitest.config.ts
- * includes only `test/review/**\/*.test.ts`.
+ * bridge cannot start). The page modules are imported only once the globals exist. Kept in test/ui (CR-2026-11-R4, the
+ * lead) so that the UI tests' TypeScript project, and ESLint's, include it; with no jsdom docblock it runs in node.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { builtinEnvironments } from 'vitest/runtime';
-import { PUBLIC_URL, startAdminStack, type AdminStack } from '../../admin/helpers.js';
-import { DAY, nowS, ownerSession, type Owner } from './helpers.js';
+// Types only (erased): the modules themselves are imported once the jsdom globals exist.
+import type * as Rtl from '@testing-library/react';
+import { PUBLIC_URL, startAdminStack, type AdminStack } from '../admin/helpers.js';
+import { DAY, nowS, ownerSession, type Owner } from '../review/r4-sessions/helpers.js';
+import type * as UiHelpers from './helpers.js';
 
 let s: AdminStack;
 let owner: Owner;
-let teardownDom: () => Promise<void> = async () => undefined;
+let teardownDom: () => Promise<void> = () => Promise.resolve();
 let forwarded: string[] = [];
-let ui: typeof import('../../ui/helpers.js');
-let rtl: typeof import('@testing-library/react');
+let ui: typeof UiHelpers;
+let rtl: typeof Rtl;
 const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -43,7 +46,7 @@ beforeAll(async () => {
   };
   await import('@testing-library/jest-dom/vitest');
   rtl = await import('@testing-library/react');
-  ui = await import('../../ui/helpers.js');
+  ui = await import('./helpers.js');
 }, 60_000);
 afterAll(async () => {
   await new Promise((r) => setTimeout(r, 200)); // the last answers handed to the (unmounted) page first
