@@ -69,6 +69,7 @@ import {
   namesakeLine,
   namesakesOf,
   namesakeView,
+  splitAliases,
   usableName,
 } from '../naming/namesakes.js';
 import {
@@ -2033,7 +2034,7 @@ export async function planRename(
             newName,
             given: kind === 'character' ? plainValue(givenKey) : null,
             family: kind === 'character' ? plainValue(familyKey) : null,
-            aliases: aliasValue ? aliasValue.split(/\s*;\s*/) : [],
+            aliases: splitAliases(aliasValue),
           }),
       customLabels,
     },

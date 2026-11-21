@@ -154,6 +154,7 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
               ...(args.continuity !== undefined ? { continuity: args.continuity } : {}),
               actor: actorOf(mctx, tool),
               ...(args.live ? { live: liveReader(pd, mctx, tool) } : {}),
+              read: liveReader(pd, mctx, tool),
             });
             const reads = r.source.live?.reads ?? 0;
             return answer(
@@ -176,7 +177,7 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
       access: 'read',
       description:
         'The Arkona pack, read-only and free: run it BEFORE writing about a character at a date (a chapter, a scene, a history). For each character (at most 25) at `date` (a date of the calendar, or "now": the pack’s present): when it was born and where that is recorded (or “birth unestablished”); the elapsed CALENDAR years (a number when both dates are exact days, a range when either is approximate, “not yet born” before the birth, none when the birth is unknown); the state recorded: Alive (recorded) between its birth and a recorded death, inside its attested span, or from its birth (or a recorded return) to the present when its Life State records it alive, never across a recorded death (after a death with no recorded return: “Unestablished (recorded death; current Life State Alive)”; between a death and a return: Deceased (recorded)); Deceased (recorded) after a recorded death, or “Deceased (recorded by <date>)” at or after a Life State’s “Deceased by <date>” (an upper bound, never compared); Unestablished otherwise (an attested life never proves survival past it); the chronology rows naming it nearest the date on each side (window, default 3); and any open Contradictory finding on its birth or death. ' +
-        'It NEVER gives apparent or biological age: Arkona’s races mature and age differently, so read the race reference it links for the maturation rules. continuity: an AU’s own pages first, else Main CANON’s values labelled “inherited from Main CANON”. Cost: none; live: true re-reads each identity page’s sidebar (1 read each).',
+        'It NEVER gives apparent or biological age: Arkona’s races mature and age differently, so read the race reference it links for the maturation rules. continuity: an AU’s own pages first, else Main CANON’s values labelled “inherited from Main CANON”. Cost: none (1 read when the chronology’s calendar is not kept yet); live: true re-reads each identity page’s sidebar (1 read each).',
       inputSchema: z.object({
         characters: z
           .array(z.string().min(1).max(300))
@@ -214,6 +215,7 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
               ...(args.continuity !== undefined ? { continuity: args.continuity } : {}),
               ...(args.window !== undefined ? { window: args.window } : {}),
               ...(args.live ? { live: liveReader(pd, mctx, tool) } : {}),
+              read: liveReader(pd, mctx, tool),
             });
             return finish(pd, mctx, tool, body, () => ({
               date: body.date,
@@ -229,7 +231,7 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Which characters have dates the calendar can read (Arkona pack, read-only)',
       access: 'read',
       description:
-        'The Arkona pack, read-only and free: how many current characters have a birth the calendar engine can read, a birth deliberately unestablished, attested bounds only, or nothing readable, from their identity pages (one bucket each, so the buckets add up to the total), with a recorded death and an unreadable birth counted as separate flags; and which have nothing readable. A report for the owner, NEVER a task list: an unrecorded birth is often deliberate (“birth date unestablished”); never invent or ask for a date to fill a gap. Cost: none.',
+        'The Arkona pack, read-only and free: how many current characters have a birth the calendar engine can read, a birth deliberately unestablished, attested bounds only, or nothing readable, read exactly as arkona_as_of reads them (the identity page, its own prose, chronology rows and other Authoritative pages, by name and alias), one bucket each, so the buckets add up to the total, with a recorded death and an unreadable birth counted as separate flags; and which have nothing readable (detail "full" lists every character’s bucket). A report for the owner, NEVER a task list: an unrecorded birth is often deliberate (“birth date unestablished”); never invent or ask for a date to fill a gap. Cost: none (1 read when the chronology’s calendar is not kept yet).',
       inputSchema: z.object({
         detail: z.enum(['summary', 'full']).optional().describe('"full": up to 1,000 characters listed.'),
         project: projectArg,
@@ -241,7 +243,11 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
           const s = service(pd);
           if (!s.ok) return s.result;
           try {
-            const body = await s.c.coverage({ projectId: pd.project.id, full: args.detail === 'full' });
+            const body = await s.c.coverage({
+              projectId: pd.project.id,
+              full: args.detail === 'full',
+              read: liveReader(pd, mctx, 'arkona_as_of_coverage'),
+            });
             return finish(pd, mctx, 'arkona_as_of_coverage', body, () => body.counts);
           } catch (e) {
             return refusal(e, pd);

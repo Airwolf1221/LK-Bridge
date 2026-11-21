@@ -591,12 +591,22 @@ export const consistencyRulesSchema = z
       .max(10)
       .optional(),
     /**
-     * v3 F4c (ADR 0065, amending F4b's D7 by the owner's ruling of 20 November 2026): Life State values (their principal
+     * v3 F4c (ADR 0065, amending F4b's D7 by the owner's ruling of 20 November 2026; ADR 0064 amendment 2: a principal
+     * part STARTING with one of them, as a whole word): Life State values (their principal
      * part) that record the character alive at the pack's `present`. Read by `arkona_as_of` only: with a recorded birth,
      * the life is recorded from the birth to the present ("Alive (recorded)"); with none, at the present only. Never a
      * fact, never compared. Absent: a Life State says nothing about a date.
      */
     aliveValues: z.array(text(100)).max(10).optional(),
+    /**
+     * ADR 0064 amendment 2 (v3 F4.1): the phrasings of a date inside an alive Life State's principal part ("Alive in 5A
+     * 931", "Living and immortal at 5A 931"); the named group `date` holds it. The Life State then attests the life up
+     * to that date (not the present). Read by `arkona_as_of` only; never a fact, never compared. Absent: no date read.
+     */
+    aliveAt: z
+      .array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_.-]{0,59}$/), regex: text(500) }).strict())
+      .max(10)
+      .optional(),
   })
   .strict();
 export type ConsistencyRules = z.infer<typeof consistencyRulesSchema>;

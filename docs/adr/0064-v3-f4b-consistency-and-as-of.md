@@ -394,3 +394,108 @@ unchanged): the bare-range attested phrasing (decision 6), the age phrasings for
 <date>" as an as-of-only upper bound (replacing D.2's "recorded as nothing" in `arkona_as_of`; still never a fact), D9's
 inheritance of the attested life and the Life State, and D7 amended by the owner's ruling: a Life State of "Alive"
 records the character alive at the present. See [ADR 0065](0065-v3-f4c-fiction.md), "On top of F4b.1".
+
+## Amendment 2: from the owner's check of the live tools (v3 F4.1)
+
+- Status: **Proposed** (20 November 2026, session F4.1). It amends the decisions above and amendment 1; where it changes
+  one, the change is said here and the text above is left as it was approved. **No new ADR number** (the owner's
+  instruction); its narrative half is [ADR 0065](0065-v3-f4c-fiction.md) amendment 1.
+- **Write scope: no issue found.** Nothing in this amendment writes to LegendKeeper: the four consistency tools stay
+  read-only (the one new request, loading the calendar, is a read); "Pick the right value" is unchanged (always ONE
+  proposal); the audits' category still reports Contradictory pairs only and makes no request.
+- Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
+  spike, rehearsal or round-trip script. Mocks and fixtures only; every fixture is the owner's live data, quoted verbatim
+  (`test/consistency/f41.test.ts`, on amendment 1's live-run world).
+- No migration. The facts index rebuilds itself once (its key holds the characters' names, which the alias parser
+  changes).
+- **Pack version `arkona-2026-11-20-f41`** (supersedes `arkona-2026-11-20-f4c`; the owner approves it on the Packs page).
+  Decisions 1, 3 and 4 and the calendar loader are code and apply at once; so does decision 2's prefix match, on the
+  approved values ("Alive in 5A 931" with `-f4c`'s `["Alive"]`, then read up to the present). "Living", the dated
+  reading (`aliveAt`) and the two Temporal Scope phrasings are pack data and apply when `-f41` is approved.
+
+### 1. Coverage agrees with `arkona_as_of` (amends D8 and amendment 1 G)
+
+The live coverage put Elias Brenner, Varadi Bendeguz and Mehrana al-Khalid under "nothing readable" (12 readable births of 299) while `arkona_as_of` read all three: Elias from his own page's prose ("Elias Brenner was born in Falkenau on Jehet
+39th, 4A 100 (1,250,407 KCY)"), Varadi from a Universal Chronology row ("Varadi Bendeguz is born in Varadyn Kiralysag |
+Selaphos 40th, 3A 78"), Mehrana through her birth name ("Yasmin Arshama is born… | Camue 1st, 4A 100"). Coverage had read
+only the identity page's sidebar facts. **Now one resolver** (`Consistency.lifeValue`): the identity page's own value (its
+Temporal Scope, Life State or own prose naming the character), else Main CANON's inherited one (D9), else the
+Authoritative restatements (prose elsewhere, chronology rows; by name or alias) when they agree. `arkona_as_of` and
+`arkona_as_of_coverage` both call it, over the same facts (`characterFacts`, non-current sections left out alike), so a
+character is in "readable birth" exactly when `arkona_as_of` finds a birth (a property test over every Main CANON
+character, both ways). A recorded death is flagged by the same resolver; attested bounds are the identity page's, as
+as-of reads them. `detail: "full"` adds `byCharacter` (each character's bucket, and the birth's value, page and source).
+
+### 2. Alive phrasings (pack data; amends ADR 0065's D7 ruling)
+
+Only the exact Life State "Alive" counted. **`aliveValues` now match a principal value (before the first ";", "(" or
+" - ") that STARTS with one of them as a whole word**; `-f41` seeds `["Alive", "Living"]`. An optional "in / at <date>"
+there (`aliveAt`, pack data: `\b(?:in|at)\s+(?<date>.+)$`, read with the scan reader) is an attestation up to that date:
+the life runs from the recorded birth (or, with none, is at that date only) to the date, not to the present. Two Temporal
+Scope phrasings, both attested-through (`bound: to`): `attested.scope.living` ("living at <date>") and
+`attested.scope.present` ("present <date>"). The death guard (ADR 0065, "On top of F4b.1", 6) is kept: a recorded death
+always wins inside its span, now with the alive end in place of the present ("Living" after a death with no return is
+"Unestablished (recorded death; current Life State Living)"). Read by `arkona_as_of` only; never facts, never compared.
+**Chosen**: "Living" as a value of its own beside "Alive" (the owner's "starts with Alive or Living").
+
+### 3. One alias parser, notes dropped (amends D2's "a name, an alias")
+
+"Rita von Katzen (4A 99-192); Yamato (from 4A 192); Katsuragi Yamato (from 4A 193)" kept each note as part of the name, so
+"Zahras 1st, 4A 99 (1,250,406 KCY) - Rita von Katzen, later Katsuragi Yamato, is born in Varadyn Kiralysag." (Varadyn -
+Historical Kingdom & Personal Union) named nobody. **`splitAliases`** (`src/packs/naming/namesakes.ts`) is the one
+parser: split at semicolons and line breaks; each alias loses its trailing bracketed notes (`aliasName`: a bracket holding
+a digit, opening with a note word such as "from", "until", "c.", "birth", "earlier", "maiden", "regnal", or ending
+"name"). The facts index, `arkona_as_of`, `arkona_consistency`, `arkona_brief`, `arkona_name_check`, the character tools,
+the change impact (resource aliases through `aliasName`) and the rename review (which had its own `split(';')`) all use
+it. **Departure** from F4a's parser, which also split at commas: a note's date may hold a comma ("(from Zahras 1st, 4A
+47)"), and the owner's rule is ";". **Chosen**: a bracket that is not a note ("Leopold (the Elder)") stays part of the
+name; a lone "…" (an elided list) is no alias. Rule A already passes over "later Katsuragi Yamato" as an appositive, so
+Yamato's birth is now Zahras 1st, 4A 99 from the Varadyn line.
+
+### 4. Race reference links (amends D7's "its Race / Species value's page")
+
+"High Elf", "Human", "Foxian" and "Faerie" found no page ("High Elves - Core Information" and the like); "Vitra" did only
+because its plural is the same. **Now**: the value's principal part, through the pack's race token map (F3a,
+`tags.race`), matched in the singular or the plural (`numberForms`: elves/elf, ies/y and ie, es, s) against the subject or
+aliases of the Race Core Reference pages (the race kind's Reference Type, or a "… - Core Information" name) under the race
+roster (`owners.races.root`, Races of Arkona); if none, the earlier rule (any page whose Reference Type or name says race
+or species), now also singular or plural. One match is linked; several or none say so, as before.
+
+### 5. The calendar on demand
+
+`Chronology.loadCalendar` is THE loader (`calendar_date`'s code moved into it unchanged in behaviour): the kept calendar,
+else one `listCalendars` read and kept. `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency` pass their
+governed read to `Consistency.world`, which loads the calendar before the facts index is brought up to date (the
+extractor reads dates with it; a new calendar is a new index key, so the index rebuilds). The nightly audit passes no
+read and never makes a request (**chosen**: the chronology check, which runs nightly, keeps the calendar anyway). A
+calendar that cannot be read leaves the dates unread as before, and `couldNotCheck` says why. The narrative tools: ADR
+0065 amendment 1.
+
+### The fixture results, before and after
+
+`test/consistency/f41.test.ts` (`F41_REPORT=1` prints them), on amendment 1's live-run world with the owner's values;
+before is this session's tests run against `main`'s code and pack.
+
+| Fixture                                                                                             | Before                                      | After                                                        |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------ |
+| Coverage, 59 Main CANON characters                                                                  | 20 readable, 27 nothing readable            | 24 readable, 23 nothing readable                             |
+| Elias Brenner, Varadi Bendeguz, Mehrana al-Khalid (coverage)                                        | nothing readable                            | readable birth (prose; chronology; chronology)               |
+| Rashad al-Khalid at 5A 931                                                                          | Unestablished                               | Alive (recorded)                                             |
+| Katsuragi Yamato at 5A 931                                                                          | Unestablished                               | Alive (recorded)                                             |
+| Iuno at 5A 931                                                                                      | Unestablished                               | Alive (recorded)                                             |
+| Katsuragi Yamato, born                                                                              | birth unestablished                         | Zahras 1st, 4A 99 (the Varadyn line)                         |
+| `arkona_name_check`: Rita von Katzen, Takamori Ayame, Ayame al-Jabaal, Mizuno Rei, Farzana al-Ruyan | no alias match                              | each matches its character as an alias                       |
+| Race reference: High Elf, Human, Foxian, Faerie                                                     | "no race reference page matches this value" | "High Elves / Humans / Foxians / Faeries - Core Information" |
+| Race reference: Vitra                                                                               | "Vitra - Core Information"                  | "Vitra - Core Information"                                   |
+
+The fourth extra readable birth is Katsuragi Yamato's (decision 3). F4b's own fixture gave "Rita von Katzen" a second,
+different birth on its nation page ("was born in 4A 305"); this file leaves that sentence out, since two disagreeing
+restatements give no birth (D7, unchanged).
+
+### For the owner
+
+1. Approve `arkona-2026-11-20-f41`, then re-run `arkona_as_of_coverage` (and `detail: "full"` to see each bucket) and the
+   `narrative-f4c` sandbox check.
+2. Decision 3's departure: commas no longer separate aliases. An Aliases value written with commas is now one alias.
+3. Decision 2: "Living" is an alive value; a dated alive Life State attests the life only up to its date.
+4. Decision 5: the nightly audit makes no request for the calendar.

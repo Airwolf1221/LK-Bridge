@@ -97,7 +97,7 @@ export interface ConsistencyDeps {
   readonly appraisal: Pick<Appraisal, 'rules' | 'reader' | 'index' | 'store' | 'freshness'>;
   readonly tree: { readonly queries: TreeQueries };
   readonly registry: { forProject(projectId: string): ProjectTypes };
-  readonly chronology: Pick<Chronology, 'config' | 'calendar'>;
+  readonly chronology: Pick<Chronology, 'config' | 'calendar'> & Partial<Pick<Chronology, 'loadCalendar'>>;
   /** A snapshot piece by its hash (the snapshot store). */
   readonly piece: (sha256: string) => Promise<unknown>;
   readonly projectSettings: (projectId: string) => Readonly<Record<string, unknown>>;
@@ -245,6 +245,23 @@ export class Consistency {
     return k;
   }
 
+  /**
+   * The chronology's calendar, loaded when it is not kept yet (ADR 0064 amendment 2): null when it is there now, else why
+   * not (never throws: without a calendar every date stays unread, as before).
+   */
+  async ensureCalendar(projectId: string, read: LiveRead): Promise<string | null> {
+    try {
+      if (this.d.chronology.calendar(projectId)) return null;
+      if (!this.d.chronology.loadCalendar) return 'the calendar loader is not available here';
+      if (!this.d.chronology.config(projectId).calendarId)
+        return 'the chronology’s calendar is not confirmed';
+      const r = await this.d.chronology.loadCalendar(projectId, { read });
+      return r.ok ? null : r.message;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
+
   /** The chronology's rows, read from the snapshots (one table piece at a time). */
   private async rows(projectId: string, reader: PageReader): Promise<ChronologyRowInput[]> {
     let cfg;
@@ -293,8 +310,11 @@ export class Consistency {
    * Everything a request works from: the rules, the overlay (caught up), the current characters and their names, the
    * calendar, and the facts index brought up to date. Free: the bridge's database and the snapshot store only.
    */
-  async world(projectId: string): Promise<World> {
+  async world(projectId: string, o: { readonly read?: LiveRead } = {}): Promise<World> {
     const { pack, rules } = this.rules(projectId);
+    // ADR 0064 amendment 2: a tool (it passes its governed read) loads the chronology's calendar when the bridge has not
+    // kept it yet: one read, through the loader calendar_date uses. The nightly audit (no read) never makes a request.
+    const loadProblem = o.read ? await this.ensureCalendar(projectId, o.read) : null;
     const compiled = compilePatterns(rules);
     let opened: Awaited<ReturnType<ConsistencyDeps['appraisal']['reader']>>;
     try {
@@ -427,7 +447,7 @@ export class Consistency {
         ...(cal
           ? []
           : [
-              'The chronology’s calendar is not available to the bridge yet, so no date can be read (the chronology tools read and keep it).',
+              `The chronology’s calendar is not available to the bridge yet, so no date can be read (the chronology tools read and keep it)${loadProblem ? `; reading it now failed: ${loadProblem}` : ''}.`,
             ]),
       ],
       page,
@@ -722,9 +742,11 @@ export class Consistency {
     readonly continuity?: string;
     readonly actor: string;
     readonly live?: LiveRead;
+    /** The tool's governed read, for loading the calendar when it is not kept yet (ADR 0064 amendment 2). */
+    readonly read?: LiveRead;
   }): Promise<AppraisalReport> {
     const startedAt = this.d.now();
-    const w = await this.world(o.projectId);
+    const w = await this.world(o.projectId, o.read ? { read: o.read } : {});
     const include = new Set(o.include ?? []);
     const characters = this.scopeCharacters(w, o);
     let reads = 0;
@@ -930,10 +952,12 @@ export class Consistency {
     readonly continuity?: string;
     readonly window?: number;
     readonly live?: LiveRead;
+    /** The tool's governed read, for loading the calendar when it is not kept yet (ADR 0064 amendment 2). */
+    readonly read?: LiveRead;
   }): Promise<Obj> {
     if (o.characters.length > MAX_AS_OF)
       throw new ConsistencyError('TOO_MANY', `At most ${MAX_AS_OF} characters in one call.`);
-    const w = await this.world(o.projectId);
+    const w = await this.world(o.projectId, o.read ? { read: o.read } : {});
     const at = this.readDate(w, o.date);
     const continuity = o.continuity ?? MAIN;
     const resolved: { asked: string; c?: CharacterRecord; error?: Obj }[] = o.characters.map((q) => {
@@ -1003,21 +1027,7 @@ export class Consistency {
     const id = c.identity.id;
     const cal = w.cal!;
     const span = (f: StoredFact) => spanOf(cal, f.date!, w.rules.approxMargin);
-    const valueOf = (kind: 'birth' | 'death') => {
-      const own = cf.facts.filter((f) => f.kind === kind && f.pageId === id && f.source !== 'chronology');
-      const pick = own.find((f) => f.date !== null) ?? own.find((f) => f.gap) ?? null;
-      if (pick) return { fact: pick, inherited: false };
-      const inh = cf.inherited.get(kind);
-      if (inh && (inh.date || inh.gap)) return { fact: inh, inherited: true };
-      // No value on the identity page: the Authoritative restatements, when they agree.
-      const others = cf.facts.filter(
-        (f) => f.kind === kind && f.date !== null && w.page(f.pageId).lifecycle === 'Authoritative',
-      );
-      const first = others[0];
-      if (first && others.every((f) => overlaps(span(f), span(first))))
-        return { fact: first, inherited: false };
-      return null;
-    };
+    const valueOf = (kind: 'birth' | 'death') => this.lifeValue(w, cf, kind);
     const where = (f: StoredFact, inherited: boolean) => ({
       value: f.valueText,
       precision: f.date ? describeDate(f.date) : null,
@@ -1089,17 +1099,21 @@ export class Consistency {
     const lifeInherited = lifeState
       ? cf.inherited.get(`identity:${textKey(w.rules.lifeState)}`) === lifeState
       : false;
-    // ADR 0065 (amending D7): a Life State recording the character alive (its principal part, "Alive") holds at the present.
-    const aliveNow =
-      lifeState !== undefined &&
-      !lifeState.gap &&
-      (w.rules.aliveValues ?? []).some((v) => textKey(v) === textKey(principalValue(lifeState.valueText)));
+    // ADR 0065 (amending D7): a Life State recording the character alive (its principal part, "Alive") holds at the
+    // present. ADR 0064 amendment 2: the principal part STARTS with one of the alive values ("Alive in 5A 931", "Living
+    // and immortal at 5A 931"); a date there ("in / at <date>") is an attestation up to that date, not the present.
+    const alive = lifeState && !lifeState.gap ? this.aliveOf(w, lifeState.valueText) : null;
+    const aliveNow = alive !== null;
+    const aliveEnd = alive?.through ?? presentSpan;
+    const aliveEndText = alive?.throughText
+      ? `${alive.throughText} (the date the Life State gives)`
+      : `the present (${w.rules.present})`;
     // v3 F4c (ADR 0065; the owner's guard on the Life State ruling): a recorded death always wins inside its own span. With
     // a death recorded before the present and a current Life State recording the character alive (a rebirth, a return),
     // the Life State never carries the life across the gap: from the death to the next recorded birth or return the
     // character is Deceased (recorded); after the last death with no return, Unestablished (recorded death; current Life
     // State …); after a return, alive from it to the present.
-    const afterDeath = aliveNow && presentSpan ? this.afterDeath(w, cf, id, at.span, presentSpan) : null;
+    const afterDeath = aliveNow && aliveEnd ? this.afterDeath(w, cf, id, at.span, aliveEnd) : null;
     let state: string;
     let why: string;
     let inherited = false;
@@ -1109,7 +1123,7 @@ export class Consistency {
         why = `after the recorded death (${afterDeath.death.valueText}), before the recorded return (${afterDeath.next!.valueText})`;
       } else if (afterDeath.state === 'returned') {
         state = 'Alive (recorded)';
-        why = `between the recorded return (${afterDeath.next!.valueText}) and the present (${w.rules.present}): the Life State records the character “${lifeState!.valueText}”`;
+        why = `between the recorded return (${afterDeath.next!.valueText}) and ${aliveEndText}: the Life State records the character “${lifeState!.valueText}”`;
       } else if (afterDeath.state === 'gap') {
         state = `Unestablished (recorded death; current Life State ${principalValue(lifeState!.valueText)})`;
         why = `a death is recorded (${afterDeath.death.valueText}) and the Life State records the character “${lifeState!.valueText}” now, but no return is recorded after it: never alive across the gap`;
@@ -1141,15 +1155,15 @@ export class Consistency {
       inherited = attestedInherited || (birth?.inherited ?? false);
     } else if (
       aliveNow &&
-      presentSpan &&
-      (birthSpan ? at.span.from > birthSpan.to : at.span.from >= presentSpan.from) &&
-      at.span.to <= presentSpan.to &&
+      aliveEnd &&
+      (birthSpan ? at.span.from > birthSpan.to : at.span.from >= aliveEnd.from) &&
+      at.span.to <= aliveEnd.to &&
       !(deathSpan && at.span.to >= deathSpan.from)
     ) {
       state = 'Alive (recorded)';
       why = birthSpan
-        ? `between the recorded birth and the present (${w.rules.present}): the Life State records the character “${lifeState.valueText}”`
-        : `at the present (${w.rules.present}): the Life State records the character “${lifeState.valueText}”`;
+        ? `between the recorded birth and ${aliveEndText}: the Life State records the character “${lifeState!.valueText}”`
+        : `at ${aliveEndText}: the Life State records the character “${lifeState!.valueText}”`;
       inherited = lifeInherited || (birth?.inherited ?? false);
     } else {
       state = 'Unestablished';
@@ -1233,6 +1247,37 @@ export class Consistency {
   }
 
   /**
+   * THE resolver of a character's birth or death (D7), shared by `arkona_as_of` and the coverage report (ADR 0064
+   * amendment 2: the coverage report agrees with as-of): the identity page's own value (its Temporal Scope, its Life
+   * State, its own prose naming the character), else Main CANON's inherited one in an AU (D9), else the Authoritative
+   * restatements (prose elsewhere, chronology rows, by name or alias) when they all agree. A date before a gap; null
+   * when nothing is recorded. Needs the calendar (a date's span).
+   */
+  lifeValue(
+    w: World,
+    cf: CharacterFacts,
+    kind: 'birth' | 'death',
+  ): { fact: StoredFact; inherited: boolean } | null {
+    const id = cf.character.identity.id;
+    const own = cf.facts.filter((f) => f.kind === kind && f.pageId === id && f.source !== 'chronology');
+    const pick = own.find((f) => f.date !== null) ?? own.find((f) => f.gap) ?? null;
+    if (pick) return { fact: pick, inherited: false };
+    const inh = cf.inherited.get(kind);
+    if (inh && (inh.date || inh.gap)) return { fact: inh, inherited: true };
+    if (!w.cal) return null;
+    const cal = w.cal;
+    const span = (f: StoredFact) => spanOf(cal, f.date!, w.rules.approxMargin);
+    // No value on the identity page: the Authoritative restatements, when they agree.
+    const others = cf.facts.filter(
+      (f) => f.kind === kind && f.date !== null && w.page(f.pageId).lifecycle === 'Authoritative',
+    );
+    const first = others[0];
+    if (first && others.every((f) => overlaps(span(f), span(first))))
+      return { fact: first, inherited: false };
+    return null;
+  }
+
+  /**
    * The guard on a Life State of "Alive" after a recorded death (ADR 0065): null when the date does not reach the first
    * recorded death (the other rules apply). The identity page's dated deaths and starts (births, and attested lives with
    * an open end: a return), Main CANON's in an AU with no identity page of its own.
@@ -1287,6 +1332,39 @@ export class Consistency {
     return at.from > next.s.to && at.to <= present.to ? out('returned') : out('spans');
   }
 
+  /**
+   * Whether a Life State records the character alive (ADR 0065, amended by ADR 0064 amendment 2): its principal part
+   * (before the first ";", "(" or spaced dash) starts with one of `aliveValues` as a whole word ("Alive", "Living").
+   * `through`: the date an `aliveAt` phrasing reads there ("Alive in 5A 931"), the attestation's end; null: the present.
+   */
+  aliveOf(w: World, value: string): { through: Span | null; throughText: string | null } | null {
+    const principal = principalValue(value);
+    const k = textKey(principal);
+    const starts = (w.rules.aliveValues ?? []).some((v) => {
+      const vk = textKey(v);
+      return vk !== '' && (k === vk || k.startsWith(`${vk} `));
+    });
+    if (!starts) return null;
+    if (w.cal)
+      for (const p of w.rules.aliveAt ?? []) {
+        let m: RegExpExecArray | null;
+        try {
+          m = new RegExp(p.regex, 'iu').exec(principal);
+        } catch {
+          continue;
+        }
+        const date = m?.groups?.date;
+        if (!date) continue;
+        const r = readScan(w.cal, date, w.style);
+        if (r?.ok)
+          return {
+            through: spanOf(w.cal, r.reading, w.rules.approxMargin),
+            throughText: r.reading.text.trim(),
+          };
+      }
+    return { through: null, throughText: null };
+  }
+
   /** A Life State's upper bound on death ("Deceased by 5A 931"), by the pack's `deceasedBy` phrasings; null when none. */
   private deceasedBy(w: World, value: string): { text: string; reading: DateReading; span: Span } | null {
     if (!w.cal) return null;
@@ -1322,15 +1400,41 @@ export class Consistency {
       ) ?? cf.inherited.get(`identity:${textKey('Race / Species')}`);
     const value = fact?.valueText;
     if (!value || fact.gap) return null;
-    const k = nameKeyOf(value);
-    const hits: TreeNode[] = [];
-    for (const kind of ['bsrc', 'bwrk', 'index'] as const)
-      for (const n of w.ctx.tree.byKind(w.projectId, kind).data)
-        if (
-          (nameKeyOf(subjectPart(n.displayName)) === k || n.aliases.some((a) => nameKeyOf(a) === k)) &&
-          (/race|species/i.test(n.referenceType ?? '') || /race|species/i.test(n.displayName))
-        )
-          hits.push(n);
+    // ADR 0064 amendment 2: the value's principal part, through the pack's race token map (F3a: "High Elf" → "High
+    // Elf"), matched in the singular or the plural ("High Elves - Core Information", "Humans - Core Information"),
+    // first among the Race Core Reference pages under the race roster (Races of Arkona), else as before.
+    const principal = principalValue(value);
+    const tokens = w.pack.tags.race;
+    const token = Object.entries(tokens).find(([k]) => textKey(k) === textKey(principal))?.[1] ?? principal;
+    const wanted = new Set([...numberForms(nameKeyOf(principal)), ...numberForms(nameKeyOf(token))]);
+    const matches = (n: TreeNode) =>
+      [subjectPart(n.displayName), ...n.aliases].some((x) =>
+        [...numberForms(nameKeyOf(x))].some((f) => wanted.has(f)),
+      );
+    const races = w.pack.owners?.races;
+    const raceKind = w.pack.owners?.types
+      .flatMap((t) => Object.values(t.kinds ?? {}))
+      .find((k) => k && k.navigation === 'race');
+    const coreType = raceKind?.referenceType ?? 'Race Core Reference';
+    const roster = (n: TreeNode) =>
+      races !== undefined &&
+      (n.path.ids.includes(races.root.id) ||
+        n.path.names.some((x) => textKey(x) === textKey(races.root.name)));
+    const nodes = (['bsrc', 'bwrk', 'index'] as const).flatMap(
+      (kind) => w.ctx.tree.byKind(w.projectId, kind).data,
+    );
+    let hits: TreeNode[] = nodes.filter(
+      (n) =>
+        roster(n) &&
+        (textKey(n.referenceType ?? '') === textKey(coreType) ||
+          / - core information$/iu.test(n.displayName)) &&
+        matches(n),
+    );
+    if (hits.length === 0)
+      hits = nodes.filter(
+        (n) =>
+          matches(n) && (/race|species/i.test(n.referenceType ?? '') || /race|species/i.test(n.displayName)),
+      );
     return hits.length === 1
       ? {
           value,
@@ -1355,8 +1459,12 @@ export class Consistency {
    * deliberately unestablished; attested bounds only; nothing readable); a recorded death and an unreadable birth are
    * flags with their own counts.
    */
-  async coverage(o: { readonly projectId: string; readonly full?: boolean }): Promise<Obj> {
-    const w = await this.world(o.projectId);
+  async coverage(o: {
+    readonly projectId: string;
+    readonly full?: boolean;
+    readonly read?: LiveRead;
+  }): Promise<Obj> {
+    const w = await this.world(o.projectId, o.read ? { read: o.read } : {});
     const counts = {
       characters: 0,
       readableBirth: 0,
@@ -1367,31 +1475,38 @@ export class Consistency {
     const flags = { recordedDeath: 0, unreadableBirth: 0 };
     const nothing: Obj[] = [];
     const unreadable: Obj[] = [];
-    const leaveOutNonCurrent = w.rules.nonCurrent?.exclude === true;
+    const each: Obj[] = [];
     for (const c of w.characters) {
       if (w.continuityOf(c.identity.id) !== MAIN) continue;
       counts.characters++;
-      const own = this.facts
-        .factsOn(w.projectId, [c.identity.id])
-        .filter((f) => f.matchedAs === 'page' && !(leaveOutNonCurrent && f.nonCurrent));
-      const birth = own.filter((f) => f.kind === 'birth');
-      const readable = birth.some((f) => f.date);
-      const gap = birth.some((f) => f.gap);
-      const death = own.some((f) => f.kind === 'death' && f.date);
-      const attested = own.some((f) => f.kind === 'attested' && f.date);
-      const bad = birth.find((f) => f.unreadable);
-      if (readable) counts.readableBirth++;
-      else if (gap) counts.birthUnestablished++;
-      else if (attested) counts.attestedBoundsOnly++;
-      else {
-        counts.nothingReadable++;
+      // ADR 0064 amendment 2: the SAME resolver as arkona_as_of (the identity page, its prose, the chronology rows and
+      // other Authoritative pages, by name and alias; non-current sections left out as as-of leaves them out), never the
+      // identity page's sidebar alone.
+      const cf = this.characterFacts(w, c, { continuity: MAIN });
+      const id = c.identity.id;
+      const birth = this.lifeValue(w, cf, 'birth');
+      const readable = birth !== null && birth.fact.date !== null;
+      const gap = birth !== null && birth.fact.date === null && birth.fact.gap;
+      const death = this.lifeValue(w, cf, 'death')?.fact.date != null;
+      const attested = cf.facts.some((f) => f.kind === 'attested' && f.date && f.pageId === id);
+      const bad = readable
+        ? undefined
+        : cf.facts.find((f) => f.kind === 'birth' && f.pageId === id && f.unreadable);
+      const bucket = readable
+        ? 'readableBirth'
+        : gap
+          ? 'birthUnestablished'
+          : attested
+            ? 'attestedBoundsOnly'
+            : 'nothingReadable';
+      counts[bucket]++;
+      if (bucket === 'nothingReadable')
         nothing.push({
           character: c.subject,
-          identityPage: { id: c.identity.id, name: c.identity.name, lifecycle: c.lifecycle },
+          identityPage: { id, name: c.identity.name, lifecycle: c.lifecycle },
           ...(death ? { flags: ['recorded death'] } : {}),
           ...(bad ? { unreadableBirth: bad.valueText } : {}),
         });
-      }
       if (death) flags.recordedDeath++;
       if (bad) {
         flags.unreadableBirth++;
@@ -1402,6 +1517,21 @@ export class Consistency {
           why: bad.unreadable,
         });
       }
+      if (o.full)
+        each.push({
+          character: c.subject,
+          identityPage: id,
+          bucket,
+          ...(readable
+            ? {
+                birth: {
+                  value: birth.fact.valueText,
+                  page: w.page(birth.fact.pageId).name,
+                  source: birth.fact.source,
+                },
+              }
+            : {}),
+        });
     }
     const cap = o.full ? 1000 : 50;
     return {
@@ -1411,9 +1541,10 @@ export class Consistency {
       nothingReadable: nothing.slice(0, cap),
       ...(nothing.length > cap ? { more: nothing.length - cap } : {}),
       ...(unreadable.length ? { unreadableBirths: unreadable.slice(0, cap) } : {}),
+      ...(o.full ? { byCharacter: each } : {}),
       note: 'A report for the owner, not a task list: an unrecorded birth is often deliberate (“birth date unestablished”), and nothing here asks for a date to be added. Never invent a date to fill a gap (Character Architecture).',
       scope:
-        'Current Main CANON characters (Authoritative and Working), from their identity pages’ Temporal Scope and Life State as the snapshots hold them.',
+        'Current Main CANON characters (Authoritative and Working), read as arkona_as_of reads them: the identity page (Temporal Scope, Life State, its own prose), then the chronology rows and other Authoritative pages that restate a birth or death by name or alias, as the snapshots hold them.',
       ...(w.problems.length ? { couldNotCheck: w.problems } : {}),
       freshness: this.d.appraisal.freshness(o.projectId),
       cost: 'free',
@@ -1666,6 +1797,37 @@ export class Consistency {
       createdAt: iso(Number(r.created_at)),
     }));
   }
+}
+
+/**
+ * A name's key in the singular and the plural of its last word (ADR 0064 amendment 2): "high elves" → "high elf",
+ * "humans" → "human", "faeries" → "faerie", "foxians" → "foxian"; and the reverse. Only for matching a race value to its
+ * reference page; never shown.
+ */
+export function numberForms(key: string): Set<string> {
+  const out = new Set<string>([key]);
+  const m = /^(.*?)(\S+)$/u.exec(key);
+  if (!m) return out;
+  const [, head, last] = m as unknown as [string, string, string];
+  const add = (x: string) => {
+    if (x.length >= 2) out.add(`${head}${x}`);
+  };
+  if (last.endsWith('ves')) {
+    add(`${last.slice(0, -3)}f`);
+    add(`${last.slice(0, -3)}fe`);
+  }
+  if (last.endsWith('ies')) {
+    add(`${last.slice(0, -3)}y`);
+    add(last.slice(0, -1));
+  }
+  if (last.endsWith('es')) add(last.slice(0, -2));
+  if (last.endsWith('s') && !last.endsWith('ss')) add(last.slice(0, -1));
+  if (last.endsWith('f')) add(`${last.slice(0, -1)}ves`);
+  if (last.endsWith('fe')) add(`${last.slice(0, -2)}ves`);
+  if (last.endsWith('y')) add(`${last.slice(0, -1)}ies`);
+  add(`${last}s`);
+  add(`${last}es`);
+  return out;
 }
 
 export const newPickId = (): string => `cpk_${randomBytes(8).toString('hex')}`;

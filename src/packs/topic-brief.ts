@@ -50,7 +50,7 @@ import type { SidebarBlock, TreeNode } from '../tree/index.js';
 import { consistencyLine } from '../consistency/brief-line.js';
 import { characterBrief } from './brief.js';
 import { textKey } from './engine/text.js';
-import { nameKeyOf, splitAliases, subjectPart, treeLabeller } from './naming/namesakes.js';
+import { aliasName, nameKeyOf, splitAliases, subjectPart, treeLabeller } from './naming/namesakes.js';
 import { cutText, packForRead, sectionMarkdown, sectionsWhere } from './read-support.js';
 import type { PackRules } from './types.js';
 
@@ -467,7 +467,7 @@ function subjectNames(ctx: RepoCtx, node: TreeNode, owners: readonly TreeNode[],
     if (t.length >= 3) names.add(t);
   };
   add(subjectPart(node.displayName));
-  for (const a of node.aliases) add(a);
+  for (const a of node.aliases) add(aliasName(a));
   const sidebars = ctx.tree.sidebars(
     ctx.projectId,
     owners.map((n) => n.id),
@@ -475,7 +475,7 @@ function subjectNames(ctx: RepoCtx, node: TreeNode, owners: readonly TreeNode[],
   for (const n of owners) {
     add(subjectPart(n.displayName));
     add(n.canonicalDisplayName);
-    for (const a of n.aliases) add(a);
+    for (const a of n.aliases) add(aliasName(a));
     for (const a of splitAliases(rowOf(sidebars.get(n.id) ?? null, rules.sidebar.property, 'Aliases')))
       add(a);
   }

@@ -7,9 +7,10 @@
  *
  * It runs on a temporary database that starts as a READ-ONLY copy of the project's settings, repository tree and packs
  * from the bridge's database (`copyBridgeState`, as the write-scope rehearsal does), so the APPROVED Arkona pack version
- * `arkona-2026-11-20-f4c` (its narrative rules) applies; it never writes to the bridge's database. The tools are called
+ * `arkona-2026-11-20-f4c` or later (its narrative rules) applies; it never writes to the bridge's database. The tools are called
  * as the MCP server calls them, for a temporary write-scope principal with the rails off. Each step reports PASS or FAIL:
  *
+ * - **C1** the chronology's calendar, kept (copied from the bridge's database) or read now (ADR 0064 amendment 2);
  * - **N1** Narratives is found by name; Main CANON is found, or made (a plain index, with the sandbox's RAW client, as
  *   the consistency-f4b check makes its probe: the audit's "Propose a fix" is the owner's route on Arkona);
  * - **N2** `arkona_story_create`: a throwaway story `lk-bridge f4c check <time>` with one act (its Story Map first, its
@@ -74,7 +75,7 @@ async function runCheck(sb: SoakRuntime, raw: RawLk, name: string): Promise<Item
       id: 'N0',
       title: 'the approved Arkona pack has narrative rules',
       verdict: 'fail',
-      detail: 'approve arkona-2026-11-20-f4c on the Packs page first',
+      detail: 'approve arkona-2026-11-20-f41 (or arkona-2026-11-20-f4c) on the Packs page first',
     });
     return items;
   }
@@ -126,6 +127,17 @@ async function runCheck(sb: SoakRuntime, raw: RawLk, name: string): Promise<Item
       .children(pid, parent)
       .data.find((n) => n.displayName.toLowerCase() === display.toLowerCase()) ?? null;
   try {
+    // ADR 0064 amendment 2: the chronology's calendar first, as consistency-f4b's F1 does (the owner's run of 20 November
+    // 2026 failed at N3 with CALENDAR_UNAVAILABLE: the copied state lacked the kept calendar). Through the loader every
+    // date-reading tool uses: kept (copied from the bridge's database), else read now (one request).
+    const ok0 = await check('C1', 'the chronology’s calendar, as the chronology tools keep it', async () => {
+      const calendarId = rt.chronology.config(pid).calendarId;
+      if (!calendarId) throw new Error('the chronology’s calendar is not confirmed on this project');
+      const r = await rt.chronology.loadCalendar(pid);
+      if (!r.ok) throw new Error(`${r.code}: ${r.message}`);
+      return `calendar ${r.calendar.engine.name} (${calendarId}), ${r.source}; ${copied.calendars} calendar(s) copied from the bridge’s database`;
+    });
+    if (!ok0) return items;
     const ok1 = await check('N1', 'Narratives found by name; Main CANON found or made', async () => {
       const narr = rt.tree.queries
         .findByName(pid, rules.indexes.narratives, { fields: ['display'] })

@@ -791,6 +791,24 @@ const rules: PackRules = packRulesSchema.parse({
         regex: String.raw`^\s*(?<date>(?:c\.\s*)?(?:[a-z]+\s+\d{1,3}(?:st|nd|rd|th),\s*)?\d{1,2}A\s+[\d,]+\s*[-–]\s*(?:[a-z]+\s+\d{1,3}(?:st|nd|rd|th),\s*)?(?:\d{1,2}A\s+)?[\d,]+)\s*$`,
         bound: 'both',
       },
+      // ADR 0064 amendment 2 (`-f41`, the owner's check of 20 November 2026): "living at <date>" (Rashad al-Khalid's
+      // "living at 5A 931") and "present <date>" (Iuno's "present 5A 931") attest the life THROUGH the date.
+      {
+        id: 'attested.scope.living',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`^\s*(?:still\s+)?living\s+(?:at|in)\s+(?<date>.+)$`,
+        date: 'scan',
+        bound: 'to',
+      },
+      {
+        id: 'attested.scope.present',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`^\s*present\s+(?:(?:at|in)\s+)?(?<date>.+)$`,
+        date: 'scan',
+        bound: 'to',
+      },
       // v3 F4c (ADR 0065; the owner's guard on the Life State ruling): a return after a recorded death ("Reborn 4A 300",
       // "Returned …", "Reincarnated …": Mehrana al-Khalid's incarnations, Nahla's Sidhe rebirth, Yue Bailu's Kitsune
       // rebirth) is an attested start of life, never a second birth, so never compared; arkona_as_of reads the death as
@@ -899,7 +917,11 @@ const rules: PackRules = packRulesSchema.parse({
     deceasedBy: [{ id: 'deceased.by', regex: String.raw`^\s*deceased\s+(?:by|before)\s+(?<date>.+)$` }],
     // v3 F4c (ADR 0065; the owner's ruling amending D7): a Life State of "Alive" records the character alive at the present
     // (5A 931), so with a recorded birth "as of" reads them alive from it to the present; read by arkona_as_of only.
-    aliveValues: ['Alive'],
+    aliveValues: ['Alive', 'Living'],
+    // ADR 0064 amendment 2 (`-f41`): a Life State whose principal part STARTS with an alive value ("Alive in 5A 931",
+    // Katsuragi Yamato's; "Living and immortal at 5A 931", Rashad al-Khalid's) records the character alive; a date
+    // there ("in / at <date>") attests the life up to that date rather than the present.
+    aliveAt: [{ id: 'alive.at', regex: String.raw`\b(?:in|at)\s+(?<date>.+)$` }],
   },
   // v3 F4c (ADR 0065; the owner-approved design docs/design/F4c-fiction.md, E1 to E9): the layout of Narratives. Every
   // name is found by name (never by id); the templates by name through the template list. The governance it derives
@@ -1036,9 +1058,13 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // non-current markers, switched on. `-f4c` (ADR 0065, 20 November 2026; session F4c, on top of F4b.1's rules): the
   // narrative layout (`narrative`), the narrative tools' switches, plan-baisheng-stories in the equivalence map, the two
   // fiction Design References pinned (found by their names), and in `consistency` the age phrasings (`ages`), the
-  // bare-range attested phrasing and "Deceased by <date>" as an as-of-only upper bound (`deceasedBy`).
-  seed: 'arkona-2026-11-20-f4c',
+  // bare-range attested phrasing and "Deceased by <date>" as an as-of-only upper bound (`deceasedBy`). `-f41` (ADR 0064
+  // amendment 2 and ADR 0065 amendment 1, 20 November 2026; session F4.1, from the owner's check of the live tools): a
+  // Life State STARTING with "Alive" or "Living" (`aliveValues`, with a date read by `aliveAt`), and the Temporal Scope
+  // phrasings "living at <date>" and "present <date>".
+  seed: 'arkona-2026-11-20-f41',
   supersedes: [
+    'arkona-2026-11-20-f4c',
     'arkona-2026-11-20-f4b1',
     'arkona-2026-11-20-f4b',
     'arkona-2026-11-19-f4a',

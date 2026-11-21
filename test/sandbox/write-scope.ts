@@ -68,6 +68,12 @@ export interface CopyReport {
   readonly treeNodes: number;
   /** The packs attached to the project, copied with their versions and this project's attachment. */
   readonly packs: readonly string[];
+  /**
+   * ADR 0064 amendment 2: the calendars the bridge keeps for the project (`chronology_calendars`). Before F4.1 they were
+   * not copied, so a sandbox runtime had the chronology's confirmed calendar id (in the settings) but no calendar: the
+   * narrative-f4c check's N3 was refused CALENDAR_UNAVAILABLE although the bridge itself had the calendar cached.
+   */
+  readonly calendars: number;
 }
 
 /** The repository tree's tables, parents first (the names and links hang on the nodes). */
@@ -78,8 +84,8 @@ const columnsOf = (db: Pick<Db, 'prepare'>, table: string): string[] =>
 
 /**
  * Copies, READ-ONLY from the bridge's database (`bridgeDbPath`, opened read-only) into the rehearsal's temporary one:
- * the project's settings, its stored repository tree, and each setting pack attached to it (the pack, every version,
- * and this project's attachment). Refuses (SandboxGuardError) unless the bridge's database has the project registered
+ * the project's settings, its stored repository tree, the calendars the bridge keeps for it, and each setting pack
+ * attached to it (the pack, every version, and this project's attachment). Refuses (SandboxGuardError) unless the bridge's database has the project registered
  * AND marked as a sandbox: the same guard as resolveSandboxTarget, checked again where the state comes from. The
  * project's key, its other projects, sessions, tokens and audit are never read.
  */
@@ -118,6 +124,7 @@ export function copyBridgeState(o: {
       src.prepare('SELECT pack_id FROM pack_projects WHERE project_id = ?').all(pid) as { pack_id: string }[]
     ).map((r) => r.pack_id);
     let treeNodes = 0;
+    let calendars = 0;
     o.target.transaction(() => {
       // The tree first, then the settings that name its root (a changed root would discard the stored tree).
       for (const t of [...TREE_TABLES].reverse())
@@ -136,10 +143,13 @@ export function copyBridgeState(o: {
         copy('pack_projects', 'pack_id = ? AND project_id = ?', [id, pid]);
       }
       o.target.prepare('UPDATE projects SET settings = ? WHERE id = ?').run(project.settings ?? '{}', pid);
+      // The kept calendars, so the copied chronology settings find their calendar (ADR 0064 amendment 2).
+      o.target.prepare('DELETE FROM chronology_calendars WHERE project_id = ?').run(pid);
+      calendars = copy('chronology_calendars', 'project_id = ?', [pid]);
     })();
     o.runtime.projects.refresh();
     const settings = Object.keys(JSON.parse(project.settings ?? '{}') as Obj).sort();
-    return { settings, treeNodes, packs: packIds };
+    return { settings, treeNodes, packs: packIds, calendars };
   } finally {
     src.close();
   }
