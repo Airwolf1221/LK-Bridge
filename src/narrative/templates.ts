@@ -21,12 +21,25 @@ import { placeOf } from './layout.js';
 import { narrativeScope, treeView, type PacksLike } from './scope.js';
 
 /** The narrative template kinds (a key of the pack's `narrative.templates`) by the place a page holds. */
-const KIND_TEMPLATE: Readonly<Record<string, keyof NarrativeRules['templates']>> = {
+export const KIND_TEMPLATE: Readonly<Record<string, keyof NarrativeRules['templates']>> = {
   storyMap: 'storyMap',
   actMap: 'actMap',
   chapterPlan: 'chapterPlan',
   chapter: 'chapter',
 };
+
+/**
+ * The one template of a list whose name is the pack's template name (as the narrative tools find it: prefixes and the
+ * word "Template" aside), or null when none or more than one is.
+ */
+export function templateNamed<T extends { readonly name: string | null }>(
+  list: Iterable<T>,
+  packName: string,
+): T | null {
+  const want = templateBaseKey(cleanPrefixes(packName).name);
+  const hits = [...list].filter((t) => t.name && templateBaseKey(cleanPrefixes(t.name).name) === want);
+  return hits.length === 1 ? hits[0]! : null;
+}
 
 export interface PageTemplateDeps {
   readonly packs: PacksLike;
@@ -58,11 +71,7 @@ export function pageTemplateReader(d: PageTemplateDeps): TemplateOfPage {
       const place = placeOf(treeView(d.queries, projectId), scope.rules, scope.roots, resourceId);
       const which = place ? KIND_TEMPLATE[place.kind] : undefined;
       if (!which) return null;
-      const want = templateBaseKey(cleanPrefixes(scope.rules.templates[which]).name);
-      const hits = d
-        .templates(projectId)
-        .filter((t) => t.name && templateBaseKey(cleanPrefixes(t.name).name) === want);
-      return hits.length === 1 ? hits[0]!.id : null;
+      return templateNamed(d.templates(projectId), scope.rules.templates[which])?.id ?? null;
     } catch {
       return null;
     }

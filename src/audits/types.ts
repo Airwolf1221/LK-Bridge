@@ -621,7 +621,7 @@ export const CODES = {
   narrative_placeholder: {
     category: 'narrative',
     severity: 'info',
-    title: 'A narrative page’s field still holds the template’s placeholder text',
+    title: 'A narrative page’s field still holds the template’s placeholder text (or its default value)',
   },
   // CR-2026-11-R4 (ADR 0065 amendment 2): canon, Working or Archived pages sitting in Narratives (their lifecycle ignored).
   narrative_lifecycle_page: {

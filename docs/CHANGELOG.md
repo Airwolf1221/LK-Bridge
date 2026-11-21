@@ -14,11 +14,16 @@ migration; no pack version. Nothing was run against a live system: the mock only
   or a narrative page's template by its kind (a chapter made in the app); never the tree's record of an older copy (a
   template's default may be a real value, as a Core template's Continuity "Main"). The
   lifecycle guard already read a placeholder's replacement as a first fill (it counts only lifecycle values); a
-  template default that is itself a lifecycle state stays the lifecycle tools' (question Q1 for the owner).
+  template default that is itself a lifecycle state stays the lifecycle tools' (the owner's answer to Q1).
 - **The mock's templates as the real ones**: the narrative test world's Chapter template holds the owner's placeholder
-  texts (Story, Chapter Number, In-world Date, Continuity, POV, Chapter Plan, Draft Status; Act and Last Major Revision
-  in the same style, assumed), the other narrative templates placeholders in their Continuity fields (assumed). N3
+  texts (Story, Chapter Number, In-world Date, Continuity, POV, Chapter Plan, Draft Status; Act in the same style,
+  assumed), the other narrative templates placeholders in their Continuity fields (assumed). N3
   fails with them on the R4 code, as on the owner's run.
+- **The narrative audit reports a field still holding its template's default** as a leftover `narrative_placeholder`
+  (the owner's answer to Q2), alongside the pack's patterns: the page's kind's template, from the snapshot's templates,
+  and a value identical to its default for that field ("Draft, Revised or Final", which no pattern matched). A
+  Continuity default is a placeholder, no longer a `narrative_continuity_mismatch`; a template Status naming a lifecycle
+  state (Working) is never one (Q1, kept protected as built).
 - **`arkona_chapter_plan`** fills a new plan's Continuity Type and Continuity, as the Story Map and Act Map carry them
   (found by the faithful templates: the placeholder was left in every plan and the audit read it as another
   continuity).

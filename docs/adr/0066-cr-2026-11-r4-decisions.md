@@ -272,8 +272,8 @@ on the reviewed code (or on this review's first fix, where the review says so) a
 
 ## Amendment 1: R4.1, after the owner's sandbox runs (21 November 2026)
 
-Status: decisions 1 and 3 are the owner's (21 November 2026); the choices marked **Chosen** were made building them;
-questions Q1 and Q2 are open for the owner. No migration; no pack version.
+Status: decisions 1 to 3 are the owner's (21 November 2026); the choices marked **Chosen** were made building them;
+questions Q1 and Q2 were answered by the owner the same day (Q1 (b), Q2 (a)), and built. No migration; no pack version.
 
 ### Context
 
@@ -325,9 +325,10 @@ The narrative test world's templates hold their default values (`test/narrative/
 the owner's placeholder texts (Story "Link to the story's [INDEX]", Chapter Number "1 (numbered across the whole story,
 not per act)", Continuity "Main CANON, or the AU's name", In-world Date "Isar 27th, 4A 645 (exact) or c. 4A 640-645
 (approximate)", POV "Link to the POV character", Chapter Plan "Link to this chapter's Chapter Plan", Draft Status
-"Draft, Revised or Final"). **Assumed** (not read from the live templates, written in the same style): the Chapter's Act
-and Last Major Revision, and the Continuity Type and Continuity of the Story Map, Act Map and Chapter Plan. With them, N3
-fails on the R4 code, as on the owner's run.
+"Draft, Revised or Final"). **Assumed** (not read from the live templates, written in the same style): the Chapter's Act,
+and the Continuity Type and Continuity of the Story Map, Act Map and Chapter Plan; the Chapter's Last Major Revision is
+left empty (not known; a new chapter's is never written, so a placeholder there would be reported until its first major
+revision). With them, N3 fails on the R4 code, as on the owner's run.
 
 **Chosen** (found by them): `arkona_chapter_plan` fills a NEW plan's Continuity Type and Continuity, as its Story Map and
 Act Map carry them; a template's placeholder was left in every plan, and the audit read it as another continuity
@@ -346,15 +347,29 @@ Act Map carry them; a template's placeholder was left in every plan, and the aud
    assumptions-r2, 10 for maps, whose clean-ups wait out the write minute). Proved on the mock with a step that never
    resolves (`test/sandbox-mock/steps-timeout.test.ts`).
 
-### Questions for the owner
+### Questions for the owner (answered 21 November 2026)
 
 - **Q1.** Should a template default that is itself a lifecycle state (the generic Working sidebar's Status "Working") also
   be a first fill, so set_facts may replace it without the lifecycle tools? (a) yes, literally as decision 1 reads; (b)
-  no, as built: the copy gave the page that state, and replacing it would take a page out of Working without the
-  lifecycle tools. Recommended: **(b)**.
-- **Q2.** The narrative audit's placeholder check (pack data `narrative.placeholders`, patterns) matches few of the real
-  placeholder texts above ("Link to …" only), so a chapter left with "Draft, Revised or Final" is not reported, and a
-  plan made before this amendment with Continuity "Main CANON, or the AU's name" is reported as
+  no: the copy gave the page that state, and replacing it would take a page out of Working without the lifecycle tools.
+  **The owner: (b), keep it protected, as built** (decision 1.4). The audit agrees (Q2): such a Status is never
+  reported as a leftover placeholder.
+- **Q2.** The narrative audit's placeholder check (pack data `narrative.placeholders`, patterns) matched few of the real
+  placeholder texts above ("Link to …" only), so a chapter left with "Draft, Revised or Final" was not reported, and a
+  plan made before this amendment with Continuity "Main CANON, or the AU's name" was reported as
   `narrative_continuity_mismatch`. (a) the audit also treats a value identical to the page's template default as a
-  placeholder (the snapshots' manifests hold the templates); (b) new patterns in the next pack version; (c) leave it,
-  as the owner is clearing the placeholders. Recommended: **(a)**. Not built.
+  placeholder; (b) new patterns in the next pack version; (c) leave it. **The owner: (a)**, built as:
+  1. A field of a narrative page whose value is IDENTICAL (trimmed) to its template's default for that field is a
+     leftover `narrative_placeholder` ("… still holds its template’s default “…”", evidence `templateDefault: true`),
+     alongside the pack's patterns, which still apply. The template is the page's kind's (Story Map, Act Map, Chapter
+     Plan, Chapter: the pack's `narrative.templates`), found by name among the base full snapshot's templates as the
+     narrative tools find it (`templateNamed`, src/narrative/templates.ts); a value one character off is the page's own.
+  2. A template's default in Continuity is reported as a placeholder, not as another continuity
+     (`narrative_continuity_mismatch` skips it).
+  3. **Chosen:** a Status the template gives that names a lifecycle state (Working, Archived, Authoritative) is never a
+     leftover (Q1: the copy gives the page that state). A field the template leaves empty has no default.
+  4. **Chosen:** the defaults are the templates the audit's base full snapshot holds (the nightly snapshot records them);
+     a base without templates (its note says so), or a name that matches no template or more than one, gives none, and
+     the patterns alone apply, as before. Once the owner clears a template's placeholders, its pages' old texts are found
+     by the patterns only.
+     Tests: `test/narrative/r41-audit-template-defaults.test.ts` (fails on the R4 audit).

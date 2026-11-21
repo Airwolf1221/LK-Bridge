@@ -62,8 +62,8 @@ export const PLAN_SIDEBAR = [
 /**
  * R4.1 (mock fidelity): the Chapter template's sidebar as the owner's live template holds it, its DEFAULT values the
  * placeholder texts LegendKeeper copies into every new chapter (the owner's sandbox run of 21 November 2026, N3). The
- * owner gave Story, Chapter Number, In-world Date, Continuity, POV, Chapter Plan and Draft Status; Act and Last Major
- * Revision are written here in the same style (assumed, not read from the live template).
+ * owner gave Story, Chapter Number, In-world Date, Continuity, POV, Chapter Plan and Draft Status; Act is written here
+ * in the same style (assumed, not read from the live template); Last Major Revision is left empty (not known).
  */
 export const CHAPTER_SIDEBAR: [string, string][] = [
   ['Story', "Link to the story's [INDEX]"],
@@ -74,7 +74,7 @@ export const CHAPTER_SIDEBAR: [string, string][] = [
   ['POV', 'Link to the POV character'],
   ['Chapter Plan', "Link to this chapter's Chapter Plan"],
   ['Draft Status', 'Draft, Revised or Final'],
-  ['Last Major Revision', 'Date of the last major revision'],
+  ['Last Major Revision', ''],
 ];
 
 /**
