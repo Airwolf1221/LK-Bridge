@@ -18,6 +18,7 @@ import type { LoadedPage, PageReader } from '../../appraisal/reader.js';
 import { lifecycleFrom } from '../../lifecycle/settings.js';
 import { narrativeCalendar } from '../../narrative/calendar.js';
 import { nkey, subjectOf, type StoryLayout } from '../../narrative/layout.js';
+import { lifecyclePrefix } from '../../narrative/signals.js';
 import { currentCharacters } from '../../packs/naming/namesakes.js';
 import { sectionMarkdown, sectionsWhere } from '../../packs/read-support.js';
 import { topicBrief } from '../../packs/topic-brief.js';
@@ -579,9 +580,16 @@ async function chapterCheck(
     }
   }
   // ---- names that resolve nowhere (new-lore candidates), and those resolving only to Archived or Legacy pages.
+  // CR-2026-11-R4 (F6; design E2.4, never authority): resolved against the pages outside Narratives only, so a name
+  // known only from fiction (a narrative page of that name) is still a candidate. Canon filed under Narratives (a page
+  // whose name carries a lifecycle prefix: NA-43) is canon still, as the facts index reads it.
+  const narratives = env.roots.narratives.id;
   const nodes = env.ctx.tree
     .subtree(env.ctx.projectId, env.ctx.meta.rootId ?? '', { limit: 1_000_000 })
-    .data.entries.map((e) => e.node);
+    .data.entries.map((e) => e.node)
+    .filter(
+      (n) => n.id === narratives || !n.path.ids.includes(narratives) || lifecyclePrefix(n.rawName) !== null,
+    );
   const archivedOnly = (id: string) => {
     const n = env.ctx.tree.node(env.ctx.projectId, id).data;
     return !!n && (n.kind === 'barc' || n.path.names.some((x) => /^legacy canon archive$/i.test(x)));

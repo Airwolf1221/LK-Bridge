@@ -18,7 +18,8 @@
  *   dateline first;
  * - **N4** `arkona_chapter_insert` at 2: chapter 2 becomes 3, plan 2 becomes 3, a new Chapter 2 Plan: names and Chapter
  *   Number fields read back live;
- * - **N5** `arkona_chapter_check` on chapter 1, then a full snapshot and an audit: the story's narrative findings listed.
+ * - **N5** a full snapshot first (the chapter tools read through the snapshots), `arkona_chapter_check` on chapter 1,
+ *   then an audit: the story's narrative findings listed.
  *
  * Clean-up: the throwaway story deleted with everything under it, and Main CANON if this run made it, with the raw
  * client, even after a failure; the report names what must be deleted by hand. Cost: about 60 writes and 40 reads, plus

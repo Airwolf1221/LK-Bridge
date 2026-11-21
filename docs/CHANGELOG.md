@@ -24,6 +24,26 @@ The fourth review's session findings (`test/review/r4-sessions/`). No migration,
 - **A wrong current password** on the Account page is shown again instead of being hidden as a sign-out.
 - Not changed: resuming a paused job stays one click (the review's SE-51 is the owner's decision).
 
+## Unreleased: CR-2026-11-R4, moving into and out of Narratives (ADR 0065 amendment 2, 21 November 2026)
+
+No migration, no pack version. The owner's rule: moving any page into or out of Narratives is a proposal, and never
+changes its lifecycle silently.
+
+- **Narratives in the lifecycle guard**: a page or subtree moved into Narratives (or created, copied or restored there by
+  any route but the narrative tools), or moved out of it, is a proposal at every scope on every route, judged again
+  inside the lock; canonical when a page of it carries a lifecycle signal, the proposal naming those pages.
+- **Markers**: `to: null` declares placement and a new page's first state only; the narrative tags fix only adds tags.
+- **`create_resource` under Narratives** refuses a Status in `facts` and status or lifecycle tags (AU included).
+- **The narrative indexes' names** are never given to a page (every create and rename route; `arkona_story_create`:
+  `NARRATIVE_INDEX_NAME`); the facts index resolves Narratives by id, as the tools do (every candidate when ambiguous).
+- **The dateline fix** replaces a first line only when it reads as a date (an epigraph is kept).
+- **`arkona_chapter_check`** resolves names against pages outside Narratives only.
+- **The lifecycle tools** refuse a whole set touching Narratives and a `promote_page` or `unarchive_page` destination
+  inside it.
+- **Canon in a story**: never read as a map, plan or chapter; the writing tools refuse the story
+  (`NARRATIVE_LIFECYCLE_PAGE`); the audit reports it (`narrative_lifecycle_page`). `arkona_chapter_save` checks the
+  chapter is still in its story inside the lock before revising it.
+
 ## Unreleased: v3 F4.1, from the owner's check of the live tools (ADR 0064 amendment 2, ADR 0065 amendment 1, 20 November 2026)
 
 No migration, no new ADR. **After deploying, approve `arkona-2026-11-20-f41` on the Packs page** (it supersedes

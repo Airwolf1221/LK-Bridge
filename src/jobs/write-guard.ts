@@ -53,7 +53,12 @@ export type WriteGuardVerdict =
   | { readonly decision: 'allow' }
   | { readonly decision: 'deny'; readonly reason: string; readonly opId: string; readonly stepIndex?: number }
   /** Turn the request into a proposal that only the owner's canonical approval can run. */
-  | { readonly decision: 'propose_canonical'; readonly reason: string; readonly changes: readonly unknown[] };
+  | { readonly decision: 'propose_canonical'; readonly reason: string; readonly changes: readonly unknown[] }
+  /**
+   * CR-2026-11-R4 (ADR 0065 amendment 2): turn the request into an ORDINARY proposal, whatever the scope (a page moved
+   * into or out of Narratives): the owner's ordinary approval runs it. The reason is the proposal's `proposedBecause`.
+   */
+  | { readonly decision: 'propose'; readonly reason: string; readonly changes: readonly unknown[] };
 
 export interface WriteGuardInLock {
   readonly job: JobView;
@@ -75,21 +80,27 @@ export interface WriteGuard {
 
 /**
  * v2 C2c (ADR 0035): several guards as one. At entry, the first deny wins; otherwise any `propose_canonical` makes the
- * request a canonical proposal (the reasons and changes of all of them together); otherwise allow. Inside the lock each
- * guard is asked in turn (the first to throw refuses).
+ * request a canonical proposal (the reasons and changes of all of them together, an ordinary proposal's included);
+ * otherwise any `propose` makes it an ordinary proposal; otherwise allow. Inside the lock each guard is asked in turn
+ * (the first to throw refuses).
  */
 export function combineGuards(...guards: readonly WriteGuard[]): WriteGuard {
   return {
     async entry(input) {
-      const proposals: { reason: string; changes: readonly unknown[] }[] = [];
+      const proposals: { reason: string; changes: readonly unknown[]; canonical: boolean }[] = [];
       for (const g of guards) {
         const v = await g.entry(input);
         if (v.decision === 'deny') return v;
-        if (v.decision === 'propose_canonical') proposals.push({ reason: v.reason, changes: v.changes });
+        if (v.decision === 'propose_canonical' || v.decision === 'propose')
+          proposals.push({
+            reason: v.reason,
+            changes: v.changes,
+            canonical: v.decision === 'propose_canonical',
+          });
       }
       if (proposals.length === 0) return { decision: 'allow' };
       return {
-        decision: 'propose_canonical',
+        decision: proposals.some((p) => p.canonical) ? 'propose_canonical' : 'propose',
         reason: proposals.map((p) => p.reason).join('; and '),
         changes: proposals.flatMap((p) => p.changes),
       };

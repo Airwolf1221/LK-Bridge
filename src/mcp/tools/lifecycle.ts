@@ -110,6 +110,21 @@ export const refuse = (pd: ProjectDeps, code: string, message: string, more: Obj
   result: errorResult({ code, message, ...more }, pd),
 });
 
+/** CR-2026-11-R4 (F7): a node that is the Narratives index or inside it (no page there has a lifecycle, E2). */
+export function inNarrativePlace(pd: ProjectDeps, ctx: RepoCtx, n: Pick<TreeNode, 'id' | 'path'>): boolean {
+  const scope = narrativeScope(pd.services?.packs, ctx.tree, ctx.projectId);
+  const root = scope?.roots.narratives;
+  return !!root && (n.id === root.id || inNarratives(scope, n));
+}
+
+/** CR-2026-11-R4 (F7): the refusal of a destination inside Narratives. */
+export const narrativeDestination = (pd: ProjectDeps, n: { readonly displayName: string }): Answer =>
+  refuse(
+    pd,
+    NARRATIVE_NO_LIFECYCLE,
+    `“${n.displayName}” is Narratives or inside it, where pages have no lifecycle (the F4c design, E2): a page made Authoritative or Working there would have its lifecycle ignored. Give a destination outside Narratives. Nothing was written or proposed.`,
+  );
+
 // ============================================================================================ the page now
 
 export interface PageNow {
@@ -1428,6 +1443,8 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
                   `“${d.value.displayName}” is a lifecycle index or under one; an Authoritative page goes back to its normal place.`,
                 );
               }
+              // CR-2026-11-R4 (F7): never into Narratives, where it would have no lifecycle.
+              if (inNarrativePlace(pd, ctx, d.value)) return narrativeDestination(pd, d.value);
               return d.value;
             };
             if (rec) {
@@ -1453,7 +1470,9 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
                   prev.id !== idx.working.id &&
                   prev.id !== idx.archived.id &&
                   !prev.path.ids.includes(idx.working.id) &&
-                  !prev.path.ids.includes(idx.archived.id);
+                  !prev.path.ids.includes(idx.archived.id) &&
+                  // CR-2026-11-R4 (F7): a previous parent now inside Narratives is no place for canon.
+                  !inNarrativePlace(pd, ctx, prev);
                 if (args.destination !== undefined || !usable) {
                   const d = destination(
                     args.destination,
@@ -1760,6 +1779,8 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
                 `“${dest.displayName}” is a lifecycle index or under one; an Authoritative page goes in its normal place.`,
               );
             }
+            // CR-2026-11-R4 (F7): canon is never made inside Narratives, where its lifecycle would be ignored.
+            if (inNarrativePlace(pd, ctx, dest)) return narrativeDestination(pd, dest);
             // A Working character: its own index under [INDEX] Working moves with it.
             let mover: LifecycleTarget['moveIndex'] = null;
             const flags: string[] = [];

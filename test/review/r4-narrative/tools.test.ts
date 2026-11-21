@@ -246,12 +246,10 @@ describe('the writing tools given canon', () => {
   });
 
   it('NA-22: a canon page named “Chapter 6 Plan”, once inside the story, is not updated by arkona_chapter_plan', async () => {
-    // move_resource refuses a page as the parent (PARENT_NOT_INDEX); the low-level route (NA-02's) takes it.
-    const moved = await agent('lk_api_write', {
-      operationId: 'moveResource',
-      params: { path: { resourceId: ids.canonPlan }, body: { parentId: ids.map } },
-    });
-    expect(moved.status, JSON.stringify(moved).slice(0, 300)).toBe('succeeded');
+    // The lead (CR-2026-11-R4): the owner files the canon page there in the app. As first written, an agent moved it
+    // with the low-level route (NA-02's), which is now a canonical proposal (R4-01); the defence asserted below must
+    // hold however canon came to be in the story.
+    w.repo.outside.move(ids.canonPlan, ids.map);
     w.rebuildTree(); // as the next tree sweep sees it
     const before = facts(ids.canonPlan).Subject;
     const b = await agent('arkona_chapter_plan', { story: STORY, number: 6, title: 'Renamed Accord' });
@@ -260,8 +258,9 @@ describe('the writing tools given canon', () => {
   });
 
   it('NA-23: a canon page named “Chapter 4 - …”, once inside the story, is never renamed out of [BSRC] by a renumbering', async () => {
-    const moved = await agent('move_resource', { page: ids.canonChapter, to: ids.story });
-    expect(moved.status, JSON.stringify(moved).slice(0, 300)).toBe('written');
+    // The lead (CR-2026-11-R4): the owner files it in the story in the app (an agent's move_resource is now a canonical
+    // proposal, R4-01).
+    w.repo.outside.move(ids.canonChapter, ids.story);
     w.rebuildTree();
     const b = await agent('arkona_chapter_insert', { story: STORY, at: 4, title: 'Interlude' });
     const name = w.repo.live(ids.canonChapter)!.name;

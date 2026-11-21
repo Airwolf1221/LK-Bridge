@@ -59,7 +59,9 @@ import {
   TOOL,
   archiveTarget,
   factsOf,
+  inNarrativePlace,
   mainDocument,
+  narrativeDestination,
   positionOf,
   tagRulesOf,
   planPage,
@@ -71,6 +73,7 @@ import {
   type PagePart,
   type PageNow,
 } from './lifecycle.js';
+import { NARRATIVE_NO_LIFECYCLE, NARRATIVE_NO_LIFECYCLE_MESSAGE } from '../../narrative/scope.js';
 import { liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
 import { errorResult, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
 import { runWriteJob } from './write-job.js';
@@ -182,6 +185,10 @@ async function planSet(
       'LIFECYCLE_INDEX',
       `“${root.rawName}” is a lifecycle index itself: it has no lifecycle of its own and the tools never change it (the owner edits [INDEX] Working and [INDEX] Archived by hand). Name the page, or a character’s own [INDEX], instead.`,
     );
+  // v3 F4c (ADR 0065, design E2) and CR-2026-11-R4 (F7): narrative pages have no lifecycle, so a set rooted in
+  // Narratives (or Narratives itself) is refused as a single narrative page is; every member is checked below.
+  if (inNarrativePlace(pd, ctx, root))
+    return refuse(pd, NARRATIVE_NO_LIFECYCLE, NARRATIVE_NO_LIFECYCLE_MESSAGE);
 
   // A set change of this root that stopped part-way: the same tool resumes it; another waits for it.
   const open = lc.store.setsForRoot(pid, root.id, 5).find((s) => s.state === 'incomplete') ?? null;
@@ -235,6 +242,12 @@ async function planSet(
       { pages: unknown.slice(0, 50).map((p) => ({ id: p.id, name: p.name })) },
     );
   }
+  // CR-2026-11-R4 (F7): a set holding Narratives or any narrative page is refused (narrative pages have no lifecycle).
+  const narrativeMembers = below.filter((p) => inNarrativePlace(pd, ctx, ctx.tree.node(pid, p.id).data!));
+  if (narrativeMembers.length > 0)
+    return refuse(pd, NARRATIVE_NO_LIFECYCLE, NARRATIVE_NO_LIFECYCLE_MESSAGE, {
+      pages: narrativeMembers.slice(0, 50).map((p) => ({ id: p.id, name: p.name })),
+    });
   const parentOf = new Map<string, string | null>([
     [root.id, root.parentId],
     ...below.map((p) => [p.id, p.parentId] as [string, string]),
@@ -496,6 +509,10 @@ async function planSet(
         );
     }
 
+    // CR-2026-11-R4 (F7): a set never goes into Narratives, where it would have no lifecycle.
+    const rootParentNode = ctx.tree.node(pid, rootParent).data;
+    if (rootParentNode && inNarrativePlace(pd, ctx, rootParentNode))
+      return narrativeDestination(pd, rootParentNode);
     // The root's name must be free at its destination.
     const display = rootPage.kind === 'index' ? rootPage.displayName : rootPage.displayName;
     const twin = ctx.tree

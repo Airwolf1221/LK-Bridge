@@ -3432,6 +3432,9 @@ export class JobEngine {
       propose = true;
     // v2 C2a (ADR 0032): the write guard sees the whole request, once the gate has let every operation through.
     let canonical: ProposalMeta['canonical'];
+    // CR-2026-11-R4 (ADR 0065 amendment 2): an ordinary proposal the guard asked for (a page moved into or out of
+    // Narratives), shown with its reason as the rails' proposals are.
+    let guardRail: RailDecision | null = null;
     if (this.writeGuard && items.some((it) => it.meta.kind !== 'read')) {
       let verdict: Awaited<ReturnType<WriteGuard['entry']>>;
       try {
@@ -3469,12 +3472,19 @@ export class JobEngine {
         propose = true;
         canonical = { reason: verdict.reason, changes: verdict.changes };
       }
+      if (verdict.decision === 'propose') {
+        propose = true;
+        guardRail = {
+          reason: `proposed because: ${verdict.reason}`,
+          hits: [{ rail: 'narrative', text: verdict.reason }],
+        };
+      }
     }
     // v3 F3.4 (ADR 0055): a request that would run directly at scope `write` meets the agent profile's safety rails
     // (deletes, bulk changes, renames and moves, asset deletes and moves). A rail only ever ADDS a proposal: it is not
     // asked about a request already proposed, approved work or the bridge's own; a rail that cannot be judged fails
     // closed (a proposal).
-    let rail: RailDecision | null = propose && extra.forcedBecause ? extra.forcedBecause : null;
+    let rail: RailDecision | null = propose && extra.forcedBecause ? extra.forcedBecause : guardRail;
     if (
       !propose &&
       this.policyGate.rails &&

@@ -14,6 +14,7 @@
  *   Number fields, as items the owner can approve one by one when it is a proposal); never the prose.
  */
 import * as z from 'zod';
+import { factKey } from '../../facts/index.js';
 import { fromMarkdown, MarkdownError, type LkBlock } from '../../markdown/index.js';
 import { PACK_FILLER, shiftStep } from '../../packs/engine/job.js';
 import { mainDocumentId } from '../../jobs/engine.js';
@@ -34,6 +35,7 @@ import {
   existingFacts,
   findContinuity,
   findStory,
+  lifecycleInStory,
   linkTargets,
   mention,
   narrativeTemplate,
@@ -213,6 +215,17 @@ async function storyCreate(
     const b = bad(t, w);
     if (b) return b.result;
   }
+  // CR-2026-11-R4 (F4): a story index named as a narrative index (Narratives, Continuities, Main CANON; any case,
+  // spacing or look-alike letters) would make the narrative layout ambiguous, which switches every narrative rule off.
+  const taken = [rules.indexes.narratives, rules.indexes.continuities, rules.indexes.main].find(
+    (n) => factKey(n) === factKey(title),
+  );
+  if (taken)
+    return no(
+      pd,
+      'NARRATIVE_INDEX_NAME',
+      `The title “${title}” is the name of a narrative index (${taken}), which the bridge finds by name: a story of that name would make Narratives ambiguous. Choose another title. Nothing was written.`,
+    ).result;
   const c = findContinuity(env, args.continuity);
   if (!c.ok) return c.result;
   const cont = c.value;
@@ -488,6 +501,9 @@ async function chapterPlan(
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const map = storyMapOf(env, layout);
   if (!map.ok) return map.result;
   const n = args.number;
@@ -728,6 +744,9 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const story = layout.story;
   const n = args.number;
   const existing = oneNumbered(env, layout.chapters, n, 'chapter');
@@ -899,7 +918,24 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
             },
           ]
         : [];
-    const steps = joinParts([[body], ef.value.steps, rename, ps.value]);
+    // CR-2026-11-R4 (F9): inside the lock, the chapter must still be where the plan read it (its act, or the story): a
+    // chapter moved out of the story in the app since the tree last read it is not revised (nothing is written).
+    const where: StepSpec = {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [
+            {
+              label: node.displayName,
+              kind: 'resource',
+              resourceId: node.id,
+              parentId: ch.act?.node.id ?? story.id,
+            },
+          ],
+        },
+      },
+    };
+    const steps = joinParts([[where], [body], ef.value.steps, rename, ps.value]);
     return saveAndReadBack(env, {
       steps,
       title: `${env.tool}: ${story.displayName}, Chapter ${n} revised${gateNote}`,
@@ -1331,6 +1367,9 @@ async function chapterInsert(
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const map = storyMapOf(env, layout);
   if (!map.ok) return map.result;
   const at = args.at;
@@ -1352,7 +1391,7 @@ async function chapterInsert(
       .filter((c) => c.n >= at)
       .map((c) => ({
         id: c.node.id,
-        rawName: c.node.displayName,
+        rawName: c.node.rawName,
         kind: 'chapter' as const,
         from: c.n,
         to: c.n + 1,
@@ -1363,7 +1402,7 @@ async function chapterInsert(
       .filter((p) => p.n >= at)
       .map((p) => ({
         id: p.node.id,
-        rawName: p.node.displayName,
+        rawName: p.node.rawName,
         kind: 'plan' as const,
         from: p.n,
         to: p.n + 1,
@@ -1498,6 +1537,9 @@ async function chapterMove(
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const { from, to } = args;
   const moving = oneNumbered(env, layout.chapters, from, 'chapter');
   if (!moving.ok) return moving.result;
@@ -1537,7 +1579,7 @@ async function chapterMove(
     const parentId = moved && targetAct !== null ? targetAct.node.id : c.node.parentId!;
     list.push({
       id: c.node.id,
-      rawName: c.node.displayName,
+      rawName: c.node.rawName,
       kind: 'chapter',
       from: c.n,
       to: n2,
@@ -1563,7 +1605,7 @@ async function chapterMove(
     if (n2 === p.n && !move) continue;
     list.push({
       id: p.node.id,
-      rawName: p.node.displayName,
+      rawName: p.node.rawName,
       kind: 'plan',
       from: p.n,
       to: n2,

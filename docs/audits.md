@@ -277,7 +277,12 @@ Map not first is this category's own finding. Stable codes:
 | `narrative_date_unreadable`                                                                                                                                     | warning       | none                                                   |
 | `narrative_date_backwards` (earlier than the chapter before, no `Flashback` tag), `narrative_date_outside_span` (Act Span or Story Span, when the field exists) | info          | none                                                   |
 | `narrative_placeholder` (a field still holding template placeholder text, pack data)                                                                            | info          | none                                                   |
+| `narrative_lifecycle_page` (a page in Narratives with a lifecycle prefix, a CANON, Working or Archived tag, or Status Authoritative or Archived)                | warning       | none                                                   |
 
 **Propose a fix** is offered only where the fix is mechanical, and is always ONE proposal for the owner: re-read live and
-compared with what the audit saw (`FIX_STALE` otherwise). A dateline fix replaces only the chapter's first block (or puts
-the dateline first), echoing every other block exactly as read. Never the prose.
+compared with what the audit saw (`FIX_STALE` otherwise). A dateline fix replaces the chapter's first block only when its
+text before the separator reads whole as a calendar date, and otherwise puts the dateline before it (an epigraph is
+kept), echoing every other block exactly as read. Never the prose. The tags fix only adds the narrative tags: every tag
+the page holds is kept, a status tag included (CR-2026-11-R4, [ADR 0065 amendment 2](adr/0065-v3-f4c-fiction.md)). A page
+carrying a lifecycle signal is reported (`narrative_lifecycle_page`) and is never read as a story's map, act, plan or
+chapter.

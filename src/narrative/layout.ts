@@ -12,7 +12,7 @@
  */
 import type { NodeKind } from '../tree/index.js';
 import type { NarrativeRules } from '../packs/types.js';
-import { parseNarrativeName } from './names.js';
+import { parseNarrativeName, type NamedKind, type ParsedName } from './names.js';
 
 /** A node, as the view gives it. */
 export interface NNode {
@@ -173,12 +173,32 @@ export interface StoryLayout {
   readonly chapters: readonly (Numbered & { readonly title: string; readonly act: Numbered | null })[];
   /** Anything else in the story (named by no pattern), with its parent. */
   readonly others: readonly { readonly node: NNode; readonly parent: NNode }[];
+  /**
+   * CR-2026-11-R4 (F8): pages in the story that carry a lifecycle signal (canon, Working or Archived pages sitting in
+   * a story): never read as a map, act, plan or chapter, so no tool acts on them; with the kind their name gives (for
+   * the audit's tags) and their signals in words. The pages under such an index are not read either.
+   */
+  readonly lifecycle: readonly {
+    readonly node: NNode;
+    readonly parent: NNode;
+    readonly kind: NamedKind | null;
+    readonly signals: readonly string[];
+  }[];
   /** Whether the story is told in acts. */
   readonly hasActs: boolean;
 }
 
-/** The layout of one story (its index). */
-export function storyLayout(view: NView, rules: NarrativeRules, roots: Roots, story: NNode): StoryLayout {
+/**
+ * The layout of one story (its index). `signals`: a page's lifecycle signals as the caller reads them
+ * (src/narrative/signals.ts, the `inside` reading); a page with any is put in `lifecycle`, not read as a story's page.
+ */
+export function storyLayout(
+  view: NView,
+  rules: NarrativeRules,
+  roots: Roots,
+  story: NNode,
+  signals: (n: NNode) => readonly string[] = () => [],
+): StoryLayout {
   const cont = story.parentId ? view.node(story.parentId) : null;
   const continuity = cont ? continuityOf(view, rules, roots, cont) : null;
   const storyMaps: NNode[] = [];
@@ -187,9 +207,18 @@ export function storyLayout(view: NView, rules: NarrativeRules, roots: Roots, st
   const plans: (Numbered & { parent: NNode; act: number | null })[] = [];
   const chapters: (Numbered & { title: string; act: Numbered | null })[] = [];
   const others: { node: NNode; parent: NNode }[] = [];
+  const lifecycle: { node: NNode; parent: NNode; kind: NamedKind | null; signals: readonly string[] }[] = [];
+  /** CR-2026-11-R4 (F8): a page carrying a lifecycle signal, set apart (true), with the kind its name gives. */
+  const apart = (k: NNode, parent: NNode, p: ParsedName | null): boolean => {
+    const s = signals(k);
+    if (s.length === 0) return false;
+    lifecycle.push({ node: k, parent, kind: p?.kind ?? null, signals: s });
+    return true;
+  };
   const planIn = (parent: NNode, act: number | null) => {
     for (const k of view.children(parent.id)) {
       const p = parseNarrativeName(rules, k.displayName, k.kind === 'index');
+      if (apart(k, parent, p)) continue;
       if (p?.kind === 'chapterPlan') plans.push({ node: k, n: p.n!, parent, act });
       else if (p?.kind === 'actMap' && act === null) {
         actMaps.push({ node: k, n: p.n!, map: parent });
@@ -199,6 +228,7 @@ export function storyLayout(view: NView, rules: NarrativeRules, roots: Roots, st
   };
   for (const k of view.children(story.id)) {
     const p = parseNarrativeName(rules, k.displayName, k.kind === 'index');
+    if (apart(k, story, p)) continue;
     if (p?.kind === 'storyMap') {
       storyMaps.push(k);
       planIn(k, null);
@@ -207,6 +237,7 @@ export function storyLayout(view: NView, rules: NarrativeRules, roots: Roots, st
       acts.push(act);
       for (const c of view.children(k.id)) {
         const q = parseNarrativeName(rules, c.displayName, c.kind === 'index');
+        if (apart(c, k, q)) continue;
         if (q?.kind === 'chapter') chapters.push({ node: c, n: q.n!, title: q.title ?? '', act });
         else others.push({ node: c, parent: k });
       }
@@ -223,6 +254,7 @@ export function storyLayout(view: NView, rules: NarrativeRules, roots: Roots, st
     plans: byN(plans),
     chapters: byN(chapters),
     others,
+    lifecycle,
     hasActs: acts.length > 0 || actMaps.length > 0,
   };
 }

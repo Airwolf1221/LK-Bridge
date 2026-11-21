@@ -856,7 +856,20 @@ async function fixNarrative(
       const now = Array.isArray(res.tags) ? (res.tags as string[]) : [];
       if (stableJson(now) !== stableJson(a.expected))
         throw stale('The page’s tags changed since the audit.', { tags: now });
-      const tags = a.tags as string[];
+      // CR-2026-11-R4 (F2): additive only. Every tag the page holds now is kept, by its exact spelling (a status tag
+      // too: taking one off is the lifecycle tools', never an ordinary approval's), whatever the finding's args say.
+      const lower = (s: string) => s.toLocaleLowerCase('en-GB');
+      const asked = Array.isArray(a.tags)
+        ? (a.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+        : [];
+      const tags: string[] = [];
+      for (const t of asked) {
+        const mine = now.find((x) => lower(x) === lower(t)) ?? t;
+        if (!tags.includes(mine)) tags.push(mine);
+      }
+      for (const t of now) if (!tags.includes(t)) tags.push(t);
+      if (stableJson(tags) === stableJson(now))
+        return { status: 'nothing_to_do', message: 'The page already carries its narrative tags.' };
       const name = String(res.name);
       return propose(d, projectId, {
         steps: [
@@ -960,8 +973,11 @@ async function fixNarrative(
       if (firstText !== String(a.expectedFirst).replace(/\s+/g, ' ').trim())
         throw stale('The chapter’s first line changed since the audit.');
       const dateline = String(a.dateline);
-      // The first block is a (wrong) dateline when it is a short line with no sentence end; else a dateline is put first.
+      // CR-2026-11-R4 (F5): the first block is replaced only when the audit read its text before the separator WHOLE
+      // as a calendar date (`replaceFirst`: a wrong or old dateline); anything else (an epigraph, a short line of prose,
+      // a finding stored before the flag) stays, and the dateline is put before it.
       const isDateline =
+        a.replaceFirst === true &&
         isObj(first) &&
         first.kind === 'paragraph' &&
         firstText.length <= 160 &&

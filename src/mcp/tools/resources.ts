@@ -25,6 +25,7 @@ import {
   assessDelete,
   assessFactChange,
   canonConfigFrom,
+  factKey,
   factRows,
   type CanonicalRule,
 } from '../../facts/index.js';
@@ -689,6 +690,35 @@ async function narrativeCreate(
     );
   if (args.status !== undefined)
     return refusal(pd, NARRATIVE_NO_LIFECYCLE, `${NARRATIVE_NO_LIFECYCLE_MESSAGE} Leave status out.`);
+  // CR-2026-11-R4 (F3): no lifecycle by another route either: a Status in `facts` (any spelling of the key), or a tag
+  // that reads as a status or lifecycle tag (CANON, Working, Archived, AU; look-alikes included: the facts fold). The
+  // tools add AU themselves in an AU's continuity.
+  const statusKey = factKey(cc.lifecycle.fields.status);
+  const givenStatus = Object.keys(args.facts ?? {}).filter((k) => factKey(k) === statusKey);
+  if (givenStatus.length > 0)
+    return refusal(
+      pd,
+      NARRATIVE_NO_LIFECYCLE,
+      `${NARRATIVE_NO_LIFECYCLE_MESSAGE} Leave ${givenStatus.join(', ')} out of facts.`,
+      { facts: givenStatus },
+    );
+  const lifecycleTags = [
+    cc.lifecycle.tags.canon,
+    cc.lifecycle.tags.working,
+    cc.lifecycle.tags.archived,
+    scope.rules.tags.au,
+    pd.services?.packs?.lifecycleRules?.(ctx.projectId)?.au?.tag,
+  ]
+    .filter((x): x is string => typeof x === 'string')
+    .map((x) => factKey(x));
+  const badTags = (args.tags ?? []).filter((x) => lifecycleTags.includes(factKey(x)));
+  if (badTags.length > 0)
+    return refusal(
+      pd,
+      NARRATIVE_NO_LIFECYCLE,
+      `${NARRATIVE_NO_LIFECYCLE_MESSAGE} The tags ${badTags.map((x) => `“${x}”`).join(', ')} read as status or lifecycle tags: leave them out (the tools add ${scope.rules.tags.au} themselves in an AU’s continuity).`,
+      { tags: badTags },
+    );
   const t = await resolveTemplate(pd, cc.mctx, ctx, 'create_resource', args.template);
   const bad = pageTemplateCheck(pd, t);
   if (bad) return bad;
@@ -1533,7 +1563,7 @@ function moveResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Move a page',
     access: 'write',
     description:
-      'Moves a page (and everything under it) under a new parent [INDEX], in its alphabetical place. Within a lifecycle area it is an ordinary move with no canonical approval: a [BWRK] page between [INDEX] Working and an index inside a Working set (to build a character’s set before promote_page), and likewise [BARC] pages in the Archived area. A move into, out of or between [INDEX] Working and [INDEX] Archived is refused (POLICY_DENIED, naming archive_page, unarchive_page, move_to_working or promote_page). A move under itself or out of the repository is refused. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
+      'Moves a page (and everything under it) under a new parent [INDEX], in its alphabetical place. Within a lifecycle area it is an ordinary move with no canonical approval: a [BWRK] page between [INDEX] Working and an index inside a Working set (to build a character’s set before promote_page), and likewise [BARC] pages in the Archived area. A move into, out of or between [INDEX] Working and [INDEX] Archived is refused (POLICY_DENIED, naming archive_page, unarchive_page, move_to_working or promote_page). A move into or out of Narratives is always a proposal, whatever your scope (canonical when a page of it is canon, Working or Archived): never retry it. A move under itself or out of the repository is refused. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page to move (name or id).'),
       to: pageRef.describe('The new parent index (name or id).'),

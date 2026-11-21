@@ -174,9 +174,11 @@ describe('the narrative audit’s fixes on canon in Narratives', () => {
     }
   });
 
-  it('NA-41: end to end, an agent’s direct move of a CANON index into Main CANON, then the audit’s tags fix approved ordinarily, never removes CANON', async () => {
-    const moved = await agent('move_resource', { page: ids.charters, to: N.main });
-    expect(moved.status, JSON.stringify(moved).slice(0, 300)).toBe('written'); // NA-06's route
+  it('NA-41: end to end, a CANON index filed in Main CANON, then the audit’s tags fix approved ordinarily, never removes CANON', async () => {
+    // The lead (CR-2026-11-R4): the owner files the index in Main CANON in the app. As first written, an agent moved it
+    // (NA-06's route), which is now a canonical proposal (R4-01); the tags fix must keep CANON however it got there.
+    w.repo.outside.move(ids.charters, N.main);
+    w.rebuildTree();
     await w.snapshot();
     const f = findings().find((x) => x.code === 'narrative_tags' && x.pageId === ids.charters);
     expect(f, 'the audit reports the moved index’s narrative tags').toBeTruthy();
@@ -280,23 +282,28 @@ describe('never authority (E2.4)', () => {
   const unborn = (b: any) =>
     ((b.items ?? []) as any[]).some((i) => /Rashad al-Khalid is not yet born/.test(String(i.what)));
 
-  it('NA-42: Harun’s canon set an agent moves into Narratives (his death also in a chronology row) still contradicts a chapter that has him alive after it', async () => {
+  it('NA-42: Harun’s canon set filed in Narratives (his death also in a chronology row) still contradicts a chapter that has him alive after it', async () => {
     const h = await agent('arkona_chapter_check', { story: STORY, number: 5 });
     expect(deceased(h), `control: ${JSON.stringify(h.items).slice(0, 400)}`).toBe(true);
     const r = await agent('arkona_chapter_check', { story: STORY, number: 6 });
     expect(unborn(r), `control: ${JSON.stringify(r.items).slice(0, 400)}`).toBe(true);
-    for (const idx of [K.harunIdx, K.rashadIdx]) {
-      const moved = await agent('move_resource', { page: idx, to: N.main });
-      expect(moved.status, JSON.stringify(moved).slice(0, 300)).toBe('written');
-    }
+    // The lead (CR-2026-11-R4): the owner files both sets in Main CANON in the app. As first written, an agent moved
+    // them, which is now a canonical proposal (R4-01); canon must stay evidence however it came to be in Narratives.
+    for (const idx of [K.harunIdx, K.rashadIdx]) w.repo.outside.move(idx, N.main);
+    w.rebuildTree();
     await w.snapshot();
     const after = await agent('arkona_chapter_check', { story: STORY, number: 5 });
     expect(deceased(after), JSON.stringify(after.items ?? after).slice(0, 600)).toBe(true);
   });
 
-  it('NA-43: Rashad’s canon set (his birth on his Core only) moved into Narratives by an agent still contradicts a chapter set before his birth', async () => {
+  it('NA-43: Rashad’s canon set (his birth on his Core only) filed in Narratives still contradicts a chapter set before his birth', async () => {
     const after = await agent('arkona_chapter_check', { story: STORY, number: 6 });
     expect.soft(unborn(after), JSON.stringify(after.items ?? after).slice(0, 600)).toBe(true);
+    // The lead (CR-2026-11-R4): his name still resolves to canon, never a new-lore candidate.
+    const candidate = ((after.items ?? []) as any[]).filter(
+      (i) => i.kind === 'name' && /Rashad al-Khalid/.test(String(i.name ?? i.what)),
+    );
+    expect.soft(candidate, JSON.stringify(candidate)).toEqual([]);
     const asOf = await agent('arkona_as_of', { characters: ['Rashad al-Khalid'], date: '4A 350' });
     expect.soft(JSON.stringify(asOf).slice(0, 1500), 'arkona_as_of').toMatch(/Camue 44th, 4A 360/);
   });

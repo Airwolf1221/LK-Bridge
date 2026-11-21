@@ -3,7 +3,13 @@ import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mc
 import { createPacks, type Packs } from './packs/service.js';
 import { findPageByName } from './packs/find-page.js';
 import { ToolListWatch } from './mcp/tool-list.js';
-import { inNarratives, narrativeRulesOf, narrativeScope } from './narrative/scope.js';
+import {
+  inNarratives,
+  narrativeArea,
+  narrativeAuthorityRoots,
+  narrativeRulesOf,
+  narrativeScope,
+} from './narrative/scope.js';
 import { narrativeCalendar } from './narrative/calendar.js';
 import { narrativeBlindAppraisal } from './narrative/authority.js';
 import { narrativeCompare } from './narrative/names.js';
@@ -615,6 +621,22 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     // v3 F3d (ADR 0053): the AU ruling's status tag is guarded on a project whose approved pack carries it.
     tagRules: (projectId) => packs.lifecycleRules(projectId),
+    // CR-2026-11-R4 (ADR 0065 amendment 2): Narratives as the narrative tools resolve it (moves into or out of it are
+    // proposals; the narrative indexes' names are never given to a page).
+    narratives: (projectId) => narrativeArea(packs, tree.queries, projectId),
+    // CR-2026-11-R4 (F2): a job's own pages (its create steps' client-minted ids), also after a restart.
+    createdByJob: (projectId, jobId, resourceId) =>
+      engine.queries.getJob(projectId, jobId)?.steps.some((s) => {
+        if (!['createResource', 'createManyResources', 'createResourceFromTemplate'].includes(s.opId))
+          return false;
+        if (s.clientIds.includes(resourceId)) return true;
+        const body = (s.params?.body ?? {}) as { id?: unknown; resources?: unknown };
+        return (
+          body.id === resourceId ||
+          (Array.isArray(body.resources) &&
+            body.resources.some((r) => (r as { id?: unknown } | null)?.id === resourceId))
+        );
+      }) ?? false,
   });
   const unregisterGuard = engine.setWriteGuard(
     combineGuards(
@@ -885,10 +907,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const consistency: Consistency = new Consistency({
     db: o.db,
     // v3 F4c (ADR 0065, design E2): the facts index never reads a narrative page (fiction is never canon evidence).
-    appraisal: narrativeBlindAppraisal(
-      appraisal,
-      (projectId) => narrativeRulesOf(packs, projectId)?.indexes.narratives ?? null,
-    ),
+    // CR-2026-11-R4 (F4): Narratives resolved as the narrative tools resolve it (by id; every candidate when ambiguous).
+    appraisal: narrativeBlindAppraisal(appraisal, (projectId) => ({
+      name: narrativeRulesOf(packs, projectId)?.indexes.narratives ?? null,
+      roots: narrativeAuthorityRoots(packs, tree.queries, projectId),
+    })),
     tree,
     registry,
     chronology,

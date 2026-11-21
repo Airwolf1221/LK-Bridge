@@ -7,12 +7,32 @@
 import type { Pack, PackRules, NarrativeRules } from '../packs/types.js';
 import { reportRulesOf } from '../packs/governance-audit.js';
 import type { SidebarBlock, TreeNode, TreeQueries } from '../tree/index.js';
+import type { NarrativeArea } from '../lifecycle/guard.js';
 import { nkey, rootsOf, type NNode, type NView, type Roots } from './layout.js';
 
 /** What the scope needs of the packs. */
 export interface PacksLike {
   forProject(projectId: string): Pack[];
   readonly store: { rulesAt(packId: string, version: number): PackRules | null };
+}
+
+/**
+ * CR-2026-11-R4: a stored version's rules, parsed once per store (a version's rules never change; only its approval
+ * does). The lifecycle guard asks for the narrative rules on every write, and parsing a pack's rules is not free.
+ */
+const parsedRules = new WeakMap<object, Map<string, PackRules | null>>();
+function rulesAtCached(store: PacksLike['store'], id: string, version: number): PackRules | null {
+  let m = parsedRules.get(store);
+  if (!m) {
+    m = new Map();
+    parsedRules.set(store, m);
+  }
+  const k = `${id}\u0000${version}`;
+  if (!m.has(k)) {
+    if (m.size >= 64) m.clear();
+    m.set(k, store.rulesAt(id, version));
+  }
+  return m.get(k)!;
 }
 
 /** The narrative rules of a project: the first attached pack (by id) whose approved rules carry them, or null. */
@@ -22,7 +42,7 @@ export function narrativeRulesOf(
 ): NarrativeRules | null {
   if (!packs) return null;
   for (const pack of [...packs.forProject(projectId)].sort((a, b) => (a.id < b.id ? -1 : 1))) {
-    const r = reportRulesOf(pack, (id, v) => packs.store.rulesAt(id, v));
+    const r = reportRulesOf(pack, (id, v) => rulesAtCached(packs.store, id, v));
     if (r.narrative) return r.narrative;
   }
   return null;
@@ -76,6 +96,64 @@ export function narrativeScope(
   try {
     const roots = rootsOf(treeView(queries, projectId), rules);
     return roots.narratives ? { rules, roots } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * CR-2026-11-R4 (ADR 0065 amendment 2): Narratives as the lifecycle guard knows it: the one Narratives index by id, as
+ * the narrative tools resolve it (`rootsOf` over the tree; null when it is missing or ambiguous, so no page is
+ * narrative and every page keeps its lifecycle), the narrative indexes' names and tags. Null: no approved narrative
+ * rules (Narratives is ordinary content).
+ */
+export function narrativeArea(
+  packs: PacksLike | undefined | null,
+  queries: Pick<TreeQueries, 'node' | 'children' | 'findByName' | 'sidebars'> | undefined | null,
+  projectId: string,
+): NarrativeArea | null {
+  const rules = narrativeRulesOf(packs, projectId);
+  if (!rules) return null;
+  let rootId: string | null;
+  try {
+    rootId = queries ? (rootsOf(treeView(queries, projectId), rules).narratives?.id ?? null) : null;
+  } catch {
+    rootId = null;
+  }
+  return {
+    rootId,
+    indexNames: {
+      narratives: rules.indexes.narratives,
+      continuities: rules.indexes.continuities,
+      main: rules.indexes.main,
+    },
+    narrativeTag: rules.tags.narrative,
+    auTag: rules.tags.au,
+  };
+}
+
+/**
+ * CR-2026-11-R4 (F4): the Narratives indexes whose pages the facts index leaves out, resolved as the narrative tools
+ * resolve Narratives (by id, from the tree), so the two never disagree: the one index, or EVERY index of that name when
+ * there are several (fail closed for authority: no story is ever read as canon evidence, while the guards treat none of
+ * them as narrative). Empty: no narrative rules. Null: the tree cannot answer now (the overlay's own names are used).
+ */
+export function narrativeAuthorityRoots(
+  packs: PacksLike | undefined | null,
+  queries: Pick<TreeQueries, 'node' | 'children' | 'findByName' | 'sidebars'> | undefined | null,
+  projectId: string,
+): readonly string[] | null {
+  const rules = narrativeRulesOf(packs, projectId);
+  if (!rules) return [];
+  if (!queries) return null;
+  try {
+    const view = treeView(queries, projectId);
+    const roots = rootsOf(view, rules);
+    if (roots.narratives) return [roots.narratives.id];
+    return view
+      .indexesNamed(rules.indexes.narratives)
+      .filter((n) => n.kind === 'index')
+      .map((n) => n.id);
   } catch {
     return null;
   }
