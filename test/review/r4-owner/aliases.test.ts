@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * CR-2026-11-R4, the owner's queued request for F4.1: the one alias parser (`splitAliases`) splits an Aliases value at
  * ";" (and line breaks) AND at commas outside brackets. F4.1 had dropped commas altogether (ADR 0064 amendment 2,

@@ -40,7 +40,11 @@ export async function sandboxOnMock(stack: Stack): Promise<OnMock> {
     apiKey: API_KEY,
     project: 'test',
     baseUrl: stack.mock.url,
-    env: { WRITE_SPACING_MS: '0', WRITE_SPACING_STRETCHED_MS: '0', LK_TIER_LIMITS: JSON.stringify(MOCK_LIMITS) },
+    env: {
+      WRITE_SPACING_MS: '0',
+      WRITE_SPACING_STRETCHED_MS: '0',
+      LK_TIER_LIMITS: JSON.stringify(MOCK_LIMITS),
+    },
   });
   const raw = rawLk({ lk: sb.lk, projectId: sb.projectId, apiKey: API_KEY, baseUrl: stack.mock.url });
   return { sb, raw, bridgeDbPath: stack.dbPath, close: () => sb.close() };

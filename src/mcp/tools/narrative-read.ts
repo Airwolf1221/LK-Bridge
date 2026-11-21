@@ -192,8 +192,8 @@ async function openRead(
   if (!o.ok) return o;
   const ap = pd.services?.appraisal;
   const note: string[] = [];
-  let reader: PageReader | null = null;
-  let pack: PackRules | null = null;
+  let reader: PageReader | null;
+  let pack: PackRules | null;
   try {
     pack = ap ? ap.rules(o.value.ctx.projectId) : null;
     reader = ap ? (await ap.reader(o.value.ctx.projectId)).reader : null;

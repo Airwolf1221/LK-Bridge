@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment -- tool results and the pack's rules are JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- tool results and the pack's rules are JSON */
 /**
  * CR-2026-11-R4, the lead reviewer's reading of `tools/list_changed` (F4c's commit 79b1700, merged with #78) and the
  * tool lists it recomputes. Each test asserts the SAFE behaviour: no tool is listed to a session that may not use it,
@@ -24,8 +24,18 @@ afterAll(async () => {
   await w?.close();
 });
 
-const NARRATIVE = ['arkona_story_create', 'arkona_chapter_save', 'arkona_chapter_context', 'arkona_chapter_check'];
-const CONSISTENCY = ['arkona_consistency', 'arkona_as_of', 'arkona_as_of_coverage', 'arkona_consistency_suggest'];
+const NARRATIVE = [
+  'arkona_story_create',
+  'arkona_chapter_save',
+  'arkona_chapter_context',
+  'arkona_chapter_check',
+];
+const CONSISTENCY = [
+  'arkona_consistency',
+  'arkona_as_of',
+  'arkona_as_of_coverage',
+  'arkona_consistency_suggest',
+];
 
 async function listening(token: string, era: 'modern' | 'legacy' = 'modern') {
   const changes: string[][] = [];
@@ -76,18 +86,21 @@ describe('the tool lists follow the approved version (LD-01, LD-02)', () => {
     // waits for approval: the tools cannot be used (they read the approved version).
     const { narrative: _n, consistency: _c, ...without } = full as PackRules & Record<string, unknown>;
     expect(full.narrative, 'the approved version has the narrative rules').toBeDefined();
-    packs.commands.replaceRules('owner', 'arkona', without as PackRules, 'R4 LD-01: no narrative rules');
+    packs.commands.replaceRules('owner', 'arkona', without, 'R4 LD-01: no narrative rules');
     await packs.commands.approve('owner', 'arkona');
     packs.commands.replaceRules('owner', 'arkona', full, 'R4 LD-01: the rules back, waiting');
     expect(packs.get('arkona')!.approved!.version).toBeLessThan(packs.get('arkona')!.version);
 
-    let listed: string[] = [];
+    let listed: string[] | undefined;
     try {
       const c1 = await w.stack.connect();
       listed = (await c1.listTools()).tools.map((t) => t.name);
       await c1.close();
       // Held: a call refuses (the approved version has no narrative rules).
-      const story = await w.tool('arkona_story_create', { continuity: 'Main CANON', title: 'R4 LD-01 probe' });
+      const story = await w.tool('arkona_story_create', {
+        continuity: 'Main CANON',
+        title: 'R4 LD-01 probe',
+      });
       expect(JSON.stringify(story)).toMatch(/PACK_NOT_CURRENT/);
       const asOf = await w.tool('arkona_as_of', { characters: ['Yasmin al-Naim'], date: 'now' });
       expect(JSON.stringify(asOf)).toMatch(/no consistency rules/i);
@@ -97,7 +110,7 @@ describe('the tool lists follow the approved version (LD-01, LD-02)', () => {
     }
     // SAFE: not listed while they cannot be used.
     expect(
-      listed.filter((t) => [...NARRATIVE, ...CONSISTENCY].includes(t)),
+      (listed ?? []).filter((t) => [...NARRATIVE, ...CONSISTENCY].includes(t)),
       'tools listed although the approved version has none of their rules',
     ).toEqual([]);
 
@@ -115,7 +128,7 @@ describe('the tool lists follow the approved version (LD-01, LD-02)', () => {
     const full = packs.get('arkona')!.rules;
     expect(full.narrative, 'the approved version has the narrative rules').toBeDefined();
     const { narrative: _n, consistency: _c, ...without } = full as PackRules & Record<string, unknown>;
-    packs.commands.replaceRules('owner', 'arkona', without as PackRules, 'R4 LD-02: dropped, waiting');
+    packs.commands.replaceRules('owner', 'arkona', without, 'R4 LD-02: dropped, waiting');
     try {
       const c = await w.stack.connect();
       const listed = (await c.listTools()).tools.map((t) => t.name);

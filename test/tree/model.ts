@@ -416,7 +416,11 @@ export class TreeModel {
       for (const d of r.docs) this.docs.delete(d);
       r.docs = [];
       for (const d of (body.documents as { name?: unknown; type?: unknown }[]).slice(0, 5))
-        this.addDoc(r.id, typeof d.name === 'string' ? d.name : 'Untitled', typeof d.type === 'string' ? d.type : 'blank');
+        this.addDoc(
+          r.id,
+          typeof d.name === 'string' ? d.name : 'Untitled',
+          typeof d.type === 'string' ? d.type : 'blank',
+        );
     }
     const placed = this.place(r, parentId, body.after, body.before);
     if (placed) {

@@ -177,7 +177,8 @@ export async function runNarrativeCheck(
     }
     const ok2 = await check('N2', 'arkona_story_create: one act, the Story Map first', async () => {
       const b = await tool('arkona_story_create', { continuity: rules.indexes.main, title, acts: ['One'] });
-      if (b.status !== 'written') throw new Error(`status ${String(b.status)}; the whole answer: ${JSON.stringify(b)}`);
+      if (b.status !== 'written')
+        throw new Error(`status ${String(b.status)}; the whole answer: ${JSON.stringify(b)}`);
       made.story = String(b.story.id);
       const kids = rt.tree.queries.children(pid, made.story).data.map((n) => n.displayName);
       if (kids[0] !== rules.names.storyMap) throw new Error(`children: ${kids.join(', ')}`);
@@ -217,12 +218,16 @@ export async function runNarrativeCheck(
               );
             readBack = await readBackSent(rt, raw, pid, String(b.jobId), String(b.chapter?.id ?? ''));
           } else if (b.status !== 'written')
-            throw new Error(`status ${String(b.status)} (not written); the whole answer: ${JSON.stringify(b)}`);
+            throw new Error(
+              `status ${String(b.status)} (not written); the whole answer: ${JSON.stringify(b)}`,
+            );
           if (readBack?.matches !== true)
             throw new Error(
               `the read-back did not match (readBack.matches is ${JSON.stringify(readBack?.matches ?? null)}): ${JSON.stringify(readBack ?? null)}; the whole answer: ${JSON.stringify(b)}`,
             );
-          seen.push(`chapter ${n}: ${String(readBack.words)} words read back (${String(readBack.compared ?? 'the Markdown')})`);
+          seen.push(
+            `chapter ${n}: ${String(readBack.words)} words read back (${String(readBack.compared ?? 'the Markdown')})`,
+          );
         }
         return `chapters 1 and 2 saved and read back: ${seen.join('; ')}`;
       },
@@ -233,7 +238,8 @@ export async function runNarrativeCheck(
       'arkona_chapter_insert at 2: the later chapter and plan renumbered, read back live',
       async () => {
         const b = await tool('arkona_chapter_insert', { story: title, at: 2, title: 'Inserted' });
-        if (b.status !== 'written') throw new Error(`status ${String(b.status)}; the whole answer: ${JSON.stringify(b)}`);
+        if (b.status !== 'written')
+          throw new Error(`status ${String(b.status)}; the whole answer: ${JSON.stringify(b)}`);
         const live = async (id: string) => await raw.request('getResource', 'GET', `/resources/${id}`);
         const out: string[] = [];
         for (const r of b.renumbered as Obj[]) {
@@ -245,21 +251,25 @@ export async function runNarrativeCheck(
         return out.join('; ');
       },
     );
-    await check('N5', 'a full snapshot, arkona_chapter_check, then the audit’s narrative findings for the story', async () => {
-      // CR-2026-11-R4: the snapshot first. The check reads the chapter and canon through the snapshots, and this run's
-      // own database has none until it takes one (on the mock, N5 answered CHAPTER_UNREADABLE).
-      await rt.snapshots.full(pid, 'manual');
-      const c = await tool('arkona_chapter_check', { story: title, number: 1 });
-      await rt.audits.run(pid, 'manual');
-      const f = rt.audits
-        .list(pid, { category: ['narrative'], limit: 1000 })
-        .findings.filter(
-          (x) =>
-            x.pageName?.includes('f4c check') ||
-            (x.pageId && rt.tree.queries.node(pid, x.pageId).data?.path.ids.includes(made.story!)),
-        );
-      return `check: ${JSON.stringify(c.counts)}; audit: ${f.map((x) => x.code).join(', ') || 'no narrative finding on the story'}`;
-    });
+    await check(
+      'N5',
+      'a full snapshot, arkona_chapter_check, then the audit’s narrative findings for the story',
+      async () => {
+        // CR-2026-11-R4: the snapshot first. The check reads the chapter and canon through the snapshots, and this run's
+        // own database has none until it takes one (on the mock, N5 answered CHAPTER_UNREADABLE).
+        await rt.snapshots.full(pid, 'manual');
+        const c = await tool('arkona_chapter_check', { story: title, number: 1 });
+        await rt.audits.run(pid, 'manual');
+        const f = rt.audits
+          .list(pid, { category: ['narrative'], limit: 1000 })
+          .findings.filter(
+            (x) =>
+              x.pageName?.includes('f4c check') ||
+              (x.pageId && rt.tree.queries.node(pid, x.pageId).data?.path.ids.includes(made.story!)),
+          );
+        return `check: ${JSON.stringify(c.counts)}; audit: ${f.map((x) => x.code).join(', ') || 'no narrative finding on the story'}`;
+      },
+    );
   } finally {
     for (const [what, id] of [
       ['the throwaway story', made.story],
@@ -279,7 +289,6 @@ export async function runNarrativeCheck(
   }
   return items;
 }
-
 
 /** A job followed to its end (at most ten minutes). */
 async function settleJob(rt: SoakRuntime['runtime'], pid: string, jobId: string) {
@@ -308,7 +317,9 @@ async function readBackSent(
   for (const s of [...job.steps].reverse()) {
     if (s.opId !== 'replaceDocumentBlocks') continue;
     const params = (s.params ??
-      (s.paramsArtifactId ? rt.engine.queries.readArtifact(pid, s.paramsArtifactId)?.data : null)) as Obj | null;
+      (s.paramsArtifactId
+        ? rt.engine.queries.readArtifact(pid, s.paramsArtifactId)?.data
+        : null)) as Obj | null;
     if (params?.path?.resourceId !== chapterId || typeof params.path.documentId !== 'string') continue;
     const got = await raw.request(
       'getDocumentBlocks',
@@ -320,7 +331,7 @@ async function readBackSent(
     return {
       matches: diff === null,
       words: want.length,
-      documentId: params.path.documentId,
+      documentId: String(params.path.documentId),
       compared: 'what the job sent',
       ...(diff ? { firstDifference: diff } : {}),
     };

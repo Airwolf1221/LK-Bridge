@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment -- tool results are JSON */
 /**
  * CR-2026-11-R4, scope item 8 (memory under the new indexes): each path F4b, F4c and F4.1 added, run many times in one
  * process through the real tools on the mock LegendKeeper, with the heap read after a full collection at checkpoints.

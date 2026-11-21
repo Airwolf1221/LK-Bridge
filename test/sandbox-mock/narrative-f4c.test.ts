@@ -35,7 +35,9 @@ describe.each([
     const items = await runNarrativeCheck(on.sb, on.raw, 'test', { bridgeDbPath: on.bridgeDbPath });
     expectEveryItemPasses(items, formatNarrativeReport(items));
     // Nothing the check made is left on the mock (its story, and Main CANON when it made it).
-    const left = [...(w.repo as unknown as { res: Map<string, { name: string; deletedAt: string | null }> }).res.values()]
+    const left = [
+      ...(w.repo as unknown as { res: Map<string, { name: string; deletedAt: string | null }> }).res.values(),
+    ]
       .filter((r) => r.deletedAt === null && /lk-bridge f4c check/.test(r.name))
       .map((r) => r.name);
     expect(left).toEqual([]);

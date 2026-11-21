@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access -- LK results are untyped JSON */
+/* eslint-disable @typescript-eslint/no-explicit-any -- LK results are untyped JSON */
 /**
  * CR-2026-11-R4 (the fourth review), opt-in, WRITES then cleans up: what this review's fixes assume of LegendKeeper and
  * no sandbox check confirms yet. Written for the owner; never run by an agent or in CI. On the server:
@@ -59,7 +59,8 @@ export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5It
       priority: 'P2',
       ...options,
     });
-    if (r.status !== 'succeeded') throw new Error(`${op}: ${r.status}; the whole answer: ${JSON.stringify(r)}`);
+    if (r.status !== 'succeeded')
+      throw new Error(`${op}: ${r.status}; the whole answer: ${JSON.stringify(r)}`);
     return r.result as Obj;
   };
   const check = async (id: string, title: string, fn: () => Promise<void>) => {
@@ -97,43 +98,51 @@ export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5It
       body: { blocks: [{ id: mintClientId(), kind: 'paragraph', content: [{ text: NOTES_TEXT }] }] },
     });
 
-    await check('Z1', 'a template copy holds each of its documents; Main holds the template’s Main', async () => {
-      const tpl = await run('saveResourceAsTemplate', {
-        path: { resourceId: pageId! },
-        body: { name: `lk-bridge r5 template ${stamp}` },
-      });
-      templateId = String(tpl.id);
-      const copy = await run('createResourceFromTemplate', {
-        body: { templateId, name: `lk-bridge r5 copy ${stamp}`, parentId: pageId },
-      });
-      const res = await run('getResource', { path: { resourceId: String(copy.id) } });
-      const listed = ((res.documents ?? []) as Obj[]).filter((d) => !d.deletedAt);
-      const order = listed.map((d) => `${String(d.name)} (${String(d.type)})`).join(', ');
-      record('Z1', 'the order a template copy’s documents are listed in (NOTED)', 'noted', order);
-      const main = mainDocumentId(listed);
-      if (!main) {
-        record('Z1', 'the copy has one document named Main', 'fail', `documents: ${order}`);
-        return;
-      }
-      const read = async (documentId: string) =>
-        blockWords(
-          ((await run('getDocumentBlocks', { path: { resourceId: String(copy.id), documentId } })).blocks ??
-            []) as Obj[],
+    await check(
+      'Z1',
+      'a template copy holds each of its documents; Main holds the template’s Main',
+      async () => {
+        const tpl = await run('saveResourceAsTemplate', {
+          path: { resourceId: pageId! },
+          body: { name: `lk-bridge r5 template ${stamp}` },
+        });
+        templateId = String(tpl.id);
+        const copy = await run('createResourceFromTemplate', {
+          body: { templateId, name: `lk-bridge r5 copy ${stamp}`, parentId: pageId },
+        });
+        const res = await run('getResource', { path: { resourceId: String(copy.id) } });
+        const listed = ((res.documents ?? []) as Obj[]).filter((d) => !d.deletedAt);
+        const order = listed.map((d) => `${String(d.name)} (${String(d.type)})`).join(', ');
+        record('Z1', 'the order a template copy’s documents are listed in (NOTED)', 'noted', order);
+        const main = mainDocumentId(listed);
+        if (!main) {
+          record('Z1', 'the copy has one document named Main', 'fail', `documents: ${order}`);
+          return;
+        }
+        const read = async (documentId: string) =>
+          blockWords(
+            ((await run('getDocumentBlocks', { path: { resourceId: String(copy.id), documentId } })).blocks ??
+              []) as Obj[],
+          );
+        const mainText = await read(main);
+        const notes = listed.find((d) => d.name === 'Notes');
+        const notesText = notes ? await read(String(notes.id)) : '(no Notes document)';
+        const ok = mainText === MAIN_TEXT && notesText === NOTES_TEXT;
+        record(
+          'Z1',
+          'a template copy holds each of its documents; Main holds the template’s Main',
+          ok ? 'pass' : 'fail',
+          `Main: “${mainText}”; Notes: “${notesText}”`,
         );
-      const mainText = await read(main);
-      const notes = listed.find((d) => d.name === 'Notes');
-      const notesText = notes ? await read(String(notes.id)) : '(no Notes document)';
-      const ok = mainText === MAIN_TEXT && notesText === NOTES_TEXT;
-      record(
-        'Z1',
-        'a template copy holds each of its documents; Main holds the template’s Main',
-        ok ? 'pass' : 'fail',
-        `Main: “${mainText}”; Notes: “${notesText}”`,
-      );
-    });
+      },
+    );
 
     await check('Z2', 'a key-value row’s runs kept when one run’s text changes (bold kept)', async () => {
-      const first = [{ text: 'Born ' }, { text: 'Camue 1st, 4A 100', bold: true }, { text: '; attested through 5A 931' }];
+      const first = [
+        { text: 'Born ' },
+        { text: 'Camue 1st, 4A 100', bold: true },
+        { text: '; attested through 5A 931' },
+      ];
       // A key-value property is made with its rows (the spec requires them).
       const prop = await run('createProperty', {
         path: { resourceId: pageId! },
@@ -143,7 +152,11 @@ export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5It
       const listed = await run('listPropertyRows', { path: { resourceId: pageId!, propertyId } });
       const row = ((listed.data ?? listed.rows ?? []) as Obj[]).find((r) => r.key === 'Temporal Scope');
       if (!row) throw new Error(`the row is not listed: ${JSON.stringify(listed)}`);
-      const next = [{ text: 'Born ' }, { text: 'Camue 2nd, 4A 100', bold: true }, { text: '; attested through 5A 931' }];
+      const next = [
+        { text: 'Born ' },
+        { text: 'Camue 2nd, 4A 100', bold: true },
+        { text: '; attested through 5A 931' },
+      ];
       await run('updatePropertyRow', {
         path: { resourceId: pageId!, propertyId, rowId: String(row.id) },
         body: { content: next },
@@ -160,29 +173,33 @@ export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5It
       );
     });
 
-    await check('Z3', 'a paragraph’s runs kept when one run’s text changes; the generic verify agrees', async () => {
-      const path = { resourceId: pageId!, documentId: docOf('Main') };
-      const id = mintClientId();
-      const block = (date: string) => ({
-        id,
-        kind: 'paragraph',
-        content: [{ text: 'Ada was born on ' }, { text: date, bold: true }, { text: ' in Harrow.' }],
-      });
-      await run('replaceDocumentBlocks', { path, body: { blocks: [block('Camue 1st, 4A 100')] } });
-      const sent = block('Camue 2nd, 4A 100');
-      await run('replaceBlock', { path: { ...path, blockId: id }, body: sent });
-      const after = await run('getDocumentBlocks', { path });
-      const stored = ((after.blocks ?? []) as Obj[]).filter((b) => b.id === id);
-      const cmp = compareStoredBlocks([sent], stored);
-      record(
-        'Z3',
-        'a paragraph’s runs kept when one run’s text changes; the generic verify agrees',
-        cmp.ok ? 'pass' : 'fail',
-        cmp.ok
-          ? `read back as sent: ${runsText(sent.content)}`
-          : `${JSON.stringify(cmp)}; read back ${JSON.stringify(stored)}`,
-      );
-    });
+    await check(
+      'Z3',
+      'a paragraph’s runs kept when one run’s text changes; the generic verify agrees',
+      async () => {
+        const path = { resourceId: pageId!, documentId: docOf('Main') };
+        const id = mintClientId();
+        const block = (date: string) => ({
+          id,
+          kind: 'paragraph',
+          content: [{ text: 'Ada was born on ' }, { text: date, bold: true }, { text: ' in Harrow.' }],
+        });
+        await run('replaceDocumentBlocks', { path, body: { blocks: [block('Camue 1st, 4A 100')] } });
+        const sent = block('Camue 2nd, 4A 100');
+        await run('replaceBlock', { path: { ...path, blockId: id }, body: sent });
+        const after = await run('getDocumentBlocks', { path });
+        const stored = ((after.blocks ?? []) as Obj[]).filter((b) => b.id === id);
+        const cmp = compareStoredBlocks([sent], stored);
+        record(
+          'Z3',
+          'a paragraph’s runs kept when one run’s text changes; the generic verify agrees',
+          cmp.ok ? 'pass' : 'fail',
+          cmp.ok
+            ? `read back as sent: ${runsText(sent.content)}`
+            : `${JSON.stringify(cmp)}; read back ${JSON.stringify(stored)}`,
+        );
+      },
+    );
   } finally {
     for (const [what, id, cascade] of [
       ['the throwaway template', templateId, false],

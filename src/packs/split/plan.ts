@@ -1295,10 +1295,16 @@ export async function planSplit(
    * `splits.sections`: its Reference Type (ignoring case), else its role in a character's set, else its owner type, else
    * `otherwise`. A version without the data: both, as ADR 0059 amendment 1 built.
    */
-  const expectedFrame = (r: { d: SplitDestinationInput }): { fields: ReadonlySet<FrameField>; as: string } => {
+  const expectedFrame = (r: {
+    d: SplitDestinationInput;
+  }): { fields: ReadonlySet<FrameField>; as: string } => {
     const spec = s?.sections;
     if (!spec) return { fields: new Set(frame.map((f) => f.field)), as: 'every new owner' };
-    const role = character ? (r.d.kind === 'relationship' ? 'relationship' : (r.d.role ?? 'specialist')) : null;
+    const role = character
+      ? r.d.kind === 'relationship'
+        ? 'relationship'
+        : (r.d.role ?? 'specialist')
+      : null;
     const referenceType =
       (r.d.referenceType ?? '').trim() ||
       (role ? (ctype.roles.find((x) => x.role === role)?.referenceType ?? '') : '');

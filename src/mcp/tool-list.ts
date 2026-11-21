@@ -30,7 +30,7 @@ export class ToolListWatch {
 
   constructor(private readonly source: ToolListSource) {
     this.last = this.fingerprint();
-    this.lastConnections = this.connectionMap() ?? new Map();
+    this.lastConnections = this.connectionMap() ?? new Map<string, string | null>();
   }
 
   /** Told after every change that moved some list. Returns an unsubscribe function. */

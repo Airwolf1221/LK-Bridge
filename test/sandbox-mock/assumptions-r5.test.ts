@@ -34,7 +34,8 @@ describe('assumptions-r5 on the mock', () => {
       if (req.method !== 'POST') return undefined;
       const src = /\/resources\/([^/]+)\/save-as-template$/.exec(req.path.replace(/\/$/, ''))![1]!;
       const s = repo.res.get(src);
-      if (!s || s.deletedAt !== null) return { status: 404, body: { code: 'NOT_FOUND', message: 'not found' } };
+      if (!s || s.deletedAt !== null)
+        return { status: 404, body: { code: 'NOT_FOUND', message: 'not found' } };
       const name = (req.body as { name?: string } | undefined)?.name ?? s.name;
       const t = w.repo.seed({ name, parentId: null, props: false });
       for (const d of [...t.docs]) w.repo.outside.deleteDocument(d);
@@ -58,7 +59,9 @@ describe('assumptions-r5 on the mock', () => {
     const items = await runAssumptionsR5(on.sb);
     expectEveryItemPasses(items, formatAssumptionsR5Report(items));
     // Z1's NOTED line shows the copy's documents listed in another order than the template's (as modelled).
-    expect(items.find((i) => i.id === 'Z1' && i.verdict === 'noted')?.detail).toMatch(/^Notes \(page\), Main \(page\)$/);
+    expect(items.find((i) => i.id === 'Z1' && i.verdict === 'noted')?.detail).toMatch(
+      /^Notes \(page\), Main \(page\)$/,
+    );
     const left = [...(w.repo as Repo).res.values()]
       .filter((r) => r.deletedAt === null && /lk-bridge r5/.test(r.name))
       .map((r) => r.name);

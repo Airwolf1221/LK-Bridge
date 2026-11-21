@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment -- tool results and the mock's state are JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- tool results and the mock's state are JSON */
 /**
  * CR-2026-11-R4 (the owner's request S): narrative-f4c's N3 failed on the owner's run although `arkona_chapter_save` made
  * "Chapter 1 - First" with its dateline; the check's 400-character slice of the answer cut off `readBack`, which comes
@@ -51,7 +51,8 @@ const save = (w: NarrativeWorld) =>
 const docsOf = (w: NarrativeWorld, id: string) =>
   (w.repo.live(id) as any).docs.map((d: string) => ({ id: d, name: (w.repo as any).docs.get(d).name }));
 const chapterId = (w: NarrativeWorld, name: string) => {
-  for (const r of (w.repo as any).res.values()) if (r.name === name && r.deletedAt === null) return r.id as string;
+  for (const r of (w.repo as any).res.values())
+    if (r.name === name && r.deletedAt === null) return r.id as string;
   throw new Error(`no ${name}`);
 };
 

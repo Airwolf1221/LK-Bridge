@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- LK results are untyped JSON */
 /**
  * v3 F4c (ADR 0065), opt-in, WRITES then cleans up: the narrative tools end to end on the real API. Written for the
  * owner; never run by an agent or in CI. On the server:

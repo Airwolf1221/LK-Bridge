@@ -194,11 +194,12 @@ function world(
 const byName = (drafts: readonly FindingDraft[], name: string) =>
   drafts.filter((d) => (d.evidence as { name?: string }).name === name);
 
-
 describe('decision 3: a run inside a longer name is never resolved silently (LD-05, LD-06)', () => {
   const tagging = heading('pn9', 2, 'Tagging');
   const partialOf = (drafts: readonly FindingDraft[], name: string) =>
-    byName(drafts, name).map((d) => (d.evidence as { nearMiss?: { closest?: string; partial?: boolean } }).nearMiss);
+    byName(drafts, name).map(
+      (d) => (d.evidence as { nearMiss?: { closest?: string; partial?: boolean } }).nearMiss,
+    );
 
   it('control: “the Native Tagging Standard” alone is a partial near miss for the tab', () => {
     const drafts = world({ navigation: [para('pn7', t('Read the Native Tagging Standard.'))] });
