@@ -23,7 +23,7 @@ export function arkonaReadTools(deps: ToolDeps): McpToolProvider[] {
   const hasCharacters = () =>
     listed() &&
     (packs()
-      ?.get('arkona')
+      ?.peek('arkona')
       ?.rules.types.some((t) => t.hook === 'character') ??
       false);
   return [

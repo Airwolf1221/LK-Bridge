@@ -1330,6 +1330,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       policy.store
         .listProfiles()
         .map((p) => ({ id: p.id, scope: p.scope, showLowLevelTools: p.showLowLevelTools })),
+    // CR-2026-11-R4 (LD-03, LD-04): a connection moved to another profile tells its sessions.
+    connections: () => policy.store.connectionProfiles(),
   });
   const detachToolList = [
     packs.onChange(() => toolList.poke()),

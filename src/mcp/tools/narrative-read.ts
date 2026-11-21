@@ -685,9 +685,10 @@ export function narrativeReadTools(
   deps: ToolDeps,
   tool: (name: string) => McpToolProvider | undefined,
 ): McpToolProvider[] {
+  // CR-2026-11-R4 (LD-01): listed while the APPROVED version carries the narrative layout, as the writing tools.
   const listed = () => {
     const packs = deps.services?.packs;
-    return (packs?.toolListed(PACK) ?? false) && packs?.get(PACK)?.rules.narrative !== undefined;
+    return (packs?.toolListed(PACK) ?? false) && packs?.approvedRules(PACK)?.narrative !== undefined;
   };
   const runRead =
     <A>(name: string, fn: (o: Opened, args: A) => Promise<McpToolResult>) =>

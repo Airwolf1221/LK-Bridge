@@ -653,6 +653,22 @@ const rules: PackRules = packRulesSchema.parse({
       },
     ],
     guardWords: 120,
+    // CR-2026-11-R4 (the owner's request; ADR 0066 A): a split's new owners address Source Boundaries and Unresolved
+    // Material only where the pack expects them, as the roles' own `warnMissing` already say: a Core, a Compact
+    // Reference and a relationship owner both; an Art page and a specialist page neither (they answered "not
+    // applicable" every time); any other owner both (`owners.text.warnMissing`). A Reference Type named here wins.
+    sections: {
+      referenceTypes: {},
+      roles: {
+        core: ['sourceBoundaries', 'unresolvedMaterial'],
+        compact: ['sourceBoundaries', 'unresolvedMaterial'],
+        relationship: ['sourceBoundaries', 'unresolvedMaterial'],
+        art: [],
+        specialist: [],
+      },
+      ownerTypes: {},
+      otherwise: ['sourceBoundaries', 'unresolvedMaterial'],
+    },
   },
   // v3 F3f (ADR 0060): the retag audit and apply, a derived translation of the Controlled Native Tagging Standard's
   // classification procedure. Batches of at most 25 pages; the identity tokens on the Core and the Compact Reference;

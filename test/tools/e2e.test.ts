@@ -81,21 +81,9 @@ describe('the MCP surface with the official client', () => {
         // v3 F4a (ADR 0063): the name check and the topic brief.
         'arkona_name_check',
         'arkona_brief',
-        // v3 F4b (ADR 0064): the consistency check and "as of a date".
-        'arkona_consistency',
-        'arkona_as_of',
-        'arkona_as_of_coverage',
-        'arkona_consistency_suggest',
-        // v3 F4c (ADR 0065): the narrative writing tools.
-        'arkona_story_create',
-        'arkona_chapter_plan',
-        'arkona_chapter_save',
-        'arkona_chapter_insert',
-        'arkona_chapter_move',
-        // v3 F4c (ADR 0065): reading a chapter against canon, and promotion.
-        'arkona_chapter_context',
-        'arkona_chapter_check',
-        'arkona_promote_from_chapter',
+        // v3 F4b and F4c (ADR 0064, ADR 0065): the consistency and narrative tools are listed only while the APPROVED
+        // pack version carries their rules (CR-2026-11-R4, LD-01); this stack attaches the pack without approving it,
+        // so they are not listed here (they refused every call: PACK_NOT_CURRENT).
         'bridge_job_resume',
         'create_document',
         'create_index',
@@ -168,10 +156,8 @@ describe('the MCP surface with the official client', () => {
       // v3 F4a (ADR 0063): read-only, free.
       'arkona_name_check',
       'arkona_brief',
-      // v3 F4b (ADR 0064): read-only, free.
-      'arkona_consistency',
-      'arkona_as_of',
-      'arkona_as_of_coverage',
+      // v3 F4b's read-only tools are not listed here (the pack is not approved: CR-2026-11-R4, LD-01); their
+      // annotations are checked where they are listed (test/review/r4-lead/tool-list.test.ts, LD-01).
     ]) {
       expect(by[n]!.annotations?.readOnlyHint, n).toBe(true);
     }

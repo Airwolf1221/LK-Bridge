@@ -52,9 +52,15 @@ describe('a sliding 30-day session (ADR 0062 decision 1)', () => {
       expect(row()).toEqual({ expires_at: signedIn + 30 * DAY, last_seen_at: signedIn });
       for (let i = 1; i <= 3; i++) {
         bridge.clock.advance(29 * DAY);
+        // CR-2026-11-R4: the test clock is the wall clock plus an offset, so a second can pass during the request under
+        // the full suite's load (the baseline run failed by one second): the end is bounded by the clock read before
+        // and after the request.
+        const from = bridge.clock.now();
         const page = await browser.request(url);
+        const to = bridge.clock.now();
         expect(page.status, `after ${i * 29} days`).toBe(200);
-        expect(row().expires_at).toBe(bridge.clock.now() + 30 * DAY);
+        expect(row().expires_at).toBeGreaterThanOrEqual(from + 30 * DAY);
+        expect(row().expires_at).toBeLessThanOrEqual(to + 30 * DAY);
         // The consent page is a use too: its cookie is renewed with it.
         expect(page.headers.getSetCookie().find((c) => c.startsWith('__Host-lkb_session='))).toMatch(
           /; Max-Age=2592000/,

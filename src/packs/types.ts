@@ -315,6 +315,9 @@ export type OwnersRules = z.infer<typeof ownersRulesSchema>;
 
 // ============================================================================================ v3 F3e: splits
 
+/** CR-2026-11-R4: the split completeness sections a kind of new owner is expected to address (ADR 0059 amendment 1). */
+const splitFrameList = z.array(z.enum(['sourceBoundaries', 'unresolvedMaterial'])).max(2);
+
 /**
  * v3 F3e (ADR 0059; the owner-approved design docs/design/F3e-splits.md): the measurable Split Triggers of Character
  * Architecture, with Anti-Fragmentation as their counterweight, and what `arkona_split_owner` checks. DATA the owner
@@ -388,6 +391,23 @@ export const splitsRulesSchema = z
      * reason lets it through).
      */
     guardWords: z.number().int().min(20).max(100_000),
+    /**
+     * CR-2026-11-R4 (the owner's request; ADR 0066 A): which of the source's Source Boundaries and Unresolved Material
+     * a NEW owner of a split must address (ADR 0059 amendment 1), by the kind of page it is: its Reference Type first
+     * (ignoring case), else its role in a character's set (`core`, `compact`, `relationship`, `art`, `specialist`), else
+     * its owner type (`Polity`, `Culture`…), else `otherwise`. A section a new owner is not expected to carry is neither
+     * asked for nor refused (items of it may still move there, its text may still be given). Absent (a version before
+     * it): every new owner addresses both, as amendment 1 built.
+     */
+    sections: z
+      .object({
+        referenceTypes: z.record(text(200), splitFrameList),
+        roles: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/), splitFrameList),
+        ownerTypes: z.record(text(100), splitFrameList),
+        otherwise: splitFrameList,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type SplitsRules = z.infer<typeof splitsRulesSchema>;

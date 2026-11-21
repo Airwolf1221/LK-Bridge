@@ -14,15 +14,23 @@ export interface ToolListSource {
   listed(): readonly string[];
   /** What decides a profile's list besides the tools: each profile's scope and low-level switch. */
   profiles(): readonly { readonly id: string; readonly scope: string; readonly showLowLevelTools: boolean }[];
+  /**
+   * CR-2026-11-R4 (LD-03, LD-04): each connection's profile. A connection the owner moves to another profile has
+   * another list (a scope up or down, the low-level tools), so a move tells its sessions too. A connection made or
+   * removed tells no one (a new one asks for its list; a removed one has no session left).
+   */
+  connections?(): readonly { readonly id: string; readonly profileId: string | null }[];
 }
 
 export class ToolListWatch {
   private readonly listeners = new Set<() => void>();
   private last: string;
+  private lastConnections: Map<string, string | null>;
   private scheduled = false;
 
   constructor(private readonly source: ToolListSource) {
     this.last = this.fingerprint();
+    this.lastConnections = this.connectionMap() ?? new Map();
   }
 
   /** Told after every change that moved some list. Returns an unsubscribe function. */
@@ -44,7 +52,14 @@ export class ToolListWatch {
   /** Compares now; tells the listeners when a list moved. Returns whether it did. */
   check(): boolean {
     const now = this.fingerprint();
-    if (now === this.last) return false;
+    const connections = this.connectionMap();
+    let moved = false;
+    if (connections) {
+      for (const [id, profile] of connections)
+        if (this.lastConnections.has(id) && this.lastConnections.get(id) !== profile) moved = true;
+      this.lastConnections = connections;
+    }
+    if (now === this.last && !moved) return false;
     this.last = now;
     for (const fn of [...this.listeners]) {
       try {
@@ -54,6 +69,16 @@ export class ToolListWatch {
       }
     }
     return true;
+  }
+
+  /** Each connection's profile now (null: it could not be read, so no move is judged). */
+  private connectionMap(): Map<string, string | null> | null {
+    if (!this.source.connections) return null;
+    try {
+      return new Map(this.source.connections().map((c) => [c.id, c.profileId]));
+    } catch {
+      return null;
+    }
   }
 
   private fingerprint(): string {

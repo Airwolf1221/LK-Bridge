@@ -383,11 +383,12 @@ async function storyCreate(
 // ============================================================================================ the tools
 
 export function narrativeTools(deps: ToolDeps): McpToolProvider[] {
-  // Listed while the pack is attached and its rules carry the narrative layout (as the other pack tools); a version
-  // waiting for the owner's approval is refused at the call (PACK_NOT_CURRENT).
+  // Listed while the pack is attached and the version the owner APPROVED carries the narrative layout (ADR 0065: "until
+  // then the narrative tools are not listed"), the rules every call reads (CR-2026-11-R4, LD-01: it read the current
+  // version, so the tools were listed while a version waited for approval, and refused).
   const listed = () => {
     const packs = deps.services?.packs;
-    return (packs?.toolListed(PACK) ?? false) && packs?.get(PACK)?.rules.narrative !== undefined;
+    return (packs?.toolListed(PACK) ?? false) && packs?.approvedRules(PACK)?.narrative !== undefined;
   };
   return [storyCreateTool(deps, listed), ...chapterTools(deps, listed)];
 }

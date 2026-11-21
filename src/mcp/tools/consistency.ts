@@ -69,8 +69,11 @@ const actorOf = (mctx: McpToolContext, tool: string): string =>
 
 export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
   const packs = () => deps.services?.packs;
+  // CR-2026-11-R4 (LD-01): listed while the version the owner APPROVED has consistency rules (ADR 0064: "until then the
+  // four tools are not listed"), the rules every call reads; the current version's were read, so they were listed while
+  // a version waited for approval, and refused.
   const listed = () =>
-    (packs()?.toolListed('arkona') ?? false) && packs()?.get('arkona')?.rules.consistency !== undefined;
+    (packs()?.toolListed('arkona') ?? false) && packs()?.approvedRules('arkona')?.consistency !== undefined;
   return [
     defineTool({
       name: 'arkona_consistency',

@@ -77,19 +77,45 @@ export function aliasName(s: string): string {
 /**
  * An Aliases fact as bare names: THE alias parser (ADR 0064 amendment 2), used by the facts index, `arkona_as_of`,
  * `arkona_consistency`, `arkona_brief`, `arkona_name_check`, the character tools and the rename review. Aliases are
- * separated by semicolons or line breaks (a comma may sit inside a note's date: "(from Zahras 1st, 4A 192)"); each loses
- * its trailing bracketed notes (`aliasName`).
+ * separated by semicolons, line breaks and (CR-2026-11-R4, the owner's rule) commas outside brackets (a comma may sit
+ * inside a note's date: "(from Zahras 1st, 4A 192)", which stays whole); each loses its trailing bracketed notes
+ * (`aliasName`), and a piece that is only a date is no alias.
  */
 export function splitAliases(v: string | null | undefined): string[] {
   return [
     ...new Set(
-      (v ?? '')
-        .split(/[;\n]/)
+      aliasPieces(v ?? '')
         .map(aliasName)
-        .filter((s) => s !== '' && s !== '…' && s !== '...'),
+        .filter((s) => s !== '' && s !== '…' && s !== '...' && !onlyADate(s)),
     ),
   ];
 }
+
+/**
+ * CR-2026-11-R4 (the owner's rule): an Aliases value's pieces: split at semicolons and line breaks (as F4.1 did) and at
+ * commas outside brackets, so "Rita von Katzen, Yamato" is two aliases while "(from Zahras 1st, 4A 192)" and "Leopold
+ * (the Elder, of Hohenfalk)" stay whole. An unclosed bracket keeps every comma after it (nothing is split on a guess).
+ */
+function aliasPieces(v: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of v) {
+    if (ch === '(' || ch === '[') depth++;
+    else if ((ch === ')' || ch === ']') && depth > 0) depth--;
+    if (ch === ';' || ch === '\n' || (ch === ',' && depth === 0)) {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** A piece that holds a digit and no run of two letters ("4A 192", "4A 99-192"): an unbracketed note's date, no name. */
+const onlyADate = (s: string): boolean => /\d/u.test(s) && !/\p{L}{2}/u.test(s);
 
 /** The names a character goes by, as matching reads them. */
 export interface NameSet {
