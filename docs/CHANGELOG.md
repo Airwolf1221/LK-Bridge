@@ -143,6 +143,8 @@ The owner's rule: moving any page into or out of Narratives is a proposal, and n
   the request).
 - **A resumed timeline change keeps its rows' marks** (LD-08): a stopped `update_timeline_event`, resumed, rewrote its
   rows from the block the first run planned; it now writes each row as read now with only the changed cells replaced.
+- **ESLint and Prettier ignore `.claude/`**: a coding agent's worktrees inside the checkout made a whole-repository lint
+  run out of memory.
 
 ## Unreleased: v3 F4.1, from the owner's check of the live tools (ADR 0064 amendment 2, ADR 0065 amendment 1, 20 November 2026)
 
