@@ -494,6 +494,14 @@ Narratives pages are ordered Story Map first, then by number (Act 10 after Act 9
 `Narrative`, their kind, and `AU` in an AU's story. They are **never canon evidence**: the briefs and the consistency
 check never read them.
 
+**Moving a page into or out of Narratives is always a proposal**, at every scope and on every route (`move_resource`,
+the low-level tools, a create, copy or restore there by any tool but the narrative ones): canonical when a page of it
+carries a lifecycle prefix, a status tag or a lifecycle Status, which it would lose or regain. Never move canon into a
+story, or a chapter out into the repository; tell the owner instead. No page may take a narrative index's name
+(Narratives, Continuities, Main CANON). A page in Narratives that still carries a lifecycle prefix is canon filed in the
+wrong place: it stays canon evidence, the audit reports it (`narrative_lifecycle_page`), and the writing tools leave its
+story alone (`NARRATIVE_LIFECYCLE_PAGE`, naming the page) until the owner moves it out.
+
 Routine organisation follows your scope (direct at `write`, on the Review page and Revertible; a proposal at `propose`):
 
 - **`arkona_story_create { continuity, title, acts?, span?, principalCharacters? }`**: the story index, its Story Map and
@@ -509,12 +517,14 @@ markdown, baseVersion? }`**: saves the prose (the Fiction Writing Reference, 32B
   `inWorldDate` must be a date the calendar reads, exact or approximate (`c. 4A 640-645`). A new number makes the chapter
   and links it with its plan both ways; an existing one is revised **in place**: read it with `read_document` and pass
   its version as `baseVersion`. An Open Question Gate is refused unless `overrideGate: { reason }` (shown on the Review
-  page). The answer's `readBack` says whether the chapter read back word for word.
+  page). The answer's `readBack` says whether the chapter read back word for word, compared with what the job sent
+  (`compared`).
 - **`arkona_chapter_insert { story, at, title }`** and **`arkona_chapter_move { story, from, to, act? }`**: renumber every
   later chapter and plan (names and Chapter Number; mentions follow; prose never changes). More than 10 pages is a
   proposal the owner approves item by item.
 
 **The working sequence** (the Workflow's): `arkona_chapter_context` (the canon this chapter needs, as of its date; free)
+(both reading tools need a full snapshot of the project: before the first, `NO_SNAPSHOT`)
 → the **Question Gate** (ask the plan's questions; record the answers; close the gate) → **draft** → `arkona_chapter_save`
 → `arkona_chapter_check` (what the chapter says against canon at its date: `Contradicts canon`, `Not in canon
 (candidate)`, `Unestablished in canon`) → `arkona_promote_from_chapter` for the lore the owner should see. A story's

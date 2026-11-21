@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint';
 const upstreamHost = '/legendkeeper\\.com/i';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', 'ui/dist/**', '**/*.generated.ts', 'coverage/**'] },
+  { ignores: ['dist/**', 'node_modules/**', 'ui/dist/**', '**/*.generated.ts', 'coverage/**', '.claude/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
