@@ -40,6 +40,7 @@ import {
   openEnv,
   pageRuns,
   readDate,
+  ensureCalendar,
   templateFacts,
   text,
   yieldToLoop,
@@ -222,6 +223,7 @@ async function storyCreate(
     );
   let span: string | null = null;
   if (args.span !== undefined) {
+    await ensureCalendar(env);
     const d = readDate(env, args.span, 'Story Span');
     if (!d.ok) return d.result;
     span = d.value;
@@ -486,6 +488,7 @@ async function chapterPlan(
   if (!chapter.ok) return chapter.result;
   let planned: string | null = null;
   if (args.plannedDate !== undefined) {
+    await ensureCalendar(env);
     const d = readDate(env, args.plannedDate, 'Planned Date');
     if (!d.ok) return d.result;
     planned = d.value;
@@ -722,6 +725,7 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
   if (!existing.ok) return existing.result;
   const plan = oneNumbered(env, layout.plans, n, 'Chapter Plan');
   if (!plan.ok) return plan.result;
+  await ensureCalendar(env);
   const date = readDate(env, args.inWorldDate, 'In-world Date');
   if (!date.ok) return date.result;
   const place = args.place?.replace(/\s+/g, ' ').trim() || null;

@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased: v3 F4.1, from the owner's check of the live tools (ADR 0064 amendment 2, ADR 0065 amendment 1, 20 November 2026)
+
+No migration, no new ADR. **After deploying, approve `arkona-2026-11-20-f41` on the Packs page** (it supersedes
+`arkona-2026-11-20-f4c`), then re-run `arkona_as_of_coverage` and the `narrative-f4c` sandbox check.
+
+- **Coverage agrees with `arkona_as_of`**: one resolver for a birth or death (the identity page, its own prose, the
+  chronology rows and other Authoritative pages, by name and alias), never the identity page's sidebar alone;
+  `detail: "full"` lists each character's bucket (`byCharacter`). A property test pins both directions.
+- **Alive phrasings** (pack data): a Life State whose principal part starts with "Alive" or "Living" records the
+  character alive, a date there ("Alive in 5A 931") attesting the life up to it; "living at <date>" and "present <date>"
+  in a Temporal Scope attest the life through the date. The death guard is kept.
+- **One alias parser**: Aliases split at semicolons, each alias's trailing bracketed note dropped ("Rita von Katzen
+  (4A 99-192)" → "Rita von Katzen"), for the facts index, `arkona_as_of`, `arkona_consistency`, `arkona_brief`,
+  `arkona_name_check`, the character tools, the change impact and the rename review (which had its own). Commas no
+  longer separate aliases.
+- **Race references** in the singular or the plural, through the race token map, among the Race Core References under
+  Races of Arkona ("High Elf" → "High Elves - Core Information").
+- **The calendar on demand**: `Chronology.loadCalendar`, the loader `calendar_date` uses, is called by every tool that
+  reads dates (`arkona_chapter_save`, `arkona_chapter_plan`, `arkona_story_create`, `arkona_chapter_context`,
+  `arkona_chapter_check`, `arkona_as_of`, `arkona_as_of_coverage`, `arkona_consistency` and the extractor): one read when
+  the calendar is not kept. A calendar that truly cannot be read is refused as before (`CALENDAR_UNAVAILABLE`), with the
+  reason in `loading`.
+- **The sandbox harness**: `copyBridgeState` now copies the calendars the bridge keeps (their absence made the owner's
+  `narrative-f4c` run fail at N3), and `narrative-f4c` reads the calendar first (step C1).
+
 ## Unreleased: v3 F4c, fiction (ADR 0065, 20 November 2026)
 
 From the owner-approved design [design/F4c-fiction.md](design/F4c-fiction.md) (E1 to E10). No migration. **After

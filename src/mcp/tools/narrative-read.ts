@@ -27,6 +27,7 @@ import { liveReader } from './appraisal.js';
 import { CREATE_ANNOTATIONS } from './resources.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
 import {
+  ensureCalendar,
   existingFacts,
   findStory,
   no,
@@ -232,6 +233,7 @@ async function chapterContext(
   const { env } = o;
   const w = locate(env, a);
   if (!w.ok) return w.result;
+  await ensureCalendar(env);
   const { layout, n } = w.value;
   const f = env.rules.fields;
   const live = a.live === true;
@@ -356,6 +358,7 @@ async function chapterCheck(
     ).result;
   const f = env.rules.fields;
   const live = a.live !== false;
+  await ensureCalendar(env);
   const ch = await loadPage(o, w.value.chapter.id, live);
   if (!ch) return no(env.pd, 'CHAPTER_UNREADABLE', `“${w.value.chapter.name}” could not be read.`).result;
   const blocks = (ch.body?.blocks ?? []) as Obj[];

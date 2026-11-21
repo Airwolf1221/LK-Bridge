@@ -248,3 +248,52 @@ tools in the governance audit's equivalence map.
 the raw client), a throwaway story with one act, two plans and two chapters (each read back word for word), a chapter
 inserted at 2 and the renumbering read back live, the check and the audit, and clean-up of everything it made. It needs
 `arkona-2026-11-20-f4c` approved.
+
+## Amendment 1: the calendar on demand, and F4.1's consistency changes (v3 F4.1)
+
+- Status: **Proposed** (20 November 2026, session F4.1). **No new ADR number** (the owner's instruction); the
+  consistency half is [ADR 0064](0064-v3-f4b-consistency-and-as-of.md) amendment 2.
+- **Write scope: no issue found.** The narrative writing tools are unchanged in what they write and how (direct at scope
+  `write`, proposals at `propose`, the rails, the lifecycle and canon guards); the one addition is a governed READ (the
+  calendar) before a date is read, in the tool's own name and at interactive priority. The reading tools still write
+  nothing to LegendKeeper (keeping the calendar is the bridge's own database, as `calendar_date` always did).
+- Nothing in this session touched a live system. Mocks and fixtures only.
+- Pack version **`arkona-2026-11-20-f41`** supersedes `arkona-2026-11-20-f4c` (approving it covers both). Its narrative
+  rules are `-f4c`'s, unchanged.
+
+### What the owner's run found
+
+The `narrative-f4c` sandbox check failed at N3: `arkona_chapter_save` refused with `CALENDAR_UNAVAILABLE`, although the
+live bridge had the test world's calendar ("Kumikan Epochal", rp86pkdr) cached (`calendar_date` answered
+`source: cached`).
+
+1. **Why the sandbox runtime did not see the cache.** The check runs on a temporary database that `copyBridgeState`
+   fills, read-only, from the bridge's: the project's settings (so the chronology's confirmed `calendarId`), its tree and
+   its packs, but **not the calendars the bridge keeps** (`chronology_calendars`). So the sandbox runtime knew which
+   calendar to use and had none: `Chronology.calendar` was null, and every narrative tool's date refused.
+   `consistency-f4b` passed only because its F1 read the calendar first. **Fixed in the harness**: `copyBridgeState`
+   copies the project's kept calendars too (`CopyReport.calendars`; pinned in `test/review/rehearsal-dryrun.test.ts`:
+   the copied runtime has the calendar), and `narrative-f4c` reads the calendar first, as `consistency-f4b`'s F1 does: a
+   new step **C1** through `Chronology.loadCalendar` (kept, else one read), before N1.
+2. **The tools no longer depend on it.** Every tool that reads dates loads the chronology's calendar itself when it is
+   not kept, through the loader `calendar_date` uses (`Chronology.loadCalendar`, ADR 0064 amendment 2, 5): one
+   `listCalendars` read. The narrative tools call `ensureCalendar` (`src/mcp/tools/narrative-support.ts`) before reading a
+   date: `arkona_chapter_save`, `arkona_chapter_plan` with a Planned Date, `arkona_story_create` with a span,
+   `arkona_chapter_context` and `arkona_chapter_check` (whose `arkona_as_of` then finds it kept); `arkona_as_of` and the
+   extractor load it in `Consistency.world`. It never refuses by itself: a calendar that truly cannot be read (none
+   confirmed, none of that id, the read delayed) is still refused with the existing message, `CALENDAR_UNAVAILABLE`, now
+   with the reason in `loading`.
+3. **Tests** (`test/narrative/calendar.test.ts`): a cold cache, where the first save loads the calendar (one
+   `listCalendars`) and succeeds, and the next makes no such read; a calendar that truly cannot be read, refused with the
+   existing message; `arkona_chapter_check`, `arkona_as_of`, `arkona_as_of_coverage` and `calendar_date` loading it the
+   same way.
+
+### Consistency changes the narrative tools see
+
+`arkona_chapter_context` and `arkona_chapter_check` read characters through `arkona_as_of`, so they get ADR 0064
+amendment 2's alive phrasings, aliases without their notes, and race references in the singular or the plural.
+
+### For the owner
+
+After deploying: approve `arkona-2026-11-20-f41`, then re-run `narrative-f4c` (its C1 reports where the calendar came
+from: kept, copied from the bridge's database, or read now).

@@ -87,6 +87,18 @@ describe('the write-scope rehearsal (dry run against the mock)', () => {
     expect(copied.settings).toEqual(expect.arrayContaining(['aiRepositoryRootId', 'chronology']));
     expect(copied.treeNodes).toBeGreaterThan(10);
     expect(copied.packs).toEqual(['arkona']);
+    // ADR 0064 amendment 2: the calendars the bridge keeps are copied too, so the copied chronology settings find their
+    // calendar (the owner's narrative-f4c run failed at N3 without them).
+    const kept = (
+      w.stack.db
+        .prepare('SELECT COUNT(*) AS n FROM chronology_calendars WHERE project_id = ?')
+        .get(PROJECT) as {
+        n: number;
+      }
+    ).n;
+    expect(kept).toBeGreaterThan(0);
+    expect(copied.calendars).toBe(kept);
+    expect(rt.runtime.chronology.calendar(rt.projectId)).not.toBeNull();
     const countBefore = w.count('Fourth Arkonan Age');
     const lines: string[] = [];
     const report: RehearsalReport = await runWriteScopeRehearsal(

@@ -2011,6 +2011,13 @@ recorded with it; an unmapped value is reported as such. Every answer points to 
 Standard's tab and states the rule: **never an inference** of a culture, race or nationality from a name, and never a
 proposed rename. Cost: none.
 
+**Aliases** (since F4.1, ADR 0064 amendment 2; one parser, `splitAliases`, for the name check, the facts index,
+`arkona_as_of`, `arkona_consistency`, `arkona_brief`, the character tools and the rename review): an Aliases fact is
+split at semicolons and line breaks (never at commas, which a note's date may hold), and each alias loses its trailing
+bracketed notes: a date or range, "birth", "birth name", "from …", "earlier birth/family name" and the like ("Rita von
+Katzen (4A 99-192); Yamato (from 4A 192)" → "Rita von Katzen", "Yamato"). A bracket that is no note ("Leopold (the
+Elder)") stays part of the name.
+
 **In `arkona_create_character` and `arkona_rename`.** A new character's name, and a character's new name (the subject
 left out), are checked the same way, free. An exact full-name match is a `NAMESAKE` warning in the preview and the
 answer and in the proposal the owner sees (its summary: "namesake: … already goes by this name"; a rename's operation
@@ -2080,14 +2087,24 @@ death; current Life State Alive)**, and between a death and a return **Deceased 
 recorded death, **Deceased (recorded by <date>)** at or after a Life State's "Deceased by <date>" (with `deceasedBy`; an
 upper bound, never compared), **Unestablished** otherwise (an attested life never proves survival past it); in an AU
 with no identity page of its own, a state decided by Main CANON's values carries `label: "inherited from Main CANON"`; `around` (the chronology rows naming it, `window` each side, default 3); and `contradictions` on its birth or
-death. Cost: none; `live: true` 1 read a character.
+death. Since F4.1 (ADR 0064 amendment 2): a Life State whose principal part STARTS with "Alive" or "Living"
+(`aliveValues`) records the character alive, and a date there ("Alive in 5A 931", "Living and immortal at 5A 931",
+read by `aliveAt`) attests the life up to that date rather than the present; the Temporal Scope phrasings "living at
+<date>" and "present <date>" attest the life through the date; the race reference is the Race / Species value's
+principal part, through the pack's race token map, matched in the singular or the plural to a Race Core Reference under
+Races of Arkona ("High Elf" → "High Elves - Core Information"). Cost: none (1 read when the chronology's calendar is not
+kept yet, through the loader `calendar_date` uses); `live: true` 1 read a character.
 
 ### `arkona_as_of_coverage`
 
-The current Main CANON characters, each in ONE bucket so the buckets add up to the total (`counts`: a readable birth, a
-birth deliberately unestablished, attested bounds only, nothing readable; `sums` says so), with a recorded death and an
-unreadable birth counted as separate flags (`flags`); those with nothing readable are listed. A report, never a task
-list. Cost: none.
+`{ detail? }`. The current Main CANON characters, each in ONE bucket so the buckets add up to the total (`counts`: a
+readable birth, a birth deliberately unestablished, attested bounds only, nothing readable; `sums` says so), with a
+recorded death and an unreadable birth counted as separate flags (`flags`); those with nothing readable are listed.
+**Since F4.1, read with the same resolver as `arkona_as_of`** (the identity page's Temporal Scope, Life State and its own
+prose, then the chronology rows and the other Authoritative pages restating the birth or death by name or alias), so a
+character is a readable birth exactly when `arkona_as_of` finds a birth; `detail: "full"` adds `byCharacter` (each
+character's bucket, and the birth's value, page and source). A report, never a task list. Cost: none (1 read when the
+chronology's calendar is not kept yet).
 
 ### `arkona_consistency_suggest`
 
@@ -2147,6 +2164,12 @@ page) lacks is refused as `TEMPLATE_MISMATCH` naming it, any other is skipped an
 Renumbering is ONE job of items (one per page, F3d): each item's check (the page as planned), its rename, its move and
 its Chapter Number; a proposal can be approved item by item. Mentions point at pages, so they follow; prose never
 changes. Planning gives the event loop a turn every few pages (R3-64).
+
+**The calendar on demand** (since F4.1, ADR 0065 amendment 1): every narrative tool that reads a date
+(`arkona_chapter_save`, `arkona_chapter_plan` with a Planned Date, `arkona_story_create` with a span,
+`arkona_chapter_context`, `arkona_chapter_check`) loads the chronology's calendar itself when the bridge has not kept it
+yet: one `listCalendars` read, through the loader `calendar_date` uses. Only a calendar that truly cannot be read is
+still refused, `CALENDAR_UNAVAILABLE` with its message as before and the reason in `loading`.
 
 **Costs** (against the mock): a story with two acts: 2 template reads, about 20 writes; a plan: 1 template read, about 8
 writes; a new chapter: 1 to 2 reads (the plan's gate, its sidebar), about 14 writes and 2 reads for the read-back; a

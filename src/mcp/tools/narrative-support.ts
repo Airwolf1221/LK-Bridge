@@ -261,6 +261,39 @@ export function actFor(
 
 // ============================================================================================ dates
 
+/** Why loading the calendar failed, per tool call (shown with CALENDAR_UNAVAILABLE). */
+const calendarProblems = new WeakMap<Env, string>();
+
+/**
+ * ADR 0064 amendment 2: the chronology's calendar, loaded when the bridge has not kept it yet: one read, through the
+ * loader `calendar_date` uses (`Chronology.loadCalendar`). Every narrative tool that reads a date calls it first; it
+ * never refuses by itself: a calendar that truly cannot be read leaves `readDate`'s refusal (CALENDAR_UNAVAILABLE) as it
+ * was, with the reason added.
+ */
+export async function ensureCalendar(env: Env): Promise<void> {
+  const chron = env.pd.services?.chronology;
+  if (!chron) return;
+  try {
+    if (narrativeCalendar(chron, env.ctx.projectId).calendar) return;
+    if (!chron.config(env.ctx.projectId).calendarId) {
+      calendarProblems.set(env, 'the chronology’s calendar is not confirmed');
+      return;
+    }
+    const delayed: { message: string | null } = { message: null };
+    const r = await chron.loadCalendar(env.ctx.projectId, {
+      read: async (op, params) => {
+        const x = await liveRead(env.pd, env.mctx, env.tool, op, params);
+        if (x.ok) return x.value;
+        delayed.message = 'LegendKeeper’s rate budget is busy, so the calendar could not be read now';
+        throw new Error(delayed.message);
+      },
+    });
+    if (!r.ok) calendarProblems.set(env, r.message);
+  } catch (e) {
+    calendarProblems.set(env, e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** A date the calendar engine reads WHOLE (exact or an approximate range), or the refusal with the accepted forms. */
 export function readDate(env: Env, text: string, field: string): R<string> {
   const chron = env.pd.services?.chronology;
@@ -273,6 +306,7 @@ export function readDate(env: Env, text: string, field: string): R<string> {
       env.pd,
       'CALENDAR_UNAVAILABLE',
       'The chronology’s calendar is not available to the bridge yet (the chronology tools read and keep it), so no date can be read; nothing was written.',
+      calendarProblems.has(env) ? { loading: calendarProblems.get(env) } : {},
     );
   const r = style ? readLeading(calendar, t, style) : readLeading(calendar, t);
   if (r.ok && r.reading.text.replace(/\s+/g, ' ').trim().length >= t.replace(/[.;,]\s*$/, '').length)

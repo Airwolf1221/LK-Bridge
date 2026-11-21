@@ -15,6 +15,7 @@
  * page, never canon-gated; only deleting a whole timeline document of an Authoritative page is canonical.
  */
 import { keptEventFields } from '../../chronology/event-body.js';
+import type { CalendarLoad } from '../../chronology/index.js';
 import { createHash } from 'node:crypto';
 import * as z from 'zod';
 import {
@@ -679,39 +680,27 @@ function calendarDateTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         const config = ch.config(pd.project.id);
-        let cal: Calendar | null = null;
-        let source = 'cached';
-        if (args.calendar === undefined && config.calendarId)
-          cal = ch.calendar(pd.project.id, config.calendarId);
-        if (!cal) {
-          const r = await liveRead(pd, mctx, 'calendar_date', 'listCalendars', {});
-          if (!r.ok) return r.result;
-          const data = (r.value as { data?: unknown }).data;
-          const list = Array.isArray(data) ? (data as Obj[]) : [];
-          const want = args.calendar ?? config.calendarId;
-          const hits = want
-            ? list.filter(
-                (c) => c.id === want || (typeof c.name === 'string' && nameKey(c.name) === nameKey(want)),
-              )
-            : list;
-          if (hits.length !== 1)
-            return errorResult(
-              {
-                code: hits.length === 0 ? 'CALENDAR_NOT_FOUND' : 'CALENDAR_AMBIGUOUS',
-                message: want
-                  ? `${hits.length === 0 ? 'No' : 'More than one'} calendar is named or numbered “${want}”.`
-                  : 'The chronology is not confirmed and the project has several calendars: pass `calendar`.',
-                calendars: list.map((c) => ({ id: c.id, name: c.name })),
-              },
-              pd,
-            );
-          try {
-            cal = ch.remember(pd.project.id, hits[0]!);
-          } catch (e) {
-            return calendarError(pd, e);
-          }
-          source = 'read now';
+        // ADR 0064 amendment 2: the one calendar loader (the tools that read dates use it too).
+        const delayed: { result: McpToolResult | null } = { result: null };
+        let loaded: CalendarLoad;
+        try {
+          loaded = await ch.loadCalendar(pd.project.id, {
+            ...(args.calendar !== undefined ? { calendar: args.calendar } : {}),
+            read: async (op, params) => {
+              const r = await liveRead(pd, mctx, 'calendar_date', op, params);
+              if (r.ok) return r.value;
+              delayed.result = r.result;
+              throw new Error('read delayed');
+            },
+          });
+        } catch (e) {
+          if (delayed.result) return delayed.result;
+          return calendarError(pd, e);
         }
+        if (!loaded.ok)
+          return errorResult({ code: loaded.code, message: loaded.message, calendars: loaded.calendars }, pd);
+        const cal: Calendar = loaded.calendar;
+        const source = loaded.source;
         const ageOf = (eraId: string) => {
           const a = config.confirmed ? config.ages.find((x) => x.eraId === eraId) : undefined;
           return a ? { age: a.name } : {};

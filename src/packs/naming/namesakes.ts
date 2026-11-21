@@ -46,12 +46,49 @@ export function subjectPart(name: string): string {
   return cleanPrefixes(name).name.split(' - ')[0]!.trim();
 }
 
-/** An Aliases fact as names (separated by commas, semicolons or line breaks). */
+/**
+ * What opens a bracketed NOTE on an alias rather than a part of its name (ADR 0064 amendment 2): a time ("from 4A 192",
+ * "until …", "c. …"), or what kind of name it is ("birth", "birth name", "earlier birth/family name", "maiden name",
+ * "regnal name", "childhood name", "nickname").
+ */
+const NOTE_START =
+  /^(?:from|until|till|to|since|after|before|during|c\.|ca\.|circa|approx\.?|approximately|born|birth|earlier|later|former|formerly|original|originally|maiden|childhood|regnal|nickname|informal|formal|family|given|personal|courtesy|used|as|in|by|nee|née)\b/iu;
+
+/** Whether a bracket's inside is a note: it holds a digit (a date or range), opens as a note does, or ends "name(s)". */
+function isAliasNote(inner: string): boolean {
+  const t = inner.trim();
+  return t === '' || /\d/u.test(t) || NOTE_START.test(t) || /\bnames?$/iu.test(t);
+}
+
+/**
+ * One alias as a bare name (ADR 0064 amendment 2): every trailing bracketed note dropped ("Rita von Katzen (4A 99-192)"
+ * → "Rita von Katzen"; "Mizuno Rei (birth name)" → "Mizuno Rei"). A bracket that is not a note ("Leopold (the Elder)")
+ * stays part of the name.
+ */
+export function aliasName(s: string): string {
+  let t = s.replace(/\s+/g, ' ').trim();
+  for (;;) {
+    const m = /\s*[([]([^()[\]]*)[)\]]\s*$/u.exec(t);
+    if (!m || !isAliasNote(m[1]!) || m.index === 0) return t;
+    t = t.slice(0, m.index).trim();
+  }
+}
+
+/**
+ * An Aliases fact as bare names: THE alias parser (ADR 0064 amendment 2), used by the facts index, `arkona_as_of`,
+ * `arkona_consistency`, `arkona_brief`, `arkona_name_check`, the character tools and the rename review. Aliases are
+ * separated by semicolons or line breaks (a comma may sit inside a note's date: "(from Zahras 1st, 4A 192)"); each loses
+ * its trailing bracketed notes (`aliasName`).
+ */
 export function splitAliases(v: string | null | undefined): string[] {
-  return (v ?? '')
-    .split(/[,;\n]/)
-    .map((s) => s.trim())
-    .filter((s) => s !== '');
+  return [
+    ...new Set(
+      (v ?? '')
+        .split(/[;\n]/)
+        .map(aliasName)
+        .filter((s) => s !== '' && s !== '…' && s !== '...'),
+    ),
+  ];
 }
 
 /** The names a character goes by, as matching reads them. */
@@ -361,7 +398,12 @@ export function currentCharacters(o: {
         full: [...new Set([subject, ...(cdn ? [cdn] : [])])],
         given: row(keys.given),
         surname: row(keys.surname),
-        aliases: [...new Set([...n.aliases, ...splitAliases(row(keys.aliases))])],
+        aliases: [
+          ...new Set([
+            ...n.aliases.map(aliasName).filter((a) => a !== ''),
+            ...splitAliases(row(keys.aliases)),
+          ]),
+        ],
       },
       namingCulture: row(keys.culture),
       lifeState: row(keys.lifeState),

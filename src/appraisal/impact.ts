@@ -15,6 +15,7 @@
  */
 import type { Db } from '../db/open.js';
 import { textKey } from '../packs/engine/text.js';
+import { aliasName } from '../packs/naming/namesakes.js';
 import { cleanPrefixes } from '../registry/names.js';
 import { classifyName } from '../tree/classify.js';
 import type { FullText, Term } from './fts.js';
@@ -82,7 +83,7 @@ export async function namesOf(
   const aliases = new Set<string>();
   const res = loaded?.resource as Obj | null | undefined;
   for (const a of o.aliases ?? (Array.isArray(res?.aliases) ? (res.aliases as unknown[]) : []))
-    if (typeof a === 'string' && a.trim() !== '') aliases.add(a.trim());
+    if (typeof a === 'string' && aliasName(a) !== '') aliases.add(aliasName(a));
   const cdn = loaded?.sidebar?.facts.get('canonical display name')?.text;
   if (cdn && cdn.trim() !== '' && textKey(cdn) !== textKey(subject)) aliases.add(cdn.trim());
   return { display, subject, aliases: [...aliases].filter((a) => textKey(a) !== textKey(subject)) };

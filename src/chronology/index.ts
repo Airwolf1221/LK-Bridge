@@ -149,6 +149,23 @@ export interface LookupView extends FindView {
   readonly proposed: StoredChronology | null;
 }
 
+/** How `loadCalendar` reads (see there). */
+export interface CalendarLoadOptions {
+  readonly calendar?: string;
+  readonly read?: (op: string, params: Obj) => Promise<unknown>;
+  readonly priority?: PriorityClass;
+}
+
+/** What `loadCalendar` found: the calendar and where it came from, or why none (with the project's calendars). */
+export type CalendarLoad =
+  | { readonly ok: true; readonly calendar: Calendar; readonly source: 'cached' | 'read now' }
+  | {
+      readonly ok: false;
+      readonly code: 'CALENDAR_NOT_FOUND' | 'CALENDAR_AMBIGUOUS';
+      readonly message: string;
+      readonly calendars: readonly { readonly id: unknown; readonly name: unknown }[];
+    };
+
 /** The chronology as confirmed, checked against the tree now, or the refusal the tools give. */
 export type Readiness =
   | { readonly ok: true; readonly config: ChronologyConfig; readonly resource: TreeNode }
@@ -167,6 +184,14 @@ export interface Chronology {
   calendar(projectId: string, calendarId?: string): Calendar | null;
   /** Stores a calendar definition just read (from `listCalendars`) and gives its engine. */
   remember(projectId: string, definition: Obj): Calendar;
+  /**
+   * ADR 0064 amendment 2 (v3 F4.1): THE calendar loader (`calendar_date` and every tool that reads dates use it). The
+   * chronology's calendar as the bridge keeps it (no request), else read now (one `listCalendars`) and kept. `calendar`:
+   * another calendar by name or id (always read). With no calendar confirmed, the project's only calendar. `read`: the
+   * caller's governed read (a tool's, at P1); without one, the chronology's own at `priority` (default P1). Throws
+   * what the read throws, and a definition the engine refuses.
+   */
+  loadCalendar(projectId: string, o?: CalendarLoadOptions): Promise<CalendarLoad>;
   /** The era of an age of the configured calendar. */
   eraOf(calendar: Calendar, age: AgeConfig): Era | null;
   /** The owner's "mark resolved" of a stopped change. Audited. */
@@ -405,6 +430,30 @@ export function createChronology(d: ChronologyDeps): Chronology {
     } catch {
       return null;
     }
+  };
+
+  const loadCalendar = async (projectId: string, o: CalendarLoadOptions = {}): Promise<CalendarLoad> => {
+    const want = o.calendar ?? config(projectId).calendarId ?? null;
+    if (o.calendar === undefined && want) {
+      const cached = calendar(projectId, want);
+      if (cached) return { ok: true, calendar: cached, source: 'cached' };
+    }
+    const read = o.read ?? reader(projectId, o.priority ?? 'P1', { n: 0 });
+    const list = (await read('listCalendars', {})) as { data?: unknown } | undefined;
+    const all = Array.isArray(list?.data) ? (list.data as Obj[]) : [];
+    const hits = want
+      ? all.filter((c) => c.id === want || (typeof c.name === 'string' && nameKey(c.name) === nameKey(want)))
+      : all;
+    if (hits.length !== 1)
+      return {
+        ok: false,
+        code: hits.length === 0 ? 'CALENDAR_NOT_FOUND' : 'CALENDAR_AMBIGUOUS',
+        message: want
+          ? `${hits.length === 0 ? 'No' : 'More than one'} calendar is named or numbered “${want}”.`
+          : 'The chronology is not confirmed and the project has several calendars: pass `calendar`.',
+        calendars: all.map((c) => ({ id: c.id, name: c.name })),
+      };
+    return { ok: true, calendar: remember(projectId, hits[0]!), source: 'read now' };
   };
 
   const eraOf = (cal: Calendar, age: AgeConfig): Era | null =>
@@ -1024,6 +1073,7 @@ export function createChronology(d: ChronologyDeps): Chronology {
     readiness,
     calendar,
     remember,
+    loadCalendar,
     eraOf,
     resolve,
     check,
