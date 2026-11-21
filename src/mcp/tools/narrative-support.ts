@@ -29,6 +29,7 @@ import {
   type StoryLayout,
 } from '../../narrative/layout.js';
 import { treeView } from '../../narrative/scope.js';
+import { lifecycleSignals } from '../../narrative/signals.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import {
@@ -203,7 +204,49 @@ export function findStory(
     );
   const node = env.view.treeNode(hits[0]!.id);
   if (!node) return no(env.pd, 'NOT_FOUND', `${hits[0]!.id} is not in the repository tree.`);
-  return { ok: true, value: { node, layout: storyLayout(env.view, env.rules, env.roots, node) } };
+  return {
+    ok: true,
+    value: { node, layout: storyLayout(env.view, env.rules, env.roots, node, insideSignals(env)) },
+  };
+}
+
+/**
+ * CR-2026-11-R4 (F8): a page's lifecycle signals as the narrative tools read them inside a story (a prefix, a status
+ * tag, a Status of Authoritative or Archived: src/narrative/signals.ts, the `inside` reading).
+ */
+export function insideSignals(env: Env): (n: NNode) => readonly string[] {
+  const status = env.cc.lifecycle.fields.status;
+  return (n) =>
+    lifecycleSignals(
+      env.cc.lifecycle,
+      {
+        name: n.rawName,
+        tags: n.tags,
+        status: [env.view.fact(n.id, status)].filter((x): x is string => x !== null),
+      },
+      'inside',
+    );
+}
+
+/**
+ * CR-2026-11-R4 (F8): the writing tools change nothing in a story that holds a page carrying a lifecycle signal (canon,
+ * Working or Archived pages sitting in it): such a page is never one of the story's maps, plans or chapters, and its
+ * numbers would collide with theirs. The narrative audit reports it (`narrative_lifecycle_page`).
+ */
+export function lifecycleInStory(env: Env, layout: StoryLayout): R<null> {
+  const l = layout.lifecycle;
+  if (l.length === 0) return { ok: true, value: null };
+  return no(
+    env.pd,
+    'NARRATIVE_LIFECYCLE_PAGE',
+    `“${layout.story.displayName}” holds ${l.length === 1 ? 'a page that carries' : `${l.length} pages that carry`} a lifecycle signal (${l
+      .slice(0, 3)
+      .map((x) => `${x.node.rawName}: ${x.signals.join(', ')}`)
+      .join(
+        '; ',
+      )}${l.length > 3 ? `; and ${l.length - 3} more` : ''}): canon, Working or Archived pages sitting in a story. The narrative tools never treat them as the story’s maps, plans or chapters, and change nothing in this story while they are there. The narrative audit reports them (narrative_lifecycle_page); tell the owner, who moves them out (a proposal) or makes them narrative pages by hand. Nothing was written.`,
+    { pages: l.slice(0, 20).map((x) => ({ id: x.node.id, name: x.node.rawName, signals: x.signals })) },
+  );
 }
 
 /**

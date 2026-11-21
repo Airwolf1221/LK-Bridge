@@ -28,7 +28,7 @@ import {
   type ToolDeps,
 } from './shape.js';
 
-const GROUPS = ['contradictory', 'differs', 'gaps', 'historical', 'unreadable'] as const;
+const GROUPS = ['contradictory', 'differs', 'gaps', 'historical', 'unreadable', 'spelling'] as const;
 const include = z
   .array(z.enum(['archived', 'legacy', 'design', 'pre-rewrite']))
   .max(4)
@@ -69,8 +69,11 @@ const actorOf = (mctx: McpToolContext, tool: string): string =>
 
 export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
   const packs = () => deps.services?.packs;
+  // CR-2026-11-R4 (LD-01): listed while the version the owner APPROVED has consistency rules (ADR 0064: "until then the
+  // four tools are not listed"), the rules every call reads; the current version's were read, so they were listed while
+  // a version waited for approval, and refused.
   const listed = () =>
-    (packs()?.toolListed('arkona') ?? false) && packs()?.get('arkona')?.rules.consistency !== undefined;
+    (packs()?.toolListed('arkona') ?? false) && packs()?.approvedRules('arkona')?.consistency !== undefined;
   return [
     defineTool({
       name: 'arkona_consistency',
@@ -176,7 +179,7 @@ export function consistencyTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Characters as of a date (Arkona pack, read-only)',
       access: 'read',
       description:
-        'The Arkona pack, read-only and free: run it BEFORE writing about a character at a date (a chapter, a scene, a history). For each character (at most 25) at `date` (a date of the calendar, or "now": the pack’s present): when it was born and where that is recorded (or “birth unestablished”); the elapsed CALENDAR years (a number when both dates are exact days, a range when either is approximate, “not yet born” before the birth, none when the birth is unknown); the state recorded: Alive (recorded) between its birth and a recorded death, inside its attested span, or from its birth (or a recorded return) to the present when its Life State records it alive, never across a recorded death (after a death with no recorded return: “Unestablished (recorded death; current Life State Alive)”; between a death and a return: Deceased (recorded)); Deceased (recorded) after a recorded death, or “Deceased (recorded by <date>)” at or after a Life State’s “Deceased by <date>” (an upper bound, never compared); Unestablished otherwise (an attested life never proves survival past it); the chronology rows naming it nearest the date on each side (window, default 3); and any open Contradictory finding on its birth or death. ' +
+        'The Arkona pack, read-only and free: run it BEFORE writing about a character at a date (a chapter, a scene, a history). For each character (at most 25) at `date` (a date of the calendar, or "now": the pack’s present): when it was born and where that is recorded (or “birth unestablished”); the elapsed CALENDAR years (a number when both dates are exact days, a range when either is approximate, “not yet born” before the birth, none when the birth is unknown); the state recorded: Alive (recorded) between its birth and a recorded death, inside its attested span, or from its birth (or a recorded return) to the present when its Life State records it alive, never across a recorded death (after a death with no recorded return: “Unestablished (recorded death; current Life State Alive)”; between a death and the next life, a return, a restoration or a later life’s birth: “Between lives (recorded)”; a date on a recorded death or a life’s start: Unestablished); Deceased (recorded) after a recorded death with no later life, or “Deceased (recorded by <date>)” at or after a Life State’s “Deceased by <date>” (an upper bound, never compared); Unestablished otherwise (an attested life never proves survival past it); the chronology rows naming it nearest the date on each side (window, default 3); and any open Contradictory finding on its birth or death. A character with more than one life (a return, a restoration, “First life …; second life born …”) has the life the date falls in named (`life`, and the reason: “in the second life”, “after the restoration”), its lives listed (`lives`), and its elapsed years counted within that life. ' +
         'It NEVER gives apparent or biological age: Arkona’s races mature and age differently, so read the race reference it links for the maturation rules. continuity: an AU’s own pages first, else Main CANON’s values labelled “inherited from Main CANON”. Cost: none (1 read when the chronology’s calendar is not kept yet); live: true re-reads each identity page’s sidebar (1 read each).',
       inputSchema: z.object({
         characters: z

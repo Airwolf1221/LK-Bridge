@@ -182,9 +182,20 @@ export class MockLk {
   /** v2 E5.5: what each undocumented tier counted, and the most it ever held in one window. */
   readonly opCounted: { at: number; tier: string }[] = [];
   private readonly blockedUntil = new Map<CountedTier, number>();
-  private readonly idem = new Map<string, { status: number; body: unknown } | 'running'>();
+  private readonly idem = new Map<string, { status: number; body: unknown; request?: string } | 'running'>();
   private seq = 0;
   url = '';
+  /**
+   * CR-2026-11-R4 (the owner's request S; the mock's faithful setting, test/sandbox-mock/faithful.ts), as LegendKeeper's
+   * spec says it behaves (PLAN §1.1). Off by default (what the older tests expect):
+   * - a client-supplied `x-request-id` that matches `^[A-Za-z0-9._-]{1,64}$` is answered with that id (ADR 0010 relies
+   *   on it; no recorded run states the smoke's item (a) yet: the real run decides); otherwise the mock's `mock-<n>`;
+   * - an Idempotency-Key used again with ANOTHER body answers 409 IDEMPOTENCY_KEY_REUSED (G30a records the answer;
+   *   otherwise the stored answer is replayed whatever the body).
+   */
+  faithful = false;
+  /** The id the request being answered supplied, when it is echoed (`handle` answers synchronously). */
+  private echoed: string | undefined;
 
   constructor(private readonly opts: MockLkOptions) {
     this.limits = { ...PUBLISHED_LIMITS, ...opts.limits };
@@ -301,7 +312,7 @@ export class MockLk {
   }
 
   private send(reply: FastifyReply, status: number, body: unknown, headers: Record<string, string>) {
-    const requestId = `mock-${++this.seq}`;
+    const requestId = this.echoed ?? `mock-${++this.seq}`;
     void reply
       .code(status)
       .headers({ 'x-request-id': requestId, ...headers })
@@ -310,7 +321,12 @@ export class MockLk {
   }
 
   private error(reply: FastifyReply, status: number, code: string, headers: Record<string, string> = {}) {
-    this.send(reply, status, { message: `mock ${code}`, code, requestId: `mock-${this.seq + 1}` }, headers);
+    this.send(
+      reply,
+      status,
+      { message: `mock ${code}`, code, requestId: this.echoed ?? `mock-${this.seq + 1}` },
+      headers,
+    );
   }
 
   private handle(req: FastifyRequest, reply: FastifyReply): void {
@@ -321,6 +337,11 @@ export class MockLk {
       const v = req.headers[name];
       return Array.isArray(v) ? v[0] : v;
     };
+    const supplied = header('x-request-id');
+    this.echoed =
+      this.faithful && supplied !== undefined && /^[A-Za-z0-9._-]{1,64}$/.test(supplied)
+        ? supplied
+        : undefined;
     const call: SeenCall = {
       n: this.calls.length,
       at: now,
@@ -387,6 +408,12 @@ export class MockLk {
         this.count(tiers, items, now);
         call.outcome = 'in-progress';
         this.error(reply, 409, 'IN_PROGRESS', this.rateHeaders(this.tightest(tiers, now), now));
+        return;
+      }
+      if (stored && this.faithful && stored.request !== JSON.stringify(req.body ?? null)) {
+        this.count(tiers, items, now);
+        call.outcome = 'key-reused';
+        this.error(reply, 409, 'IDEMPOTENCY_KEY_REUSED', this.rateHeaders(this.tightest(tiers, now), now));
         return;
       }
       if (stored) {
@@ -476,7 +503,8 @@ export class MockLk {
     if (modelled && modelled.status >= 400) call.outcome = `status-${modelled.status}`;
     // LK does not store 400/401/403/404 or 5xx responses for idempotency replay.
     const storable = status < 500 && ![400, 401, 403, 404].includes(status);
-    if (key !== undefined && storable) this.idem.set(key, { status, body });
+    if (key !== undefined && storable)
+      this.idem.set(key, { status, body, request: JSON.stringify(req.body ?? null) });
     if (action?.kind === 'drop-after-commit') {
       call.outcome = 'dropped-after-commit';
       reply.hijack();

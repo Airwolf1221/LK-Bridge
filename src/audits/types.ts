@@ -623,6 +623,13 @@ export const CODES = {
     severity: 'info',
     title: 'A narrative page’s field still holds the template’s placeholder text',
   },
+  // CR-2026-11-R4 (ADR 0065 amendment 2): canon, Working or Archived pages sitting in Narratives (their lifecycle ignored).
+  narrative_lifecycle_page: {
+    category: 'narrative',
+    severity: 'warning',
+    title:
+      'A page in Narratives carries a lifecycle signal (a [BSRC], [BWRK] or [BARC] prefix, a status tag, or Status)',
+  },
   // ---- the run itself
   stale_snapshot: {
     category: 'audit',

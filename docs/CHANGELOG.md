@@ -1,5 +1,155 @@
 # Changelog
 
+## Unreleased: CR-2026-11-R4, the fourth independent review (21 November 2026)
+
+**Critical, fixed here: on the reviewed code an agent at scope `write` could launder canon through Narratives** (R4-01):
+one direct move took a `[BSRC]` page, or a canon index with its pages, into a story, out of the lifecycle and out of the
+consistency check, and the narrative tags fix then stripped CANON on an ordinary approval (R4-02). Four more critical
+findings turned the owner's ordinary "Pick the right value" into an edit of something not picked (R4-11, R4-20 to
+R4-22). **Deploy this before anything else**; until then keep Claude's and ChatGPT's profiles at scope `propose` on
+Arkona, approve no narrative audit fix and use no pick. The review covers everything merged after the third review's
+fixes up to `b8da571` (#74 to #79: split completeness, F4a, F4b, F4b.1, F4c, F4.1, with ADR 0062's sessions from #73)
+([docs/reviews/CR-2026-11-R4.md](reviews/CR-2026-11-R4.md); decisions in
+[ADR 0066](adr/0066-cr-2026-11-r4-decisions.md), **accepted on 21 November 2026**: part A confirmed as built, part B
+decided and built). 59 findings (6 critical, 28 high, 16 medium, 9 low), all fixed, each with a test that fails on the
+reviewed code; one (R4-59) by the owner's decision. No migration. **After deploying, approve `arkona-2026-11-21-r4` on
+the Packs page** (it supersedes `arkona-2026-11-20-f41`). Nothing was run against a live system.
+
+### Moving into and out of Narratives (R4-01 to R4-10; ADR 0065 amendment 2)
+
+The owner's rule: moving any page into or out of Narratives is a proposal, and never changes its lifecycle silently.
+
+- **Narratives in the lifecycle guard**: a page or subtree moved into Narratives (or created, copied or restored there by
+  any route but the narrative tools), or moved out of it, is a proposal at every scope on every route, judged again
+  inside the lock; canonical when a page of it carries a lifecycle signal, the proposal naming those pages.
+- **Markers**: `to: null` declares placement and a new page's first state only; the narrative tags fix only adds tags.
+- **`create_resource` under Narratives** refuses a Status in `facts` and status or lifecycle tags (AU included).
+- **The narrative indexes' names** are never given to a page (every create and rename route; `arkona_story_create`:
+  `NARRATIVE_INDEX_NAME`); the facts index resolves Narratives by id, as the tools do (every candidate when ambiguous).
+- **The dateline fix** replaces a first line only when it reads as a date (an epigraph is kept).
+- **`arkona_chapter_check`** resolves names against pages outside Narratives only.
+- **Canon filed under Narratives stays canon** (NA-43, LD-10): a page there whose name carries a lifecycle prefix is still
+  evidence for the facts index and a known name for the chapter check, while the audit reports it.
+- **The lifecycle tools** refuse a whole set touching Narratives and a `promote_page` or `unarchive_page` destination
+  inside it.
+- **Canon in a story**: never read as a map, plan or chapter; the writing tools refuse the story
+  (`NARRATIVE_LIFECYCLE_PAGE`); the audit reports it (`narrative_lifecycle_page`). `arkona_chapter_save` checks the
+  chapter is still in its story inside the lock before revising it.
+
+### "Pick the right value" (R4-11 to R4-19; ADR 0066 P1 to P7)
+
+- **Each edit is placed where the check read the value, never searched for**: the sentence (or the field's `;` clause)
+  found exactly once on the page as it is now, the date whole at its offset and in one text run (outside any closed
+  bracket first); only that run is edited. A sentence, clause or row changed since the check, a quotation, a date split
+  by formatting and a page archived, renamed or moved since are listed and left; the job checks each page's name,
+  parent and tags again inside its locks.
+- **A field keeps its runs** (line breaks, bold, links); **an identity value keeps its qualifier** (only its principal
+  part is replaced).
+- **The dashboard sends the value it showed**; when the side reads otherwise now, `SIDE_CHANGED` and nothing proposed.
+  A typed value must read whole as one date (a range or a line break is `VALUE_UNREADABLE`).
+- **A chronology row is compared and written whole**, its marks kept: for the pick, every `update_timeline_event`, and
+  its Resume (LD-08). The planning reads each page once more (ADR 0064's Costs table amended). The facts index is
+  rebuilt once after deploying.
+
+### "As of" and consistency (R4-20 to R4-41; ADR 0064 amendment 3)
+
+- **Who governs the verb**: a name after a relational particle ("The daughter of …", "bint", "ibn", "née") or after a
+  capitalised word that is no title is nobody's subject; rows use the same rule.
+- **The date of the clause**: brackets skipped, a colon or a relative clause ends the scan, and a birth's or death's
+  date is reached from the verb directly or through one "in / on / at / to <place or parents>"; "X or Y" is the span of
+  both; "between", "by" and "no later than" give no date.
+- **Shared names**: a key several characters own, as a name, an alias, a given name or a title, counts only on its own
+  pages. **Aliases**: ";" and "," split only outside brackets; a bracket is a note only when it holds a date or note
+  words; "(birth name X)" is the alias X.
+- **Deaths and returns**: a date inside a death's own span is Unestablished; a death restated on another Authoritative
+  page feeds the death guard; an upper bound ("Deceased (by …)", "died by", "no later than") is no death date; an
+  approximate "Deceased by c. …" holds only after its margin; "born again" is a return.
+- **The Life State**: a value in doubt ("Alive (presumed)", "Alive?", "unconfirmed") records nothing; "Alive as of /
+  until / through / last attested <date>" dates it; "no longer alive" attests nothing.
+- **AUs**: an AU's own pages first, else Main CANON's values labelled; an AU's own value is never compared with an
+  inherited one.
+- **Non-current material** counts only as a heading's own qualifier (every Unicode dash a dash) or a row's bracketed
+  note; a container (an expand, a layout column) opens its own heading frame.
+- **Identity values** compare their words in order (the character's own given name and surname may be swapped); names
+  differing only in accents are **Spelling differs** (information).
+- **Elapsed years** count year indices (no year 0) and anniversaries by month and day; "Attested through X" with no
+  birth attests X; a date that may come before the birth says so (`maybeUnborn`).
+
+### Characters with more than one life (the owner's request L; R4-58)
+
+- **Life phrasings** (pack data): a life's span ("First life <date>–<date>"), birth ("second life born <date>"), death
+  ("second-life actual death at <date>"), a restoration ("restored to life … <date>") and a recollection.
+- **`arkona_as_of`** places a date in a life, between lives ("Between lives (recorded)") or after a restoration, and names
+  the life (`life`, `lives`, the elapsed years within it); **`arkona_consistency`** agrees with any life's birth or death;
+  **`arkona_chapter_check`** reads "Between lives" as not alive. Mehrana al-Khalid's two true births are no longer
+  Contradictory; "4A 960" is no date of Arkona's calendar (the Fourth Age ends on Zahras 36th, 4A 950) and is refused
+  with the calendar's reason.
+
+### The dashboard's sessions (R4-42 to R4-50; ADR 0062 amendment 1)
+
+- **The consent page asks for the step-up** before a scope raise, a new profile above the default scope, or a
+  connection on a profile at scope `write`: on the page itself ("Confirm it’s you": the authenticator code, or the
+  password without one; counted with the sign-in limits; audited `owner.reauth`, `via: consent`), then the same pending
+  request goes on. Nothing is applied and no code issued without it, so a stolen cookie alone no longer yields a
+  write-scope connection. Ordinary `read` and `propose` connections and lowerings are not asked.
+- **Approving a proposal** asks for the step-up when the rail that made it a proposal was the deletes, bulk or assets
+  rail (its recorded reason), and when its operations meet a guarded rail with the low-level tools' removals (a block or
+  a row deleted, a list write that drops entries, text taken off a pack page) and member administration's removals
+  (`removeMember`, `revokeInvite`) counted.
+- **A project's chronology settings**: confirming or changing them asks for the step-up; a reset stays one click.
+- **An idle open tab no longer keeps its session alive**: the dashboard marks every request it sends without the
+  owner's input (`X-LKB-Background: 1`: refresh timers, reloads for live events and for the stream starting afresh, the
+  session check after the stream drops, anything a minute after the owner's last input), and the bridge checks those,
+  and the live stream itself, without counting them as a use.
+- **Sign out everywhere** also revokes sessions already past their end (they cannot come back if the clock is set back).
+- **The bounce page** answers top-level navigations only (never another site's image, fetch or frame) and is never
+  framed.
+- **A wrong current password** on the Account page is shown again instead of being hidden as a sign-out.
+- **The owner's decisions** (ADR 0066 part B, 21 November 2026): **resuming a paused job** asks for the step-up (R4-59),
+  and so do **resuming a job stopped part-way** (`resume-stopped`), a **forced step retry** and **starting a restore
+  rehearsal**; pausing, a normal retry (it checks first) and a rehearsal's plan stay one click. With
+  `LK_ALLOW_MEMBER_ADMIN` on, **a member or an invite taken away is a delete at entry too**: an agent at scope `write`
+  proposes it (`proposed because: delete (1 project member)`).
+
+### The lead's own, the owner's queued items and request S
+
+- **The tool lists** (R4-51 to R4-53): the narrative and consistency tools are listed only while the APPROVED pack version
+  carries their rules (they read it at every call; a version waiting for approval listed them and they refused); a
+  connection the owner moves to another profile tells its connected sessions (`notifications/tools/list_changed`); the
+  lists no longer parse the pack's rules 18 times at every MCP request (`PackService.peek`, `approvedRules`).
+- **ADR 0063 decision 3, completed** (R4-54): a name without its trailing generic word must keep two words to resolve,
+  so "the Tagging Standard" is a near miss for the tab "Controlled Native Tagging Standard" even where a one-word heading
+  or tag "Tagging" exists.
+- **The owner's request S, the sandbox checks on the mock**: every `test/sandbox` check runs in the ordinary suite against
+  the mock LegendKeeper through the same runtime and harness as the owner's run (`test/sandbox-mock/`); any item that is
+  not PASS or NOTED fails the build, with the whole report printed (never a slice of a tool's answer). The mock models
+  what the owner's runs established of LegendKeeper behind an opt-in faithful setting (`test/sandbox-mock/faithful.ts`,
+  each behaviour with its source) and a template copy's documents (`copyTemplateDocuments`); the older tests see what
+  they always saw.
+- **narrative-f4c's N3** (R4-55): `arkona_chapter_save`'s read-back of a NEW chapter compared the chapter's Markdown with
+  the first page document listed; a Chapter template with a second page document (LegendKeeper lists a copy's documents
+  in no stated order), or a block of the template's that the job keeps, made it differ at its first word, the dateline.
+  It now compares what the job sent, to the document it sent it to (`readBack.compared`). The check says which condition
+  failed and prints the whole answer, follows a job still running past the tool's wait, and takes its snapshot before
+  N5.
+- **The chapter tools without a snapshot** (R4-56): `arkona_chapter_check` and `arkona_chapter_context` refuse
+  `NO_SNAPSHOT` on a project with no full snapshot yet (they answered `CHAPTER_UNREADABLE`).
+- **A new sandbox check, `assumptions-r5`** (written, not run): Z1 a template copy's documents and the one named Main;
+  Z2 and Z3 a row's and a paragraph's runs kept when one run's text changes.
+- **The owner's queued items**: a split's new owners answer for Source Boundaries and Unresolved Material only where the
+  pack expects them (`splits.sections`, by Reference Type, role or owner type; on Arkona not an Art or specialist page);
+  Aliases split at semicolons and at commas outside brackets; and the third review's four low findings (R3-56, R3-58,
+  R3-59, R3-60), their tests now passing.
+- **Memory** (scope item 8): the facts index, the consistency tools, the narrative reading tools and the calendar loader
+  run repeatedly with the heap back to its baseline (`test/review/r4-memory/new-paths.test.ts`); every maintenance job
+  three times on a world with characters and a story keeps nothing (opt-in, `maintenance-r4.test.ts`).
+- A flaky ADR 0062 test fixed (`test/auth/sessions-r3.test.ts` compared a session's end with a wall clock read after
+  the request).
+- **A resumed timeline change keeps its rows' marks** (LD-08): a stopped `update_timeline_event`, resumed, rewrote its
+  rows from the block the first run planned; it now writes each row as read now with only the changed cells replaced.
+- **ESLint and Prettier ignore `.claude/`**: a coding agent's worktrees inside the checkout made a whole-repository lint
+  run out of memory.
+
 ## Unreleased: v3 F4.1, from the owner's check of the live tools (ADR 0064 amendment 2, ADR 0065 amendment 1, 20 November 2026)
 
 No migration, no new ADR. **After deploying, approve `arkona-2026-11-20-f41` on the Packs page** (it supersedes

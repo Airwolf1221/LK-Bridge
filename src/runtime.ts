@@ -3,7 +3,13 @@ import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mc
 import { createPacks, type Packs } from './packs/service.js';
 import { findPageByName } from './packs/find-page.js';
 import { ToolListWatch } from './mcp/tool-list.js';
-import { inNarratives, narrativeRulesOf, narrativeScope } from './narrative/scope.js';
+import {
+  inNarratives,
+  narrativeArea,
+  narrativeAuthorityRoots,
+  narrativeRulesOf,
+  narrativeScope,
+} from './narrative/scope.js';
 import { narrativeCalendar } from './narrative/calendar.js';
 import { narrativeBlindAppraisal } from './narrative/authority.js';
 import { narrativeCompare } from './narrative/names.js';
@@ -62,6 +68,7 @@ import { RetagService } from './packs/retag/service.js';
 import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
 import { RenameService } from './packs/rename/service.js';
+import { subjectRenameRefusal } from './packs/rename/guard.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
@@ -614,6 +621,22 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     // v3 F3d (ADR 0053): the AU ruling's status tag is guarded on a project whose approved pack carries it.
     tagRules: (projectId) => packs.lifecycleRules(projectId),
+    // CR-2026-11-R4 (ADR 0065 amendment 2): Narratives as the narrative tools resolve it (moves into or out of it are
+    // proposals; the narrative indexes' names are never given to a page).
+    narratives: (projectId) => narrativeArea(packs, tree.queries, projectId),
+    // CR-2026-11-R4 (F2): a job's own pages (its create steps' client-minted ids), also after a restart.
+    createdByJob: (projectId, jobId, resourceId) =>
+      engine.queries.getJob(projectId, jobId)?.steps.some((s) => {
+        if (!['createResource', 'createManyResources', 'createResourceFromTemplate'].includes(s.opId))
+          return false;
+        if (s.clientIds.includes(resourceId)) return true;
+        const body = (s.params?.body ?? {}) as { id?: unknown; resources?: unknown };
+        return (
+          body.id === resourceId ||
+          (Array.isArray(body.resources) &&
+            body.resources.some((r) => (r as { id?: unknown } | null)?.id === resourceId))
+        );
+      }) ?? false,
   });
   const unregisterGuard = engine.setWriteGuard(
     combineGuards(
@@ -851,6 +874,29 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     engine,
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    // CR-2026-11-R3 (R3-59): the rename steering's judgement of the em-dash name fix (it then says it is a plain rename).
+    subjectRename: (projectId, page, newName) =>
+      subjectRenameRefusal({
+        packs,
+        projectId,
+        node: page,
+        newName,
+        characterOf: (id) => {
+          try {
+            return registry.forProject(projectId).characterOfPage(id).ok;
+          } catch {
+            return false;
+          }
+        },
+        factKeys: page.factKeys,
+        childrenOf: (indexId) => {
+          try {
+            return tree.queries.children(projectId, indexId).data;
+          } catch {
+            return [];
+          }
+        },
+      }) !== null,
     assetHosts: imageSettings.assetHosts,
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
@@ -861,10 +907,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const consistency: Consistency = new Consistency({
     db: o.db,
     // v3 F4c (ADR 0065, design E2): the facts index never reads a narrative page (fiction is never canon evidence).
-    appraisal: narrativeBlindAppraisal(
-      appraisal,
-      (projectId) => narrativeRulesOf(packs, projectId)?.indexes.narratives ?? null,
-    ),
+    // CR-2026-11-R4 (F4): Narratives resolved as the narrative tools resolve it (by id; every candidate when ambiguous).
+    appraisal: narrativeBlindAppraisal(appraisal, (projectId) => ({
+      name: narrativeRulesOf(packs, projectId)?.indexes.narratives ?? null,
+      roots: narrativeAuthorityRoots(packs, tree.queries, projectId),
+    })),
     tree,
     registry,
     chronology,
@@ -1108,11 +1155,23 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const detachResume = resume.start();
   // v3 F3d (ADR 0058): `arkona_rename`: its in-job checks, its record, the token change's pack version (the job waits for
   // the owner to approve it) and what a rename left, from the full-text index.
-  const unregisterRenameChecks = registerRenameChecks(engine, packs, (projectId, pageId) => {
-    // CR-2026-11-R3 (R3-29): the tree's view of a page (its name and path), for the rename's history check.
-    const n = tree.queries.node(projectId, pageId).data;
-    return n ? { rawName: n.rawName, path: n.path } : null;
-  });
+  const unregisterRenameChecks = registerRenameChecks(
+    engine,
+    packs,
+    (projectId, pageId) => {
+      // CR-2026-11-R3 (R3-29): the tree's view of a page (its name and path), for the rename's history check.
+      const n = tree.queries.node(projectId, pageId).data;
+      return n ? { rawName: n.rawName, path: n.path } : null;
+    },
+    // CR-2026-11-R3 (R3-56): a parent's own sibling order, for the re-placing moves worked out when they run.
+    (projectId, parentId) => {
+      try {
+        return registry.forProject(projectId).orderFor(parentId);
+      } catch {
+        return null;
+      }
+    },
+  );
   const renames = new RenameService({
     db: o.db,
     engine,
@@ -1330,6 +1389,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       policy.store
         .listProfiles()
         .map((p) => ({ id: p.id, scope: p.scope, showLowLevelTools: p.showLowLevelTools })),
+    // CR-2026-11-R4 (LD-03, LD-04): a connection moved to another profile tells its sessions.
+    connections: () => policy.store.connectionProfiles(),
   });
   const detachToolList = [
     packs.onChange(() => toolList.poke()),

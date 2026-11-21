@@ -43,6 +43,7 @@ import type { RestoreInput } from '../../src/snapshots/restore.js';
 import type { Finding, Verdict } from './smoke.js';
 import type { HttpCounters } from './soak.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
+import { wholeError } from './whole.js';
 
 type Obj = Record<string, any>;
 
@@ -105,9 +106,7 @@ export async function runSnapshotsSandbox(
     } catch (e) {
       const verdict: Verdict = e instanceof Fails ? 'fail' : 'inconclusive';
       const why =
-        e instanceof Fails || e instanceof Unclear
-          ? e.message
-          : `could not complete: ${(e as Error).message}`;
+        e instanceof Fails || e instanceof Unclear ? e.message : `could not complete: ${wholeError(e)}`;
       record(id, title, verdict, `${why}; ${costText(before)}`);
     }
     costs[id] = spent(before);
@@ -406,7 +405,7 @@ export async function runSnapshotsSandbox(
       const back = await liveDoc(pageId, id);
       if (back.sha !== docSha(id))
         throw new Fails(
-          `read back, the ${key} document differs from the snapshot: ${renderDocument(back.piece as never).slice(0, 300)}`,
+          `read back, the ${key} document differs from the snapshot: ${renderDocument(back.piece as never)}`,
         );
       return `proposal ${r.proposalId} approved; the document reads back exactly as in the snapshot${
         r.plan.lost.length
@@ -525,7 +524,7 @@ export async function runSnapshotsSandbox(
             )?.iconGlyph as string | undefined)
           : undefined;
         const form = (x: { ok: boolean; error?: string } | { ok: true; body: unknown }) =>
-          x.ok ? 'ACCEPTED' : `REFUSED (${((x as { error?: string }).error ?? '').slice(0, 120)})`;
+          x.ok ? 'ACCEPTED' : `REFUSED (${(x as { error?: string }).error ?? ''})`;
         const iconNote =
           `icon forms: "fas fa-book" ${form(probeRead)}; "book" ${form(probeWrite)}` +
           (iconRead !== undefined ? `, which reads back as ${JSON.stringify(iconRead)}` : '');
@@ -579,7 +578,7 @@ export async function runSnapshotsSandbox(
         let got = await attemptRecreate('original');
         let idNote = `LegendKeeper TOOK the original id ${cid}`;
         if (!got.ok) {
-          idNote = `LegendKeeper refused the original id (${got.why.slice(0, 200)}); recreated with a new id`;
+          idNote = `LegendKeeper refused the original id (${got.why}); recreated with a new id`;
           got = await attemptRecreate('new');
           if (!got.ok) throw new Fails(`not recreated with a new id either: ${got.why}`);
         }
@@ -655,10 +654,7 @@ export async function runSnapshotsSandbox(
       const summary = `${res.exact} of ${res.pagesCompared} pages exact; ${res.cost?.writes} writes, ${res.cost?.reads} compare reads, ${Math.round((res.ms ?? 0) / 1000)} s; root ${done.rootName} deleted`;
       if (diffs.length > 0)
         throw new Fails(
-          `${summary}; differences: ${diffs
-            .map((d) => `${d.page} ${d.piece}: ${d.reason}`)
-            .join('; ')
-            .slice(0, 1200)}`,
+          `${summary}; differences: ${diffs.map((d) => `${d.page} ${d.piece}: ${d.reason}`).join('; ')}`,
         );
       return summary;
     });

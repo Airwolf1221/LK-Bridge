@@ -23,6 +23,8 @@ describe('showLowLevelTools, per profile', () => {
     for (const n of ['browse_repository_tree', 'search', 'read_document', 'get_resource', 'get_bridge_guide'])
       expect(names, n).toContain(n);
     // The final list with the setting off (documented in docs/tools.md).
+    // CR-2026-11-R4 (LD-01): the 12 consistency and narrative tools are listed only while the APPROVED pack version
+    // carries their rules; this world attaches the pack without approving it, so they are not listed (they refused).
     expect(names).toEqual(
       [
         'bridge_budget',
@@ -76,21 +78,7 @@ describe('showLowLevelTools, per profile', () => {
         // v3 F4a (ADR 0063): the name check and the topic brief.
         'arkona_name_check',
         'arkona_brief',
-        // v3 F4b (ADR 0064): the consistency check and "as of a date".
-        'arkona_consistency',
-        'arkona_as_of',
-        'arkona_as_of_coverage',
-        'arkona_consistency_suggest',
-        // v3 F4c (ADR 0065): the narrative writing tools.
-        'arkona_story_create',
-        'arkona_chapter_plan',
-        'arkona_chapter_save',
-        'arkona_chapter_insert',
-        'arkona_chapter_move',
-        // v3 F4c (ADR 0065): reading a chapter against canon, and promotion.
-        'arkona_chapter_context',
-        'arkona_chapter_check',
-        'arkona_promote_from_chapter',
+        // v3 F4b's and F4c's tools: not listed here (the pack is not approved; CR-2026-11-R4, LD-01).
         'bridge_job_resume',
         'create_document',
         'create_index',
@@ -157,9 +145,10 @@ describe('showLowLevelTools, per profile', () => {
     // create_bare_resource are hidden by default (-2); v3 F3b's four pack tools (+4); v3 F3c's five appraisal tools (+5);
     // v3 F3d's bridge_job_resume and arkona_rename (+2); v3 F3e's arkona_split_appraisal and arkona_split_owner (+2);
     // v3 F3f's arkona_retag_audit and arkona_retag_apply (+2); v3 F4a's arkona_name_check and arkona_brief (+2); v3 F4b's four consistency tools (+4).
-    expect(await list(t.token)).toHaveLength(86);
+    // CR-2026-11-R4 (LD-01): the 12 consistency and narrative tools are not listed while the pack is not approved.
+    expect(await list(t.token)).toHaveLength(86 - 12);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(86 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(86 - 12 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

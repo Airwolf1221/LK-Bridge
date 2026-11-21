@@ -172,13 +172,17 @@
 
 ## Costs
 
-| Call                                                          | LegendKeeper requests                                                    |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` | 0                                                                        |
-| … with `live: true`                                           | 1 per identity page re-read (at most 25)                                 |
-| `arkona_consistency_suggest`; the audits' category; the brief | 0                                                                        |
-| Pick the right value (planning)                               | 1 per page edited (its sidebar or document); a chronology row: about 9   |
-| The approved pick's job                                       | each page's check, writes and read-back, as `set_facts` and `write_page` |
+| Call                                                          | LegendKeeper requests                                                                  |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` | 0                                                                                      |
+| … with `live: true`                                           | 1 per identity page re-read (at most 25)                                               |
+| `arkona_consistency_suggest`; the audits' category; the brief | 0                                                                                      |
+| Pick the right value (planning)                               | 2 per page edited (the page, then its sidebar or document)¹; a chronology row: about 9 |
+| The approved pick's job                                       | each page's check, writes and read-back, as `set_facts` and `write_page`               |
+
+¹ Amended by CR-2026-11-R4 (21 November 2026): the pick reads the page itself first (its name, parent and tags), so a
+page archived, renamed or moved since the check is left as it is (R4-15); one more for each further document edited.
+It was 1 per page edited.
 
 ## Consequences
 
@@ -499,3 +503,107 @@ restatements give no birth (D7, unchanged).
 2. Decision 3's departure: commas no longer separate aliases. An Aliases value written with commas is now one alias.
 3. Decision 2: "Living" is an alive value; a dated alive Life State attests the life only up to its date.
 4. Decision 5: the nightly audit makes no request for the calendar.
+
+## Amendment 3: the fourth review's "as of" pass, and characters with more than one life (CR-2026-11-R4)
+
+- Status: **Proposed** (21 November 2026, CR-2026-11-R4). It amends the decisions above and amendments 1 and 2, and ADR
+  0065 "On top of F4b.1" 4 and 6; where it changes one, the change is said here and the text above is left as it was
+  approved. **No new ADR number.**
+- **Write scope: no issue found** in this amendment's part. Nothing here writes: the four consistency tools stay
+  read-only and the audits' category still reports Contradictory pairs only. "Pick the right value" is changed by the
+  same review separately ([ADR 0066](0066-cr-2026-11-r4-decisions.md) part A, P1 to P7).
+- Nothing in this session touched a live system. Mocks and fixtures only: the independent reviewer's 98 attempts
+  (`test/review/r4-asof/`) on F4b.1's live-run world, and the owner's request L (`test/review/r4-owner/lives.test.ts`,
+  Mehrana al-Khalid's Temporal Scope verbatim).
+- No migration. The facts index's key gains a version (3), so it is rebuilt once. The full-text index's section paths
+  (decision 6) are recomputed as pages are next read from a snapshot (the next full snapshot rebuilds them all).
+- **Pack data in the pack version `arkona-2026-11-21-r4`** (this review's version, ADR 0066 A11; the phrasings apply
+  once the owner approves it): `relational`, the life phrasings (`life.scope.birth`, `life.scope.death`, `life.scope.span`,
+  `life.scope.restored`, `attested.scope.recollection`, with the new pattern field `life` and the rules' `lifeOrdinals`),
+  "born again" as a return, the upper bounds ("died by", "Deceased (by …)", "no later than", "at the latest by") out of
+  `death.scope` and `death.lifestate` and into `deceasedBy`, `attested.scope.alive` anchored at the clause's start,
+  `attested.scope.present` needing a date, `aliveAt` with "as of", "until", "through", "last attested", and the new
+  `aliveDoubt` and `aliveFollowers`. Everything else is code and applies at once.
+
+### 1. Who governs the verb (amends amendment 1, A)
+
+The run of a clause's last words that names a character is its subject only when it starts the clause or follows a
+lower-case word, a determiner or a title: after a relational particle (`relational`: of, bint, ibn, bin, née, by, with,
+to, from, and…; "The daughter of Rashad al-Khalid was born", "Layla bint Rashad al-Khalid") it is someone's relation, and
+after a capitalised word that is no title ("Karl Tobias von Hohenfalk") the end of a longer name: nobody. Rows use the
+same rule ("The heir of @Rashad al-Khalid is born" is nobody's).
+
+### 2. The date of the clause (amends amendment 1, B)
+
+The scan skips bracketed parentheticals ("(born Malakh 33rd, 4A 280)", "(1,250,391 KCY)"), stops at a colon and a
+relative clause (", which", ", who", ", whose", ", where", "since", "that"), and, for a birth or a death, takes a date
+only when it is reached from the verb directly or through one "in / on / at / to <place or parents>" ("born in Altan-Saray
+on …", "died at midday Zahras 36th, 4A 950"); "Born between …", "no later than …", "by …" read nothing. Two dates joined
+by "or" read as the span holding both.
+
+### 3. Names and given names shared (amends D2's chosen narrowings)
+
+A key several characters own, as a name, an alias OR a given name, counts only on the pages of the character who owns
+the page (Katsuragi Yamato's alias "Yamato" and Hoshino Yamato's given name). An alias that is a title ("the Kaiser")
+counts only on its character's own pages, as a given name does. The alias parser (amendment 2, 3, with the owner's comma
+rule): ";" splits only outside brackets; a bracket is a note only when it holds a date or is made of note words ("as-Saffah"
+and "Second of the Name" are part of the name); "(birth name X)" is the alias X.
+
+### 4. A character's lives (the owner's request L; amends D7 and ADR 0065 "On top of F4b.1" 6)
+
+`arkona_as_of` builds a character's lives from ALL of its identity page's dated births, deaths and starts (returns,
+restorations), whatever the Life State: in date order a start opens a life and a death closes it; a return, a
+restoration or a later named life's birth while a life is open closes it unrecorded. When the identity page records no
+death, every Authoritative restatement of one is used (agreeing: the death; disagreeing: a death is recorded from the
+earliest, and nothing is established after it). A recorded death always wins inside its own span: a date overlapping it
+is Unestablished; after it, **"Between lives (recorded)"** when a later life is recorded (between a death and a return
+too: F4c said "Deceased (recorded)"), "Deceased (recorded)" when none is, and, with a Life State recording the character
+alive now, "Unestablished (recorded death; current Life State …)". A life that ended unrecorded is Unestablished unless an
+attestation inside it says alive. Attestations belong to the life they fall in; the Life State and a "Deceased by" bound
+speak of the last life. A character with one life reads exactly as before. With several: `life` and `lives` in the
+answer, the life named in the reason, the elapsed years counted within the life (none between lives), `born` the first
+life's birth (the coverage report's readable birth). `arkona_consistency` agrees with any life's birth or death and
+never compares one life's own value with another's; `arkona_chapter_check` reads "Between lives" as not alive and a
+prose birth or death against every life.
+
+Mehrana al-Khalid (her Temporal Scope verbatim): 4A 200 Alive (recorded), in the first life; 4A 400 Between lives
+(recorded), "after the first life’s death (Camue 33rd, 4A 325), before the second life’s birth (Camue 1st, 4A 530)"; 4A
+600 Alive (recorded), in the second life; 5A 900 Alive (recorded), after the restoration, in the restored life; her two
+restated births are no Contradictory. **4A 960 is no date**: on Arkona's calendar the Fourth Age ends on Zahras 36th, 4A
+950, and the Fifth begins the next day, Camue 1st, 5A 1, so the tool refuses "4A 960" with the calendar's reason, and no
+whole day lies between her second death and her restoration (both days answer Unestablished).
+
+### 5. AU inheritance (amends D9 as built, and ADR 0065 "On top of F4b.1" 4)
+
+In an AU its own pages come first: its birth and deaths when it states them, else Main CANON's resolved values, deaths,
+returns and attestations (its prose and chronology rows too, not only its sidebar), labelled; the consistency check never
+compares an AU's own Authoritative value with the inherited Main CANON one; each `around` row of Main CANON's chronology
+is labelled. Yasmin al-Naim in Moonfall is born in 4A 150 there (her AU's own chronicle).
+
+### 6. Smaller readings
+
+A Life State in doubt ("Alive (presumed)", "Alive - unconfirmed", "Alive?") or with a noun after its alive value
+("Living memory") records nothing; its date is read over the whole value ("Alive (last attested 4A 500)"). An approximate
+"Deceased by c. <date>" holds only after its margin. Elapsed years count year indices (no year 0) and anniversaries by
+month and day (a leap day earlier in a year moves no anniversary); a "c." margin steps over the missing year 0; a range
+that may come before the birth says so (`maybeUnborn`). An attestation "through <date>" with no birth recorded attests that
+date. Identity values compare their words in order (a two-part personal name, the character's given name and surname,
+in either order agrees), fall back to the whole value when the principal part's key is empty, and a given name or surname
+that differs only in accents is reported as **Spelling differs** (information, never a conflict: D3 normalises accents).
+A non-current marker counts only as a heading's own qualifier (its start, after a spaced dash, or in brackets) with every
+Unicode dash read as a dash, and in a row only as a bracketed provenance note; a heading inside a container (an expand, a
+layout column) governs only that container.
+
+### For the owner
+
+1. The state between two lives is **"Between lives (recorded)"** (between a death and a return too); "Deceased
+   (recorded)" is kept for a death with no later life.
+2. A death restated on another Authoritative page now feeds the guard: with the Life State "Alive" it is "Unestablished
+   (recorded death; current Life State Alive)" after the death, never a bare "Deceased (recorded)".
+3. Elapsed years are counted within the life the date falls in; none between lives; `born` stays the first life's.
+4. An AU's own Authoritative value is never compared with the inherited Main CANON one.
+5. **Spelling differs** (a new information label) for names differing only in accents; word order matters except for the
+   character's own given name and surname.
+6. The relational particles, the doubt words and the words that may follow an alive value are the seeded lists above
+   (edit them on the Packs page).
+7. Mehrana's "4A 960" is no date of the calendar (the Fourth Age ends on Zahras 36th, 4A 950).

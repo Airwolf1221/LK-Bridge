@@ -4,10 +4,14 @@
  * - `GET /api/admin/audits/findings/:id/consistency`: the finding's values side by side (the identity page's, then
  *   each restatement's, with page, lifecycle, section, excerpt and precision), the agents' suggestions and the owner's
  *   earlier picks. Reads the bridge's own data only.
- * - `POST /api/admin/audits/findings/:id/consistency-pick` `{ side? | value?, confirm: true }`: the owner picks one side's
- *   value or types one; the bridge builds ONE proposal editing every page that disagrees (src/consistency/fix.ts). A
- *   step-up action (ADR 0062, as a pack-level decision): the authenticator code within ten minutes. Audited
- *   `consistency.pick`. Agents can never pick: they suggest (`arkona_consistency_suggest`).
+ * - `POST /api/admin/audits/findings/:id/consistency-pick` `{ side? (with shown?) | value?, confirm: true }`: the owner
+ *   picks one side's value or types one; the bridge builds ONE proposal editing every page that disagrees
+ *   (src/consistency/fix.ts). A step-up action (ADR 0062, as a pack-level decision): the authenticator code within ten
+ *   minutes. Audited `consistency.pick`. Agents can never pick: they suggest (`arkona_consistency_suggest`).
+ *   CR-2026-11-R4 (PK-51): a side is one of the values the dashboard showed (the audit's stored values,
+ *   `SIDE_NOT_FOUND` otherwise), `shown` is its value as shown (the dashboard sends it; the stored value when absent),
+ *   and the pick is refused with `SIDE_CHANGED` when the side reads otherwise now: the bridge proposes only a value the
+ *   owner saw.
  */
 import * as z from 'zod';
 import { AuditError, type Audits } from '../../audits/index.js';
@@ -21,6 +25,7 @@ const STATUS: Readonly<Record<string, number>> = {
   NOT_FOUND: 404,
   FINDING_GONE: 409,
   SIDE_NOT_FOUND: 400,
+  SIDE_CHANGED: 409,
   INVALID_PARAMS: 400,
   VALUE_UNREADABLE: 400,
   NOTHING_TO_PROPOSE: 409,
@@ -92,11 +97,16 @@ export const registerConsistency: Register = (api, ctx) => {
         .object({
           confirm: z.literal(true),
           side: z.string().min(1).max(500).optional(),
+          /** CR-2026-11-R4: the side's value as the dashboard showed it. */
+          shown: z.string().max(2000).optional(),
           value: z.string().trim().min(1).max(300).optional(),
           project: projectParam,
         })
         .refine((x) => (x.side === undefined) !== (x.value === undefined), {
           message: 'Give either side (a value of the finding) or value (one you type), not both.',
+        })
+        .refine((x) => x.shown === undefined || x.side !== undefined, {
+          message: 'shown goes with side: the value of the side as it was shown.',
         }),
       req.body,
     );
@@ -106,6 +116,27 @@ export const registerConsistency: Register = (api, ctx) => {
     const f = finding(p.id, id);
     if (f.state !== 'open')
       throw new AdminHttpError(409, 'FINDING_GONE', 'This finding is no longer present.');
+    // CR-2026-11-R4 (PK-51): the side as the dashboard showed it (the audit's stored values): a side of another finding,
+    // or anything else, is not one of these; the value shown goes to the service, which refuses a side that reads
+    // otherwise now.
+    let shown: string | undefined;
+    if (b.side !== undefined) {
+      const stored = [f.evidence.reference, ...((f.evidence.restatements as unknown[] | undefined) ?? [])];
+      const seen = stored.find(
+        (v): v is { key: string; value?: unknown } =>
+          typeof v === 'object' && v !== null && (v as { key?: unknown }).key === b.side,
+      );
+      if (!seen) throw new AdminHttpError(400, 'SIDE_NOT_FOUND', 'That value is not one of this finding’s.');
+      const value = typeof seen.value === 'string' ? seen.value : '';
+      const tidy = (s: string) => s.replace(/\s+/g, ' ').trim();
+      if (b.shown !== undefined && tidy(b.shown) !== tidy(value))
+        throw new AdminHttpError(
+          409,
+          'SIDE_CHANGED',
+          `The finding has changed since the page showed it (“${b.shown}” was shown; it holds “${value}” now). Nothing was proposed: reload the finding and pick again.`,
+        );
+      shown = value;
+    }
     return wrap(() =>
       service().pick({
         projectId: p.id,
@@ -113,6 +144,7 @@ export const registerConsistency: Register = (api, ctx) => {
         continuity: typeof f.evidence.continuity === 'string' ? f.evidence.continuity : 'Main CANON',
         findingId: f.evidence.consistencyId as string,
         ...(b.side !== undefined ? { side: b.side } : {}),
+        ...(shown !== undefined ? { shown } : {}),
         ...(b.value !== undefined ? { value: b.value } : {}),
         actor: 'owner',
         auditFindingId: f.id,

@@ -315,6 +315,9 @@ export type OwnersRules = z.infer<typeof ownersRulesSchema>;
 
 // ============================================================================================ v3 F3e: splits
 
+/** CR-2026-11-R4: the split completeness sections a kind of new owner is expected to address (ADR 0059 amendment 1). */
+const splitFrameList = z.array(z.enum(['sourceBoundaries', 'unresolvedMaterial'])).max(2);
+
 /**
  * v3 F3e (ADR 0059; the owner-approved design docs/design/F3e-splits.md): the measurable Split Triggers of Character
  * Architecture, with Anti-Fragmentation as their counterweight, and what `arkona_split_owner` checks. DATA the owner
@@ -388,6 +391,23 @@ export const splitsRulesSchema = z
      * reason lets it through).
      */
     guardWords: z.number().int().min(20).max(100_000),
+    /**
+     * CR-2026-11-R4 (the owner's request; ADR 0066 A): which of the source's Source Boundaries and Unresolved Material
+     * a NEW owner of a split must address (ADR 0059 amendment 1), by the kind of page it is: its Reference Type first
+     * (ignoring case), else its role in a character's set (`core`, `compact`, `relationship`, `art`, `specialist`), else
+     * its owner type (`Polity`, `Culture`…), else `otherwise`. A section a new owner is not expected to carry is neither
+     * asked for nor refused (items of it may still move there, its text may still be given). Absent (a version before
+     * it): every new owner addresses both, as amendment 1 built.
+     */
+    sections: z
+      .object({
+        referenceTypes: z.record(text(200), splitFrameList),
+        roles: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/), splitFrameList),
+        ownerTypes: z.record(text(100), splitFrameList),
+        otherwise: splitFrameList,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type SplitsRules = z.infer<typeof splitsRulesSchema>;
@@ -525,6 +545,14 @@ export const consistencyPatternSchema = z
     bound: z.enum(['from', 'to', 'both']).optional(),
     /** A deliberate gap ("birth date unestablished"): no date is read. */
     gap: z.boolean().optional(),
+    /**
+     * CR-2026-11-R4 (the owner's request L, characters with more than one life): `return` and `restoration` mark an
+     * attested start (`bound: from`) that begins a new life ("Reborn 4A 300"; "restored to life … Camue 1st, 5A 1");
+     * `span` reads the `date` group as a life's range, its start that life's birth and its end that life's death
+     * ("First life Camue 1st, 4A 100–Camue 33rd, 4A 325"). A named group `life` holds the life's ordinal ("first",
+     * "second", "2nd": `lifeOrdinals`), for a birth or a death of a named life.
+     */
+    life: z.enum(['return', 'restoration', 'span']).optional(),
   })
   .strict();
 export type ConsistencyPattern = z.infer<typeof consistencyPatternSchema>;
@@ -558,6 +586,12 @@ export const consistencyRulesSchema = z
      * Absent: after, when, before, until, while.
      */
     clauseWords: z.array(text(50)).max(30).optional(),
+    /**
+     * CR-2026-11-R4 (RC-1): the relational particles ("of", "bint", "ibn", "née"…): a name right after one of them is a
+     * relation of the subject ("The daughter of Rashad al-Khalid was born"), never the subject; nobody is read. Absent:
+     * of, bint, ibn, bin, ben, bat, née, by, with, for, to, from, and, or, nor.
+     */
+    relational: z.array(text(50)).max(60).optional(),
     /**
      * ADR 0064 amendment 1 (F): sections (by any heading above them) and chronology rows (by their text) holding one of
      * these markers are non-current material inside current pages ("Author-Facing Pre-Rewrite History"). With
@@ -607,6 +641,22 @@ export const consistencyRulesSchema = z
       .array(z.object({ id: z.string().regex(/^[a-z][a-z0-9_.-]{0,59}$/), regex: text(500) }).strict())
       .max(10)
       .optional(),
+    /**
+     * CR-2026-11-R4 (RC-13): words or marks that make a Life State no record of the living wherever they stand in it
+     * ("Alive (presumed)", "Alive - unconfirmed", "Alive?"). Read by `arkona_as_of` only. Absent: none.
+     */
+    aliveDoubt: z.array(text(50)).max(30).optional(),
+    /**
+     * CR-2026-11-R4 (RC-13): the words that may follow an alive value in a Life State's principal part ("Living and
+     * immortal at 5A 931", "Alive as of 4A 500"); any other word after it ("Living memory") is no Life State of the living.
+     * Absent: any word may follow (as F4.1 read it).
+     */
+    aliveFollowers: z.array(text(50)).max(30).optional(),
+    /**
+     * CR-2026-11-R4 (the owner's request L): the ordinal words of lives, in order ("first" is life 1), read from a
+     * phrasing's `life` group and used to name a character's lives. Absent: first to tenth.
+     */
+    lifeOrdinals: z.array(text(30)).max(20).optional(),
   })
   .strict();
 export type ConsistencyRules = z.infer<typeof consistencyRulesSchema>;

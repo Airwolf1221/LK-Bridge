@@ -2,35 +2,54 @@
  * The opt-in chronology sandbox check (test/sandbox/chronology.ts) run against the mock chronology: it reads only, gets
  * to an answer for every age, and its report says PASS on a consistent chronology and lists each row that is not (the
  * real run on the server is the owner's: `deploy/sandbox-test.sh --project test`).
+ *
+ * CR-2026-11-R4 (the owner's request S): through the same runtime and harness as the owner's run (`createSoakRuntime`
+ * pointed at the faithful mock, test/sandbox-mock/harness.ts), the chronology found as the real run finds it (the one
+ * confirmed in the bridge's database, `chronologyResourceFor`), and any failure of the engine or the structure fails the
+ * build with the whole report printed. Drift is reported under its own heading, never a failure (as on the real run).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
-import { runChronologySandbox } from '../sandbox/chronology.js';
+import { chronologyResourceFor, runChronologySandbox } from '../sandbox/chronology.js';
+import { makeFaithful } from '../sandbox-mock/faithful.js';
+import { MOCK_LIMITS, sandboxOnMock, type OnMock } from '../sandbox-mock/harness.js';
 import { C, chronologyWorld, type ChronologyWorld } from './world.js';
 
 let w: ChronologyWorld;
+let on: OnMock;
 beforeAll(async () => {
-  w = await chronologyWorld({ confirm: false });
+  w = makeFaithful(
+    await chronologyWorld({ env: { LK_TIER_LIMITS: JSON.stringify(MOCK_LIMITS) }, limits: MOCK_LIMITS }),
+  );
+  on = await sandboxOnMock(w.stack);
 });
-afterAll(async () => w.close());
+afterAll(async () => {
+  await on?.close();
+  await w?.close();
+});
 
+// The real run's read path (test/sandbox/chronology.test.ts): the sandbox runtime's engine, at P2.
 const run = () =>
   runChronologySandbox({
-    resourceId: C.resource,
+    resourceId: chronologyResourceFor(on.bridgeDbPath, PROJECT, {}),
     read: (op, params) =>
-      w.stack.runtime.engine.internalRead(PROJECT, op, params, { priority: 'P2', notFoundIsAnswer: true }),
+      on.sb.runtime.engine.internalRead(on.sb.projectId, op, params, {
+        priority: 'P2',
+        notFoundIsAnswer: true,
+      }),
   });
 
 describe('the chronology sandbox check, dry run', () => {
-  it('reads every age, writes nothing, and passes on a consistent chronology', async () => {
-    const done = w.mark();
+  it('finds the confirmed chronology as the real run does, reads every age, writes nothing, and passes', async () => {
+    expect(chronologyResourceFor(on.bridgeDbPath, PROJECT, {})).toBe(C.resource);
+    const before = { reads: on.sb.counters.reads, writes: on.sb.counters.writes };
     const r = await run();
-    const cost = done();
-    expect(cost.writes).toBe(0);
-    expect(r.failures, r.text).toEqual([]);
+    expect(on.sb.counters.writes - before.writes, r.text).toBe(0);
+    if (r.failures.length > 0) process.stdout.write(`${r.text}\n`);
+    expect(r.failures, 'the report above has every row in full').toEqual([]);
     expect(r.text).toContain('Result: PASS');
     expect(r.text).toContain('KCY cell shapes');
-    console.log(`sandbox chronology check: ${r.reads} reads on the mock world`);
+    console.log(`sandbox chronology check: ${on.sb.counters.reads - before.reads} reads on the mock world`);
   });
 
   it('does not fail the thousands separator: the tables write AA 1,988,119, LegendKeeper’s events AA 1988119 (ADR 0039)', async () => {

@@ -68,15 +68,33 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   retag) need a step-up on the session within the last ten minutes: the authenticator code (or a recovery code), or the
   password when no authenticator is set up. Otherwise the answer is `403 REAUTH_REQUIRED`; the dashboard asks in one
   dialog and sends the change again ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). A wrong code
-  stays in the dialog. Tightenings and brakes stay one click: lowering a scope, moving a connection down, read-only on,
-  ChatGPT's file source off, pausing writes and draining, Sign out everywhere, revoking a connection or a token,
-  cancelling a job, switching most maintenance jobs off, rejecting a proposal.
+  (`401 REAUTH_FAILED`) stays in the dialog, and a wrong current password (`401 WRONG_PASSWORD`) on the Account page is
+  shown there (CR-2026-11-R4); any other 401 means signed out. Tightenings and brakes stay one click: lowering a scope,
+  moving a connection down, read-only on, ChatGPT's file source off, pausing writes and draining, Sign out everywhere,
+  revoking a connection or a token, cancelling a job, switching most maintenance jobs off, rejecting a proposal.
+  CR-2026-11-R4 (ADR 0062 amendment 1): a guarded approval is judged on the whole proposal by the rail that made it a
+  proposal (its recorded reason: the deletes, bulk or assets rail) and by its operations, with the removals through a
+  low-level tool (`lk_api_write`, `lk_api_batch`, `lk_op_*`: a block or a row deleted, a list write that drops entries,
+  text taken off a pack page) and a member or invite removed counted as deletes; confirming a project's chronology asks
+  too (a reset is one click); and the OAuth consent page asks for the same step-up, on the page itself, before a scope
+  raise, a new profile above the default or a connection at scope `write` ([auth.md](auth.md#consent-and-profiles-chunk-2b)).
+  The owner's decisions on the fourth review ([ADR 0066](adr/0066-cr-2026-11-r4-decisions.md) part B, 21 November 2026):
+  releasing a job asks too, as resuming writes does: **Resume** of a paused job, **Resume** of one stopped part-way, a
+  **forced** step retry and starting a **restore rehearsal** (pausing a job, a normal retry and a rehearsal's plan stay
+  one click).
 - **Sessions (ADR 0062).** A session lasts 30 days from its last use (each use renews it and its cookie), survives a
-  restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included), at a
-  password change (the other sessions) or after 30 days unused. A link to the dashboard, Claude's consent page and
-  Google Drive's return come from another site, which a Strict cookie does not ride on: each answers once with a small
-  page of the bridge's own that opens the same address again from the bridge. When the live stream is refused, the
-  dashboard checks its session once and, signed out, goes to the sign-in page instead of reconnecting.
+  restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included, and
+  those already past their end), at a password change (the other sessions) or after 30 days unused. A link to the
+  dashboard, Claude's consent page and Google Drive's return come from another site, which a Strict cookie does not ride
+  on: each answers once (a top-level navigation only: never another site's image, fetch or frame) with a small page of
+  the bridge's own, never framed, that opens the same address again from the bridge. When the live stream is refused,
+  the dashboard checks its session once and, signed out, goes to the sign-in page instead of reconnecting.
+- **What counts as a use (CR-2026-11-R4, ADR 0062 amendment 1).** The owner's own actions and page loads. Not the
+  dashboard's own requests: every request it sends without the owner's input carries `X-LKB-Background: 1` (a page's
+  refresh timer, a reload for a live event or for the stream starting afresh, the session check after the stream
+  drops, anything sent more than a minute after the owner's last key, click or touch), and opening the live stream is
+  never one; the bridge checks such a request's session without moving its end or renewing its cookie. An idle open tab
+  therefore ends 30 days after the owner last used it.
 - **No secrets shown or logged.** An API key goes to the bridge once, from a write-only field; afterwards only its last
   four characters are shown (OPS2). The authenticator secret (while it is set up) and recovery codes are in one response
   each, marked `shownOnce`. A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
@@ -304,7 +322,7 @@ every route that changes a setting, a scope or a key, and of approving a proposa
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Session     | `GET /session` (user, CSRF token, version)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Overview †  | `GET /overview` (every project's status, health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice; where it stopped and Resume; v3 F3e: `split`, the split whose phase 1 it is), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                                                                                                                                                                                                                                                                                  |
+| Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice; where it stopped and Resume; v3 F3e: `split`, the split whose phase 1 it is), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume` (`resume` ‡), `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`; ‡ with `force: true`)                                                                                                                                                                                                                                                                               |
 | Errors †    | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Budgets †   | `GET /budgets` (one project's snapshot with its learned operation limits, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -332,7 +350,8 @@ CONFIRMATION_REQUIRED`, and every settings and reserve-floor change needs `confi
 
 `retry` on each step says whether it may be retried and whether it is _ambiguous_ (it may already have reached
 LegendKeeper). A normal retry re-checks first and cannot duplicate; `force: true` re-runs it as new work. The dashboard
-shows the warning and asks twice before forcing.
+shows the warning and asks twice before forcing, and a forced retry asks for the step-up as well (ADR 0066 part B,
+question 4).
 
 ## Tool calls (v2 E3)
 
@@ -577,7 +596,8 @@ again as prop_…"; the new proposal names the one it came from. Agents can neve
 The design's section 3 (decision D6). A package, a rename or a recreate whose job **stopped part-way** (a failed step, a
 cancel) shows a **Stopped part-way** card on its job page (and in the Review page's detail of a direct job): the step it
 stopped at and why, its last verified step (every step up to it succeeded and read back as planned), and how often it was
-resumed. **Resume** (after a confirmation that says from which step it continues and how many are left) continues the
+resumed. **Resume** (after a confirmation that says from which step it continues and how many are left, and the step-up:
+ADR 0066 part B, question 4) continues the
 same job: its own check runs again first, inside its locks; no step that succeeded is sent again, no page or document is
 made twice, and a step that is no longer safe is refused with its reason (the card shows it; resume again once the page
 is as it should be, or revert). Work you approved resumes without a new approval; every resume is audited (`job.resume`,
@@ -651,9 +671,10 @@ project.
   timeline's lanes (about three requests per age) and shows what it found: each age with its era, rows and count, any
   problem, and **how the tables write** dates and KCY values (each aspect's value, how many rows showed each way, up to
   three examples, and the aspects written more than one way). The style can be edited before **Confirm these settings**
-  (asks for a confirmation). **Clear the chronology settings** removes them (the tools refuse again). Every change is
-  audited as `project.set_chronology`. Until confirmed, the timeline tools refuse. The table is the authority; the
-  timeline is a derived view.
+  (asks for a confirmation and, since CR-2026-11-R4, the step-up: they are a project's settings, which the timeline
+  tools write by). **Clear the chronology settings** removes them (the tools refuse again; one click, a tightening).
+  Every change is audited as `project.set_chronology`. Until confirmed, the timeline tools refuse. The table is the
+  authority; the timeline is a derived view.
 - **Chronology check.** The last run of the check (state, when, requests, summary) and its findings in plain words: rows
   without an event, events without a row, a row and its event that disagree about the date or shape (**Row and event
   disagree about the date**), rows out of order, wrong KCY values, cells written differently from the confirmed style,
@@ -710,7 +731,7 @@ project.
   confirmation; audited `chronology.resolve`) is for one fixed by hand, after which other changes of its ages go ahead.
 
 Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lookup`, `PUT /projects/:name/chronology`
-(`{ confirm: true, settings }` or `{ confirm: true, reset: true }`), `GET /chronology/records`, `POST
+(`{ confirm: true, settings }`, which needs the step-up, or `{ confirm: true, reset: true }`, which does not), `GET /chronology/records`, `POST
 /chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`), `POST /chronology/propose-fix`
 (`{ confirm: true, project, age, rowId, confirmShapeChange? }`, `{ …, kind: 'count' }` or `{ …, kind: 'orphan', eventId }`:
 one proposal, or `nothing_to_do`), `GET /chronology/table-only` and `POST /chronology/table-only`
@@ -824,7 +845,8 @@ database copies), `GET /api/admin/snapshots/pages?project=&q=`, `GET /api/admin/
 `POST /api/admin/snapshots/runs/<run id>/abandon` `{ confirm: true }`, `POST /api/admin/snapshots/restore?project=`
 `{ page, snapshot, scope, document?, mode?, ids?, parent?, dryRun? }`, `POST /api/admin/snapshots/restore-image?project=`
 `{ snapshot, asset, updateReferences?, dryRun? }`, `POST /api/admin/snapshots/rehearsals/plan` `{ target, snapshot, mode,
-max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202), `GET
+max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202; it asks
+for the step-up, ADR 0066 part B, question 4), `GET
 /api/admin/snapshots/rehearsals/<id>`, `POST /api/admin/snapshots/rehearsals/<id>/delete-root` `{ confirm: true }`. A
 refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`, `snapshots.restore`,
 `snapshots.rehearsal` and `snapshots.rehearsal_delete_root`.
@@ -1147,4 +1169,8 @@ On the Audits page, a finding of the **Consistency** category has **Pick the rig
 each restatement side by side (page, lifecycle, where, excerpt), each with **Pick this value**, a field to type the
 right value, the agents' suggestions (shown, never applied) and the earlier picks. A pick asks for the step-up (ADR 0062:
 a pack-level decision), then makes ONE proposal editing every page that disagrees; approve it on the Proposals page
-(selectively if wanted; more than 10 pages asks for the step-up again). The job is revertible from the Jobs page.
+(selectively if wanted; more than 10 pages asks for the step-up again). The job is revertible from the Jobs page. **Pick
+this value** sends the value as shown with the side: when that side reads otherwise now (a page changed after the
+audit), the pick is refused ("SIDE_CHANGED") and nothing is proposed; run the audit again and pick again. Each edit is
+made where the check read the value, and only there; the proposal lists what it leaves as it is, with why (a value
+changed since, a quotation, a page archived since, a date split by formatting).

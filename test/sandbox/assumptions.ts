@@ -39,6 +39,7 @@ import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
 import { fromMarkdown, stubResolver } from '../../src/markdown/index.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
 import { runSettled } from './wait.js';
+import { wholeError } from './whole.js';
 
 type Obj = Record<string, any>;
 
@@ -137,7 +138,7 @@ export async function runAssumptions(
       record(id, title, 'pass', await fn());
     } catch (e) {
       if (e instanceof Fails) record(id, title, 'fail', e.message);
-      else record(id, title, 'inconclusive', `the check could not complete: ${(e as Error).message}`);
+      else record(id, title, 'inconclusive', `the check could not complete: ${wholeError(e)}`);
     }
   };
 
@@ -279,7 +280,7 @@ export async function runAssumptions(
         imageId = typeof asset.body?.id === 'string' ? asset.body.id : null;
       } catch (e) {
         verdict = 'inconclusive';
-        detail = e instanceof Unclear ? e.message : `the check could not complete: ${(e as Error).message}`;
+        detail = e instanceof Unclear ? e.message : `the check could not complete: ${wholeError(e)}`;
       } finally {
         // Deleted by id whatever happened: the image, then its folder (404 counts as gone).
         const left: string[] = [];
@@ -1309,7 +1310,7 @@ export async function runAssumptions(
         });
         if (made.status !== 201 && made.status !== 200)
           throw new Unclear(
-            `createFeature with labelSize md answered ${made.status} ${made.code ?? ''} ${JSON.stringify(made.errors ?? made.body ?? null).slice(0, 300)}`,
+            `createFeature with labelSize md answered ${made.status} ${made.code ?? ''} ${JSON.stringify(made.errors ?? made.body ?? null)}`,
           );
         featureId = String(made.body?.id ?? fid);
         const listed = await raw('listFeatures', 'GET', `${docPath()}/features`);
@@ -1323,14 +1324,14 @@ export async function runAssumptions(
           detail = `LegendKeeper HAS FIXED IT: listFeatures answered 200 with the md label (labelSize read back as ${JSON.stringify(back?.labelSize ?? null)}). Set LABEL_SIZE_WRITABLE in src/maps/features.ts to true (ADR 0046 decision 14) once confirmed.`;
         } else {
           verdict = 'fail';
-          detail = `listFeatures answered ${listed.status} ${listed.code ?? ''} ${JSON.stringify(listed.errors ?? null).slice(0, 300)}, neither the known 400 nor a fix`;
+          detail = `listFeatures answered ${listed.status} ${listed.code ?? ''} ${JSON.stringify(listed.errors ?? listed.body ?? null)}, neither the known 400 nor a fix`;
         }
       } catch (e) {
         verdict = e instanceof Fails ? 'fail' : 'inconclusive';
         detail =
           e instanceof Unclear || e instanceof Fails
             ? e.message
-            : `the check could not complete: ${(e as Error).message}`;
+            : `the check could not complete: ${wholeError(e)}`;
       } finally {
         // Clean up by id, even after a failed assertion, then check the map lists again.
         if (page && featureId) {

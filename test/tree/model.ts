@@ -38,6 +38,8 @@ export interface Res {
   props: Prop[];
   /** Read form, as LegendKeeper answers it (for example `fas fa-book`); a write takes the bare name (`book`). */
   iconGlyph?: string | null;
+  /** CR-2026-11-R4 (`TreeModel.faithful` only): the pin colour, stored and answered as sent. */
+  iconColor?: string | null;
   /** Bumped by any row write (the version the rows' If-Match checks). */
   propsVersion: number;
 }
@@ -50,6 +52,9 @@ export interface Doc {
   rank: string;
   isHidden: boolean;
   deletedAt: string | null;
+  /** CR-2026-11-R4 (`TreeModel.faithful` only): as written by createDocument and updateDocument. */
+  isFullWidth?: boolean;
+  calendarId?: string;
 }
 
 const err = (status: number, code: string, message = `model ${code}`): MockResponse => ({
@@ -109,6 +114,24 @@ export class TreeModel {
    * fixtures compare blocks as written).
    */
   fillMentions = false;
+  /**
+   * CR-2026-11-R4 (the owner's request S): LegendKeeper as its specification and the owner's runs describe it, where this
+   * model's default (which the older tests were written against) differs. Off by default; the sandbox checks' runs on
+   * the mock turn it on (test/sandbox-mock/faithful.ts), and nothing else does.
+   *
+   * - A page's blocks as `replaceDocumentBlocks` and `createResource`'s `documents[].blocks` store them
+   *   (`writtenBlocks`): a block sent without an id is given one, a requested id is kept (the spec's DocumentBlocksWrite;
+   *   the owner's smoke run of 11 November 2026 passed d.blocks and d.infobox, which address blocks written without ids
+   *   by the ids LegendKeeper gave them). The same id twice is refused, 400 VALIDATION_ERROR at the second occurrence
+   *   (the spec, and what the split assumes; no real run has recorded it yet: assumptions-r3's X3 and X7 and split-ids'
+   *   item 4 note either answer, and the real run decides).
+   * - `createResource`: with `documents`, 1 to 5 documents, created in that order, a page's blocks inline (the spec);
+   *   without, one `blank` document named Main (the spec; D23, which the owner's assumptions run of 11 November 2026
+   *   passed: "a new page's Main is blank and empty; the first insert makes it a page named Main").
+   * - A resource's `iconColor`, a document's `isFullWidth` and a timeline's `calendarId` stored and answered as written
+   *   (A9 and E27, which that run passed).
+   */
+  faithful = false;
 
   constructor(private readonly now: () => number) {}
 
@@ -272,7 +295,7 @@ export class TreeModel {
       name: r.name,
       parentId: r.parentId,
       iconGlyph: null,
-      iconColor: null,
+      iconColor: r.iconColor ?? null,
       tags: [...r.tags],
       aliases: [...r.aliases],
       rank: r.rank,
@@ -286,7 +309,16 @@ export class TreeModel {
   }
 
   private docView(d: Doc) {
-    return { id: d.id, name: d.name, type: d.type, rank: d.rank, isHidden: d.isHidden };
+    return {
+      id: d.id,
+      name: d.name,
+      type: d.type,
+      rank: d.rank,
+      isHidden: d.isHidden,
+      // CR-2026-11-R4 (faithful): a document's isFullWidth and a timeline's calendarId, as written (E27).
+      ...(this.faithful ? { isFullWidth: d.isFullWidth ?? false } : {}),
+      ...(this.faithful && d.calendarId !== undefined ? { calendarId: d.calendarId } : {}),
+    };
   }
 
   private propView(p: Prop) {
@@ -320,6 +352,7 @@ export class TreeModel {
       isHidden: r.isHidden,
       isLocked: r.isLocked,
       ...(r.iconGlyph ? { iconGlyph: r.iconGlyph } : {}),
+      ...(r.iconColor !== undefined ? { iconColor: r.iconColor } : {}),
       permissions: {},
       documents: this.liveDocs(r).map((d) => this.docView(d)),
       properties: r.props.map((p) => this.propView(p)),
@@ -421,6 +454,14 @@ export class TreeModel {
     return { status: 201, body: this.resourceView(r) };
   }
 
+  /**
+   * CR-2026-11-R4 (the owner's request S; narrative-f4c's N3): LegendKeeper copies a template's documents, with their
+   * content, "in an order it does not state" (ADR 0050). Off (the default, which every older test expects): a copy gets
+   * a fresh, empty Main. `as-template`: each live document of the template copied with its blocks, in the template's
+   * order; `reversed`: the same, listed in the reverse order (another page document before Main).
+   */
+  copyTemplateDocuments: false | 'as-template' | 'reversed' = false;
+
   private copyTemplate(
     t: Res,
     id: string,
@@ -429,6 +470,16 @@ export class TreeModel {
     withChildren: boolean,
   ): Res {
     const r = this.seed({ id, name, parentId, props: false });
+    if (this.copyTemplateDocuments) {
+      for (const d of r.docs) this.docs.delete(d);
+      r.docs = [];
+      const from = this.liveDocs(t);
+      for (const d of this.copyTemplateDocuments === 'reversed' ? [...from].reverse() : from) {
+        const copy = this.addDoc(r.id, d.name, d.type);
+        const body = this.blocks.get(d.id);
+        if (body) this.blocks.set(copy.id, { version: 1, blocks: structuredClone(body.blocks) });
+      }
+    }
     // C2d (A1): LegendKeeper reuses the template's property and row ids in a copy (unique only within a page).
     r.props = structuredClone(t.props);
     if (withChildren) {
@@ -460,7 +511,8 @@ export class TreeModel {
           body: { data, hasMore: more, nextCursor: more ? String(offset + limit) : null },
         };
       }
-      if (M === 'POST') return this.create(body, 'createResource');
+      if (M === 'POST')
+        return this.faithful ? this.createWithDocuments(body) : this.create(body, 'createResource');
     }
     if (p.length === 2 && p[1] === 'batch' && M === 'POST') {
       const items = (body.resources ?? []) as Record<string, unknown>[];
@@ -513,6 +565,9 @@ export class TreeModel {
         const iconError = this.iconError(body);
         if (iconError) return iconError;
         if (typeof body.iconGlyph === 'string') res.iconGlyph = `fas fa-${body.iconGlyph}`;
+        // CR-2026-11-R4 (faithful): the colour stored as sent (A9, which the owner's run of 11 November 2026 passed).
+        if (this.faithful && (typeof body.iconColor === 'string' || body.iconColor === null))
+          res.iconColor = body.iconColor;
         if (typeof body.name === 'string') res.name = this.nameFilter(body.name);
         if (Array.isArray(body.tags)) res.tags = body.tags as string[];
         if (Array.isArray(body.aliases)) res.aliases = body.aliases as string[];
@@ -568,6 +623,10 @@ export class TreeModel {
           typeof body.name === 'string' ? body.name : 'Doc',
           typeof body.type === 'string' ? body.type : 'page',
         );
+        if (this.faithful) {
+          d.isFullWidth = body.isFullWidth === true;
+          if (typeof body.calendarId === 'string' && d.type === 'time') d.calendarId = body.calendarId;
+        }
         this.mutations.push({ op: 'createDocument', id: d.id });
         return { status: 201, body: this.docView(d) };
       }
@@ -595,7 +654,9 @@ export class TreeModel {
       if (M === 'GET') return { status: 200, body: view() };
       if (M === 'PUT') {
         if (req.headers['if-match'] !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
-        b.blocks = structuredClone((body.blocks ?? []) as unknown[]);
+        const written = this.faithful ? this.writtenBlocks((body.blocks ?? []) as unknown[]) : null;
+        if (written !== null && !Array.isArray(written)) return written;
+        b.blocks = written ?? structuredClone((body.blocks ?? []) as unknown[]);
         b.version++;
         doc.type = 'page';
         this.mutations.push({ op: 'replaceDocumentBlocks', id: doc.id });
@@ -693,6 +754,9 @@ export class TreeModel {
       if (M === 'PATCH') {
         if (typeof body.name === 'string') doc.name = body.name;
         if (typeof body.isHidden === 'boolean') doc.isHidden = body.isHidden;
+        if (this.faithful && typeof body.isFullWidth === 'boolean') doc.isFullWidth = body.isFullWidth;
+        if (this.faithful && typeof body.calendarId === 'string' && doc.type === 'time')
+          doc.calendarId = body.calendarId;
         this.mutations.push({ op: 'updateDocument', id: doc.id });
         return { status: 200, body: this.docView(doc) };
       }
@@ -813,6 +877,111 @@ export class TreeModel {
       return { status: 204 };
     }
     return undefined;
+  }
+
+  // ============================================================================================ faithful (CR-2026-11-R4)
+
+  /**
+   * Blocks as LegendKeeper stores a write of them (`faithful`): every block sent without an id given a new one, at any
+   * depth; a requested id kept; the same id twice refused (400 VALIDATION_ERROR at the second occurrence, `at` naming
+   * where the blocks were sent).
+   */
+  writtenBlocks(blocks: readonly unknown[], at = 'blocks'): unknown[] | MockResponse {
+    const out = structuredClone(blocks) as unknown[];
+    const seen = new Set<string>();
+    const twice = (list: readonly unknown[], path: string): string | null => {
+      for (const [i, x] of list.entries()) {
+        const b = x as { id?: unknown; children?: unknown } | null;
+        if (!b || typeof b !== 'object') continue;
+        if (typeof b.id === 'string' && b.id !== '') {
+          if (seen.has(b.id)) return `${path}.${i}.id`;
+          seen.add(b.id);
+        }
+        if (Array.isArray(b.children)) {
+          const hit = twice(b.children as unknown[], `${path}.${i}.children`);
+          if (hit) return hit;
+        }
+      }
+      return null;
+    };
+    const dup = twice(out, at);
+    if (dup)
+      return {
+        status: 400,
+        body: {
+          message: 'The same block id is used twice',
+          code: 'VALIDATION_ERROR',
+          requestId: 'model-VALIDATION_ERROR',
+          errors: [{ path: dup, message: 'The same block id is used twice' }],
+        },
+      };
+    // A key-value block's rows and an infobox's properties (and a key-value property's rows) get ids and ranks too: the
+    // block-level routes address them (listBlockRows, listBlockProperties), as LegendKeeper's reads give them.
+    const rowsOf = (rows: unknown, prefix: string) => {
+      if (!Array.isArray(rows)) return;
+      (rows as Record<string, unknown>[]).forEach((row, i) => {
+        if (!row || typeof row !== 'object') return;
+        if (typeof row.id !== 'string' || row.id === '') row.id = newId(prefix);
+        if (typeof row.rank !== 'string') row.rank = rankOf((i + 1) * 1000);
+      });
+    };
+    const give = (list: unknown[]) => {
+      for (const x of list) {
+        const b = x as { id?: unknown; kind?: unknown; rows?: unknown; children?: unknown } | null;
+        if (!b || typeof b !== 'object') continue;
+        if (typeof b.id !== 'string' || b.id === '') b.id = newId('b');
+        if (b.kind === 'keyValue') rowsOf(b.rows, 'w');
+        if (b.kind === 'infobox' && Array.isArray(b.rows)) {
+          rowsOf(b.rows, 'p');
+          for (const p of b.rows as Record<string, unknown>[]) {
+            if (p?.kind === 'keyValue') rowsOf(p.rows, 'w');
+            if (Array.isArray(p?.children)) give(p.children as unknown[]);
+          }
+        }
+        if (Array.isArray(b.children)) give(b.children as unknown[]);
+      }
+    };
+    give(out);
+    return out;
+  }
+
+  /**
+   * `createResource` (`faithful`): with `documents`, 1 to 5 documents, created in that order, a page's blocks inline and
+   * validated as `replaceDocumentBlocks` validates them (nothing is made when one is refused); without, a blank Main.
+   */
+  private createWithDocuments(body: Record<string, unknown>): MockResponse {
+    const specs = Array.isArray(body.documents)
+      ? (body.documents as Record<string, unknown>[])
+      : [{ name: 'Main', type: 'blank' }];
+    if (specs.length < 1 || specs.length > 5)
+      return err(400, 'VALIDATION_ERROR', 'documents: 1 to 5 documents');
+    const contents: (unknown[] | null)[] = [];
+    for (const [i, s] of specs.entries()) {
+      if (!Array.isArray(s.blocks)) {
+        contents.push(null);
+        continue;
+      }
+      if (s.type !== undefined && s.type !== 'page')
+        return err(400, 'VALIDATION_ERROR', `documents[${i}].blocks: only a page document takes blocks`);
+      const written = this.writtenBlocks(s.blocks as unknown[], `documents.${i}.blocks`);
+      if (!Array.isArray(written)) return written;
+      contents.push(written);
+    }
+    const made = this.create({ ...body, documents: undefined }, 'createResource');
+    if (made.status !== 201) return made;
+    const r = this.res.get((made.body as { id: string }).id)!;
+    if (typeof body.iconColor === 'string') r.iconColor = body.iconColor;
+    for (const d of r.docs) this.docs.delete(d);
+    r.docs = [];
+    specs.forEach((s, i) => {
+      const blocks = contents[i] ?? null;
+      const type = typeof s.type === 'string' ? s.type : blocks ? 'page' : 'blank';
+      const d = this.addDoc(r.id, typeof s.name === 'string' ? s.name : 'Main', type);
+      d.isFullWidth = false;
+      if (type === 'time' && typeof s.calendarId === 'string') d.calendarId = s.calendarId;
+      if (blocks) this.blocks.set(d.id, { version: 1, blocks });
+    });
+    return { status: 201, body: this.resourceView(r) };
   }
 }
 

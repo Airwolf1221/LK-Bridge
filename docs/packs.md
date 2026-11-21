@@ -442,6 +442,7 @@ appraisal and the split need to know:
 | `universalTypes`                            | the owner types whose material is universal (Species, Creature, Culture, Magic, Technology, Material, Equipment, Religion, Law, Condition, Ceremony…)                                                                                                                 |
 | `questions`                                 | the owner's questions for the triggers the bridge cannot measure                                                                                                                                                                                                      |
 | `guardWords`                                | 120: `write_page` refuses taking that many words off a pack page (`USE_ARKONA_SPLIT`)                                                                                                                                                                                 |
+| `sections`                                  | CR-2026-11-R4: which new owners answer for Source Boundaries and Unresolved Material, by Reference Type, else role, else owner type, else `otherwise` (Arkona: a Core, a Compact Reference, a relationship owner and any other owner; not an Art or specialist page)  |
 
 **What the pack's rules do in a split.** A new owner is made by F3a's rules (a character's page: its role, title,
 Reference Type, its place in the character's index; a Compact Reference with no index gets one, and moves into it) or

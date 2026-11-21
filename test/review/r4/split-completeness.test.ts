@@ -42,13 +42,16 @@ describe('the plan refuses a new owner that leaves a section or its Dependencies
   });
   afterAll(() => w?.close());
 
+  // CR-2026-11-R4 (the owner's request): the sections are asked only of the kinds of page the pack expects to carry them
+  // (splits.sections), so SC-1 asks the relationship owner (its role expects both); a specialist page such as the
+  // Biography is no longer asked (test/review/r4-owner/split-sections.test.ts).
   it('SC-1 a new owner that does not address Source Boundaries or Unresolved Material: SPLIT_SECTIONS_UNADDRESSED', async () => {
     const writes = w.requests().writes;
-    const r = await split(w, { ...zahraWith('bio', { notApplicable: undefined }), dryRun: true });
+    const r = await split(w, { ...zahraWith('rel', { notApplicable: undefined }), dryRun: true });
     const hit = refusal(r, 'SPLIT_SECTIONS_UNADDRESSED');
     expect(hit.unaddressed).toEqual([
-      { destination: 'bio', section: 'Source Boundaries' },
-      { destination: 'bio', section: 'Unresolved Material' },
+      { destination: 'rel', section: 'Source Boundaries' },
+      { destination: 'rel', section: 'Unresolved Material' },
     ]);
     expect(hit.fields).toEqual({
       'Source Boundaries': 'sourceBoundaries',
@@ -58,11 +61,11 @@ describe('the plan refuses a new owner that leaves a section or its Dependencies
     expect(hit.message).toContain('never writes these sections itself');
     // One section answered, the other not: only the other is listed.
     const half = await split(w, {
-      ...zahraWith('bio', { notApplicable: { unresolvedMaterial: NOT_APPLICABLE.unresolvedMaterial } }),
+      ...zahraWith('rel', { notApplicable: { unresolvedMaterial: NOT_APPLICABLE.unresolvedMaterial } }),
       dryRun: true,
     });
     expect(refusal(half, 'SPLIT_SECTIONS_UNADDRESSED').unaddressed).toEqual([
-      { destination: 'bio', section: 'Source Boundaries' },
+      { destination: 'rel', section: 'Source Boundaries' },
     ]);
     expect(w.requests().writes).toBe(writes);
   });

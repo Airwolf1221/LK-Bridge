@@ -350,9 +350,18 @@ export class OwnerAuth {
    * open, idle dashboard does not keep its session alive by itself).
    */
   isLive(token: string | undefined): boolean {
-    if (!token || token.length > 128) return false;
+    return this.peekSession(token) !== undefined;
+  }
+
+  /**
+   * CR-2026-11-R4: the live session for a cookie value WITHOUT counting as a use (its end does not move, its cookie is
+   * not renewed): the dashboard's own requests (`X-LKB-Background`, the live stream) and the checks a request makes after
+   * the guard has already counted it.
+   */
+  peekSession(token: string | undefined): SessionRecord | undefined {
+    if (!token || token.length > 128) return undefined;
     const s = this.deps.store.getSession(hashSecret(token));
-    return s !== undefined && s.revokedAt === null && s.expiresAt > this.deps.now();
+    return s !== undefined && s.revokedAt === null && s.expiresAt > this.deps.now() ? s : undefined;
   }
 
   /**

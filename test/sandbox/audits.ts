@@ -26,6 +26,7 @@ import type { Runtime } from '../../src/runtime.js';
 import type { Finding, Verdict } from './smoke.js';
 import type { HttpCounters } from './soak.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
+import { wholeError } from './whole.js';
 
 type Obj = Record<string, any>;
 
@@ -70,7 +71,7 @@ export async function runAuditsSandbox(t: AuditsTarget, o: AuditsOptions = {}): 
       else record(id, title, 'noted', `${r.noted}; ${costText(before)}`);
     } catch (e) {
       const verdict: Verdict = e instanceof Fails ? 'fail' : 'inconclusive';
-      record(id, title, verdict, `${(e as Error).message}; ${costText(before)}`);
+      record(id, title, verdict, `${wholeError(e)}; ${costText(before)}`);
     }
   };
   const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> =>
@@ -261,7 +262,7 @@ export async function runAuditsSandbox(t: AuditsTarget, o: AuditsOptions = {}): 
           };
         } catch (e) {
           return {
-            noted: `REFUSED or stopped (${(e as Error).message.slice(0, 300)}); nothing else changed. The fix should then be offered only for top-level paragraphs.`,
+            noted: `REFUSED or stopped (${(e as Error).message}); nothing else changed. The fix should then be offered only for top-level paragraphs.`,
           };
         }
       },

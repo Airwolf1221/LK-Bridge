@@ -22,7 +22,8 @@ export const registerSecurity: Register = (api, ctx) => {
 
   api.get('/security', (req) => {
     const token = sessionTokenOf(req);
-    const session = owner.getSession(token);
+    // CR-2026-11-R4: read, not used again (the guard counted this request, or did not: the dashboard's own refresh).
+    const session = owner.peekSession(token);
     const until = session ? owner.reauthUntil(session) : null;
     const pw = credentials.password();
     const totp = credentials.totp();

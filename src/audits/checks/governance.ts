@@ -460,12 +460,17 @@ export function resolvableNames(
   return { whole, parts, generic };
 }
 
-/** Whether a name (compared form) resolves as a whole name: as it is, or without its trailing generic word. */
+/**
+ * Whether a name (compared form) resolves as a whole name: as it is, or without its trailing generic word. CR-2026-11-R4
+ * (LD-05, LD-06; ADR 0063 decision A5's "a single word never stands for a name"): without its generic word a name must
+ * keep two words or more, so "the Tagging Standard" never resolves through a one-word heading or tag "Tagging"; it is
+ * then reported as the run inside a longer name it is (the owner's decision 3).
+ */
 export function knows(known: Resolvable, k: string): boolean {
   if (k === '') return false;
   if (known.whole.has(k)) return true;
   const short = withoutGeneric(k, known.generic);
-  return short !== null && known.whole.has(short);
+  return short !== null && short.includes(' ') && known.whole.has(short);
 }
 
 /** Whether a name (compared form) that does not resolve is a run of two words or more inside a known name. */

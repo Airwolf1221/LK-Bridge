@@ -60,28 +60,25 @@ describe('RN steering: the low-level routes', () => {
     expect(w.repo.live(P.nadiraBio)!.name).toBe(before);
   });
 
-  // CR-2026-11-R3 (R3-58): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: left open (low, modelled): the steering reads the tree's stored sidebar; a live read when it is unknown is a cost decision.
-  it.fails(
-    'RN-54 lk_api_write refuses a subject’s rename although the tree has not read the page’s sidebar yet (modelled)',
-    async () => {
-      // update_resource reads the page live: an owner page with a Subject fact (no owner tag) is refused.
-      const live = await w.call('update_resource', {
-        page: P.untagged,
-        name: 'Orskhaven - Polity Reference',
-      });
-      expect(code(live)).toBe('USE_ARKONA_RENAME');
-      // The tree holds a page's sidebar only once its properties pass has read it ("null when its properties have not
-      // been read", src/tree/queries.ts): a page made or changed since the last pass.
-      w.stack.db
-        .prepare('UPDATE tree_nodes SET sidebar = NULL WHERE project_id = ? AND id = ?')
-        .run(PROJECT, P.untagged);
-      const low = await w.call('lk_api_write', {
-        operationId: 'updateResource',
-        params: { path: { resourceId: P.untagged }, body: { name: '[BSRC] Orskhaven - Polity Reference' } },
-      });
-      expect(code(low), low.text.slice(0, 300)).toBe('USE_ARKONA_RENAME');
-    },
-  );
+  // CR-2026-11-R3 (R3-58): built (docs/reviews/CR-2026-11-R3.md section 7; ADR 0058's second amendment): with the tree's stored sidebar unknown, the steering reads the page live once, as update_resource does, counted in the call's cost.
+  it('RN-54 lk_api_write refuses a subject’s rename although the tree has not read the page’s sidebar yet (modelled)', async () => {
+    // update_resource reads the page live: an owner page with a Subject fact (no owner tag) is refused.
+    const live = await w.call('update_resource', {
+      page: P.untagged,
+      name: 'Orskhaven - Polity Reference',
+    });
+    expect(code(live)).toBe('USE_ARKONA_RENAME');
+    // The tree holds a page's sidebar only once its properties pass has read it ("null when its properties have not
+    // been read", src/tree/queries.ts): a page made or changed since the last pass.
+    w.stack.db
+      .prepare('UPDATE tree_nodes SET sidebar = NULL WHERE project_id = ? AND id = ?')
+      .run(PROJECT, P.untagged);
+    const low = await w.call('lk_api_write', {
+      operationId: 'updateResource',
+      params: { path: { resourceId: P.untagged }, body: { name: '[BSRC] Orskhaven - Polity Reference' } },
+    });
+    expect(code(low), low.text.slice(0, 300)).toBe('USE_ARKONA_RENAME');
+  });
 
   it('RN-55 plainRename through lk_api_write (a direct write) is in the job’s title and in its journal entry', async () => {
     const reason = 'a typo in this one page only';
@@ -171,29 +168,26 @@ describe('RN steering: a pack tool that renames a page', () => {
   });
   afterAll(() => w?.close());
 
-  // CR-2026-11-R3 (R3-59): OPEN (docs/reviews/CR-2026-11-R3.md section 7), kept as an expected failure: left open (low): arkona_appraisal_fix's name fix is not steered.
-  it.fails(
-    'RN-57 arkona_appraisal_fix’s name fix never changes a subject’s name without USE_ARKONA_RENAME or a reason',
-    async () => {
-      const d = await w.call('arkona_appraise_owner', { under: P.desk, limit: 200, project: 'test' });
-      const v = await w.call('arkona_visual_hygiene', { limit: 200, project: 'test' });
-      const f = [...(d.body.findings ?? []), ...(v.body.findings ?? [])].find(
-        (x: any) => x.check === 'em_dash_name' && x.page?.id === P.dashName,
-      );
-      expect(f, 'the em-dash name finding').toBeTruthy();
-      const r = await w.call('arkona_appraisal_fix', { findingId: f.id, project: 'test' });
-      if (code(r) === 'USE_ARKONA_RENAME') return; // steered: held
-      expect(r.body.status, r.text.slice(0, 300)).toBe('proposal_captured');
-      const p = w.stack.runtime.policy.proposals.detail(String(r.body.proposalId))!;
-      const ops = p.ops
-        .filter((o) => o.op === 'updateResource')
-        .map((o) => String((o.params as { body?: { name?: unknown } }).body?.name));
-      // The subject part of “Gata—Lund - Polity Reference” is “Gata—Lund”; the fix makes it “Gata” (descriptor “Lund - …”).
-      expect(ops).toEqual(['[BSRC] Gata - Lund - Polity Reference']);
-      expect(
-        `${p.summary} ${JSON.stringify(p.operations ?? [])}`,
-        'a plain-rename reason shown to the owner',
-      ).toMatch(/plain rename/i);
-    },
-  );
+  // CR-2026-11-R3 (R3-59): built (docs/reviews/CR-2026-11-R3.md section 7; ADR 0054's amendment): a name fix that changes a subject's name stays the owner's proposal and says it is a plain rename, with its reason.
+  it('RN-57 arkona_appraisal_fix’s name fix never changes a subject’s name without USE_ARKONA_RENAME or a reason', async () => {
+    const d = await w.call('arkona_appraise_owner', { under: P.desk, limit: 200, project: 'test' });
+    const v = await w.call('arkona_visual_hygiene', { limit: 200, project: 'test' });
+    const f = [...(d.body.findings ?? []), ...(v.body.findings ?? [])].find(
+      (x: any) => x.check === 'em_dash_name' && x.page?.id === P.dashName,
+    );
+    expect(f, 'the em-dash name finding').toBeTruthy();
+    const r = await w.call('arkona_appraisal_fix', { findingId: f.id, project: 'test' });
+    if (code(r) === 'USE_ARKONA_RENAME') return; // steered: held
+    expect(r.body.status, r.text.slice(0, 300)).toBe('proposal_captured');
+    const p = w.stack.runtime.policy.proposals.detail(String(r.body.proposalId))!;
+    const ops = p.ops
+      .filter((o) => o.op === 'updateResource')
+      .map((o) => String((o.params as { body?: { name?: unknown } }).body?.name));
+    // The subject part of “Gata—Lund - Polity Reference” is “Gata—Lund”; the fix makes it “Gata” (descriptor “Lund - …”).
+    expect(ops).toEqual(['[BSRC] Gata - Lund - Polity Reference']);
+    expect(
+      `${p.summary} ${JSON.stringify(p.operations ?? [])}`,
+      'a plain-rename reason shown to the owner',
+    ).toMatch(/plain rename/i);
+  });
 });

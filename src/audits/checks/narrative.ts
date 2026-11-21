@@ -18,6 +18,7 @@ import {
   type StoryLayout,
 } from '../../narrative/layout.js';
 import { narrativeTags, type NarrativeKindTag } from '../../narrative/tags.js';
+import { lifecycleSignals } from '../../narrative/signals.js';
 import type { NarrativeRules } from '../../packs/types.js';
 import { fact, isNarrativePage, modelView, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
@@ -92,12 +93,26 @@ export function narrativeCheck(ctx: AuditContext): FindingDraft[] {
         evidence: { name: p.rawName },
       });
   }
+  // CR-2026-11-R4 (ADR 0065 amendment 2): canon, Working or Archived pages sitting in Narratives, where pages have no
+  // lifecycle (so theirs is ignored there). Reported, never fixed: only the owner decides where such a page belongs.
+  const signals = (n: NNode) => insideSignalsOf(ctx, view, n);
+  for (const id of ctx.narrativeIds ?? []) {
+    const p = page(id);
+    const s = signals(p);
+    if (s.length > 0)
+      out.push({
+        code: 'narrative_lifecycle_page',
+        pageId: p.id,
+        message: `“${p.rawName}” sits in ${narratives.displayName} but carries a lifecycle signal (${s.join(', ')}): pages there have no lifecycle, so its lifecycle is ignored and the narrative tools leave it (and its story) alone. The owner moves it out (a proposal) or makes it a narrative page by hand.`,
+        evidence: { name: p.rawName, signals: s },
+      });
+  }
 
   // ---- every story.
   for (const c of conts) {
     const au = !c.main;
     for (const s of storiesIn(view, c.node)) {
-      const layout = storyLayout(view, rules, roots, s);
+      const layout = storyLayout(view, rules, roots, s, signals);
       storyChecks(ctx, input, view, layout, c.name, au, out);
     }
     // A continuity's own pages (a Chronology Map) and its stories: tags.
@@ -141,7 +156,21 @@ function indexFix(rules: NarrativeRules, narratives: NNode, name: string, au: bo
   };
 }
 
-/** The narrative tags a page should carry, and a fix setting them (others kept after them). */
+/** A page's lifecycle signals as read inside Narratives (src/narrative/signals.ts, the `inside` reading). */
+function insideSignalsOf(ctx: AuditContext, view: NView, n: NNode): string[] {
+  const status = view.fact(n.id, ctx.lifecycle.fields.status);
+  return lifecycleSignals(
+    ctx.lifecycle,
+    { name: n.rawName, tags: n.tags, status: status === null ? [] : [status] },
+    'inside',
+  );
+}
+
+/**
+ * The narrative tags a page should carry, and a fix adding them. CR-2026-11-R4 (F2): the fix is ADDITIVE only: the
+ * missing narrative tags first, then every tag the page holds, unchanged (a status tag included: removing one is the
+ * lifecycle tools', never an ordinary approval's).
+ */
 function tagCheck(
   rules: NarrativeRules,
   p: AuditPage,
@@ -154,7 +183,9 @@ function tagCheck(
   const has = (t: string) => p.tags.some((x) => nkey(x) === nkey(t));
   const missing = want.filter((t) => !has(t));
   if (missing.length === 0) return;
-  const tags = narrativeTags(rules, kind, au, p.tags);
+  // The narrative tags first (the page's own spelling where it has one), then every other tag it holds, in its order.
+  const own = want.map((t) => p.tags.find((x) => nkey(x) === nkey(t)) ?? t);
+  const tags = [...own, ...p.tags.filter((x) => !own.some((o) => nkey(o) === nkey(x)))];
   out.push({
     code: 'narrative_tags',
     pageId: p.id,
@@ -239,6 +270,9 @@ function storyChecks(
   for (const a of l.actMaps) tagCheck(rules, page(a.node.id), 'actMap', au, out);
   for (const p of l.plans) tagCheck(rules, page(p.node.id), 'chapterPlan', au, out);
   for (const c of l.chapters) tagCheck(rules, page(c.node.id), 'chapter', au, out);
+  // CR-2026-11-R4 (F8): a page set apart for its lifecycle signal still lacks its narrative tags by the kind its name
+  // gives (the fix only adds them; `narrative_lifecycle_page` reports the signal).
+  for (const x of l.lifecycle) if (x.kind) tagCheck(rules, page(x.node.id), x.kind, au, out);
   // Continuity fields.
   const contOk = (v: string) =>
     au
@@ -411,6 +445,11 @@ function storyChecks(
         d,
         place && read(firstText.slice(0, firstText.indexOf(sep)).trim()) ? place : null,
       );
+      // CR-2026-11-R4 (F5): the first block is replaced only when its text before the separator reads WHOLE as a
+      // calendar date (a wrong or old dateline); anything else (an epigraph, the prose) stays and the dateline goes
+      // before it.
+      const head = (firstText.includes(sep) ? firstText.slice(0, firstText.indexOf(sep)) : firstText).trim();
+      const replaceFirst = head !== '' && read(head) !== null;
       out.push({
         code: 'narrative_dateline_mismatch',
         pageId: ch.id,
@@ -425,8 +464,11 @@ function storyChecks(
             documentId: scan.documentId,
             dateline,
             expectedFirst: firstText,
+            replaceFirst,
           },
-          summary: `Make ${ch.displayName}’s first line its dateline “${dateline}” (the prose is untouched).`,
+          summary: replaceFirst
+            ? `Make ${ch.displayName}’s first line its dateline “${dateline}” (the prose is untouched).`
+            : `Put the dateline “${dateline}” before ${ch.displayName}’s first line (the prose is untouched).`,
         },
       });
     }

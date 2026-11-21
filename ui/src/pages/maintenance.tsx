@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from '../api';
+import { api, background } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, StatusBadge, useAction } from '../components';
 import { fmtAgo, fmtDuration, fmtTime } from '../format';
 import { useApi, useNow, useReloadOn } from '../hooks';
@@ -101,7 +101,8 @@ export function MaintenancePage() {
   // that leave none (the 10-second sampler) are picked up by the refresh below.
   useReloadOn(['policy', 'job'], list.reload, 400);
   useEffect(() => {
-    const t = setInterval(list.reload, 15_000);
+    // CR-2026-11-R4: the page's own refresh, not the owner's use of the session.
+    const t = setInterval(background(list.reload), 15_000);
     return () => clearInterval(t);
   }, [list.reload]);
   const now = useNow();

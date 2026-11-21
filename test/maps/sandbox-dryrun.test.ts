@@ -2,20 +2,38 @@
  * The opt-in maps sandbox script (test/sandbox/maps.ts) run against the mock map world: no real LegendKeeper involved
  * (the real run is the owner's: `deploy/sandbox-test.sh --project test -- maps`). It checks that every check runs to an
  * answer, that the script cleans up everything it made, and that the generated PNG is a valid PNG of the size asked.
- * The mock cannot take a signed storage PUT, so the upload step is stood in for: the same bytes are decoded here and
- * put in the asset library at the size their header says.
+ *
+ * CR-2026-11-R4 (the owner's request S): through the same runtime and harness as the owner's run (`createSoakRuntime`
+ * pointed at the faithful mock, test/sandbox-mock/harness.ts), its two images uploaded through the real image pipeline
+ * to the mock's storage host and kept from its asset host before their delete (test/sandbox-mock/image-hosts.ts; the
+ * upload was stood in for before), and every item must pass: anything but PASS (M6c-null: NOTED) fails the build with
+ * the whole report printed.
  */
 import { inflateSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { formatMapsReport, generatePng, runMapsSandbox } from '../sandbox/maps.js';
+import { makeFaithful } from '../sandbox-mock/faithful.js';
+import { expectEveryItemPasses, MOCK_LIMITS, type OnMock } from '../sandbox-mock/harness.js';
+import { sandboxOnMockWithHosts } from '../sandbox-mock/hosts.js';
+import { addImageHosts, type ImageHosts } from '../sandbox-mock/image-hosts.js';
 import { API_KEY, PROJECT } from '../tools/helpers.js';
 import { mapsWorld, type MapsWorld } from './world.js';
 
 let w: MapsWorld;
+let hosts: ImageHosts;
+let on: OnMock;
 beforeAll(async () => {
-  w = await mapsWorld();
+  w = makeFaithful(
+    await mapsWorld({ env: { LK_TIER_LIMITS: JSON.stringify(MOCK_LIMITS) }, limits: MOCK_LIMITS }),
+  );
+  hosts = await addImageHosts(w);
+  on = await sandboxOnMockWithHosts(w.stack, { uploadGuard: hosts.guard, assetHosts: hosts.assetHosts });
 });
-afterAll(async () => w.close());
+afterAll(async () => {
+  await on?.close();
+  await hosts?.close();
+  await w?.close();
+});
 
 /** The PNG's header size and pixel data, with every chunk's CRC checked (a decoder, to prove the generator's output valid). */
 function decodePng(png: Buffer) {
@@ -67,20 +85,18 @@ describe('the generated PNG', () => {
 });
 
 /**
- * Runs the script against the mock map world. With `hold`, three writes are throttled for 31 s (longer than the
- * governor waits inline), so each is PARKED (`waiting_budget`): a map job's createFeature, a plain updateDocument and the
- * clean-up's first page delete. The script must wait for them (test/sandbox/wait.ts), never send them again, and still
- * leave nothing behind (the owner's sandbox run of 12 November 2026).
+ * Runs the script against the mock map world, as the real run does (the sandbox runtime's engine, client and key). With
+ * `hold`, three writes are throttled for 31 s (longer than the governor waits inline), so each is PARKED
+ * (`waiting_budget`): a map job's createFeature, a plain updateDocument and the clean-up's first page delete. The script
+ * must wait for them (test/sandbox/wait.ts), never send them again, and still leave nothing behind (the owner's sandbox
+ * run of 12 November 2026).
  */
 async function runScript(hold: boolean) {
-  const engine = w.stack.runtime.engine;
+  const engine = on.sb.runtime.engine;
   const parked = new Set<string>();
   const off = engine.events.on('job', (e) => {
     if (e.job.status === 'waiting_budget') parked.add(`${e.job.id} ${e.job.title ?? ''}`);
   });
-  // D3 keeps an asset's bytes (downloaded from the asset host) before any deleteAsset; the mock has no asset host, so
-  // the dry run stands in for that download.
-  const offKeeper = engine.setAssetDeleteKeeper(() => Promise.resolve({ keptBytes: 'dry run' }));
   const held = { feature: false, doc: false, cleanup: false };
   const throttle = (match: (c: { method: string; path: string }) => boolean) =>
     w.stack.mock.inject(
@@ -88,27 +104,15 @@ async function runScript(hold: boolean) {
       { kind: 'rate-limit', tier: 'write-min', retryAfterS: 31 },
       1,
     );
-  // The upload step stands in for a signed PUT: decode the PNG, put an asset of that size in the library.
-  const uploads = new Map<string, { id: string; name: string; width: number; height: number; url: string }>();
-  let n = 0;
   const wrapped = new Proxy(engine, {
     get(target, prop, receiver) {
       if (prop === 'submit') {
-        return (
-          o: { kind: string; dataBase64?: string; name?: string; steps?: { op: string }[] },
-          ...rest: unknown[]
-        ) => {
+        return (o: { steps?: { op: string }[] }, ...rest: unknown[]) => {
           if (hold && !held.feature && o.steps?.some((x) => x.op === 'createFeature')) {
             held.feature = true;
             throttle((c) => c.method === 'POST' && c.path.endsWith('/features'));
           }
-          if (o.kind !== 'upload_image') return (target.submit as (...a: unknown[]) => unknown)(o, ...rest);
-          const { width, height } = decodePng(Buffer.from(o.dataBase64!, 'base64'));
-          const id = w.assets.image(o.name!, null, { width, height });
-          const a = w.assets.assets.get(id)!;
-          const jobId = `jupload${++n}`;
-          uploads.set(jobId, { id, name: o.name!, width, height, url: a.url! });
-          return Promise.resolve({ jobId, status: 'queued', eta: 1 });
+          return (target.submit as (...a: unknown[]) => unknown)(o, ...rest);
         };
       }
       if (prop === 'run') {
@@ -124,18 +128,6 @@ async function runScript(hold: boolean) {
           return (target.run as (...a: unknown[]) => unknown)(op, ...rest);
         };
       }
-      if (prop === 'wait') {
-        return (project: string, jobId: string, ms: number) => {
-          const u = uploads.get(jobId);
-          return u
-            ? Promise.resolve({
-                id: jobId,
-                status: 'succeeded',
-                result: { asset: { id: u.id, name: u.name, url: u.url, width: u.width, height: u.height } },
-              })
-            : (target.wait as (...a: unknown[]) => unknown)(project, jobId, ms);
-        };
-      }
       const v = Reflect.get(target, prop, receiver) as unknown;
       return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
     },
@@ -145,9 +137,9 @@ async function runScript(hold: boolean) {
     const { findings, assets } = await runMapsSandbox(
       {
         engine: wrapped,
-        lk: w.stack.runtime.projects.client(PROJECT)!,
-        projectId: PROJECT,
-        baseUrl: w.stack.mock.url,
+        lk: on.sb.lk,
+        projectId: on.sb.projectId,
+        baseUrl: on.sb.runtime.config.lk.baseUrl,
         apiKey: API_KEY,
       },
       PROJECT,
@@ -156,7 +148,6 @@ async function runScript(hold: boolean) {
     return { findings, assets, parked, cost: done(), held };
   } finally {
     off();
-    offKeeper();
   }
 }
 
@@ -185,8 +176,8 @@ describe('the maps sandbox script, dry run', () => {
     'cleanup',
   ];
   const expectClean = (r: Awaited<ReturnType<typeof runScript>>) => {
-    const report = formatMapsReport(r.findings);
-    process.stdout.write(`${report}requests on the mock: ${r.cost.reads} reads, ${r.cost.writes} writes\n`);
+    const report = `${formatMapsReport(r.findings)}requests on the mock: ${r.cost.reads} reads, ${r.cost.writes} writes\n`;
+    expectEveryItemPasses(r.findings, report);
     // Every check ran to an answer: none is skipped, none could not complete.
     for (const id of IDS) {
       const f = r.findings.find((x) => x.id === id);

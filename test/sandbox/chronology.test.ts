@@ -11,43 +11,22 @@
  * fails on the engine's and structure's failures only.
  *
  * The chronology resource is the one the owner confirmed on the dashboard (the bridge's stored settings), else
- * LKB_CHRONOLOGY_RESOURCE, else the test world's Universal Chronology (`h0gczxh7`, PLAN-v2 section 2).
+ * LKB_CHRONOLOGY_RESOURCE, else the test world's Universal Chronology (`h0gczxh7`, PLAN-v2 section 2)
+ * (`chronologyResourceFor`). The ordinary suite runs the check against the mock in test/chronology/sandbox-dryrun.test.ts.
  */
-import Database from 'better-sqlite3';
-import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { runChronologySandbox } from './chronology.js';
+import { chronologyResourceFor, runChronologySandbox } from './chronology.js';
 import { createSoakRuntime } from './soak.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
-
-/** The confirmed chronology resource of the project in the bridge's database, if any. */
-function storedResource(projectId: string): string | null {
-  const path = process.env.DB_PATH ?? './data/bridge.db';
-  if (!existsSync(path)) return null;
-  const db = new Database(path, { readonly: true, fileMustExist: true });
-  try {
-    const row = db.prepare('SELECT settings FROM projects WHERE id = ?').get(projectId) as
-      { settings?: string } | undefined;
-    const s = row?.settings
-      ? (JSON.parse(row.settings) as { chronology?: { resourceId?: string }; chronologyResourceId?: string })
-      : {};
-    return s.chronology?.resourceId ?? s.chronologyResourceId ?? null;
-  } catch {
-    return null;
-  } finally {
-    db.close();
-  }
-}
 
 describe.skipIf(!projectName)(
   'LegendKeeper sandbox: the calendar engine and the chronology (read-only)',
   () => {
     it('reads every age table and timeline and checks them against the engine', async () => {
       const target = resolveSandboxTarget(projectName);
-      const resourceId =
-        storedResource(target.projectId) ?? process.env.LKB_CHRONOLOGY_RESOURCE ?? 'h0gczxh7';
+      const resourceId = chronologyResourceFor(process.env.DB_PATH ?? './data/bridge.db', target.projectId);
       const sandbox = await createSoakRuntime({
         apiKey: target.apiKey,
         project: target.name,

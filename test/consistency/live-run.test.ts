@@ -138,8 +138,12 @@ describe('the first live run, rebuilt from its excerpts (ADR 0064 amendment 1)',
       }),
     ]);
     const a = (await call('arkona_as_of', { characters: [L.soren], date: '3A 200' })).characters[0];
-    expect(a.state).toMatchObject({ value: 'Deceased (recorded)' });
+    // CR-2026-11-R4 (RC-7): a death restated on another Authoritative page feeds the death guard, and his identity page's
+    // Life State is "Alive" (this fixture's default): never a bare "Deceased (recorded)" against it (F4b.1 answered
+    // "Deceased (recorded)"); the death is still the one used.
+    expect(a.state).toMatchObject({ value: 'Unestablished (recorded death; current Life State Alive)' });
     expect(a.state.why).toMatch(/Frostmoot 4th, 3A 167/);
+    expect(a.died).toMatchObject({ value: 'Frostmoot 4th, 3A 167', page: { id: L.falkenreich } });
   });
 
   it('B, C: dates found inside their clause, and the chronology rows read by their columns', () => {

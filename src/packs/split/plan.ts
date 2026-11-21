@@ -282,8 +282,11 @@ export interface SplitCompleteness {
     readonly page: { readonly id: string; readonly name: string } | null;
     readonly sections: readonly {
       readonly section: string;
-      /** `moved` (items from the source's own section), `supplied` (the agent's text), both, or not applicable. */
-      readonly by: 'moved' | 'supplied' | 'moved and supplied' | 'not applicable';
+      /**
+       * `moved` (items from the source's own section), `supplied` (the agent's text), both, not applicable (the agent's
+       * answer, with its reason), or (CR-2026-11-R4) not expected: the pack does not expect this kind of page to carry it.
+       */
+      readonly by: 'moved' | 'supplied' | 'moved and supplied' | 'not applicable' | 'not expected';
       readonly reason?: string;
     }[];
     readonly dependencies: { readonly count: number } | { readonly none: string };
@@ -1287,6 +1290,38 @@ export async function planSplit(
           textKey(assigned.get(id)?.[0]?.under ?? '') === textKey(f.title)),
     );
   };
+  /**
+   * CR-2026-11-R4 (the owner's request; ADR 0066 A): the frame sections a new owner is expected to address, by the pack's
+   * `splits.sections`: its Reference Type (ignoring case), else its role in a character's set, else its owner type, else
+   * `otherwise`. A version without the data: both, as ADR 0059 amendment 1 built.
+   */
+  const expectedFrame = (r: {
+    d: SplitDestinationInput;
+  }): { fields: ReadonlySet<FrameField>; as: string } => {
+    const spec = s?.sections;
+    if (!spec) return { fields: new Set(frame.map((f) => f.field)), as: 'every new owner' };
+    const role = character
+      ? r.d.kind === 'relationship'
+        ? 'relationship'
+        : (r.d.role ?? 'specialist')
+      : null;
+    const referenceType =
+      (r.d.referenceType ?? '').trim() ||
+      (role ? (ctype.roles.find((x) => x.role === role)?.referenceType ?? '') : '');
+    const byKey = (m: Readonly<Record<string, readonly FrameField[]>>, k: string) =>
+      k === '' ? undefined : Object.entries(m).find(([x]) => textKey(x) === textKey(k))?.[1];
+    const byType = byKey(spec.referenceTypes, referenceType);
+    if (byType) return { fields: new Set(byType), as: `a ${referenceType} page` };
+    if (role !== null) {
+      const byRole = spec.roles[role];
+      if (byRole) return { fields: new Set(byRole), as: `a ${role} page of a character’s set` };
+    } else {
+      const type = (r.d.type ?? '').trim();
+      const byOwner = byKey(spec.ownerTypes, type);
+      if (byOwner) return { fields: new Set(byOwner), as: `a ${type} owner` };
+    }
+    return { fields: new Set(spec.otherwise), as: 'a new owner of this kind' };
+  };
   const nodeName = (id: string) => ctx.tree.node(projectId, id).data?.rawName ?? id;
   const suggestedDependencies = [...depIds].map((id) => ({ id, name: nodeName(id) }));
   const completenessOwners: SplitCompleteness['owners'][number][] = [];
@@ -1296,6 +1331,7 @@ export async function planSplit(
   for (const r of newOwners) {
     const key = r.d.key;
     const sections: SplitCompleteness['owners'][number]['sections'][number][] = [];
+    const expected = expectedFrame(r);
     for (const f of frame) {
       const moved = movedFrame(key, f);
       const supplied = (r.d[f.field] ?? '').trim() !== '';
@@ -1312,7 +1348,16 @@ export async function planSplit(
           section: f.title,
           by: moved && supplied ? 'moved and supplied' : moved ? 'moved' : 'supplied',
         });
-      else if (frameBlocks(f.title).size > 0) unaddressed.push({ destination: key, section: f.title });
+      else if (frameBlocks(f.title).size > 0) {
+        if (expected.fields.has(f.field)) unaddressed.push({ destination: key, section: f.title });
+        // CR-2026-11-R4: a kind of page the pack does not expect to carry the section is not asked for it.
+        else
+          sections.push({
+            section: f.title,
+            by: 'not expected',
+            reason: `the pack does not expect ${expected.as} to carry it (splits.sections)`,
+          });
+      }
     }
     const listed =
       (r.d.dependencies ?? []).length +

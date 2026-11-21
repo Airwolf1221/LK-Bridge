@@ -39,7 +39,10 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 
 - Member and invite administration (`inviteMember`, `removeMember`, `revokeInvite`) is refused for every agent, at any
   scope, unless `LK_ALLOW_MEMBER_ADMIN=true`: by the engine's guard (`MEMBER_ADMIN_DISABLED`), after the gate, and at
-  proposal capture (so it is never captured).
+  proposal capture (so it is never captured). With it on, a member or an invite taken away (`removeMember`,
+  `revokeInvite`) is a delete for the deletes rail, at entry and at approval (CR-2026-11-R4; ADR 0066 part B, question
+  10, the owner's): at scope `write` it is a proposal, `proposed because: delete (1 project member)`, while the rail is on
+  (the default); `inviteMember` runs as before.
 - **Uploads are not proposable (v1).** At scope `propose`, `lk_upload_image`, and raw `createImageUpload` /
   `createImageAsset` calls through `lk_api_write` or `lk_api_batch`, are refused before anything is sent, with a
   message that uploads need scope `write` and that the owner can raise the profile's scope. (A proposal would have to
@@ -597,7 +600,11 @@ Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PR
   `to`) and two buttons, _Change to … and approve_ and _Keep … and approve_. Only that confirmation, for exactly that
   change, applies it (audited `profile.set_scope`, `via: consent`); picking another existing profile in the list
   without choosing its scope therefore never changes it silently. A bad choice shows an error without using up the
-  request; denial is unchanged.
+  request; denial is unchanged. **The step-up (CR-2026-11-R4, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md)
+  amendment 1):** a raise (once confirmed), a new profile above the default scope, and a connection on a profile at
+  scope `write` also need the owner's step-up within the last 10 minutes, asked on the consent page itself ("Confirm
+  it’s you": the authenticator code, or the password without one) before anything is applied or any code issued; see
+  [auth.md](auth.md#consent-and-profiles-chunk-2b). An ordinary connection at `read` or `propose` and a lowering do not.
 - **Replace on reconnect (ADR 0033).** When the application being approved already has active connections, the page
   lists them in "This application's existing connections", each with a checkbox ticked by default (label, profile,
   created, last used). The same application is the same `client_id` for a Client ID Metadata Document client; for any

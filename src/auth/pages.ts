@@ -1,5 +1,5 @@
 import { SCOPE_DESCRIPTIONS } from './scopes.js';
-import { KEEP_SCOPE, type ExistingConnection } from './services.js';
+import { KEEP_SCOPE, type ExistingConnection, type StepUpToConfirm } from './services.js';
 
 /** Server-rendered pages for login, consent and errors. All dynamic text is HTML-escaped. */
 
@@ -262,6 +262,81 @@ ${(v.replace ?? []).map((id) => `<input type="hidden" name="replace" value="${es
 <button type="submit" name="scope" value="${escapeHtml(v.from)}">Keep ${escapeHtml(v.from)} and approve</button></div>
 </form>
 <p class="muted">To deny the connection instead, go back and choose Deny.</p>`,
+  );
+}
+
+/**
+ * CR-2026-11-R4 (ADR 0062 decision 5): the step-up asked on the consent page itself, before a choice that lets the
+ * connection do more is applied (a raised scope, a new profile above the default, a connection at scope `write`). It
+ * re-posts the same pending request with the owner's choice unchanged, plus the authenticator code (or a recovery
+ * code), or the password when no authenticator is set up.
+ */
+export interface ConsentStepUpView {
+  readonly action: string;
+  readonly requestId: string;
+  readonly csrf: string;
+  readonly redirectHost: string;
+  /** The choice the owner made (profile, scope, new profile's label and kind, the scope change's confirmation). */
+  readonly fields: Readonly<Record<string, string | undefined>>;
+  /** The existing connections the owner ticked for replacement: carried through unchanged. */
+  readonly replace?: readonly string[];
+  readonly need: StepUpToConfirm;
+  /** The authenticator is set up: its code (or a recovery code) is asked; otherwise the password. */
+  readonly totp: boolean;
+  /** Why the last attempt was refused (a wrong code, too many attempts). */
+  readonly error?: string;
+}
+
+function stepUpWhy(n: StepUpToConfirm): { headline: string; detail: string } {
+  const label = `“${escapeHtml(n.label)}”`;
+  const writes =
+    n.to === 'write'
+      ? ' At scope write its writes run at once (the bridge’s safety guards still apply).'
+      : '';
+  switch (n.why) {
+    case 'raise':
+      return {
+        headline: `This raises the scope of profile ${label} from ${escapeHtml(n.from ?? '')} to ${escapeHtml(n.to)}.`,
+        detail: `Every connection on the profile can then do more, at once.${writes}`,
+      };
+    case 'new_profile':
+      return {
+        headline: `This makes a new profile ${label} at scope ${escapeHtml(n.to)}.`,
+        detail: `New connections start at ${escapeHtml(n.defaultScope)}, the default.${writes}`,
+      };
+    default:
+      return {
+        headline: `This connection would act under profile ${label}, at scope ${escapeHtml(n.to)}.`,
+        detail: `It is a credential that can write to LegendKeeper, as a personal access token at that scope is.${writes}`,
+      };
+  }
+}
+
+export function renderConsentStepUp(v: ConsentStepUpView): string {
+  const why = stepUpWhy(v.need);
+  const hidden = Object.entries(v.fields)
+    .filter((e): e is [string, string] => e[1] !== undefined)
+    .map(([k, val]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(val)}">`)
+    .join('\n');
+  const field = v.totp
+    ? '<label for="stepup">Authenticator code</label><input id="stepup" name="stepup_totp" autocomplete="one-time-code" maxlength="40" required autofocus><p class="muted">The 6-digit code from your authenticator app, or one of your recovery codes if you have lost it.</p>'
+    : '<label for="stepup">Password</label><input id="stepup" name="stepup_password" type="password" autocomplete="current-password" required autofocus>';
+  return layout(
+    'Confirm it’s you',
+    `<h1>Confirm it’s you</h1>
+<div class="box warn" role="note"><strong>${why.headline}</strong>
+<p>${why.detail}</p></div>
+${v.error ? `<p class="err" role="alert">${escapeHtml(v.error)}</p>` : ''}
+<p class="muted">As on the dashboard, a change that lets a connection do more needs ${v.totp ? 'your authenticator code' : 'your password'}, checked within the last 10 minutes. Nothing has been changed yet. The connection you are approving goes to ${escapeHtml(v.redirectHost)}.</p>
+<form method="post" action="${escapeHtml(v.action)}">
+<input type="hidden" name="request_id" value="${escapeHtml(v.requestId)}">
+<input type="hidden" name="csrf_token" value="${escapeHtml(v.csrf)}">
+${hidden}
+${(v.replace ?? []).map((id) => `<input type="hidden" name="replace" value="${escapeHtml(id)}">`).join('\n')}
+${field}
+<div class="actions"><button class="primary" type="submit" name="decision" value="approve">Confirm and approve</button>
+<button type="submit" name="decision" value="deny" formnovalidate>Deny</button></div>
+</form>`,
   );
 }
 

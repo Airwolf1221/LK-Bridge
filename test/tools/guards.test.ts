@@ -220,7 +220,8 @@ describe('the tool list', () => {
       );
       const c = await on.connect();
       const { tools } = await c.listTools();
-      expect(tools).toHaveLength(86 + 3 + 2 + 89);
+      // CR-2026-11-R4 (LD-01): the 12 consistency and narrative tools are not listed while the pack is not approved.
+      expect(tools).toHaveLength(86 - 12 + 3 + 2 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));

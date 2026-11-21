@@ -117,6 +117,57 @@ export function readLeading(
 }
 
 /**
+ * CR-2026-11-R4 (the owner's request L): a range's two ends read on their own, each with its own text and precision
+ * ("Camue 1st, 4A 100–Camue 33rd, 4A 325": a life's birth and its death). The text must BEGIN with the range (an
+ * optional "c." or "approximately" applying to both); a bare second year ("4A 640–645") takes the first one's era.
+ * Null when the text does not begin with a range the calendar can read.
+ */
+export function readRangeParts(
+  cal: Calendar,
+  input: string,
+  style: DateTextStyle = DEFAULT_DATE_STYLE,
+): { from: DateReading; to: DateReading } | null {
+  const clause = input.split(';')[0]!.replace(/\s+/g, ' ').trim();
+  const approx = APPROX.exec(clause);
+  const body = approx ? clause.slice(approx[0].length) : clause;
+  const first = cal.parser.leadingDate(body, style);
+  if (!first) return null;
+  const join = RANGE_JOIN.exec(first.rest);
+  if (!join) return null;
+  const rest = first.rest.slice(join[0].length);
+  const a = {
+    ...fromParsed(first.date, '', approx !== null),
+    text: `${approx ? approx[0] : ''}${first.match}`.trim(),
+  };
+  const second = cal.parser.leadingDate(rest, style);
+  if (second) {
+    if (second.date.start < first.date.start) return null;
+    return { from: a, to: { ...fromParsed(second.date, '', approx !== null), text: second.match.trim() } };
+  }
+  const bare = first.date.detail === 1 ? /^(\d{1,3}(?:,\d{3})+|\d+)\b/u.exec(rest) : null;
+  if (!bare) return null;
+  try {
+    const era = first.date.era;
+    const year = Number(bare[1]!.replace(/,/g, ''));
+    const start = cal.engine.yearStart(era, year);
+    if (start <= first.date.start) return null;
+    return {
+      from: a,
+      to: {
+        text: bare[1]!,
+        start,
+        end: start,
+        precision: 'year',
+        shape: 'year',
+        approximate: approx !== null,
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The calendar's own reason a date-shaped start is not a date (`Camue has 50 days; there is no day 51.`): its leading
  * words tried as a whole date, longest first. Empty when no start looks like a date.
  */
@@ -132,7 +183,11 @@ function calendarReason(cal: Calendar, body: string, style: DateTextStyle): stri
         style,
       );
     } catch (e) {
-      if (e instanceof Error && /days|does not occur|no year|outside|not a year/i.test(e.message))
+      // CR-2026-11-R4: an age's end too ("4A 960 is after the Fourth Arkonan Age (4A) ends … Write it in 5A").
+      if (
+        e instanceof Error &&
+        /days|does not occur|no year|outside|not a year|\bends\b|write it in/i.test(e.message)
+      )
         return ` (${e.message})`;
     }
   }
@@ -196,27 +251,104 @@ function shapeOf(cal: Calendar): RegExp {
   return re;
 }
 
+/** CR-2026-11-R4 (RC-2): how narrowly a scan reads the date of its clause (all off: ADR 0064 amendment 1's scan). */
+export interface ScanOptions {
+  /** Bracketed parentheticals are skipped: "(born Malakh 33rd, 4A 280)", "(1,250,391 KCY)". */
+  readonly skipBrackets?: boolean;
+  /** The clause is cut at ":" and at a relative clause: ", which", ", who", ", whose", ", where", "since", "that". */
+  readonly cutRelative?: boolean;
+  /**
+   * The date must be reached from the verb directly or through at most one "in / on / at <place>" ("born in Altan-Saray
+   * on Camue 44th, 4A 360", "died at midday Zahras 36th, 4A 950"); any other text before it ("between", "no later
+   * than", "to <parents> … on") reads nothing.
+   */
+  readonly reach?: boolean;
+}
+
+/** Where a relative clause or a colon starts: the date of the clause is never read past it. */
+const RELATIVE = /:|,\s*(?:which|who|whom|whose|where)\b|\b(?:since|that)\b/iu;
+/** The hop words of `reach`: a preposition that introduces a place (or the parents) or the date. */
+const HOP = String.raw`(?:in|on|at|to)`;
+/** A word of a place: any word that is no hop word ("Altan-Saray", "the Empire of Fujimatsu", "Wadi Al-Sihr,"). */
+const PLACE_WORD = String.raw`(?!${HOP}\b)\S+`;
+/**
+ * What may stand between the verb and the date (`reach`): nothing; one "in / on / at / to <place or parents>" and the
+ * preposition of the date ("in Altan-Saray on", "Altan-Saray on" once the phrasing took the "in", "to Murad al-Khalid
+ * on"); or a preposition with a few words before the date ("at midday").
+ */
+const REACH = new RegExp(
+  String.raw`^(?:(?:${HOP}\s+)?(?:${PLACE_WORD}\s+)+)?(?:(?:in|on|at)(?:\s+${PLACE_WORD}){0,6})?$`,
+  'iu',
+);
+
+/** A text with its bracketed parentheticals blanked out (nested ones too); an unclosed bracket is left as it is. */
+function withoutBrackets(s: string): string {
+  let t = s;
+  for (let i = 0; i < 8; i++) {
+    const next = t.replace(/\([^()]*\)|\[[^[\]]*\]/gu, ' ');
+    if (next === t) break;
+    t = next;
+  }
+  return t;
+}
+
 /**
  * The first date-shaped substring of a clause, read by the calendar engine (ADR 0064 amendment 1, rule B): a leading
  * place ("Erzherzogtum Falkenau on …"), "to <parents>" and a trailing "(… KCY)" are skipped because only the date-shaped
  * text is read. The text is cut at its first `;`. Null when nothing in it is date-shaped (then no fact is recorded:
- * "unreadable" is kept for a date-shaped text the calendar refuses, with its reason).
+ * "unreadable" is kept for a date-shaped text the calendar refuses, with its reason). CR-2026-11-R4 (RC-2, `o`): the
+ * date of the clause only, never another date in it (a parent's birth in brackets, a city's fall in a relative clause,
+ * "ruled since 3A 60"); and two dates joined by "or" ("4A 100 or 4A 101") read as the span holding both (RC-22).
  */
 export function readScan(
   cal: Calendar,
   input: string,
   style: DateTextStyle = DEFAULT_DATE_STYLE,
+  o: ScanOptions = {},
 ): ScanResult {
-  const clause = input.split(';')[0]!.replace(/\s+/g, ' ').trim();
+  let clause = input.split(';')[0]!;
+  if (o.skipBrackets) clause = withoutBrackets(clause);
+  if (o.cutRelative) clause = clause.split(RELATIVE)[0] ?? '';
+  clause = clause.replace(/\s+/g, ' ').trim();
   if (clause === '') return null;
   const re = shapeOf(cal);
   re.lastIndex = 0;
   const m = re.exec(clause);
   if (!m) return null;
+  if (o.reach && !REACH.test(clause.slice(0, m.index).trim())) return null;
   const at = clause.slice(m.index);
   const r = readLeading(cal, at, style);
-  return r.ok ? r : { ok: false, reason: r.reason, text: clip(at, 120) };
+  if (!r.ok) return { ok: false, reason: r.reason, text: clip(at, 120) };
+  if (!o.reach && !o.cutRelative) return r;
+  // "4A 100 or 4A 101": either date, so the span holding both (never the first alone).
+  const rest = at.slice(at.indexOf(r.reading.text) + r.reading.text.length);
+  const or = /^\s*(?:,\s*)?or\s+/iu.exec(rest);
+  if (!or) return r;
+  const second = readLeading(cal, rest.slice(or[0].length), style);
+  if (!second.ok)
+    return {
+      ok: false,
+      reason: 'two dates are given (“or”), and the second cannot be read',
+      text: clip(at, 120),
+    };
+  const a = r.reading;
+  const b = second.reading;
+  const first = a.start <= b.start ? a : b;
+  const last = a.start <= b.start ? b : a;
+  return {
+    ok: true,
+    reading: {
+      text: `${a.text}${or[0]}${b.text}`.replace(/\s+/g, ' ').trim(),
+      start: first.start,
+      end: Math.max(first.end, last.end),
+      precision: PRECISION[Math.min(DETAIL[a.precision], DETAIL[b.precision]) as 1 | 2 | 3],
+      shape: 'range',
+      approximate: a.approximate || b.approximate,
+    },
+  };
 }
+
+const DETAIL: Readonly<Record<Precision, number>> = { year: 1, month: 2, day: 3 };
 
 /**
  * A chronology row's Date cell, read as the chronology reads it: a plain form, else the qualified reader (by its anchor:
@@ -295,8 +427,9 @@ export function spanOf(cal: Calendar, r: DateReading, margin: number): Span {
   let from = r.start;
   let to = unitEnd(cal, r.end, r.precision) - 1;
   if (r.approximate && margin > 0) {
-    from = kcyStart(cal, cal.engine.kcyOf(from) - margin);
-    to = kcyLast(cal, cal.engine.kcyOf(to) + margin);
+    // CR-2026-11-R4 (RC-14): the margin is counted in years (their indices), so it steps over a missing year 0.
+    from = kcyStart(cal, kcyOfIndex(cal, yearIndexOfKcy(cal, cal.engine.kcyOf(from)) - margin));
+    to = kcyLast(cal, kcyOfIndex(cal, yearIndexOfKcy(cal, cal.engine.kcyOf(to)) + margin));
   }
   if (r.openStart) from = cal.engine.minMinute;
   if (r.openEnd) to = cal.engine.maxMinute;
@@ -310,20 +443,60 @@ export const overlaps = (a: Span, b: Span): boolean => a.from <= b.to && b.from 
 export const isExact = (r: DateReading): boolean =>
   r.shape === 'day' && !r.approximate && !r.openStart && !r.openEnd;
 
+/**
+ * CR-2026-11-R4 (RC-14): a KCY's year index: KCY labels skip year 0 in a calendar without one (… -2, -1, 1, 2 …), so
+ * years are counted on the indices, never the labels (AA 1 to 1A 1 is one year, not two).
+ */
+function yearIndexOfKcy(cal: Calendar, kcy: number): number {
+  return kcy > 0 && !cal.engine.rules.hasZeroYear ? kcy - 1 : kcy;
+}
+
+/** The KCY label of a year index (the inverse of `yearIndexOfKcy`). */
+function kcyOfIndex(cal: Calendar, index: number): number {
+  return index >= 0 && !cal.engine.rules.hasZeroYear ? index + 1 : index;
+}
+
+/**
+ * CR-2026-11-R4 (RC-15): where a minute falls in its year, by month, day and time of day (a leap day earlier in one of
+ * the years moves the minutes, never the anniversary); by minutes into the year where an era keeps a frame of its own.
+ */
+function placeInYear(cal: Calendar, minute: number, kcy: number): number[] {
+  try {
+    const m = cal.engine.resolve(minute);
+    if (m.era.resetMode !== 'calendar') return [m.monthIndex, m.day, m.hour, m.minuteOfHour];
+  } catch {
+    // Outside the calendar: the minutes into the year below.
+  }
+  return [minute - kcyStart(cal, kcy)];
+}
+
+const before = (x: readonly number[], y: readonly number[]): boolean => {
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i]! < y[i]!;
+  return false;
+};
+
 /** Whole calendar years from one minute to a later one (an anniversary not yet reached does not count). */
 export function yearsBetween(cal: Calendar, a: number, b: number): number {
   if (b < a) return -yearsBetween(cal, b, a);
   const e = cal.engine;
   const ka = e.kcyOf(a);
   const kb = e.kcyOf(b);
-  let years = kb - ka;
-  if (b - kcyStart(cal, kb) < a - kcyStart(cal, ka)) years -= 1;
+  let years = yearIndexOfKcy(cal, kb) - yearIndexOfKcy(cal, ka);
+  const pa = placeInYear(cal, a, ka);
+  const pb = placeInYear(cal, b, kb);
+  if (pa.length === pb.length ? before(pb, pa) : b - kcyStart(cal, kb) < a - kcyStart(cal, ka)) years -= 1;
   return Math.max(0, years);
 }
 
 export type Elapsed =
   | { readonly kind: 'exact'; readonly years: number }
-  | { readonly kind: 'range'; readonly min: number; readonly max: number }
+  | {
+      readonly kind: 'range';
+      readonly min: number;
+      readonly max: number;
+      /** CR-2026-11-R4 (RC-21): the date may come before the birth (inside its margin or its unit). */
+      readonly maybeUnborn?: true;
+    }
   | { readonly kind: 'not_yet_born' };
 
 /**
@@ -343,7 +516,10 @@ export function elapsedYears(
   }
   const min = at.span.from <= birth.span.to ? 0 : yearsBetween(cal, birth.span.to, at.span.from);
   const max = yearsBetween(cal, birth.span.from, at.span.to);
-  return min === max ? { kind: 'range', min, max } : { kind: 'range', min, max };
+  // CR-2026-11-R4 (RC-21): a date that may come before the birth ("c. 4A 640" asked 4A 636) says so.
+  return at.span.from < birth.span.to
+    ? { kind: 'range', min, max, maybeUnborn: true }
+    : { kind: 'range', min, max };
 }
 
 /** A span in words for answers (`4A 100`, `Camue 1st, 4A 100`), from its reading. */

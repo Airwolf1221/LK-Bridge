@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { background } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtAgo, fmtBytes, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
@@ -56,9 +57,10 @@ export function AssetsPage() {
   const overview = useScopedApi<AssetOverview>('/asset-tree');
   const data = overview.data;
   const busyNow = data ? data.activePass !== null : false;
-  // A running pass is followed closely; otherwise the page refreshes now and then.
+  // A running pass is followed closely; otherwise the page refreshes now and then (CR-2026-11-R4: the page's own
+  // refresh, not the owner's use of the session).
   useEffect(() => {
-    const t = setInterval(overview.reload, busyNow ? 2000 : 30_000);
+    const t = setInterval(background(overview.reload), busyNow ? 2000 : 30_000);
     return () => clearInterval(t);
   }, [overview.reload, busyNow]);
   const now = useNow();

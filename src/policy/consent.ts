@@ -11,10 +11,11 @@ import {
   type ConsentProfileChoice,
   type ConsentProfiles,
   type ProfileOption,
+  type StepUpToConfirm,
 } from '../auth/services.js';
 import type { ConnectionManager } from './connections.js';
 import { PolicyError } from './errors.js';
-import type { PolicyStore } from './store.js';
+import { validateLabel, type PolicyStore } from './store.js';
 import { PROFILE_KINDS, SCOPES, isProfileKind, isScope, type ProfileKind, type Scope } from './types.js';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -65,6 +66,30 @@ export function scopeChangeToken(profileId: string, from: Scope, to: Scope): str
   return `${profileId}:${from}:${to}`;
 }
 
+const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write: 2 };
+
+/**
+ * CR-2026-11-R4 (SE-02 to SE-04b; ADR 0062 decision 5, the owner's rule: tightening is one click, loosening asks):
+ * whether a choice on the consent page needs the step-up first, as the same change on the dashboard does: an existing
+ * profile's scope raised, a new profile given a scope above the default for new connections, or a connection on a
+ * profile at scope `write` (a credential that writes, as a token is). An ordinary connection at `read` or `propose` (an
+ * existing profile at its own scope, a new one at the default or below) and every lowering do not.
+ */
+export function consentStepUp(c: {
+  readonly label: string;
+  /** The profile's scope now; null for a new profile. */
+  readonly from: Scope | null;
+  readonly to: Scope;
+  readonly defaultScope: Scope;
+}): StepUpToConfirm | null {
+  const base = { label: c.label, from: c.from, to: c.to, defaultScope: c.defaultScope };
+  if (c.from !== null && SCOPE_RANK[c.to] > SCOPE_RANK[c.from]) return { why: 'raise', ...base };
+  if (c.from === null && SCOPE_RANK[c.to] > SCOPE_RANK[c.defaultScope])
+    return { why: 'new_profile', ...base };
+  if (c.to === 'write') return { why: 'write', ...base };
+  return null;
+}
+
 export function createConsentProfiles(store: PolicyStore, connections?: ConnectionManager): ConsentProfiles {
   return {
     kinds: PROFILE_KINDS,
@@ -98,17 +123,25 @@ export function createConsentProfiles(store: PolicyStore, connections?: Connecti
       }
       if (!isScope(chosen)) return { ok: false, error: 'Choose read, propose or write.' };
       const scope: Scope = chosen;
+      // CR-2026-11-R4: a choice that lets a connection do more needs the step-up first (`consentStepUp`); checked once
+      // the choice is otherwise valid (and an existing profile's change confirmed), before anything is changed.
+      const stepUp = (label: string, from: Scope | null) =>
+        choice.steppedUp === true
+          ? null
+          : consentStepUp({ label, from, to: scope, defaultScope: store.defaultScope() });
       try {
         if (choice.profileId === 'new') {
           if (!isProfileKind(choice.newKind))
             return { ok: false, error: 'Choose a kind for the new profile.' };
-          const label = (choice.newLabel ?? '').trim();
+          const label = validateLabel(choice.newLabel ?? '');
           if (store.getProfileByLabel(label)) {
             return {
               ok: false,
               error: `A profile labelled "${label}" already exists. Choose it from the list instead.`,
             };
           }
+          const ask = stepUp(label, null);
+          if (ask) return { ok: false, stepUp: ask };
           const p = store.insertProfile({ label, kind: choice.newKind, scope });
           store.audit('owner', 'profile.create', p.id, undefined, { ...p, via: 'consent' });
           return { ok: true, profileId: p.id };
@@ -133,6 +166,10 @@ export function createConsentProfiles(store: PolicyStore, connections?: Connecti
               },
             };
           }
+        }
+        const ask = stepUp(p.label, p.scope);
+        if (ask) return { ok: false, stepUp: ask };
+        if (p.scope !== scope) {
           store.updateScope(p.id, scope);
           store.audit('owner', 'profile.set_scope', p.id, { scope: p.scope }, { scope, via: 'consent' });
         }
@@ -143,5 +180,12 @@ export function createConsentProfiles(store: PolicyStore, connections?: Connecti
       }
     },
     defaultPatProfileId: () => ensureProfile(store, DEFAULT_PAT_PROFILE, 'claude-code').id,
+    // CR-2026-11-R4: a step-up on the consent page is audited as the dashboard's is (`owner.reauth`), with where.
+    recordStepUp: (r) =>
+      store.audit('owner', 'owner.reauth', null, undefined, {
+        ok: r.ok,
+        ...(r.reason !== undefined ? { reason: r.reason } : {}),
+        via: 'consent',
+      }),
   };
 }

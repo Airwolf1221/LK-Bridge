@@ -14,8 +14,10 @@
  *   Number fields, as items the owner can approve one by one when it is a proposal); never the prose.
  */
 import * as z from 'zod';
+import { factKey } from '../../facts/index.js';
 import { fromMarkdown, MarkdownError, type LkBlock } from '../../markdown/index.js';
 import { PACK_FILLER, shiftStep } from '../../packs/engine/job.js';
+import { mainDocumentId } from '../../jobs/engine.js';
 import { mintClientId } from '../../jobs/ids.js';
 import type { LifecycleMarker, StepSpec } from '../../jobs/index.js';
 import type { PlanItem } from '../../jobs/items.js';
@@ -33,6 +35,7 @@ import {
   existingFacts,
   findContinuity,
   findStory,
+  lifecycleInStory,
   linkTargets,
   mention,
   narrativeTemplate,
@@ -51,7 +54,14 @@ import {
   type Tpl,
 } from './narrative-support.js';
 import { finish, liveRead } from './repo.js';
-import { errorFromThrown, errorResult, projectArg, withProject, type ToolDeps } from './shape.js';
+import {
+  errorFromThrown,
+  errorResult,
+  projectArg,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 
 const PACK = 'arkona';
@@ -205,6 +215,17 @@ async function storyCreate(
     const b = bad(t, w);
     if (b) return b.result;
   }
+  // CR-2026-11-R4 (F4): a story index named as a narrative index (Narratives, Continuities, Main CANON; any case,
+  // spacing or look-alike letters) would make the narrative layout ambiguous, which switches every narrative rule off.
+  const taken = [rules.indexes.narratives, rules.indexes.continuities, rules.indexes.main].find(
+    (n) => factKey(n) === factKey(title),
+  );
+  if (taken)
+    return no(
+      pd,
+      'NARRATIVE_INDEX_NAME',
+      `The title “${title}” is the name of a narrative index (${taken}), which the bridge finds by name: a story of that name would make Narratives ambiguous. Choose another title. Nothing was written.`,
+    ).result;
   const c = findContinuity(env, args.continuity);
   if (!c.ok) return c.result;
   const cont = c.value;
@@ -383,11 +404,12 @@ async function storyCreate(
 // ============================================================================================ the tools
 
 export function narrativeTools(deps: ToolDeps): McpToolProvider[] {
-  // Listed while the pack is attached and its rules carry the narrative layout (as the other pack tools); a version
-  // waiting for the owner's approval is refused at the call (PACK_NOT_CURRENT).
+  // Listed while the pack is attached and the version the owner APPROVED carries the narrative layout (ADR 0065: "until
+  // then the narrative tools are not listed"), the rules every call reads (CR-2026-11-R4, LD-01: it read the current
+  // version, so the tools were listed while a version waited for approval, and refused).
   const listed = () => {
     const packs = deps.services?.packs;
-    return (packs?.toolListed(PACK) ?? false) && packs?.get(PACK)?.rules.narrative !== undefined;
+    return (packs?.toolListed(PACK) ?? false) && packs?.approvedRules(PACK)?.narrative !== undefined;
   };
   return [storyCreateTool(deps, listed), ...chapterTools(deps, listed)];
 }
@@ -479,6 +501,9 @@ async function chapterPlan(
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const map = storyMapOf(env, layout);
   if (!map.ok) return map.result;
   const n = args.number;
@@ -719,6 +744,9 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const story = layout.story;
   const n = args.number;
   const existing = oneNumbered(env, layout.chapters, n, 'chapter');
@@ -890,7 +918,24 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
             },
           ]
         : [];
-    const steps = joinParts([[body], ef.value.steps, rename, ps.value]);
+    // CR-2026-11-R4 (F9): inside the lock, the chapter must still be where the plan read it (its act, or the story): a
+    // chapter moved out of the story in the app since the tree last read it is not revised (nothing is written).
+    const where: StepSpec = {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [
+            {
+              label: node.displayName,
+              kind: 'resource',
+              resourceId: node.id,
+              parentId: ch.act?.node.id ?? story.id,
+            },
+          ],
+        },
+      },
+    };
+    const steps = joinParts([[where], [body], ef.value.steps, rename, ps.value]);
     return saveAndReadBack(env, {
       steps,
       title: `${env.tool}: ${story.displayName}, Chapter ${n} revised${gateNote}`,
@@ -993,6 +1038,35 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
   });
 }
 
+/**
+ * CR-2026-11-R4 (narrative-f4c N3): what a save's job sent as the chapter's text, and to which document: its last
+ * `replaceDocumentBlocks` step on the chapter, as stored once bound and filled (a large body is kept as an artefact).
+ * Null when the job has no such step with a bound document (the read-back then compares the Markdown's blocks).
+ */
+function sentText(
+  pd: ProjectDeps,
+  jobId: string,
+  chapterId: string,
+): { readonly documentId: string; readonly blocks: readonly unknown[] } | null {
+  const projectId = pd.project.id;
+  const job = pd.engine.queries.getJob(projectId, jobId);
+  if (!job) return null;
+  for (const s of [...job.steps].reverse()) {
+    if (s.opId !== 'replaceDocumentBlocks') continue;
+    const params = (s.params ??
+      (s.paramsArtifactId ? pd.engine.queries.readArtifact(projectId, s.paramsArtifactId)?.data : null)) as
+      | { path?: { resourceId?: unknown; documentId?: unknown }; body?: { blocks?: unknown } }
+      | null
+      | undefined;
+    if (params?.path?.resourceId !== chapterId) continue;
+    const documentId = params.path.documentId;
+    const blocks = params.body?.blocks;
+    if (typeof documentId !== 'string' || documentId === 'pending' || !Array.isArray(blocks)) continue;
+    return { documentId, blocks };
+  }
+  return null;
+}
+
 /** Submits a save, and (once written) reads the chapter back and compares it word for word (32B). */
 async function saveAndReadBack(
   env: Env,
@@ -1068,15 +1142,16 @@ async function saveAndReadBack(
     preview,
   });
   if (out.body.status !== 'written') return out.result;
-  // 32B: the prose verified by DIRECT read-back, word for word.
-  let documentId = o.chapter.documentId;
+  // 32B: the prose verified by DIRECT read-back, word for word. CR-2026-11-R4 (narrative-f4c N3): against what the job
+  // SENT, to the document it sent it to (its text step's stored params, the document bound and the body filled inside
+  // the lock). A new chapter is a template copy: LegendKeeper copies the template's documents in an order it does not
+  // state, so "the first page document listed" could be another one, and a block the template holds that Markdown
+  // cannot express is written back with the chapter; either made the read-back differ at its first word, the dateline.
+  const sent = out.jobId ? sentText(pd, out.jobId, o.chapter.id) : null;
+  let documentId = sent?.documentId ?? o.chapter.documentId;
   if (!documentId) {
     const res = await liveRead(pd, env.mctx, env.tool, 'getResource', { path: { resourceId: o.chapter.id } });
-    if (res.ok) {
-      const docs = ((res.value as { documents?: unknown }).documents ?? []) as Obj[];
-      const d = docs.find((x) => x.type === 'page' && !x.deletedAt) ?? null;
-      documentId = d && typeof d.id === 'string' ? d.id : undefined;
-    }
+    if (res.ok) documentId = mainDocumentId((res.value as { documents?: unknown }).documents);
   }
   let readBack: Obj;
   if (!documentId)
@@ -1095,13 +1170,14 @@ async function saveAndReadBack(
       };
     else {
       const got = (r.value as { blocks?: unknown[]; version?: unknown }).blocks ?? [];
-      const want = wordsOf(o.planted);
+      const want = wordsOf(sent?.blocks ?? o.planted);
       const diff = firstDifference(want, wordsOf(got));
       readBack = {
         matches: diff === null,
         words: want.length,
         version: (r.value as { version?: unknown }).version ?? null,
         documentId,
+        compared: sent ? 'what the job sent' : 'the chapter’s Markdown',
         ...(diff
           ? {
               firstDifference: diff,
@@ -1291,6 +1367,9 @@ async function chapterInsert(
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const map = storyMapOf(env, layout);
   if (!map.ok) return map.result;
   const at = args.at;
@@ -1312,7 +1391,7 @@ async function chapterInsert(
       .filter((c) => c.n >= at)
       .map((c) => ({
         id: c.node.id,
-        rawName: c.node.displayName,
+        rawName: c.node.rawName,
         kind: 'chapter' as const,
         from: c.n,
         to: c.n + 1,
@@ -1323,7 +1402,7 @@ async function chapterInsert(
       .filter((p) => p.n >= at)
       .map((p) => ({
         id: p.node.id,
-        rawName: p.node.displayName,
+        rawName: p.node.rawName,
         kind: 'plan' as const,
         from: p.n,
         to: p.n + 1,
@@ -1458,6 +1537,9 @@ async function chapterMove(
   const st = findStory(env, args.story, args.continuity);
   if (!st.ok) return st.result;
   const { layout } = st.value;
+  // CR-2026-11-R4 (F8): nothing is changed in a story that holds canon, Working or Archived pages.
+  const kept = lifecycleInStory(env, layout);
+  if (!kept.ok) return kept.result;
   const { from, to } = args;
   const moving = oneNumbered(env, layout.chapters, from, 'chapter');
   if (!moving.ok) return moving.result;
@@ -1497,7 +1579,7 @@ async function chapterMove(
     const parentId = moved && targetAct !== null ? targetAct.node.id : c.node.parentId!;
     list.push({
       id: c.node.id,
-      rawName: c.node.displayName,
+      rawName: c.node.rawName,
       kind: 'chapter',
       from: c.n,
       to: n2,
@@ -1523,7 +1605,7 @@ async function chapterMove(
     if (n2 === p.n && !move) continue;
     list.push({
       id: p.node.id,
-      rawName: p.node.displayName,
+      rawName: p.node.rawName,
       kind: 'plan',
       from: p.n,
       to: n2,

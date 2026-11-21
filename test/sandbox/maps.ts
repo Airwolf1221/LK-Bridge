@@ -41,6 +41,7 @@ import {
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
+import { wholeError } from './whole.js';
 
 type Obj = Record<string, any>;
 
@@ -157,7 +158,7 @@ export async function runMapsSandbox(
     } catch (e) {
       const err = (t.engine.queries.getJob(t.projectId, jobId)?.lastError ?? {}) as Obj;
       throw new Error(
-        `${(e as Error).message} ${err.differences ? JSON.stringify(err.differences).slice(0, 300) : ''}`.trim(),
+        `${(e as Error).message} ${err.differences ? JSON.stringify(err.differences) : ''}`.trim(),
         { cause: e },
       );
     }
@@ -246,7 +247,7 @@ export async function runMapsSandbox(
     } catch (e) {
       if (e instanceof Fails) record(id, title, 'fail', e.message);
       else if (e instanceof Unclear) record(id, title, 'inconclusive', e.message);
-      else record(id, title, 'inconclusive', `the check could not complete: ${(e as Error).message}`);
+      else record(id, title, 'inconclusive', `the check could not complete: ${wholeError(e)}`);
     }
   };
   /** The map as the tools read it: its settings (image frame) and every feature. */
@@ -272,12 +273,12 @@ export async function runMapsSandbox(
       holdDocuments: job.holdDocuments,
       internal: true,
     });
-    if (!('jobId' in r)) throw new Error(`${title}: not queued (${JSON.stringify(r).slice(0, 200)})`);
+    if (!('jobId' in r)) throw new Error(`${title}: not queued (${JSON.stringify(r)})`);
     const view = await settle(r.jobId, title);
     const res = (view.result ?? {}) as Obj;
     if (res.verified === false)
       throw new Error(
-        `${title}: written but not as planned: ${JSON.stringify(res.verification?.differences ?? res.verification).slice(0, 400)}`,
+        `${title}: written but not as planned: ${JSON.stringify(res.verification?.differences ?? res.verification)}`,
       );
     return view;
   };
@@ -690,7 +691,7 @@ export async function runMapsSandbox(
           'M6c-null',
           'parentId null on updateFeature is refused by LegendKeeper (the owner’s probe of 12 November 2026)',
           'inconclusive',
-          e instanceof Unclear ? e.message : `the check could not complete: ${(e as Error).message}`,
+          e instanceof Unclear ? e.message : `the check could not complete: ${wholeError(e)}`,
         );
       }
       await check(
@@ -771,7 +772,7 @@ export async function runMapsSandbox(
           }
           record('M6e', m6eTitle, 'noted', `NOTED: ${results.join(' | ')}`);
         } catch (e) {
-          record('M6e', m6eTitle, 'inconclusive', `the probe could not complete: ${(e as Error).message}`);
+          record('M6e', m6eTitle, 'inconclusive', `the probe could not complete: ${wholeError(e)}`);
         }
       })();
 
@@ -849,7 +850,7 @@ export async function runMapsSandbox(
             !removed.every((x) => x.id && x.name && x.type)
           )
             fail(
-              `the folder's journal entry does not hold the ${plan.order.length - 1} removed features in full: ${JSON.stringify(folderEntry?.preImage).slice(0, 300)}`,
+              `the folder's journal entry does not hold the ${plan.order.length - 1} removed features in full: ${JSON.stringify(folderEntry?.preImage)}`,
             );
           return `${plan.order.length} features deleted (${plan.order.map((x) => x.name).join(' → ')}); the folder's entry holds ${removed!.length} in full`;
         },

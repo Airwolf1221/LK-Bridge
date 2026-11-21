@@ -1459,6 +1459,18 @@ export class ProposalService implements ProposalSink {
     return this.require(id);
   }
 
+  /**
+   * CR-2026-11-R4: the origin the proposal was captured with, as stored (`sanitiseOrigin`: its kind, client, tool and
+   * principal; never an approval), or null. The approval's step-up reads its tool (a low-level tool's removals are
+   * deletes for the rails).
+   */
+  originOf(id: string): JobOrigin | null {
+    const r = this.store.db.prepare('SELECT origin FROM proposals WHERE id = ?').get(id) as
+      { origin: string | null } | undefined;
+    const o = parseJson<unknown>(r?.origin, null);
+    return isObj(o) && typeof o.kind === 'string' ? (o as unknown as JobOrigin) : null;
+  }
+
   /** v2 C1: the high-level operation as captured (null for a v1 proposal). */
   private operationOf(id: string): Readonly<Record<string, unknown>> | null {
     const r = this.store.db.prepare('SELECT operation FROM proposals WHERE id = ?').get(id) as
@@ -2048,10 +2060,13 @@ export class ProposalService implements ProposalSink {
     );
     let steps: StepSpec[];
     try {
-      steps = filterSteps(full, omitted, { made }).steps;
+      const approvedIds = set.items.map((i) => i.id).filter((x) => !set.omitted.includes(x));
+      // CR-2026-11-R3 (R3-56): what the approved part applied (approved, and not skipped when it ran): a re-placing move
+      // of the re-proposal replays those renames as written already.
+      const done = new Set(approvedIds.filter((x) => !omitted.has(x)));
+      steps = filterSteps(full, omitted, { made, done }).steps;
       // CR-2026-11-R3 (R3-37): the routing lines the partial approval left out of the approved writes, put back now that
       // the pages they name are made (each with the item that makes its page).
-      const approvedIds = set.items.map((i) => i.id).filter((x) => !set.omitted.includes(x));
       const approved = filterSteps(full, approvedIds);
       const sameJob =
         records.length === approved.steps.length && records.every((r, k) => r.opId === approved.steps[k]!.op);

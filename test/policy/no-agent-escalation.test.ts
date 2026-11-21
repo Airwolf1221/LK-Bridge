@@ -15,6 +15,8 @@ import { type TestBridge, startBridge } from '../auth/helpers.js';
 import { startStack, type Stack } from '../tools/helpers.js';
 import { specRespond } from '../tools/spec-mock.js';
 import { operations } from '../../src/lk/index.js';
+import type { McpToolProvider } from '../../src/mcp/server.js';
+import * as z from 'zod';
 
 const operationIds = new Set(operations.map((o) => o.operationId));
 
@@ -77,6 +79,11 @@ interface Target {
   readonly pats: AuthServices['pats'];
   readonly mcpUrl: string;
   readonly fetch?: (url: string | URL, init?: RequestInit) => Promise<Response>;
+  /**
+   * CR-2026-11-R4 (LD-01): every registered tool, so the ones the list leaves out are attacked too (the narrative and
+   * consistency tools are listed only while the APPROVED pack version carries their rules; they stay callable).
+   */
+  readonly registered?: readonly McpToolProvider[];
 }
 
 async function attack(t: Target): Promise<string[]> {
@@ -136,6 +143,16 @@ async function attack(t: Target): Promise<string[]> {
         await client.callTool({ name: tool.name, arguments: args }).catch(() => undefined);
       }
     }
+    // Registered but not listed (retired names aside): called by name, with argument sets from their own schemas.
+    const shown = new Set(names);
+    for (const tool of t.registered ?? []) {
+      if (tool.retired === true || shown.has(tool.name)) continue;
+      names.push(tool.name);
+      expect(tool.name).not.toMatch(/approve|reject|revoke|scope|profile|token|grant|policy|consent/i);
+      for (const args of argumentSets(z.toJSONSchema(tool.inputSchema) as never, ids)) {
+        await client.callTool({ name: tool.name, arguments: args }).catch(() => undefined);
+      }
+    }
   } finally {
     await client.close();
   }
@@ -160,6 +177,7 @@ describe('no MCP tool can change policy, tokens or proposal decisions', () => {
       policy: stack.policy,
       pats: stack.services.pats,
       mcpUrl: `${stack.base}/mcp`,
+      registered: stack.runtime.tools,
     });
     // Retired names (v2 E3b) are registered but never listed: they answer "renamed to …" and do nothing.
     const listed = stack.runtime.tools.filter((t) => t.retired !== true);
@@ -175,6 +193,7 @@ describe('no MCP tool can change policy, tokens or proposal decisions', () => {
         policy: perOp.policy,
         pats: perOp.services.pats,
         mcpUrl: `${perOp.base}/mcp`,
+        registered: perOp.runtime.tools,
       });
       expect(names.filter((n) => n.startsWith('lk_op_'))).toHaveLength(89);
       const listed = perOp.runtime.tools.filter((t) => t.retired !== true);

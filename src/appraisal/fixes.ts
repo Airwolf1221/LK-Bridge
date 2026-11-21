@@ -9,7 +9,9 @@
  * now, and nothing is proposed), and plans the smallest change through the bridge's existing machinery:
  *
  * - an **em dash in the name**: `updateResource` with the name's dashes replaced (the pack's own rule, ADR 0050 decision
- *   7), the prefix kept, re-placed alphabetically when its place changes (update_resource's own steps);
+ *   7), the prefix kept, re-placed alphabetically when its place changes (update_resource's own steps); when that
+ *   changes a subject's name (the rename steering's judgement), the proposal carries a plain-rename reason
+ *   (CR-2026-11-R3, R3-59);
  * - an **em dash in the headings or prose**, **decorative blank paragraphs**, **links inside headings**: write_page's
  *   block-by-block path (ADR 0046 decision 1): only the blocks that change are replaced (or deleted), every other
  *   character and block kept, the document compared inside the lock, the result verified;
@@ -43,6 +45,7 @@ import { hasForbiddenDash } from '../packs/engine/text.js';
 import { planBlockwise } from '../pages/blockwise.js';
 import { blockwiseJob, validateBlockOp } from '../pages/blockwise-job.js';
 import { SiblingSim } from '../resources/plan.js';
+import { subjectPart } from '../packs/rename/guard.js';
 import { classifyName, nameKey } from '../tree/classify.js';
 import type { TreeNode } from '../tree/index.js';
 import { dashBlocks, headingLinks, isBlankParagraph } from './owner.js';
@@ -106,6 +109,22 @@ export interface FixDeps {
     readonly key: string;
     readonly values: { readonly authoritative: string; readonly working: string; readonly archived: string };
   };
+  /**
+   * CR-2026-11-R3 (R3-59): the rename steering (ADR 0058 amendment C, src/packs/rename/guard.ts) on the page the name fix
+   * renames, as read live: whether the new name changes a subject's name on a pack project (a page of a character's
+   * set, a page with a Subject fact, a pack owner, the index of a subject's set). Absent: never (no pack).
+   */
+  readonly subjectRename?: (page: SubjectRenamePage, newName: string) => boolean;
+}
+
+/** CR-2026-11-R3 (R3-59): the page the name fix renames, as its live read gives it. */
+export interface SubjectRenamePage {
+  readonly id: string;
+  readonly kind: TreeNode['kind'];
+  readonly displayName: string;
+  readonly tags: readonly string[];
+  /** The keys of its sidebar's key-value rows. */
+  readonly factKeys: readonly string[];
 }
 
 /** CR-2026-11-R2 (R2-30, R2-31): the checks a fix's job makes before it writes (registered with the job engine). */
@@ -367,11 +386,38 @@ async function fixName(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
       );
   }
   const page = { id: pageId, name: raw };
+  // CR-2026-11-R3 (R3-59): a fix that changes a subject's name (the text before " - ": "Gata—Lund - Polity Reference"
+  // reads as "Gata" once its dash is replaced) renames this one page and nothing that refers to the subject, so it is a
+  // plain rename and says why (ADR 0058 amendment C), as update_resource's plainRename does: the reason is shown with the
+  // proposal (its summary and operation), or for a fix run at scope write on the Review page (the job's title), and it
+  // is in the write's journal entry. The fix is the owner's proposal by default (ADR 0054 decision 8), so it is not
+  // refused: the owner decides with the reason in front of them.
+  const subject = subjectPart(c.displayName, c.kind === 'index');
+  const plainRename = d.subjectRename?.(
+    {
+      id: pageId,
+      kind: c.kind,
+      displayName: c.displayName,
+      tags: Array.isArray(res.tags) ? res.tags.filter((t): t is string => typeof t === 'string') : [],
+      factKeys: sidebarFrom(res)
+        .filter((p) => p.kind === 'keyValue')
+        .flatMap((p) => (p.rows ?? []).map((row) => row.key)),
+    },
+    rawName,
+  )
+    ? `the dash replaced in this page’s name only; nothing else that names “${subject}” is renamed: arkona_rename renames a subject everywhere`
+    : null;
   const steps: StepSpec[] = [
     {
       op: 'updateResource',
       params: { path: { resourceId: pageId }, body: { name: rawName } },
-      journalOperation: { tool: 'update_resource', page, from: 'arkona_appraisal_fix', finding: f.id },
+      journalOperation: {
+        tool: 'update_resource',
+        page,
+        from: 'arkona_appraisal_fix',
+        finding: f.id,
+        ...(plainRename ? { plainRename } : {}),
+      },
       expectCurrent: {
         state: 'resource',
         hash: stateHash({ name: raw, tags: Array.isArray(res.tags) ? res.tags : [] }),
@@ -413,13 +459,14 @@ async function fixName(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
   });
   return submit(d, {
     steps,
-    title: `Replace the dash in “${raw}”: “${rawName}”`,
+    title: `Replace the dash in “${raw}”: “${rawName}”${plainRename ? ` (plain rename: ${plainRename})` : ''}`,
     holdLock: { resourceId: pageId },
     operation: {
       tool: 'update_resource',
       fromAppraisal: f.id,
       check: f.check,
       changes: { name: { before: raw, after: rawName } },
+      ...(plainRename ? { plainRename } : {}),
     },
     page,
     pageParts: ['name'],

@@ -115,3 +115,93 @@ dashboard signed in": Chromium sends no Strict cookie on the cross-site arrival,
 the bounce's same-origin one; the writer limit and a new token ask for the step-up in the dialog). The tests that
 asserted the old rules (a lowering one click, five minutes, SameSite=Lax, 12 hours) now assert these. docs/auth.md,
 docs/dashboard.md and `.env.example` say so.
+
+## Amendment 1: the fourth review's session findings (CR-2026-11-R4)
+
+- Status: **Accepted** (the owner, 21 November 2026, with [ADR 0066](0066-cr-2026-11-r4-decisions.md): its part A
+  confirmed every choice marked **Chosen** below, and its part B decided the questions this amendment left open: 3, and
+  "Not changed"). The fixes make decisions 1, 2, 4 and 5 hold on every route. No migration, no new setting. The review's
+  tests are `test/review/r4-sessions/` (SE-01 to SE-52) and `test/ui/r4-sessions-*.test.ts`.
+- Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
+  spike, rehearsal or round-trip script. Mocks and fixtures only.
+
+1. **The consent page asks for the step-up too** (SE-02 to SE-04b; decision 5). It is reached with the dashboard's
+   session, and it applied a scope raise, a new profile's scope and a connection on a profile at scope `write` with no
+   step-up, so a stolen cookie alone gave write-scope OAuth tokens that outlived Sign out everywhere. Now, unless the
+   session stepped up within the window, nothing is applied and no code is issued: before a raise (after its "Confirm
+   scope change" page), a new profile given a scope above the default for new connections, or a connection on a
+   profile at scope `write`, the page "Confirm it’s you" asks for the authenticator code (or a recovery code), or the
+   password without one, and goes on with the same pending request once it succeeds (`src/policy/consent.ts`
+   `consentStepUp`, applied inside `apply`; `src/auth/routes/authorize.ts`; `src/auth/pages.ts`
+   `renderConsentStepUp`). It is counted against the sign-in limits (`OwnerAuth.reauthenticate`), logged
+   (`reauth.*`, `consent.step_up_asked`), audited (`owner.reauth`, `via: consent`), and holds for 10 minutes on the
+   session, the dashboard included. **Chosen:** an interstitial page in the consent flow (the choice decides whether it
+   is needed, and the page has no script); the field is `stepup_totp` or `stepup_password`; a wrong one answers 401 on
+   the same page, too many 429 with `Retry-After`; Deny there needs none. An ordinary connection at `read` or `propose`
+   and every lowering are not asked (whether every new connection should ask is the owner's decision).
+2. **Approving a low-level removal asks** (SE-05 to SE-07). The approval judged a proposal's operations without the
+   low-level context the deletes rail used when it made the proposal. `LivePolicyGate.approvalVerdict` now asks when
+   the recorded reason (`proposedBecause`) names the deletes, bulk or assets rail, or cannot be read
+   (`reasonNamesGuardedRail`: only a reason made wholly of the renames-and-moves rail's hits is let through), and when
+   the operations, judged by the rails' own rules at their defaults with the proposal's recorded tool (a low-level
+   tool's block and row deletes, list writes that drop entries and text taken off a pack page, read live as at entry;
+   a read that fails counts), hit a guarded rail; a judgment that cannot be made asks. The entry rails and the
+   approval share one judgment (`judge`); a restore still counts as more than 10 pages at approval (its set is not
+   read). **Chosen:** a session already stepped up is not judged at all (no read is made).
+3. **A member removal at approval** (SE-12): `removeMember` and `revokeInvite` (`MEMBER_REMOVALS`) are deletes for the
+   approval's judgment. At entry they stay as before (refused unless `LK_ALLOW_MEMBER_ADMIN`); whether the deletes rail
+   should catch them there too, for an agent at scope `write` with member administration on, is open for the owner.
+   **Decided (ADR 0066 part B, question 10: yes) and built:** the entry rails count them as deletes too, so with member
+   administration on an agent at scope `write` proposes a removal (`proposed because: delete (1 project member)`)
+   rather than making it; `inviteMember` is unchanged.
+4. **A project's chronology settings** (SE-16): `PUT /projects/:name/chronology` with `settings` asks for the step-up (a
+   project's settings, which the timeline tools write by); `reset: true`, which makes the tools refuse until confirmed
+   again, stays one click (a tightening).
+5. **An idle open tab no longer keeps its session alive** (SE-42, SE-43; decision 1). The dashboard's own refreshes
+   counted as uses. Now every request the dashboard sends without the owner's input carries `X-LKB-Background: 1`, and
+   the guard checks such a request as `isLive` does: the session must be live, but its end does not move and its
+   cookie is not renewed (`src/admin/guard.ts`, `OwnerAuth.peekSession`). Marked: the refresh timers (Maintenance,
+   Budgets, Repository Tree, Asset Tree, Snapshots, Audits, Off-site copy, the chronology check), every reload for a
+   live event (`useReloadOn`, and anything a page does in answer to an event), every reload for the stream starting
+   afresh (`epoch`), and the session check after the stream drops. **Chosen:** (a) opening the live stream is never a
+   use either (an EventSource cannot send a header, and the dashboard opens it again by itself after every drop); (b)
+   as a safety net for what no list can name (a part of a page that appears because a refresh brought new data, and
+   loads its own), a request sent more than a minute after the owner's last key, click, touch or back-forward (or the
+   page's load) is the dashboard's own too (`OWNER_INPUT_MS`); (c) the checks a request makes after the guard (the
+   step-up, `GET /security`) no longer count as a second use. The owner's own actions and page loads are uses, as
+   before.
+6. **Sign out everywhere** (SE-33; decision 4) revokes every session not yet revoked, those already past their end
+   included, so none comes back if the server's clock is set back; only the live ones are counted in its answer.
+7. **The bounce page is never framed** (SE-40): `X-Frame-Options: DENY` and its own Content-Security-Policy
+   (`default-src 'none'`, `frame-ancestors 'none'`), as the bridge's other pages.
+8. **The bounce answers top-level navigations only** (SE-49; decision 2). Another site's image, fetch or frame was
+   answered with the bounce and set the marker, so the owner's own next link was not bounced. **Chosen:** a request
+   that carries `Sec-Fetch-Dest` must say `document` (every browser that sends the Fetch Metadata headers sends it, and
+   gives only a top-level navigation that destination, always with `Sec-Fetch-Mode: navigate`); `Sec-Fetch-Mode` is not
+   read on its own, because Node's `fetch` sends `cors` whatever it is given; a request without `Sec-Fetch-Dest` is
+   answered as before.
+9. **A wrong current password is shown** (SE-44; decision 7): `useAction` stays quiet only for a 401 that means signed
+   out (`UNAUTHENTICATED`), never for `WRONG_PASSWORD` or `REAUTH_FAILED`.
+
+**Resuming a job, decided** (ADR 0066 part B, questions 3 and 4: yes): decision 6 names pausing a job among the brakes,
+and its release now asks too, as resuming writes and undraining do: resuming a paused job (`POST /jobs/:id/resume`;
+SE-51), resuming a stopped one (`resume-stopped`), a step retry sent with `force` (a normal retry checks LegendKeeper
+first and never duplicates, one click) and a rehearsal's start (its plan stays one click). The registry, the marks the
+bridge keeps in its own tables and "Mark resolved" stay one click.
+
+**Confirmed** (the owner, 21 November 2026): the choices above (1, 2, 5 (a) to (c), 8), with ADR 0066 part A. SE-42 and
+SE-43 as first written also asserted that the idle page sends no request at all; the lead reviewer changed that
+assertion to the safe behaviour the tests name (the session's end does not move) and to every request the page sends by
+itself being marked, since the live dashboard must still refresh (the existing tests of live updates expect those
+requests).
+
+**Tests:** `test/auth/consent-stepup.test.ts` (the consent page's step-up, both factors, the window, what is not asked,
+the limits, the carried choice); `test/admin/approval-stepup.test.ts` (the approval's judgment for proposals made by
+scope: low-level and high-level removals, list writes that keep or drop, recorded reasons, member removals, a session
+already stepped up); `test/auth/background-requests.test.ts` and `test/ui/background.test.tsx` (what is
+marked, and that a marked request is checked, not used); `test/policy/mcp.test.ts` (its raise, its new profile at
+`write` and its existing `write` profile now step up on the page); `test/e2e/dashboard.spec.ts` (the token is made, and
+stepped up, before the proposal is approved, so the approval of that `lk_api_write` replace that drops a block goes
+through within the step-up's window); and, for the owner's decisions, SE-51 (`test/review/r4-sessions/misc.test.ts`),
+SE-13 and SE-14 (`routes-inventory.test.ts`: the routes that now ask) and `test/policy/member-admin.test.ts` (a member
+removal at entry).

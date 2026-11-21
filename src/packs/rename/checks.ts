@@ -23,7 +23,8 @@
  * sentence), `rename.facts.verify` (each changed fact shows its new value), `rename.asset.verify`.
  *
  * Rebasers (`StepOptions.rebase`, src/jobs/rebase.ts): `rename.block` (a block's restatements and routing lines),
- * `rename.row` (a chronology row), `rename.resource` (a page name, an alias, an identity tag) and `rename.factRow`.
+ * `rename.row` (a chronology row), `rename.resource` (a page name, an alias, an identity tag: CR-2026-11-R3, R3-60, with
+ * the approved token map judged again inside the tag write's lock) and `rename.factRow`.
  */
 import { NON_CURRENT_AREAS } from '../../appraisal/scope.js';
 import { nameKey as treeNameKey } from '../../tree/classify.js';
@@ -37,8 +38,10 @@ import type {
 import type { RebaseContext, RebaseResult } from '../../jobs/rebase.js';
 import type { StateDifference } from '../../jobs/sidebar-state.js';
 import type { SkippedItem } from '../../jobs/types.js';
+import type { SiblingCompare } from '../../registry/ordering.js';
 import { textKey } from '../engine/text.js';
 import type { Packs } from '../service.js';
+import { placeInSequence, type PlaceRename, type PlaceSibling } from './place.js';
 import {
   applyEdits,
   blockOccurrences,
@@ -219,12 +222,26 @@ function rebaseEvent(ctx: RebaseContext): RebaseResult {
   return { kind: 'retry', params: ctx.params };
 }
 
+/** A parent's own sibling order (v3 F4c, ADR 0065: Narratives'), as the registry gives it; null: the ordinary rule. */
+export type OrderFor = (projectId: string, parentId: string) => SiblingCompare | null;
+
 /**
  * CR-2026-11-R3 (R3-36): a page's re-placing move after its rename: when the page is no longer under the parent the
  * plan placed it in (the owner moved it), it is left where it is: never moved back. Its rename stands.
+ *
+ * CR-2026-11-R3 (R3-56): a page renamed beside others of the same parent (`siblings` and `renames` in the input) has
+ * its place worked out here, when the job runs: the parent's children as planned, the approved renames among them
+ * (the item filter keeps only those) replayed in the job's order up to this page (src/packs/rename/place.ts). It is
+ * moved beside the sibling its new name belongs next to among the names written by then, or not at all when that is
+ * where it stands; never anchored on a name the owner left out as if it were written.
  */
-function rebasePlace(ctx: RebaseContext): RebaseResult {
-  const input = ctx.input as { parentId: string };
+function rebasePlace(ctx: RebaseContext, orderFor?: OrderFor): RebaseResult {
+  const input = ctx.input as {
+    parentId: string;
+    pageId?: string;
+    siblings?: PlaceSibling[];
+    renames?: PlaceRename[];
+  };
   const r = (ctx.current.entity ?? ctx.current.body ?? null) as Obj | null;
   if (!ctx.current.exists || !r) return { kind: 'unchanged', note: { placement: 'the page is gone' } };
   if ((str(r.parentId) ?? null) !== input.parentId)
@@ -232,6 +249,25 @@ function rebasePlace(ctx: RebaseContext): RebaseResult {
       kind: 'unchanged',
       note: { placement: 'moved by someone else since the plan: left where it is' },
     };
+  if (input.pageId && Array.isArray(input.siblings) && Array.isArray(input.renames)) {
+    // A page's place depends only on the renames replayed before it (the later ones come after it).
+    const placed = placeInSequence(
+      input.siblings,
+      input.renames,
+      orderFor?.(ctx.projectId, input.parentId) ?? undefined,
+    ).get(input.pageId);
+    if (!placed?.moves)
+      return {
+        kind: 'unchanged',
+        note: { placement: 'already in its place among the names written: not moved' },
+      };
+    const body = isObj(ctx.params.body) ? ctx.params.body : {};
+    const { after: _a, before: _b, ...rest } = body;
+    return {
+      kind: 'retry',
+      params: { ...ctx.params, body: { ...rest, parentId: input.parentId, ...placed.slot } },
+    };
+  }
   return { kind: 'retry', params: ctx.params };
 }
 
@@ -550,17 +586,30 @@ async function assetCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckR
   return { differences };
 }
 
+/** A culture's or race's token: the pack, its map and the (new) value the APPROVED version must map to the tag. */
+export interface TokenRef {
+  readonly packId: string;
+  readonly map: 'culture' | 'race';
+  readonly value: string;
+}
+
+/** The tag the pack version the owner APPROVED maps the value to (undefined: none, or no version approved). */
+function approvedToken(packs: Pick<Packs, 'get' | 'store'>, t: TokenRef): string | undefined {
+  const pack = packs.get(t.packId);
+  const rules =
+    pack?.approved && pack.approved.version === pack.version
+      ? pack.rules
+      : pack?.approved
+        ? packs.store.rulesAt(pack.id, pack.approved.version)
+        : null;
+  return rules?.tags[t.map]?.[t.value];
+}
+
 function packCheck(packs: Pick<Packs, 'get' | 'store'>) {
   return (ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> => {
-    const input = ctx.input as { packId: string; map: 'culture' | 'race'; value: string; token: string };
+    const input = ctx.input as TokenRef & { token: string };
     const pack = packs.get(input.packId);
-    const rules =
-      pack?.approved && pack.approved.version === pack.version
-        ? pack.rules
-        : pack?.approved
-          ? packs.store.rulesAt(pack.id, pack.approved.version)
-          : null;
-    const have = rules?.tags[input.map]?.[input.value];
+    const have = approvedToken(packs, input);
     if (have !== input.token)
       return Promise.resolve({
         differences: [],
@@ -653,12 +702,19 @@ function rebaseRow(ctx: RebaseContext): RebaseResult {
   return { kind: 'retry', params: { ...ctx.params, body: next } };
 }
 
-/** A page's name (core), one alias added, or one identity tag swapped, on the page as it is now. */
-function rebaseResource(ctx: RebaseContext): RebaseResult {
+/**
+ * A page's name (core), one alias added, or one identity tag swapped, on the page as it is now.
+ *
+ * CR-2026-11-R3 (R3-60): an identity tag's swap also judges, inside its write's lock, that the pack version the owner
+ * APPROVED still maps the new value to the new tag (`token`): the job's first check judged it once before any write,
+ * and the owner may approve another version while the job runs. When it no longer does, the tag is not written: the
+ * item is skipped, saying so. (A proposal planned before this release carries no `token`: as before.)
+ */
+function rebaseResource(ctx: RebaseContext, packs?: Pick<Packs, 'get' | 'store'>): RebaseResult {
   const input = ctx.input as
     | { kind: 'name'; from: string; to: string; item: string }
     | { kind: 'alias'; alias: string; item: string }
-    | { kind: 'tags'; from: string; to: string; item: string };
+    | { kind: 'tags'; from: string; to: string; item: string; token?: TokenRef };
   const page = (ctx.current.entity ?? ctx.current.body ?? {}) as Obj;
   if (!ctx.current.exists)
     return { kind: 'skip', skipped: [{ item: input.item, reason: 'changed meanwhile: the page is gone' }] };
@@ -690,6 +746,21 @@ function rebaseResource(ctx: RebaseContext): RebaseResult {
   }
   const tags = list(page.tags);
   if (tags.includes(input.from)) {
+    if (input.token && packs) {
+      const have = approvedToken(packs, input.token);
+      if (have !== input.to)
+        return {
+          kind: 'skip',
+          skipped: [
+            {
+              item: input.item,
+              reason: `changed meanwhile: the pack version the owner approved no longer maps the ${input.token.map} “${input.token.value}” to the tag “${input.to}” (it maps it to ${have ? `“${have}”` : 'nothing'}), so the tag is not written; the rest of this page's rename stands`,
+              before: input.from,
+              after: tags.join(', '),
+            },
+          ],
+        };
+    }
     const next = tags.map((t) => (t === input.from ? input.to : t));
     const body = isObj(ctx.params.body) ? ctx.params.body : {};
     return { kind: 'retry', params: { ...ctx.params, body: { ...body, tags: [...new Set(next)] } } };
@@ -738,6 +809,8 @@ export function registerRenameChecks(
   packs: Pick<Packs, 'get' | 'store'>,
   /** CR-2026-11-R3 (R3-29): the repository tree, for the history check (absent: history is not judged again). */
   tree?: TreeNodeOf,
+  /** CR-2026-11-R3 (R3-56): a parent's own sibling order, for the re-placing moves (absent: the ordinary rule). */
+  orderFor?: OrderFor,
 ): () => void {
   const off = [
     engine.registerAsyncChecker(RENAME_CHECKS.history, (ctx) => historyCheck(tree, ctx)),
@@ -752,11 +825,11 @@ export function registerRenameChecks(
     engine.registerAsyncChecker(RENAME_CHECKS.pack, packCheck(packs)),
     engine.registerRebaser(RENAME_REBASERS.block, rebaseBlock),
     engine.registerRebaser(RENAME_REBASERS.row, rebaseRow),
-    engine.registerRebaser(RENAME_REBASERS.resource, rebaseResource),
+    engine.registerRebaser(RENAME_REBASERS.resource, (ctx) => rebaseResource(ctx, packs)),
     engine.registerRebaser(RENAME_REBASERS.factRow, rebaseFactRow),
     engine.registerRebaser(RENAME_REBASERS.asset, rebaseAsset),
     engine.registerRebaser(RENAME_REBASERS.event, rebaseEvent),
-    engine.registerRebaser(RENAME_REBASERS.place, rebasePlace),
+    engine.registerRebaser(RENAME_REBASERS.place, (ctx) => rebasePlace(ctx, orderFor)),
   ];
   return () => {
     for (const f of off) f();

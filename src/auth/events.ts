@@ -17,6 +17,8 @@ export type AuthEventName =
   | 'consent.shown'
   | 'consent.granted'
   | 'consent.scope_change_confirm'
+  /** CR-2026-11-R4: the consent page asked for the step-up before a choice that lets the connection do more. */
+  | 'consent.step_up_asked'
   | 'consent.denied'
   | 'token.issued'
   | 'token.refreshed'

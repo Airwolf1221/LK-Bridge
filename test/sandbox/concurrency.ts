@@ -24,6 +24,7 @@ import { mintClientId } from '../../src/jobs/ids.js';
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
 import { runSettled, type WaitOptions } from './wait.js';
+import { wholeError } from './whole.js';
 
 type Obj = Record<string, unknown>;
 
@@ -202,7 +203,7 @@ export async function runConcurrencySandbox(
           gone ? 'pass' : 'fail',
           gone
             ? `root ${rootId} (already gone)`
-            : `could not delete ${rootId}: delete it by hand (${(e as Error).message})`,
+            : `could not delete ${rootId}: delete it by hand (${wholeError(e)})`,
         );
       }
     }

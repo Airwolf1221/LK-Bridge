@@ -180,17 +180,10 @@ test('reviews a proposal as a readable diff and approves it; a token is shown on
   await signIn(page, '/ui/proposals');
   const row = page.locator(`tr[data-proposal="${proposalId}"]`);
   await expect(row).toContainText('Scribe');
-  await row.getByRole('button', { name: 'Review' }).click();
-  const diff = page.getByRole('group', { name: /Changes to/ });
-  await expect(diff.locator('[data-kind="add"]').first()).toContainText('A brand new opening');
-  await expect(diff.locator('[data-kind="del"]').first()).toBeVisible();
-  await page.getByRole('button', { name: 'Approve', exact: true }).click();
-  await page.getByRole('alertdialog').getByRole('button', { name: 'Approve' }).click();
-  await page.getByRole('button', { name: 'History' }).click();
-  await expect(page.locator(`tr[data-proposal="${proposalId}"]`)).toContainText(/Execut/, {
-    timeout: 15_000,
-  });
 
+  // CR-2026-11-R4: approving this proposal (an lk_api_write document replace that drops the page's block, a delete for
+  // the rails, ADR 0057 decision 4) needs the step-up (ADR 0062 decision 5). The token is made first: it asks for the
+  // step-up, which then holds for 10 minutes, so the approval below goes through without asking again.
   await goTo(page, 'Clients & Access', true);
   await page.getByLabel('Name', { exact: true }).fill('Playwright laptop');
   await page.getByRole('button', { name: 'Create token' }).click();
@@ -201,6 +194,18 @@ test('reviews a proposal as a readable diff and approves it; a token is shown on
   await expect(page.getByTestId('pat-token')).toHaveCount(0);
   await page.reload();
   expect(await page.content()).not.toContain(token);
+
+  await goTo(page, /^Proposals/);
+  await row.getByRole('button', { name: 'Review' }).click();
+  const diff = page.getByRole('group', { name: /Changes to/ });
+  await expect(diff.locator('[data-kind="add"]').first()).toContainText('A brand new opening');
+  await expect(diff.locator('[data-kind="del"]').first()).toBeVisible();
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Approve' }).click();
+  await page.getByRole('button', { name: 'History' }).click();
+  await expect(page.locator(`tr[data-proposal="${proposalId}"]`)).toContainText(/Execut/, {
+    timeout: 15_000,
+  });
   const expected = stepUpRefusal('POST', /\/api\/admin\/clients\/pats/);
   expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
   expect(problems.filter((p) => !expected(p))).toEqual([]);

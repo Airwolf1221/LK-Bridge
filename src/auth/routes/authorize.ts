@@ -4,8 +4,8 @@ import { CimdError, isCimdClientId, validateCimdUrl } from '../cimd.js';
 import { CODE_CHALLENGE_S256 } from '../crypto.js';
 import { OAuthError } from '../errors.js';
 import { FormBody } from '../form.js';
-import { originAllowed, rawQuery, redirectWith, sendErrorPage, sendHtml } from '../http.js';
-import { renderConsent, renderScopeConfirm } from '../pages.js';
+import { clientIp, originAllowed, rawQuery, redirectWith, sendErrorPage, sendHtml } from '../http.js';
+import { renderConsent, renderConsentStepUp, renderScopeConfirm } from '../pages.js';
 import { findRegisteredRedirect, isAllowedRedirectUri, isLoopbackRedirect } from '../redirect-uris.js';
 import { ScopeSyntaxError, grantableScopes, parseScope } from '../scopes.js';
 import type { AuthServices } from '../services.js';
@@ -263,7 +263,7 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
     }
   };
 
-  const consent = (req: FastifyRequest, reply: FastifyReply) => {
+  const consent = async (req: FastifyRequest, reply: FastifyReply) => {
     if (!originAllowed(req, config.publicUrl)) {
       return sendErrorPage(
         reply,
@@ -343,13 +343,88 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
       const newLabel = form.get('new_label');
       const newKind = form.get('new_kind');
       const confirmScopeChange = form.get('confirm_scope_change');
-      const applied = s.profiles.apply({
+      const asked = {
         profileId: choice,
         scope,
         ...(newLabel !== undefined ? { newLabel } : {}),
         ...(newKind !== undefined ? { newKind } : {}),
         ...(confirmScopeChange !== undefined ? { confirmScopeChange } : {}),
-      });
+      };
+      // CR-2026-11-R4 (ADR 0062 decision 5): a choice that lets the connection do more (a raise, a new profile above
+      // the default, a connection at scope write) needs the step-up within its window, as on the dashboard. Without it,
+      // nothing is applied: this page asks for it, and the same pending request goes on once it succeeds.
+      let applied = s.profiles.apply({ ...asked, steppedUp: s.owner.reauthUntil(session) !== null });
+      if (!applied.ok && 'stepUp' in applied) {
+        const need = applied.stepUp;
+        const stepUpPage = (status: number, error?: string) =>
+          sendHtml(
+            reply,
+            status,
+            renderConsentStepUp({
+              action: OAUTH_PATHS.consent,
+              requestId,
+              csrf: form.get('csrf_token') ?? '',
+              redirectHost: displayHost(pending.redirectUri),
+              fields: {
+                profile: choice,
+                scope,
+                new_label: newLabel,
+                new_kind: newKind,
+                confirm_scope_change: confirmScopeChange,
+              },
+              replace: replaces,
+              need,
+              totp: s.owner.totpRequired,
+              ...(error !== undefined ? { error } : {}),
+            }),
+            [new URL(pending.redirectUri).origin],
+          );
+        const password = form.get('stepup_password');
+        const code = form.get('stepup_totp');
+        if (password === undefined && code === undefined) {
+          s.event('consent.step_up_asked', { client_id: pending.clientId, why: need.why, scope: need.to });
+          return stepUpPage(200);
+        }
+        // Counted against the sign-in limits, as the dashboard's step-up is (OwnerAuth.reauthenticate).
+        const r = await s.owner.reauthenticate({ sessionToken, password, totp: code, ip: clientIp(req) });
+        s.profiles.recordStepUp?.(r.ok ? { ok: true } : { ok: false, reason: r.reason });
+        if (!r.ok) {
+          if (r.reason === 'rate_limited') {
+            reply.header('retry-after', String(r.retryAfterSeconds));
+            return stepUpPage(
+              429,
+              `Too many failed attempts. Try again in ${Math.ceil(r.retryAfterSeconds / 60)} minute(s).`,
+            );
+          }
+          if (r.reason === 'unavailable')
+            return stepUpPage(503, `The check is not possible right now. ${r.message}`);
+          if (r.reason === 'invalid') return stepUpPage(401, 'Those details were not recognised.');
+        }
+        // The check took a moment: the session must still be live and stepped up, and the request still waiting for it.
+        const now = s.owner.peekSession(sessionToken);
+        if (!now || s.owner.reauthUntil(now) === null) {
+          return sendErrorPage(
+            reply,
+            401,
+            'Signed out',
+            'Your sign-in has ended. Start the connection again from Claude.',
+          );
+        }
+        const still = s.consents.get(requestId);
+        if (!still || still.sessionHash !== s.sessionHash(sessionToken)) {
+          return sendErrorPage(
+            reply,
+            400,
+            'Request expired',
+            'This authorisation request has expired or was already answered. Start the connection again from Claude.',
+          );
+        }
+        applied = s.profiles.apply({ ...asked, steppedUp: true });
+      }
+      if (!applied.ok && 'stepUp' in applied) {
+        // Never with the step-up just made; refused rather than applied without it.
+        return sendErrorPage(reply, 403, 'Request refused', 'Confirm it is you first, then try again.');
+      }
       if (!applied.ok && 'confirm' in applied) {
         // A change to an existing profile's scope: ask once more, with the warning, before anything changes. The
         // request is not used up; the confirmation form posts it again with the same CSRF token.

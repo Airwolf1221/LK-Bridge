@@ -169,6 +169,17 @@ export interface Packs {
   toolsOf(pack: Pack): string[];
   /** Whether a pack tool is listed: its pack is attached to at least one project served now. */
   toolListed(packId: string): boolean;
+  /**
+   * CR-2026-11-R4 (LD-01, LD-07): the rules of the version the owner APPROVED (null: none approved, or the pack is not
+   * known), kept until the pack changes: what a tool's `listed()` reads, so a tool is listed exactly while the approved
+   * version serves it, without parsing the pack's rules at every request. Never mutate the result.
+   */
+  approvedRules(packId: string): PackRules | null;
+  /**
+   * CR-2026-11-R4 (LD-07): the pack as `get` reads it, kept until its row changes: for the tool lists' `listed()` only
+   * (each MCP request asks every pack tool). Never mutate the result.
+   */
+  peek(packId: string): Pack | null;
   /** Reads every governance source's current version (one read each) and records any drift. */
   governance(packId: string, o?: { signal?: AbortSignal }): Promise<GovernanceStatus>;
   readonly commands: {
@@ -659,8 +670,52 @@ export function createPacks(d: PacksDeps): Packs {
     }
   };
 
+  // CR-2026-11-R4 (LD-01, LD-07): what the tool lists read of a pack, kept per pack until its row changes: every MCP
+  // request works out its list afresh and asked for the pack (a full parse of its rules) once per pack tool, 18 times a
+  // request on Arkona. A stored version never changes; the row's version, approval and last change say when to read
+  // again (each of the store's updates sets `updated_at`).
+  const listMemo = new Map<string, { key: string; pack: Pack | null; approved?: PackRules | null }>();
+  const listEntry = (packId: string) => {
+    const head = store.head(packId);
+    if (!head) {
+      listMemo.delete(packId);
+      return null;
+    }
+    const key = `${head.version}|${head.approvedVersion ?? ''}|${head.updatedAt}`;
+    let hit = listMemo.get(packId);
+    if (hit?.key !== key) {
+      hit = { key, pack: store.get(packId) };
+      listMemo.set(packId, hit);
+    }
+    return hit;
+  };
+  const peek = (packId: string): Pack | null => {
+    try {
+      return listEntry(packId)?.pack ?? null;
+    } catch (e) {
+      d.log?.warn({ err: e, packId }, 'the pack could not be read; its tools are not listed');
+      return null;
+    }
+  };
+  const approvedRules = (packId: string): PackRules | null => {
+    try {
+      const e = listEntry(packId);
+      const pack = e?.pack;
+      if (!e || !pack?.approved) return null;
+      if (e.approved === undefined)
+        e.approved =
+          pack.approved.version === pack.version ? pack.rules : store.rulesAt(pack.id, pack.approved.version);
+      return e.approved;
+    } catch (e) {
+      d.log?.warn({ err: e, packId }, 'the approved pack rules could not be read; its tools are not listed');
+      return null;
+    }
+  };
+
   return {
     store,
+    peek,
+    approvedRules,
     onChange(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);

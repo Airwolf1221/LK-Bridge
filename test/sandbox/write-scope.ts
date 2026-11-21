@@ -524,8 +524,7 @@ export async function runWriteScopeRehearsal(
       async () => {
         const read = await tool(a, 'read_document', { resource: made.page, document: made.doc });
         const markdown = String(read.body.markdown ?? '');
-        if (!markdown.includes(SENTENCES[1]))
-          throw new Unclear(`the page reads back as: ${markdown.slice(0, 200)}`);
+        if (!markdown.includes(SENTENCES[1])) throw new Unclear(`the page reads back as: ${markdown}`);
         const r = await direct(a, 'write_page', {
           page: made.page,
           document: made.doc,

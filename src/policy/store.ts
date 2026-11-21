@@ -383,6 +383,19 @@ export class PolicyStore {
     return this.connections();
   }
 
+  /**
+   * CR-2026-11-R4 (LD-03, LD-04): each connection's profile, and nothing else (a light read): the tool lists' watch
+   * compares it, since a connection moved to another profile changes what its sessions may use.
+   */
+  connectionProfiles(): { readonly id: string; readonly profileId: string | null }[] {
+    return this.db
+      .prepare(
+        `SELECT family_id AS id, profile_id AS profileId FROM auth_token_families
+         UNION ALL SELECT id, profile_id AS profileId FROM auth_pats`,
+      )
+      .all() as { id: string; profileId: string | null }[];
+  }
+
   /** One grant or PAT, or undefined. */
   getConnection(id: string): ConnectionView | undefined {
     return this.connections(id)[0];

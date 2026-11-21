@@ -87,6 +87,25 @@ export class PackStore {
     return r ? this.toPack(r) : null;
   }
 
+  /**
+   * CR-2026-11-R4 (LD-07): a pack's version, approved version and last change, without reading its rules: what a cache
+   * of the rules compares (every tool list asked for them, and each `get` parses the whole rules document).
+   */
+  head(id: string): { version: number; approvedVersion: number | null; updatedAt: number } | null {
+    const r = this.db
+      .prepare(
+        `SELECT version, json_extract(approved, '$.version') AS approved_version, updated_at FROM packs WHERE id = ?`,
+      )
+      .get(id) as { version: number; approved_version: number | null; updated_at: number } | undefined;
+    return r
+      ? {
+          version: Number(r.version),
+          approvedVersion: r.approved_version === null ? null : Number(r.approved_version),
+          updatedAt: Number(r.updated_at),
+        }
+      : null;
+  }
+
   list(): Pack[] {
     return (this.db.prepare('SELECT * FROM packs ORDER BY id').all() as PackRow[]).map((r) => this.toPack(r));
   }

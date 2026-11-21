@@ -15,6 +15,13 @@
  * alone sets and which names exactly the pages the job changes: an agent's body can never carry one. A marker of the four
  * lifecycle tools (`canonical`) also makes the request a proposal that only the owner's "Approve and accept as canon"
  * can run, at every scope; at execution the token is checked again, and every change is judged again inside the lock.
+ *
+ * CR-2026-11-R4 (ADR 0065 amendment 2): Narratives is an area the guard knows too (its one index, by id, as the
+ * narrative tools resolve it). A page or subtree moved INTO Narratives (or created, copied or restored there) where no
+ * narrative job declares it, or moved OUT of it, is a proposal at every scope; when any page of it carries a lifecycle
+ * signal (src/narrative/signals.ts) it loses (or regains) its lifecycle, so only the owner's canonical approval runs
+ * it, and the proposal names those pages. The narrative indexes' names are never given to a page, and the Narratives
+ * index itself is never renamed by the tools. Judged at entry and again inside the lock.
  */
 import { isCanonicalApproval } from '../policy/approval.js';
 import { PolicyDeniedError, type JobEngine, LkOperationError } from '../jobs/index.js';
@@ -36,15 +43,37 @@ import {
   valueText,
   type SidebarProperty,
 } from '../facts/sidebar.js';
-import { listSubtree } from '../facts/canonical.js';
+import { CASCADE_READ_LIMIT, listSubtree } from '../facts/canonical.js';
 import { classifyName, type TreeNode } from '../tree/index.js';
 import { areaOf, lifecycleFrom, type LifecycleConfig } from './settings.js';
 import type { LifecycleTagRules } from './tags.js';
-import type { RestoreSet } from './deleted.js';
+import type { RestoreSet, RestoredWith } from './deleted.js';
+import { lifecycleSignals } from '../narrative/signals.js';
 
 type Obj = Record<string, unknown>;
 type Area = 'working' | 'archived' | null;
 type State = 'authoritative' | 'working' | 'archived';
+
+/**
+ * CR-2026-11-R4 (ADR 0065 amendment 2): Narratives as the guard knows it, from the approved pack's narrative rules and
+ * the repository tree (the narrative tools' own resolution, by id).
+ */
+export interface NarrativeArea {
+  /** The one Narratives index; null when it is missing or ambiguous (then no page is narrative: the lifecycle stays). */
+  readonly rootId: string | null;
+  /** The narrative indexes' names (Narratives, Continuities, Main CANON). */
+  readonly indexNames: { readonly narratives: string; readonly continuities: string; readonly main: string };
+  /** The narrative tag (`Narrative`) and the AU continuity's tag (`AU`). */
+  readonly narrativeTag: string;
+  readonly auTag: string;
+}
+
+/** A page moved, created or restored into or out of Narratives, with the pages of it that carry a lifecycle signal. */
+interface NarrativeCrossing {
+  readonly direction: 'into' | 'out';
+  /** Each page that loses (into) or regains (out) its lifecycle, with its signals; any entry needs canonical approval. */
+  readonly loses: readonly string[];
+}
 
 /** One lifecycle change a request would make. */
 export interface LifecycleChange {
@@ -56,7 +85,7 @@ export interface LifecycleChange {
    * or rename that no lifecycle tool or creation tool declares: a canonical proposal. C2d (ADR 0036 decision 7): `tag`,
    * a status tag added or removed.
    */
-  readonly what: 'status' | 'prefix' | 'place' | 'create' | 'index' | 'canon' | 'tag';
+  readonly what: 'status' | 'prefix' | 'place' | 'create' | 'index' | 'canon' | 'tag' | 'narrative';
   /** The state it moves to, as far as the change tells. */
   readonly to: State | null;
   readonly text: string;
@@ -68,6 +97,14 @@ export interface LifecycleChange {
    * its marker gives it, as LegendKeeper holds that area now).
    */
   readonly undeclarable?: true;
+  /**
+   * CR-2026-11-R4 (F2): the change is the first state of a page the same request (or job) creates: its name, place, and
+   * the Status and tags its template gives it. A marker's `to: null` declares it; for a page that exists it declares only
+   * where the page is placed.
+   */
+  readonly made?: true;
+  /** CR-2026-11-R4 (F1): `what: 'narrative'`: the crossing, and the pages of it that carry a lifecycle signal. */
+  readonly narrative?: NarrativeCrossing;
 }
 
 const TOOL_TO: Readonly<Record<State, string>> = {
@@ -269,6 +306,16 @@ export interface LifecycleGuardDeps {
    * page itself is judged.
    */
   readonly restoreSet?: (projectId: string, id: string) => Promise<RestoreSet>;
+  /**
+   * CR-2026-11-R4 (ADR 0065 amendment 2): a project's Narratives (null: no approved narrative rules, so Narratives is
+   * ordinary content). Absent: no page is narrative.
+   */
+  readonly narratives?: (projectId: string) => NarrativeArea | null;
+  /**
+   * CR-2026-11-R4 (F2): whether a job's own earlier step created this page (its client-minted id), read from the job's
+   * stored steps, so a restarted job still knows its own pages. Absent: only what this process saw it create.
+   */
+  readonly createdByJob?: (projectId: string, jobId: string, resourceId: string) => boolean;
 }
 
 export interface DeletedPageRecord {
@@ -288,12 +335,39 @@ export function looseKind(name: string): string {
   return m ? m[1]! : classifyName(name).kind;
 }
 
+/** CR-2026-11-R4 (F2): a change marked as the first state of a page the request creates. */
+const madeHere = (ch: LifecycleChange): LifecycleChange => ({ ...ch, made: true });
+
+/** CR-2026-11-R4: a name with no lifecycle prefix (`[BSRC]`, `[BWRK]`, `[BARC]`), read loosely. */
+const looseKindIsPlain = (name: string): boolean => !['bsrc', 'bwrk', 'barc'].includes(looseKind(name));
+
 /** CR-2026-11 (CR-15): whether a name is (or looks like) one of the project's lifecycle index names. */
 function isLifecycleIndexName(c: LifecycleConfig, name: string): boolean {
   if (looseKind(name) !== 'index') return false;
   const display = factKey(name).replace(/^\[\s*index\s*\]\s*/, '');
   return display === factKey(c.indexNames.working) || display === factKey(c.indexNames.archived);
 }
+
+/**
+ * CR-2026-11-R4 (F4): which narrative index's name a name is, or looks like (as `isLifecycleIndexName` reads the
+ * lifecycle indexes' names: an index, its name folded), or null. A second index of one of these names makes the
+ * narrative layout ambiguous (Narratives is found by name), which switches every narrative rule off.
+ */
+export function narrativeIndexName(
+  area: NarrativeArea | null,
+  name: string,
+): 'narratives' | 'continuities' | 'main' | null {
+  if (!area || looseKind(name) !== 'index') return null;
+  const display = factKey(name).replace(/^\[\s*index\s*\]\s*/, '');
+  for (const k of ['narratives', 'continuities', 'main'] as const)
+    if (display === factKey(area.indexNames[k])) return k;
+  return null;
+}
+
+const NARRATIVE_INDEX_TOOL =
+  'none: the owner names and renames the narrative indexes (Narratives, Continuities, Main CANON) by hand in LegendKeeper; the narrative audit’s “Propose a fix” proposes a missing continuity index';
+const NARRATIVE_MOVE_TOOL =
+  'nothing else: the owner decides on the proposal (narrative pages have no lifecycle, so moving a page into or out of Narratives is always the owner’s)';
 
 const INDEX_TOOL =
   'none: the owner manages the lifecycle indexes by hand in LegendKeeper, then confirms them again on the dashboard';
@@ -380,6 +454,284 @@ export class LifecycleGuard implements WriteGuard {
     return n ? areaOf(n, c) : null;
   }
 
+  // ------------------------------------------------------------------ CR-2026-11-R4 (ADR 0065 amendment 2): Narratives
+
+  /** The project's Narratives (null: none, or it cannot be told now). */
+  private narrativesOf(project: string): NarrativeArea | null {
+    try {
+      return this.d.narratives?.(project) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The AU tags a crossing counts as status tags: the AU ruling's and the narrative rules' own. */
+  private auTags(project: string, area: NarrativeArea | null): string[] {
+    const out = [this.auTag(project), area?.auTag ?? null].filter((t): t is string => t !== null);
+    return out.filter((t, i) => out.findIndex((x) => factKey(x) === factKey(t)) === i);
+  }
+
+  /**
+   * Whether a page under `parentId` is in Narratives (the Narratives index itself counts as inside): the tree for a
+   * parent it knows (or one the same request made), else the parent's ancestors read one by one (at most 16);
+   * `unknown` when it cannot be told.
+   */
+  private async inNarrativesUnder(
+    area: NarrativeArea,
+    project: string,
+    parentId: string | null,
+    read: (opId: string, params: OpParams) => Promise<unknown>,
+    made?: ReadonlyMap<string, boolean | 'unknown'>,
+  ): Promise<boolean | 'unknown'> {
+    const root = area.rootId;
+    if (root === null) return false;
+    let id = parentId;
+    for (let i = 0; i < 16; i++) {
+      if (id === null) return false;
+      if (id === root) return true;
+      const m = made?.get(id);
+      if (m !== undefined) return m;
+      const n = this.d.node(project, id);
+      if (n) return n.path.ids.includes(root);
+      let r: unknown;
+      try {
+        r = await read('getResource', { path: { resourceId: id } });
+      } catch {
+        return 'unknown';
+      }
+      if (r === undefined || r === null) return false; // no such page: LegendKeeper refuses the write itself
+      if (typeof r !== 'object') return 'unknown';
+      const pid = (r as Obj).parentId;
+      id = typeof pid === 'string' ? pid : null;
+    }
+    return 'unknown';
+  }
+
+  /** The same for a parent read live first (inside the lock: the owner may have moved it in the app since). */
+  private async inNarrativesLive(
+    area: NarrativeArea,
+    project: string,
+    parentId: string | null,
+    read: (opId: string, params: OpParams) => Promise<unknown>,
+  ): Promise<boolean | 'unknown'> {
+    if (area.rootId === null || parentId === null) return false;
+    if (parentId === area.rootId) return true;
+    let r: unknown;
+    try {
+      r = await read('getResource', { path: { resourceId: parentId } });
+    } catch {
+      return 'unknown';
+    }
+    if (r === undefined || r === null) return false;
+    if (typeof r !== 'object') return 'unknown';
+    const pid = (r as Obj).parentId;
+    return this.inNarrativesUnder(area, project, typeof pid === 'string' ? pid : null, read);
+  }
+
+  /**
+   * The pages of a subtree (the page and every page under it, as LegendKeeper holds them now, listed as a cascade is)
+   * that carry a lifecycle signal, each with its signals in words; when they cannot all be checked, one entry saying so
+   * (so the move needs canonical approval: fail closed).
+   */
+  private async crossingSignals(
+    c: LifecycleConfig,
+    area: NarrativeArea,
+    project: string,
+    rid: string,
+    top: { readonly name: string | null; readonly tags: readonly string[] | null },
+    read: (opId: string, params: OpParams) => Promise<unknown>,
+  ): Promise<string[]> {
+    const au = this.auTags(project, area);
+    let { name, tags } = top;
+    if (name === null || tags === null) {
+      try {
+        const r = (await read('getResource', { path: { resourceId: rid } })) as Obj | undefined;
+        if (r && typeof r === 'object') {
+          name ??= typeof r.name === 'string' ? r.name : null;
+          tags ??= Array.isArray(r.tags) ? r.tags.filter((t): t is string => typeof t === 'string') : [];
+        }
+      } catch {
+        // judged below as unchecked
+      }
+    }
+    const below = await listSubtree(read, rid, CASCADE_READ_LIMIT);
+    if (name === null || tags === null || below === null || below.length > CASCADE_READ_LIMIT)
+      return [
+        `${name ?? rid} and the pages under it could not all be checked for a lifecycle signal${below && below.length > CASCADE_READ_LIMIT ? ` (more than ${CASCADE_READ_LIMIT} pages)` : ''}`,
+      ];
+    const out: string[] = [];
+    for (const p of [
+      { id: rid, name, tags },
+      ...below.map((b) => ({ id: b.id, name: b.name ?? '', tags: b.tags })),
+    ]) {
+      let status: string[];
+      try {
+        status = statusValues(c, sidebarFrom(await read('listProperties', { path: { resourceId: p.id } })));
+      } catch {
+        out.push(`${p.name || p.id} (its Status could not be read)`);
+        continue;
+      }
+      const s = lifecycleSignals(c, { name: p.name, tags: p.tags, status }, 'crossing', au);
+      if (s.length > 0) out.push(`${p.name || p.id} (${s.join(', ')})`);
+    }
+    return out;
+  }
+
+  /** A page entering or leaving Narratives (and the pages of it that lose or regain a lifecycle). */
+  private crossing(
+    area: NarrativeArea,
+    rid: string,
+    page: string,
+    direction: 'into' | 'out',
+    loses: readonly string[],
+    how: 'moved' | 'created' | 'copied with a template' | 'restored',
+    o: { readonly stepIndex?: number; readonly made?: boolean } = {},
+  ): LifecycleChange {
+    const where = `[INDEX] ${area.indexNames.narratives}`;
+    const listed = `${loses.slice(0, 5).join('; ')}${loses.length > 5 ? `; and ${loses.length - 5} more` : ''}`;
+    const text =
+      direction === 'into'
+        ? `the page would be ${how} into ${where}, where pages have no lifecycle${loses.length > 0 ? `, and ${loses.length === 1 ? 'this loses its' : `${loses.length} pages lose their`} lifecycle: ${listed}` : ''}`
+        : `the page would be ${how} out of ${where}${loses.length > 0 ? `, and ${loses.length === 1 ? 'this takes a lifecycle signal' : `${loses.length} pages take a lifecycle signal`} back into the repository: ${listed}` : ''}`;
+    return {
+      resourceId: rid,
+      page,
+      what: 'narrative',
+      to: null,
+      text,
+      tool: NARRATIVE_MOVE_TOOL,
+      narrative: { direction, loses },
+      ...(o.stepIndex !== undefined ? { stepIndex: o.stepIndex } : {}),
+      ...(o.made ? { made: true as const } : {}),
+    };
+  }
+
+  /**
+   * A restore that brings a page (and the pages deleted with it) back into Narratives, or a narrative page (tagged
+   * Narrative) back outside it, as its delete record or newest snapshot says what it was and where it was deleted from.
+   * A narrative page coming back into Narratives carrying no lifecycle signal crosses nothing. No record: the lifecycle
+   * and canon guards' own rules judge it (they fail closed).
+   */
+  private async restoreCrossing(
+    c: LifecycleConfig,
+    area: NarrativeArea | null,
+    project: string,
+    rid: string,
+    read: (opId: string, params: OpParams) => Promise<unknown>,
+    stepIndex?: number,
+  ): Promise<LifecycleChange | null> {
+    if (!area?.rootId) return null;
+    const rec =
+      this.d.deletedPage?.(project, rid) ??
+      (await this.d.snapshotPage?.(project, rid).catch(() => null)) ??
+      null;
+    if (!rec) return null;
+    const landsIn =
+      rec.parentId === null ? false : await this.inNarrativesUnder(area, project, rec.parentId, read);
+    const set = this.d.restoreSet ? await this.d.restoreSet(project, rid).catch(() => null) : null;
+    const au = this.auTags(project, area);
+    const tagged = (tags: readonly string[]) => tags.some((t) => factKey(t) === factKey(area.narrativeTag));
+    const statusOfRows = (rows: RestoredWith['rows']) =>
+      (rows ?? [])
+        .filter((r) => factKey(r.key) === factKey(c.fields.status))
+        .map((r) => valueText(r.content as Obj[]))
+        .filter((t) => t !== '');
+    const pages = [
+      { name: rec.name, tags: rec.tags ?? [], status: [] as string[] },
+      ...(set?.pages ?? [])
+        .filter((p) => !p.inTree)
+        .map((p) => ({ name: p.name ?? p.id, tags: p.tags ?? [], status: statusOfRows(p.rows) })),
+    ];
+    const signalsOf = (reading: (p: (typeof pages)[number]) => 'inside' | 'crossing') =>
+      pages.flatMap((p) => {
+        const s = lifecycleSignals(c, p, reading(p), au);
+        return s.length > 0 ? [`${p.name} (${s.join(', ')})`] : [];
+      });
+    const at = stepIndex !== undefined ? { stepIndex } : {};
+    if (landsIn !== false) {
+      const loses = signalsOf((p) => (tagged(p.tags) ? 'inside' : 'crossing'));
+      if (landsIn === 'unknown') loses.push(`${rec.name} (where it comes back could not be told)`);
+      if (loses.length === 0 && tagged(rec.tags ?? [])) return null; // a narrative page back where it was
+      return this.crossing(area, rid, rec.name, 'into', loses, 'restored', at);
+    }
+    if (!tagged(rec.tags ?? [])) return null;
+    return this.crossing(
+      area,
+      rid,
+      rec.name,
+      'out',
+      signalsOf(() => 'crossing'),
+      'restored',
+      at,
+    );
+  }
+
+  /** The narrative-index change of a page given a narrative index's name (or of the Narratives index renamed away). */
+  private narrativeNameChange(
+    area: NarrativeArea | null,
+    rid: string,
+    page: string,
+    name: string,
+    current: string | null,
+    how: 'created' | 'copied with the template' | 'renamed',
+    o: { readonly stepIndex?: number; readonly declaredMain?: boolean } = {},
+  ): LifecycleChange | null {
+    if (!area) return null;
+    const nn = narrativeIndexName(area, name);
+    const at = o.stepIndex !== undefined ? { stepIndex: o.stepIndex } : {};
+    if (how === 'renamed' && area.rootId !== null && rid === area.rootId) {
+      if (nn === 'narratives') return null;
+      return {
+        resourceId: rid,
+        page,
+        what: 'index',
+        to: null,
+        text: `[INDEX] ${area.indexNames.narratives} itself would be renamed to ${name}, which takes every page under it out of Narratives`,
+        tool: NARRATIVE_INDEX_TOOL,
+        ...at,
+      };
+    }
+    if (nn === null) return null;
+    // A page that already holds that name keeps it (a rename within one folded name is no new index).
+    if (current !== null && narrativeIndexName(area, current) === nn) return null;
+    // The narrative audit's "Propose a fix" makes a missing Main CANON (declared by its marker, directly under
+    // Narratives); no other route gives a page a narrative index's name.
+    if (nn === 'main' && o.declaredMain === true) return null;
+    return {
+      resourceId: rid,
+      page,
+      what: 'index',
+      to: null,
+      text: `a page would be ${how === 'renamed' ? 'renamed' : how} ${how === 'renamed' ? 'to' : 'named'} ${name}, a narrative index’s name (${area.indexNames[nn]})`,
+      tool: NARRATIVE_INDEX_TOOL,
+      ...at,
+    };
+  }
+
+  /** Whether a page this job runs on was created by the job itself (inside the lock). */
+  private createdHere(project: string, jobId: string, id: string): boolean {
+    if (this.madeIn.has(`${jobId}\u0000${id}`)) return true;
+    try {
+      return this.d.createdByJob?.(project, jobId, id) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The AU ruling's tag as a status tag for a page: none for a page in Narratives without a lifecycle prefix, where AU is
+   * the narrative tag of an AU's continuity (design E2.2: the tools set it).
+   */
+  private auFor(
+    project: string,
+    area: NarrativeArea | null,
+    inNarr: boolean | 'unknown',
+    name: string | null,
+  ) {
+    if (area?.rootId && inNarr === true && (name === null || looseKindIsPlain(name))) return null;
+    return this.auTag(project);
+  }
+
   async entry(input: WriteGuardEntry): Promise<WriteGuardVerdict> {
     const marker = input.lifecycle;
     const c = this.config(input.project);
@@ -388,7 +740,7 @@ export class LifecycleGuard implements WriteGuard {
     // change in a marked job is a bridge fault: refused too. CR-2026-11 (CR-16): a page made [BSRC] that no tool
     // declares is not refused but needs the owner's canonical approval, as an Authoritative create by the tools does.
     const undeclared = changes.filter((ch) => !declares(marker, ch));
-    const refused = undeclared.filter((ch) => ch.what !== 'canon');
+    const refused = undeclared.filter((ch) => ch.what !== 'canon' && ch.what !== 'narrative');
     if (refused.length > 0) {
       const first = refused[0]!;
       return {
@@ -401,17 +753,34 @@ export class LifecycleGuard implements WriteGuard {
       };
     }
     const canon = undeclared.filter((ch) => ch.what === 'canon');
-    if (!marker?.canonical && canon.length === 0) return { decision: 'allow' };
+    // CR-2026-11-R4 (F1): a page entering or leaving Narratives is always the owner's decision; when a page of it
+    // carries a lifecycle signal it loses (or regains) its lifecycle, so the owner's canonical approval.
+    const crossing = undeclared.filter((ch) => ch.what === 'narrative');
+    const losing = crossing.filter((ch) => (ch.narrative?.loses.length ?? 0) > 0);
+    if (!marker?.canonical && canon.length === 0 && losing.length === 0) {
+      if (crossing.length === 0) return { decision: 'allow' };
+      // The owner approved this very proposal (an ordinary approval is enough: nothing loses a lifecycle).
+      if (input.origin.approval !== undefined) return { decision: 'allow' };
+      const reason = narrativeReason(crossing, false);
+      if (input.principal.principalId === SYSTEM_PRINCIPAL.principalId && !ownerForcedProposal(input))
+        return {
+          decision: 'deny',
+          opId: input.items[crossing[0]!.stepIndex ?? 0]?.op ?? 'operation',
+          reason: `${reason}; the bridge never makes it on its own`,
+        };
+      return { decision: 'propose', reason, changes: crossing.map(changeView) };
+    }
     // The four lifecycle tools: always the owner's canonical approval, at every scope (owner, 10 November 2026).
     if (isCanonicalApproval(input.origin.approval)) return { decision: 'allow' };
-    const reason = marker?.canonical
-      ? `${marker.tool} ${marker.reason ?? 'changes a page’s lifecycle state'}, which always needs the owner’s canonical approval (“Approve and accept as canon”), whatever the scope`
-      : `this puts ${canon.length === 1 ? 'a page' : `${canon.length} pages`} into or out of [BSRC] (Authoritative: ${canon
-          .slice(0, 3)
-          .map((ch) => ch.text)
-          .join(
-            '; ',
-          )}), which always needs the owner’s canonical approval (“Approve and accept as canon”), whatever the scope`;
+    const base = marker?.canonical
+      ? `${marker.tool} ${marker.reason ?? 'changes a page’s lifecycle state'}`
+      : canon.length > 0
+        ? `this puts ${canon.length === 1 ? 'a page' : `${canon.length} pages`} into or out of [BSRC] (Authoritative: ${canon
+            .slice(0, 3)
+            .map((ch) => ch.text)
+            .join('; ')})`
+        : null;
+    const reason = `${[base, losing.length > 0 ? narrativeReason(losing, true) : null].filter((x): x is string => x !== null).join('; and ')}, which always needs the owner’s canonical approval (“Approve and accept as canon”), whatever the scope`;
     if (input.origin.approval !== undefined) {
       return {
         decision: 'deny',
@@ -434,12 +803,7 @@ export class LifecycleGuard implements WriteGuard {
       reason,
       changes: [
         ...(marker?.canonical ? [{ lifecycle: marker.tool, pages: marker.pages }] : []),
-        ...[...(marker?.canonical ? changes : canon)].map((ch) => ({
-          lifecycle: ch.what,
-          page: ch.page,
-          resourceId: ch.resourceId,
-          text: ch.text,
-        })),
+        ...[...(marker?.canonical ? changes : [...canon, ...crossing])].map(changeView),
       ],
     };
   }
@@ -800,6 +1164,19 @@ export class LifecycleGuard implements WriteGuard {
     const priority = input.origin.approval !== undefined ? 'P0' : 'P1';
     const internal = (opId: string, params: OpParams) =>
       this.d.engine.internalRead(input.project, opId, params, { priority, notFoundIsAnswer: true });
+    // CR-2026-11-R4 (ADR 0065 amendment 2): the project's Narratives, and whether each page the request creates lands
+    // in it.
+    const narr = this.narrativesOf(input.project);
+    const narrMade = new Map<string, boolean | 'unknown'>();
+    const declaredNull = (id: string) =>
+      input.lifecycle?.pages.some((p) => p.id === id && p.to === null) === true;
+    /** Whether an existing page is in Narratives now, by the tree (`unknown` when the tree does not hold it). */
+    const pageInNarr = (id: string): boolean | 'unknown' => {
+      if (!narr?.rootId) return false;
+      if (narrMade.has(id)) return narrMade.get(id)!;
+      const n = this.d.node(input.project, id);
+      return n ? n.id !== narr.rootId && n.path.ids.includes(narr.rootId) : 'unknown';
+    };
     // CR-2026-11 (CR-08): an `onError: continue` batch's steps may fail one by one while the rest still run, so each
     // sidebar write is also judged on the page as it is now.
     const each = input.jobKind === 'batch_ops' && input.onError === 'continue';
@@ -857,10 +1234,22 @@ export class LifecycleGuard implements WriteGuard {
     const created = new Set<string>();
     // C2d (ADR 0036 decision 7): the status tags, when the project's `statusTags` rule is on.
     const tagsGuarded = statusTagsGuarded(canonConfigFrom(this.d.settings(input.project)).active);
-    const tagChanges = (rid: string, page: string, before: readonly string[], after: unknown, i: number) => {
+    const tagChanges = (
+      rid: string,
+      page: string,
+      before: readonly string[],
+      after: unknown,
+      i: number,
+      o: { readonly made?: boolean; readonly au?: string | null } = {},
+    ) => {
       if (!tagsGuarded || !Array.isArray(after)) return;
       const next = (after as unknown[]).filter((t): t is string => typeof t === 'string');
-      for (const t of statusTagChanges(c, before, next, this.auTag(input.project)))
+      for (const t of statusTagChanges(
+        c,
+        before,
+        next,
+        o.au !== undefined ? o.au : this.auTag(input.project),
+      ))
         out.push({
           resourceId: rid,
           page,
@@ -869,6 +1258,7 @@ export class LifecycleGuard implements WriteGuard {
           text: `the status tag ${t.tag} would be ${t.added ? 'added' : 'removed'}`,
           tool: t.tool,
           stepIndex: i,
+          ...(o.made ? { made: true as const } : {}),
         });
     };
     // The area of a page created earlier in the same request (for a batch whose items nest).
@@ -902,6 +1292,7 @@ export class LifecycleGuard implements WriteGuard {
           text: ch.text,
           tool: ch.tool,
           stepIndex: i,
+          ...(created.has(rid) ? { made: true as const } : {}),
         });
     };
     for (const [i, it] of input.items.entries()) {
@@ -949,7 +1340,7 @@ export class LifecycleGuard implements WriteGuard {
           if (templateId && tagsGuarded && !retagged(id, i)) {
             const t = await tpl();
             const tags = t ? t.tags : undefined;
-            if (Array.isArray(tags)) tagChanges(id, raw || id, [], tags, i);
+            if (Array.isArray(tags)) tagChanges(id, raw || id, [], tags, i, { made: true });
             else
               out.push({
                 resourceId: id,
@@ -959,6 +1350,7 @@ export class LifecycleGuard implements WriteGuard {
                 text: 'a page would be copied from a template whose tags (which the copy takes) could not be read',
                 tool: 'the creation tools, or try again',
                 stepIndex: i,
+                made: true,
               });
           }
           const pid = typeof x.parentId === 'string' ? x.parentId : null;
@@ -967,13 +1359,41 @@ export class LifecycleGuard implements WriteGuard {
             pid !== null && createdArea.has(pid)
               ? (createdArea.get(pid) ?? null)
               : this.areaOfParent(c, input.project, pid);
+          // CR-2026-11-R4 (F1): a page created (or copied) into Narratives that no narrative job declares is a proposal.
+          const narrIn: boolean | 'unknown' = narr?.rootId
+            ? await this.inNarrativesUnder(narr, input.project, pid, internal, narrMade)
+            : false;
           if (typeof x.id === 'string') {
             created.add(x.id);
             createdArea.set(x.id, area);
+            narrMade.set(x.id, narrIn);
           }
-          out.push(...this.createChanges(c, id, raw, area, i));
+          if (narr && narrIn !== false)
+            out.push(
+              this.crossing(
+                narr,
+                id,
+                raw || id,
+                'into',
+                narrIn === 'unknown' ? [`${raw || id} (where it would be created could not be told)`] : [],
+                templateId ? 'copied with a template' : 'created',
+                { stepIndex: i, made: true },
+              ),
+            );
+          // CR-2026-11-R4 (F4): a narrative index's name, never given to a page.
+          const nn = this.narrativeNameChange(
+            narr,
+            id,
+            raw || id,
+            raw,
+            null,
+            templateId ? 'copied with the template' : 'created',
+            { stepIndex: i, declaredMain: declaredNull(id) && narr?.rootId != null && pid === narr.rootId },
+          );
+          if (nn) out.push(nn);
+          out.push(...this.createChanges(c, id, raw, area, i).map(madeHere));
           // C2d: a create body that adds a status tag (createResourceFromTemplate takes no tags).
-          tagChanges(id, raw || id, [], x.tags, i);
+          tagChanges(id, raw || id, [], x.tags, i, { made: true });
         }
         if (templateId) {
           const id = typeof body.id === 'string' ? body.id : null;
@@ -989,6 +1409,7 @@ export class LifecycleGuard implements WriteGuard {
               text: ch.text,
               tool: ch.tool,
               stepIndex: i,
+              made: true,
             });
           // The new page starts as a copy of its template: later writes to it are judged on that copy.
           if (id && t) sidebars.set(id, t);
@@ -1012,9 +1433,23 @@ export class LifecycleGuard implements WriteGuard {
               });
             } else {
               for (const d of below) {
-                out.push(...this.createChanges(c, d.id, d.name ?? '', area, i, true));
+                out.push(...this.createChanges(c, d.id, d.name ?? '', area, i, true).map(madeHere));
+                const dn = this.narrativeNameChange(
+                  narr,
+                  d.id,
+                  d.name ?? d.id,
+                  d.name ?? '',
+                  null,
+                  'copied with the template',
+                  {
+                    stepIndex: i,
+                  },
+                );
+                if (dn) out.push(dn);
                 // CR-2026-11-R2 (R2-13): each copied with its tags.
-                tagChanges(d.id, `${d.name ?? d.id} (copied with the template)`, [], d.tags, i);
+                tagChanges(d.id, `${d.name ?? d.id} (copied with the template)`, [], d.tags, i, {
+                  made: true,
+                });
                 const sb = await readLive(d.id);
                 const sc = sb ? statusChange(c, [], statusValues(c, sb), true) : null;
                 if (sc)
@@ -1026,6 +1461,7 @@ export class LifecycleGuard implements WriteGuard {
                     text: sc.text,
                     tool: sc.tool,
                     stepIndex: i,
+                    made: true,
                   });
               }
             }
@@ -1081,7 +1517,17 @@ export class LifecycleGuard implements WriteGuard {
               tool: 'the lifecycle tools for the status tags, or try again',
               stepIndex: i,
             });
-          } else tagChanges(rid, name(rid), before, body.tags, i);
+          } else
+            tagChanges(rid, name(rid), before, body.tags, i, {
+              ...(created.has(rid) ? { made: true } : {}),
+              // CR-2026-11-R4: in Narratives, AU is the narrative tag of an AU's continuity on a narrative page.
+              au: this.auFor(
+                input.project,
+                narr,
+                pageInNarr(rid),
+                this.d.node(input.project, rid)?.rawName ?? null,
+              ),
+            });
         }
       }
       if (it.op === 'updateResource' && typeof body.name === 'string') {
@@ -1118,6 +1564,11 @@ export class LifecycleGuard implements WriteGuard {
             tool: INDEX_TOOL,
             stepIndex: i,
           });
+        // CR-2026-11-R4 (F4): a narrative index's name, and the Narratives index itself renamed away.
+        const nn = this.narrativeNameChange(narr, rid, name(rid), body.name, fromName, 'renamed', {
+          stepIndex: i,
+        });
+        if (nn) out.push(nn);
         continue;
       }
       if (it.op === 'moveResource') {
@@ -1154,6 +1605,59 @@ export class LifecycleGuard implements WriteGuard {
           this.moveChange(c, rid, name(rid), from, to, i) ??
           this.ownAreaMove(c, rid, known?.rawName ?? (await this.nameNow(input.project, rid)), to, i);
         if (ch) out.push(ch);
+        // CR-2026-11-R4 (F1): a page or subtree moved into or out of Narratives (the Narratives index itself moves with
+        // its pages, so it crosses nothing).
+        if (narr?.rootId && rid !== narr.rootId) {
+          const root = narr.rootId;
+          const fromIn: boolean | 'unknown' = narrMade.has(rid)
+            ? narrMade.get(rid)!
+            : known
+              ? known.id !== root && known.path.ids.includes(root)
+              : await (async () => {
+                  const r = (await internal('getResource', { path: { resourceId: rid } }).catch(
+                    () => null,
+                  )) as Obj | null | undefined;
+                  if (!r) return 'unknown' as const;
+                  return this.inNarrativesUnder(
+                    narr,
+                    input.project,
+                    typeof r.parentId === 'string' ? r.parentId : null,
+                    internal,
+                  );
+                })();
+          const toIn = await this.inNarrativesUnder(narr, input.project, dest, internal, narrMade);
+          if (fromIn !== toIn) {
+            const unknown = fromIn === 'unknown' || toIn === 'unknown';
+            const loses = unknown
+              ? [
+                  `${name(rid)} (whether the move crosses [INDEX] ${narr.indexNames.narratives} could not be told)`,
+                ]
+              : narrMade.has(rid)
+                ? []
+                : await this.crossingSignals(
+                    c,
+                    narr,
+                    input.project,
+                    rid,
+                    { name: known?.rawName ?? null, tags: known ? [...known.tags] : null },
+                    internal,
+                  );
+            out.push(
+              this.crossing(
+                narr,
+                rid,
+                name(rid),
+                toIn === true || (unknown && fromIn !== true) ? 'into' : 'out',
+                loses,
+                'moved',
+                {
+                  stepIndex: i,
+                  ...(narrMade.has(rid) ? { made: true } : {}),
+                },
+              ),
+            );
+          }
+        }
         continue;
       }
       if (it.op === 'restoreResource') {
@@ -1165,6 +1669,9 @@ export class LifecycleGuard implements WriteGuard {
             () => true,
           );
         out.push(...(await this.restoreChanges(c, input.project, rid, internal, gone, i)));
+        // CR-2026-11-R4 (F1): a restore that brings a page back into Narratives, or a narrative page back outside it.
+        const nc = await this.restoreCrossing(c, narr, input.project, rid, internal, i);
+        if (nc) out.push(nc);
         continue;
       }
       if (it.op === 'deleteResource') {
@@ -1224,6 +1731,18 @@ export class LifecycleGuard implements WriteGuard {
       if (declares(marker, ch)) return;
       // CR-2026-11 (CR-16): a page made [BSRC] passes only in work the owner approved as canon.
       if (ch.what === 'canon' && input.job.origin.canonicalApprovedBy !== undefined) return;
+      // CR-2026-11-R4 (F1): a page into or out of Narratives passes only in work the owner approved (as canon when a
+      // page of it loses, or regains, a lifecycle).
+      if (ch.what === 'narrative') {
+        const loses = ch.narrative?.loses.length ?? 0;
+        if (input.job.origin.canonicalApprovedBy !== undefined) return;
+        if (loses === 0 && input.job.approvedBy !== null) return;
+        throw new PolicyDeniedError(
+          input.opId,
+          `refused: ${ch.page}: ${ch.text}. A page moves into or out of Narratives only as a proposal the owner approves${loses > 0 ? ' as canon' : ''} (checked again inside the lock; nothing was sent)`,
+          input.job.principalId,
+        );
+      }
       throw new PolicyDeniedError(
         input.opId,
         `${refusal([ch])} (checked again inside the lock; nothing was sent)`,
@@ -1236,6 +1755,7 @@ export class LifecycleGuard implements WriteGuard {
       id: string,
       page: string,
       t: { tag: string; added: boolean; to: State | null; tool: string },
+      made = false,
     ) =>
       refuse({
         resourceId: id,
@@ -1244,7 +1764,11 @@ export class LifecycleGuard implements WriteGuard {
         to: t.to,
         text: `the status tag ${t.tag} would be ${t.added ? 'added' : 'removed'}`,
         tool: t.tool,
+        ...(made ? { made: true as const } : {}),
       });
+    // CR-2026-11-R4 (ADR 0065 amendment 2): the project's Narratives.
+    const narr = this.narrativesOf(project);
+    const declaredNull = (id: string) => marker?.pages.some((p) => p.id === id && p.to === null) === true;
     // CR-2026-11-R2 (R2-14): a create, judged again on where its page lands as LegendKeeper holds it now (the tree may
     // not have seen the parent moved in the app), with its name (R2-11: a lifecycle index's name is never declared).
     if (input.opId === 'createResource' || input.opId === 'createManyResources') {
@@ -1255,6 +1779,7 @@ export class LifecycleGuard implements WriteGuard {
             )
           : [body];
       const here = new Map<string, Area | 'unknown'>();
+      const hereNarr = new Map<string, boolean | 'unknown'>();
       for (const x of items) {
         const id = typeof x.id === 'string' ? x.id : '(new)';
         const name = typeof x.name === 'string' ? x.name : '';
@@ -1265,11 +1790,33 @@ export class LifecycleGuard implements WriteGuard {
           parentId !== null && here.has(parentId)
             ? here.get(parentId)!
             : await this.landingLive(c, project, input.job.id, parentId, belongs, read);
-        for (const ch of this.createChanges(c, id, name, lands === 'unknown' ? null : lands, 0)) refuse(ch);
+        for (const ch of this.createChanges(c, id, name, lands === 'unknown' ? null : lands, 0))
+          refuse(madeHere(ch));
         const lc = this.landingChange(c, id, name || id, belongs, lands);
         if (lc) refuse(lc);
+        // CR-2026-11-R4 (F1, F4): a page created into Narratives, and a narrative index's name.
+        const narrIn = narr?.rootId
+          ? await this.inNarrativesUnder(narr, project, parentId, read, hereNarr)
+          : false;
+        if (narr && narrIn !== false)
+          refuse(
+            this.crossing(
+              narr,
+              id,
+              name || id,
+              'into',
+              narrIn === 'unknown' ? [`${name || id} (where it would be created could not be told)`] : [],
+              'created',
+              { made: true },
+            ),
+          );
+        const nn = this.narrativeNameChange(narr, id, name || id, name, null, 'created', {
+          declaredMain: declaredNull(id) && narr?.rootId != null && parentId === narr.rootId,
+        });
+        if (nn) refuse(nn);
         if (typeof x.id === 'string') {
           here.set(x.id, lands);
+          hereNarr.set(x.id, narrIn);
           this.remember(input.job.id, x.id, lands);
         }
       }
@@ -1294,14 +1841,41 @@ export class LifecycleGuard implements WriteGuard {
       const belongs = this.belongsIn(c, marker, id, name, tags);
       const lands = await this.landingLive(c, project, input.job.id, parentId, belongs, read);
       const area = lands === 'unknown' ? null : lands;
-      for (const ch of this.createChanges(c, id, name, area, 0)) refuse(ch);
+      for (const ch of this.createChanges(c, id, name, area, 0)) refuse(madeHere(ch));
       const lc = this.landingChange(c, id, name || id, belongs, lands);
       if (lc) refuse(lc);
       const sc = t ? statusChange(c, [], statusValues(c, sidebarFrom(t.properties)), true) : null;
       if (sc)
-        refuse({ resourceId: id, page: name || id, what: 'status', to: sc.to, text: sc.text, tool: sc.tool });
+        refuse({
+          resourceId: id,
+          page: name || id,
+          what: 'status',
+          to: sc.to,
+          text: sc.text,
+          tool: sc.tool,
+          made: true,
+        });
       if (tagsGuarded)
-        for (const tc of statusTagChanges(c, [], tags, this.auTag(project))) tagChange(id, name || id, tc);
+        for (const tc of statusTagChanges(c, [], tags, this.auTag(project)))
+          tagChange(id, name || id, tc, true);
+      // CR-2026-11-R4 (F1, F4): a copy into Narratives, and a narrative index's name.
+      const narrIn = narr?.rootId ? await this.inNarrativesUnder(narr, project, parentId, read) : false;
+      if (narr && narrIn !== false)
+        refuse(
+          this.crossing(
+            narr,
+            id,
+            name || id,
+            'into',
+            narrIn === 'unknown' ? [`${name || id} (where it would be copied could not be told)`] : [],
+            'copied with a template',
+            { made: true },
+          ),
+        );
+      const nn = this.narrativeNameChange(narr, id, name || id, name, null, 'copied with the template', {
+        declaredMain: declaredNull(id) && narr?.rootId != null && parentId === narr.rootId,
+      });
+      if (nn) refuse(nn);
       if (typeof body.id === 'string') this.remember(input.job.id, body.id, lands);
       // CR-2026-11 (CR-10): a template copied with its children, judged again on what is under the template now.
       if (body.includeChildren !== true) return;
@@ -1318,11 +1892,20 @@ export class LifecycleGuard implements WriteGuard {
         return;
       }
       for (const d of below) {
-        for (const ch of this.createChanges(c, d.id, d.name ?? '', area, 0, true)) refuse(ch);
+        for (const ch of this.createChanges(c, d.id, d.name ?? '', area, 0, true)) refuse(madeHere(ch));
+        const dn = this.narrativeNameChange(
+          narr,
+          d.id,
+          d.name ?? d.id,
+          d.name ?? '',
+          null,
+          'copied with the template',
+        );
+        if (dn) refuse(dn);
         // CR-2026-11-R2 (R2-13): each copied with its tags.
         if (tagsGuarded)
           for (const tc of statusTagChanges(c, [], d.tags, this.auTag(project)))
-            tagChange(d.id, d.name ?? d.id, tc);
+            tagChange(d.id, d.name ?? d.id, tc, true);
         const sb = await input.read('listProperties', { path: { resourceId: d.id } });
         const sc = sb !== undefined ? statusChange(c, [], statusValues(c, sidebarFrom(sb)), true) : null;
         if (sc)
@@ -1352,7 +1935,21 @@ export class LifecycleGuard implements WriteGuard {
             (await input.read('getResource', { path: { resourceId: rid } })) as { tags?: unknown } | undefined
           )?.tags as string[] | undefined);
       const next = (body.tags as unknown[]).filter((t): t is string => typeof t === 'string');
-      for (const t of statusTagChanges(c, Array.isArray(before) ? before : [], next, this.auTag(project)))
+      // CR-2026-11-R4: a page the job itself created takes its first tags (F2); in Narratives, AU is the narrative tag
+      // of an AU's continuity on a narrative page.
+      const inNarr =
+        narr?.rootId && this.auTag(project) !== null && current && 'parentId' in current
+          ? await this.inNarrativesUnder(
+              narr,
+              project,
+              typeof current.parentId === 'string' ? current.parentId : null,
+              read,
+            )
+          : false;
+      const au = this.auFor(project, narr, inNarr, typeof current?.name === 'string' ? current.name : null);
+      const found = statusTagChanges(c, Array.isArray(before) ? before : [], next, au);
+      const made = found.length > 0 && this.createdHere(project, input.job.id, rid);
+      for (const t of found)
         refuse({
           resourceId: rid,
           page: typeof current?.name === 'string' ? current.name : rid,
@@ -1360,6 +1957,7 @@ export class LifecycleGuard implements WriteGuard {
           to: t.to,
           text: `the status tag ${t.tag} would be ${t.added ? 'added' : 'removed'}`,
           tool: t.tool,
+          ...(made ? { made: true as const } : {}),
         });
     }
     if (input.opId === 'updateResource' && typeof body.name === 'string') {
@@ -1390,6 +1988,9 @@ export class LifecycleGuard implements WriteGuard {
           text: `the page would be renamed to ${body.name}, a lifecycle index’s name`,
           tool: INDEX_TOOL,
         });
+      // CR-2026-11-R4 (F4): a narrative index's name, and the Narratives index itself renamed away.
+      const nn = this.narrativeNameChange(narr, rid, page, body.name, fromName, 'renamed');
+      if (nn) refuse(nn);
       return;
     }
     if (input.opId === 'moveResource' && body.parentId !== undefined) {
@@ -1415,6 +2016,62 @@ export class LifecycleGuard implements WriteGuard {
       const pageName = typeof current?.name === 'string' ? current.name : await this.nameNow(project, rid);
       const ch = this.moveChange(c, rid, pageName ?? rid, from, to) ?? this.ownAreaMove(c, rid, pageName, to);
       if (ch) refuse(ch);
+      // CR-2026-11-R4 (F1): into or out of Narratives, as LegendKeeper holds the page and its new parent now (the owner
+      // may have moved either in the app since the entry check), with the pages under it listed live.
+      if (narr?.rootId && rid !== narr.rootId) {
+        const root = narr.rootId;
+        const fromIn: boolean | 'unknown' =
+          current && 'parentId' in current
+            ? await this.inNarrativesUnder(
+                narr,
+                project,
+                typeof current.parentId === 'string' ? current.parentId : null,
+                read,
+              )
+            : (() => {
+                const n = this.d.node(project, rid);
+                return n ? n.id !== root && n.path.ids.includes(root) : ('unknown' as const);
+              })();
+        const toIn = await this.inNarrativesLive(
+          narr,
+          project,
+          typeof body.parentId === 'string' ? body.parentId : null,
+          read,
+        );
+        if (fromIn !== toIn) {
+          const unknown = fromIn === 'unknown' || toIn === 'unknown';
+          const loses = unknown
+            ? [
+                `${pageName ?? rid} (whether the move crosses [INDEX] ${narr.indexNames.narratives} could not be told)`,
+              ]
+            : await this.crossingSignals(
+                c,
+                narr,
+                project,
+                rid,
+                {
+                  name: pageName,
+                  tags: Array.isArray(current?.tags)
+                    ? (current.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+                    : null,
+                },
+                read,
+              );
+          refuse(
+            this.crossing(
+              narr,
+              rid,
+              pageName ?? rid,
+              toIn === true || (unknown && fromIn !== true) ? 'into' : 'out',
+              loses,
+              'moved',
+              {
+                ...(this.createdHere(project, input.job.id, rid) ? { made: true } : {}),
+              },
+            ),
+          );
+        }
+      }
       return;
     }
     // v2 E4 (RV2-1): a restore lands the page under its old parent (or at the top level): judged as a move.
@@ -1422,6 +2079,9 @@ export class LifecycleGuard implements WriteGuard {
       const gone = async (id: string) =>
         (await read('getResource', { path: { resourceId: id } })) === undefined;
       for (const ch of await this.restoreChanges(c, project, rid, read, gone)) refuse(ch);
+      // CR-2026-11-R4 (F1): back into Narratives, or a narrative page back outside it.
+      const nc = await this.restoreCrossing(c, narr, project, rid, read);
+      if (nc) refuse(nc);
       return;
     }
     if (!SIDEBAR_WRITE_OPS.has(input.opId)) return;
@@ -1491,19 +2151,57 @@ function touchesKey(input: WriteGuardInLock, k: string): boolean {
   }
 }
 
+/** CR-2026-11-R4 (F2): the changes that only say where a page is placed (what a marker's `to: null` declares). */
+const PLACEMENT: ReadonlySet<LifecycleChange['what']> = new Set(['place', 'create', 'narrative']);
+
 /** Whether the job's marker declares this change (the page, and the state it moves to when the change tells one). */
 function declares(marker: LifecycleMarker | undefined, ch: LifecycleChange): boolean {
   if (!marker) return false;
   // CR-2026-11-R2 (R2-11): no marker declares a lifecycle index change (a page given a lifecycle index's name, or the index
   // itself changed: the owner's by hand, ADR 0036 decision 3), nor a page created outside the lifecycle area its own
-  // state or its marker gives it (R2-14); a page's `to: null` (an index the job makes) covers only where it is placed.
+  // state or its marker gives it (R2-14).
   // C2b: a canon change only a canonical marker declares (whose job the owner approves as canon).
   if (ch.what === 'index' || ch.undeclarable === true) return false;
   if (ch.what === 'canon' && !marker.canonical) return false;
+  // CR-2026-11-R4 (F1): a page that carries a lifecycle signal entering or leaving Narratives loses (or regains) its
+  // lifecycle: no marker declares that; only the owner's canonical approval runs it.
+  if (ch.what === 'narrative' && (ch.narrative?.loses.length ?? 0) > 0) return false;
   const p = marker.pages.find((x) => x.id === ch.resourceId);
   if (!p) return false;
-  if (ch.to === null || p.to === null) return true;
+  // CR-2026-11-R4 (F2): a page's `to: null` (an index the job makes, a narrative page: no lifecycle state) covers only
+  // where the page is placed, and the first state of a page the same job creates (the Status and tags its template
+  // gives it, which the creation tools replace). A Status, prefix or tag change of a page that exists needs an
+  // explicit target: the narrative audit's tags fix took CANON off a canon page on an ordinary approval through it.
+  if (p.to === null) return PLACEMENT.has(ch.what) || ch.made === true;
+  // A page given a lifecycle state is never declared into or out of Narratives, where it would have none.
+  if (ch.what === 'narrative') return false;
+  if (ch.to === null) return true;
   return p.to === ch.to;
+}
+
+/** A change as a proposal lists it. */
+function changeView(ch: LifecycleChange): Obj {
+  return {
+    lifecycle: ch.what,
+    page: ch.page,
+    resourceId: ch.resourceId,
+    text: ch.text,
+    ...(ch.narrative
+      ? {
+          narrative: ch.narrative.direction,
+          ...(ch.narrative.loses.length ? { loses: ch.narrative.loses } : {}),
+        }
+      : {}),
+  };
+}
+
+/** CR-2026-11-R4 (F1): why a move into or out of Narratives is a proposal (canonical: some page loses a lifecycle). */
+function narrativeReason(list: readonly LifecycleChange[], canonical: boolean): string {
+  const parts = list.slice(0, 3).map((ch) => `${ch.page}: ${ch.text}`);
+  return (
+    `this moves ${list.length === 1 ? 'a page' : `${list.length} pages`} into or out of Narratives (${parts.join('; ')}${list.length > 3 ? `; and ${list.length - 3} more` : ''})` +
+    (canonical ? '' : ', which is always the owner’s decision, whatever the scope')
+  );
 }
 
 function refusal(changes: readonly LifecycleChange[]): string {

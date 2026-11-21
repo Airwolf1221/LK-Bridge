@@ -653,6 +653,22 @@ const rules: PackRules = packRulesSchema.parse({
       },
     ],
     guardWords: 120,
+    // CR-2026-11-R4 (the owner's request; ADR 0066 A): a split's new owners address Source Boundaries and Unresolved
+    // Material only where the pack expects them, as the roles' own `warnMissing` already say: a Core, a Compact
+    // Reference and a relationship owner both; an Art page and a specialist page neither (they answered "not
+    // applicable" every time); any other owner both (`owners.text.warnMissing`). A Reference Type named here wins.
+    sections: {
+      referenceTypes: {},
+      roles: {
+        core: ['sourceBoundaries', 'unresolvedMaterial'],
+        compact: ['sourceBoundaries', 'unresolvedMaterial'],
+        relationship: ['sourceBoundaries', 'unresolvedMaterial'],
+        art: [],
+        specialist: [],
+      },
+      ownerTypes: {},
+      otherwise: ['sourceBoundaries', 'unresolvedMaterial'],
+    },
   },
   // v3 F3f (ADR 0060): the retag audit and apply, a derived translation of the Controlled Native Tagging Standard's
   // classification procedure. Batches of at most 25 pages; the identity tokens on the Core and the Compact Reference;
@@ -732,19 +748,64 @@ const rules: PackRules = packRulesSchema.parse({
     patterns: [
       // Temporal Scope, one `;` clause at a time: "Born Camue 44th, 4A 360; alive and immortal in Fifth-Age present 5A 931",
       // "Born 2A 73,511; attested through 5A 931", "Attested 5A 411–5A 931; birth date unestablished".
+      // CR-2026-11-R4 (RC-12; for the next pack version): "born again 4A 300" is no second birth (a return, below).
       {
         id: 'birth.scope',
         source: 'temporalScope',
         kind: 'birth',
-        regex: String.raw`^\s*born\s+(?<date>.+)$`,
+        regex: String.raw`^\s*born\s+(?!again\b)(?<date>.+)$`,
         date: 'scan',
       },
+      // CR-2026-11-R4 (RC-10): "died by 4A 600", "died no later than 4A 300" are upper bounds, never a death date.
       {
         id: 'death.scope',
         source: 'temporalScope',
         kind: 'death',
-        regex: String.raw`^\s*died\s+(?<date>.+)$`,
+        regex: String.raw`^\s*died\b(?![\s,(–—-]*(?:by|before|no\s+later\s+than|not\s+later\s+than|at\s+the\s+latest)\b)\s+(?<date>.+)$`,
         date: 'scan',
+      },
+      // CR-2026-11-R4 (the owner's request L, characters with more than one life; for the next pack version): one birth
+      // and one death per life, and a restoration. Mehrana al-Khalid's Temporal Scope: "First life Camue 1st, 4A 100–Camue
+      // 33rd, 4A 325; second life born Camue 1st, 4A 530; recollection 4A 624–Sarias 9th, 4A 645; second-life actual death
+      // at midday Zahras 36th, 4A 950; restored to life as a five-Domain innate goddess Camue 1st, 5A 1; alive through 5A
+      // 931." The named group `life` is the life's ordinal (`lifeOrdinals`).
+      {
+        id: 'life.scope.birth',
+        source: 'temporalScope',
+        kind: 'birth',
+        regex: String.raw`^\s*(?<life>first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d{1,2}(?:st|nd|rd|th))[\s-]+life\s+(?:born|begins|began)\b(?:\s+(?:on|in))?\s*(?<date>.*)$`,
+        date: 'scan',
+      },
+      {
+        id: 'life.scope.death',
+        source: 'temporalScope',
+        kind: 'death',
+        regex: String.raw`^\s*(?<life>first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d{1,2}(?:st|nd|rd|th))[\s-]+life(?:['’]s)?\s+(?:(?:actual|final)\s+)?(?:death|died|ended|ends)\b(?<date>.*)$`,
+        date: 'scan',
+      },
+      {
+        id: 'life.scope.span',
+        source: 'temporalScope',
+        kind: 'birth',
+        regex: String.raw`^\s*(?<life>first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d{1,2}(?:st|nd|rd|th))[\s-]+life\s+(?!(?:born|begins|began|actual|final|death|died|ended|ends)\b)(?:from\s+)?(?<date>.+)$`,
+        life: 'span',
+      },
+      {
+        id: 'life.scope.restored',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`^\s*restored\s+to\s+life\b(?<date>.*)$`,
+        date: 'scan',
+        bound: 'from',
+        life: 'restoration',
+      },
+      // An attested span inside a life (Mehrana al-Khalid's "recollection 4A 624–Sarias 9th, 4A 645"), never a life.
+      {
+        id: 'attested.scope.recollection',
+        source: 'temporalScope',
+        kind: 'attested',
+        regex: String.raw`^\s*recollection\s+(?<date>.+)$`,
+        bound: 'both',
       },
       {
         id: 'birth.scope.gap',
@@ -778,7 +839,8 @@ const rules: PackRules = packRulesSchema.parse({
         id: 'attested.scope.alive',
         source: 'temporalScope',
         kind: 'attested',
-        regex: String.raw`\b(?:alive|active)\b(?<date>.*)$`,
+        // CR-2026-11-R4 (RC-11): at the clause's start only ("no longer alive in 5A 931" attests nothing).
+        regex: String.raw`^\s*(?:still\s+)?(?:alive|active)\b(?<date>.*)$`,
         date: 'scan',
         bound: 'both',
       },
@@ -805,7 +867,8 @@ const rules: PackRules = packRulesSchema.parse({
         id: 'attested.scope.present',
         source: 'temporalScope',
         kind: 'attested',
-        regex: String.raw`^\s*present\s+(?:(?:at|in)\s+)?(?<date>.+)$`,
+        // CR-2026-11-R4 (RC-11): a date directly after "present" ("present status: deceased since 4A 600" is none).
+        regex: String.raw`^\s*present\s+(?:(?:at|in)\s+)?(?<date>(?=(?:c\.\s*|approximately\s+)?(?:\p{L}+\s+)?\d).+)$`,
         date: 'scan',
         bound: 'to',
       },
@@ -817,9 +880,11 @@ const rules: PackRules = packRulesSchema.parse({
         id: 'attested.scope.return',
         source: 'temporalScope',
         kind: 'attested',
-        regex: String.raw`^\s*(?:reborn|returned|reincarnated|resurrected)\b(?:\s+(?:on|in|at))?\s+(?<date>.+)$`,
+        // CR-2026-11-R4 (RC-12): "born again 4A 300" is a return too.
+        regex: String.raw`^\s*(?:reborn|born\s+again|returned|reincarnated|resurrected)\b(?:\s+(?:on|in|at))?\s+(?<date>.+)$`,
         date: 'scan',
         bound: 'from',
+        life: 'return',
       },
       // A Life State of "Deceased" with a date. "Deceased" alone is a state (the Life State identity fact), not a date;
       // "Deceased by <date>" is an upper bound on death, never a death date (ADR 0064 amendment 1, D).
@@ -827,7 +892,8 @@ const rules: PackRules = packRulesSchema.parse({
         id: 'death.lifestate',
         source: 'lifeState',
         kind: 'death',
-        regex: String.raw`^\s*deceased\b(?!\s+(?:by|before)\b)(?<date>.*)$`,
+        // CR-2026-11-R4 (RC-10): "Deceased (by …)", "Deceased, by …", "no later than", "at the latest by": no death date.
+        regex: String.raw`^\s*deceased\b(?![\s,(–—-]*(?:by|before|no\s+later\s+than|not\s+later\s+than|at\s+the\s+latest)\b)(?<date>.*)$`,
         date: 'scan',
       },
       {
@@ -903,6 +969,25 @@ const rules: PackRules = packRulesSchema.parse({
       'Dame',
     ],
     clauseWords: ['after', 'when', 'before', 'until', 'while'],
+    // CR-2026-11-R4 (RC-1; for the next pack version): a name right after a relational particle is a relation of the
+    // subject, never the subject ("The daughter of Rashad al-Khalid was born", "Layla bint Rashad al-Khalid was born").
+    relational: [
+      'of',
+      'bint',
+      'ibn',
+      'bin',
+      'ben',
+      'bat',
+      'née',
+      'by',
+      'with',
+      'for',
+      'to',
+      'from',
+      'and',
+      'or',
+      'nor',
+    ],
     // F: non-current sections and rows inside current pages. Switched on by the owner's ruling (20 November 2026):
     // "Pre-Rewrite" and "Author-Facing" sections and rows are non-current.
     nonCurrent: { markers: ['Pre-Rewrite', 'Author-Facing'], exclude: true },
@@ -914,14 +999,58 @@ const rules: PackRules = packRulesSchema.parse({
     ],
     // v3 F4c (ADR 0065; the owner's ruling from F4b.1's review): "Deceased by 5A 931" (Jahan-Timur's Life State) is an
     // upper bound on death, read only by arkona_as_of; never a fact, never compared.
-    deceasedBy: [{ id: 'deceased.by', regex: String.raw`^\s*deceased\s+(?:by|before)\s+(?<date>.+)$` }],
+    // CR-2026-11-R4 (RC-10; for the next pack version): "Deceased (by 5A 931)", "Deceased, by …", "Deceased – by …",
+    // "Deceased no later than …", "Deceased at the latest by …" are the same upper bound.
+    deceasedBy: [
+      {
+        id: 'deceased.by',
+        regex: String.raw`^\s*(?:deceased|died)[\s,(–—-]*(?:by|before|no\s+later\s+than|not\s+later\s+than|at\s+the\s+latest(?:\s+by)?)\s+(?<date>.+)$`,
+      },
+    ],
     // v3 F4c (ADR 0065; the owner's ruling amending D7): a Life State of "Alive" records the character alive at the present
     // (5A 931), so with a recorded birth "as of" reads them alive from it to the present; read by arkona_as_of only.
     aliveValues: ['Alive', 'Living'],
     // ADR 0064 amendment 2 (`-f41`): a Life State whose principal part STARTS with an alive value ("Alive in 5A 931",
     // Katsuragi Yamato's; "Living and immortal at 5A 931", Rashad al-Khalid's) records the character alive; a date
     // there ("in / at <date>") attests the life up to that date rather than the present.
-    aliveAt: [{ id: 'alive.at', regex: String.raw`\b(?:in|at)\s+(?<date>.+)$` }],
+    // CR-2026-11-R4 (RC-13; for the next pack version): "as of", "until", "through" and "last attested" too, read over the
+    // whole value ("Alive (last attested 4A 500)").
+    aliveAt: [
+      { id: 'alive.at', regex: String.raw`\b(?:in|at|as\s+of|until|till|through|thru)\s+(?<date>.+)$` },
+      {
+        id: 'alive.last',
+        regex: String.raw`\blast\s+(?:attested|seen|recorded)(?:\s+(?:in|at|on))?\s+(?<date>.+)$`,
+      },
+    ],
+    // CR-2026-11-R4 (RC-13): a Life State in doubt is no record of the living ("Alive (presumed)", "Alive -
+    // unconfirmed", "Alive?"), and only these words may follow the alive value ("Living memory" is none).
+    aliveDoubt: [
+      'presumed',
+      'presumably',
+      'unconfirmed',
+      'uncertain',
+      'unverified',
+      'possibly',
+      'probably',
+      'rumoured',
+      'reportedly',
+      'believed',
+      '?',
+    ],
+    aliveFollowers: ['and', 'in', 'at', 'as of', 'until', 'till', 'through', 'thru'],
+    // CR-2026-11-R4 (the owner's request L): the ordinals of lives ("first life …", "second life born …").
+    lifeOrdinals: [
+      'first',
+      'second',
+      'third',
+      'fourth',
+      'fifth',
+      'sixth',
+      'seventh',
+      'eighth',
+      'ninth',
+      'tenth',
+    ],
   },
   // v3 F4c (ADR 0065; the owner-approved design docs/design/F4c-fiction.md, E1 to E9): the layout of Narratives. Every
   // name is found by name (never by id); the templates by name through the template list. The governance it derives
@@ -1061,9 +1190,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // bare-range attested phrasing and "Deceased by <date>" as an as-of-only upper bound (`deceasedBy`). `-f41` (ADR 0064
   // amendment 2 and ADR 0065 amendment 1, 20 November 2026; session F4.1, from the owner's check of the live tools): a
   // Life State STARTING with "Alive" or "Living" (`aliveValues`, with a date read by `aliveAt`), and the Temporal Scope
-  // phrasings "living at <date>" and "present <date>".
-  seed: 'arkona-2026-11-20-f41',
+  // phrasings "living at <date>" and "present <date>". `-r4` (CR-2026-11-R4, 21 November 2026; the fourth review and the
+  // owner's requests): which kinds of new owner of a split address Source Boundaries and Unresolved Material
+  // (`splits.sections`), and the consistency phrasings this review's fixes and the owner's lives (L) add.
+  seed: 'arkona-2026-11-21-r4',
   supersedes: [
+    'arkona-2026-11-20-f41',
     'arkona-2026-11-20-f4c',
     'arkona-2026-11-20-f4b1',
     'arkona-2026-11-20-f4b',

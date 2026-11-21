@@ -44,7 +44,9 @@ export type Group =
   | 'differs'
   | 'gaps'
   | 'historical'
-  | 'unreadable';
+  | 'unreadable'
+  // CR-2026-11-R4 (RC-18): identity values that differ only in accents or marks ("Ōno", "Ono"): information.
+  | 'spelling';
 
 export const GROUP_LABEL: Readonly<Record<Group, string>> = {
   required: 'Required defects',
@@ -62,6 +64,7 @@ export const GROUP_LABEL: Readonly<Record<Group, string>> = {
   gaps: 'Gaps',
   historical: 'Historical material differs',
   unreadable: 'Dates the calendar cannot read',
+  spelling: 'Spelling differs (accents or marks)',
 };
 
 /** The groups each tool reports, in order. */
@@ -73,7 +76,7 @@ export const TOOL_GROUPS: Readonly<Record<AppraisalTool, readonly Group[]>> = {
   // v3 F3e (ADR 0059): the split appraisal (A6) reports architectural candidates only (and what it could not read).
   arkona_split_appraisal: ['architectural', 'blocked'],
   // v3 F4b (ADR 0064): Contradictory first (the audits report only these), then the rest the tool keeps.
-  arkona_consistency: ['contradictory', 'differs', 'gaps', 'historical', 'unreadable'],
+  arkona_consistency: ['contradictory', 'differs', 'gaps', 'historical', 'unreadable', 'spelling'],
 };
 
 /** Repository Automation's evidence terms. */

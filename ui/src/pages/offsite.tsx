@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, formText } from '../api';
+import { api, background, formText } from '../api';
 import {
   Badge,
   Button,
@@ -158,10 +158,11 @@ export function OffsitePage() {
     if (back || backError) navigate('/offsite', { replace: true });
   }, [back, backError, toast, navigate]);
   // While a run is going, look again every few seconds (the runner is a separate service, with no live events).
+  // CR-2026-11-R4: the page's own refresh, not the owner's use of the session.
   const running = s.data?.running !== null && s.data?.running !== undefined;
   useEffect(() => {
     if (!running && !(s.data?.pending.length ?? 0)) return;
-    const t = setInterval(s.reload, 5000);
+    const t = setInterval(background(s.reload), 5000);
     return () => clearInterval(t);
   }, [running, s.data?.pending.length, s.reload]);
 

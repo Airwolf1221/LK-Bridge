@@ -32,8 +32,10 @@ import {
   isLowLevelTool,
   listsSent,
   railsVerdict,
+  reasonNamesGuardedRail,
   type RailItem,
   type RailVerdict,
+  type WriteRails,
 } from './rails.js';
 import type { PolicyStore } from './store.js';
 import type { ResolvedPrincipal, Scope } from './types.js';
@@ -215,18 +217,37 @@ export class LivePolicyGate implements PolicyGate {
   }
 
   /**
-   * ADR 0062: whether approving these operations is one of the owner's guarded kinds (a delete, more than 10 pages, an
-   * asset delete or move): the dashboard then asks for the step-up. Judged by the rails' own rules at the owner's
-   * defaults (ADR 0055), whatever made the request a proposal; a restore's set is not read here, so a restore counts as
-   * more than 10 pages (fails closed, as the rails do when they cannot tell).
+   * ADR 0062: whether approving a proposal is one of the owner's guarded kinds (a delete, more than 10 pages, an asset
+   * delete or move): the dashboard then asks for the step-up. CR-2026-11-R4 (SE-05 to SE-07, SE-12): either of two
+   * judgments asks.
+   *
+   * 1. The rail that made it a proposal, as recorded (`proposedBecause`): the deletes, bulk or assets rail, or a reason
+   *    that cannot be read (`reasonNamesGuardedRail`).
+   * 2. Its operations, by the rails' own rules at the owner's defaults (ADR 0055), whatever made it a proposal (a rail,
+   *    a scope, the owner's own request): the removals through a low-level tool (the proposal's recorded `tool`) and the
+   *    text they take off a pack page count as the deletes rail counts them at entry (read live; a read that fails
+   *    counts), a member or an invite taken away counts as a delete, and a restore counts as more than 10 pages (its set
+   *    is not read here). A judgment that cannot be made asks (fails closed).
    */
-  guardedVerdict(projectId: string, items: readonly RailItem[]): RailVerdict | null {
-    const l = this.railLookups;
-    return railsVerdict(DEFAULT_WRITE_RAILS, items, {
-      descendants: (rid) => l.descendants?.(projectId, rid) ?? null,
-      pageName: (rid) => l.pageName?.(projectId, rid) ?? null,
-      restored: () => null,
-    });
+  async approvalVerdict(
+    projectId: string,
+    items: readonly RailItem[],
+    o: { readonly tool?: string; readonly proposedBecause?: string | null } = {},
+  ): Promise<RailVerdict | null> {
+    if (reasonNamesGuardedRail(o.proposedBecause)) return { hits: [], reason: o.proposedBecause! };
+    try {
+      return await this.judge(DEFAULT_WRITE_RAILS, items, {
+        project: projectId,
+        ...(o.tool !== undefined ? { tool: o.tool } : {}),
+        readRestores: false,
+        memberRemovals: true,
+      });
+    } catch (e) {
+      return {
+        hits: [],
+        reason: `proposed because: the safety rails could not be judged (${e instanceof Error ? e.message : String(e)})`,
+      };
+    }
   }
 
   /** v3 F3.4: the tree's answers the rails use (a cascade's pages, page names for the reason); merged with earlier ones. */
@@ -253,13 +274,39 @@ export class LivePolicyGate implements PolicyGate {
     if (principal.principalId === SYSTEM_PRINCIPAL_ID) return null;
     const r = this.resolve(principal.principalId);
     if (!r?.active || r.scope !== 'write') return null;
+    return this.judge(r.rails, items, {
+      project: ctx.project,
+      ...(ctx.tool !== undefined ? { tool: ctx.tool } : {}),
+      ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
+      readRestores: true,
+      // CR-2026-11-R4 (ADR 0066 part B, question 10, the owner's decision): a member or an invite taken away is a delete
+      // at entry too (it reaches the rails only with LK_ALLOW_MEMBER_ADMIN on; it is refused before them otherwise).
+      memberRemovals: true,
+    });
+  }
+
+  /**
+   * The rails `rails` a request meets, with what they need read first (shared by the entry rails and the approval's
+   * judgment, CR-2026-11-R4). `readRestores` false: a restore's set is not read (it counts as more than any N).
+   */
+  private async judge(
+    rails: WriteRails,
+    items: readonly RailRequestItem[],
+    ctx: {
+      readonly project: string;
+      readonly tool?: string;
+      readonly stagedPlacement?: boolean;
+      readonly readRestores: boolean;
+      readonly memberRemovals?: boolean;
+    },
+  ): Promise<RailVerdict | null> {
     const l = this.railLookups;
     const writes = (it: RailRequestItem) =>
       it.kind !== 'read' && !it.opId.startsWith('bridge.') && !it.opId.startsWith('upload_image.');
     // ADR 0057 decision 9: a restore counts every page its restore set says may come back (read before the verdict; an
     // unknown set, or none to read, fails closed).
     const restored = new Map<string, number | null>();
-    if (r.rails.bulk)
+    if (rails.bulk && ctx.readRestores)
       for (const it of items) {
         const rid = it.params.path?.resourceId;
         if (it.opId !== 'restoreResource' || !writes(it) || !rid || restored.has(rid)) continue;
@@ -268,7 +315,7 @@ export class LivePolicyGate implements PolicyGate {
     // ADR 0057 decision 4: a whole-list write through a low-level tool is a removal when it drops an entry held now.
     const lowLevel = isLowLevelTool(ctx.tool);
     const drops = new Map<number, boolean | null>();
-    if (r.rails.deletes && lowLevel)
+    if (rails.deletes && lowLevel)
       for (const [i, it] of items.entries()) {
         if (!writes(it) || listsSent(it.opId, it.params.body).length === 0) continue;
         drops.set(i, l.drops ? await l.drops(ctx.project, it).catch(() => null) : null);
@@ -276,28 +323,29 @@ export class LivePolicyGate implements PolicyGate {
     // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool is a removal too (an error
     // reading it refuses the request: no direct write).
     const textRemoved =
-      r.rails.deletes && lowLevel && l.textRemoved
+      rails.deletes && lowLevel && l.textRemoved
         ? await l.textRemoved(ctx.project, items.filter(writes))
         : [];
     const base = {
       ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
       ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
+      ...(ctx.memberRemovals === true ? { memberRemovals: true } : {}),
       restored: (id: string) => restored.get(id) ?? null,
       lowLevel,
       drops: (i: number) => drops.get(i) ?? null,
       textRemoved: () => textRemoved,
     };
     const fromTree = (id: string) => l.descendants?.(ctx.project, id) ?? null;
-    const verdict = railsVerdict(r.rails, items, { ...base, descendants: fromTree });
+    const verdict = railsVerdict(rails, items, { ...base, descendants: fromTree });
     // CR-2026-11-R2 (R2-04): a request the tree's counts would let run directly although it deletes a cascade or copies a
     // page with its children is counted again on the pages LegendKeeper holds now (the larger count wins; a listing
     // that cannot be made fails closed). Only then: a request already proposed costs no reads.
-    if (verdict !== null || !r.rails.bulk || !l.liveDescendants) return verdict;
+    if (verdict !== null || !rails.bulk || !l.liveDescendants) return verdict;
     const roots = countedRoots(items);
     if (roots.length === 0) return null;
     const live = new Map<string, number | null>();
-    for (const id of roots) live.set(id, await l.liveDescendants(ctx.project, id, r.rails.bulkPages));
-    return railsVerdict(r.rails, items, {
+    for (const id of roots) live.set(id, await l.liveDescendants(ctx.project, id, rails.bulkPages));
+    return railsVerdict(rails, items, {
       ...base,
       descendants: (id: string) => {
         const now = live.get(id);

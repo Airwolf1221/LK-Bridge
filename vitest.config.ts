@@ -39,6 +39,7 @@ export default defineConfig({
       'test/narrative/**/*.test.ts', // v3 F4c: the narrative layout, tools and audit (ADR 0065)
       'test/review/**/*.test.ts', // v3 F3.4: write scope: the review of direct writes, Revert, the rails (ADR 0055)
       'test/blockids/**/*.test.ts', // v3 F3.5: the block-id sweep, an approved narrow automation (ADR 0056)
+      'test/sandbox-mock/**/*.test.ts', // CR-2026-11-R4 (S): every sandbox check, run against the mock in the ordinary suite
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

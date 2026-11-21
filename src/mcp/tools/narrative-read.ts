@@ -18,6 +18,7 @@ import type { LoadedPage, PageReader } from '../../appraisal/reader.js';
 import { lifecycleFrom } from '../../lifecycle/settings.js';
 import { narrativeCalendar } from '../../narrative/calendar.js';
 import { nkey, subjectOf, type StoryLayout } from '../../narrative/layout.js';
+import { lifecyclePrefix } from '../../narrative/signals.js';
 import { currentCharacters } from '../../packs/naming/namesakes.js';
 import { sectionMarkdown, sectionsWhere } from '../../packs/read-support.js';
 import { topicBrief } from '../../packs/topic-brief.js';
@@ -192,14 +193,20 @@ async function openRead(
   if (!o.ok) return o;
   const ap = pd.services?.appraisal;
   const note: string[] = [];
-  let reader: PageReader | null = null;
-  let pack: PackRules | null = null;
+  let reader: PageReader | null;
+  let pack: PackRules | null;
   try {
     pack = ap ? ap.rules(o.value.ctx.projectId) : null;
     reader = ap ? (await ap.reader(o.value.ctx.projectId)).reader : null;
   } catch (e) {
-    note.push(
-      `The snapshots cannot be read (${e instanceof Error ? e.message : String(e)}): pass live: true.`,
+    // CR-2026-11-R4 (narrative-f4c N5): every page these tools read, live or not, is read through the snapshots'
+    // reader, and canon itself comes from the snapshots: without one, nothing can be read. It said "could not be read"
+    // (CHAPTER_UNREADABLE) and suggested `live: true`, which was already the check's default.
+    const code = typeof (e as { code?: unknown }).code === 'string' ? (e as { code: string }).code : null;
+    return no(
+      pd,
+      code === 'NO_SNAPSHOT' ? 'NO_SNAPSHOT' : 'SNAPSHOTS_UNREADABLE',
+      `${e instanceof Error ? e.message : String(e)} The chapter tools read the chapter, and compare it with canon, through the snapshots: take a full snapshot (the Snapshots page, or wait for the nightly one) and call again.`,
     );
   }
   if (!pack) return no(pd, 'TOOL_UNAVAILABLE', 'The Arkona pack’s rules cannot be read here.');
@@ -439,6 +446,15 @@ async function chapterCheck(
         // "Deceased by <date>" (an upper bound on death, the Life State's): the state says which.
         ...(c.deceasedBy ? { deceasedBy: c.deceasedBy, state: state.value } : {}),
       });
+    // CR-2026-11-R4 (the owner's request L): between two of a character's lives, recorded dead at the date.
+    else if (state.value?.startsWith('Between lives (recorded'))
+      items.push({
+        label: LABELS.contradicts,
+        kind: 'person',
+        what: `${who} is between lives at ${date} (${state.why ?? 'after one life’s death, before the next life'})`,
+        character: who,
+        ...(c.died ? { died: c.died } : {}),
+      });
     else if (state.value?.startsWith('Unestablished'))
       items.push({
         label: LABELS.unestablished,
@@ -537,11 +553,16 @@ async function chapterCheck(
             : readLeading(calendar, recorded.value)
           : null;
         const margin = cons?.approxMargin ?? 5;
-        if (
-          rv &&
-          rv.ok &&
-          !overlaps(spanOf(calendar, said.reading, margin), spanOf(calendar, rv.reading, margin))
-        )
+        // CR-2026-11-R4 (the owner's request L): a character with several lives: a birth (or death) written in the
+        // prose agrees with any life's start (or death).
+        const saidSpan = spanOf(calendar, said.reading, margin);
+        const anyLife = ((c?.lives as Obj[] | undefined) ?? []).some((l) => {
+          const v = ((p.kind === 'birth' ? l.began : l.ended) as { value?: unknown } | undefined)?.value;
+          if (typeof v !== 'string') return false;
+          const r = style ? readLeading(calendar, v, style) : readLeading(calendar, v);
+          return r.ok && overlaps(saidSpan, spanOf(calendar, r.reading, margin));
+        });
+        if (rv && rv.ok && !anyLife && !overlaps(saidSpan, spanOf(calendar, rv.reading, margin)))
           items.push({
             label: LABELS.contradicts,
             kind: 'date',
@@ -559,9 +580,16 @@ async function chapterCheck(
     }
   }
   // ---- names that resolve nowhere (new-lore candidates), and those resolving only to Archived or Legacy pages.
+  // CR-2026-11-R4 (F6; design E2.4, never authority): resolved against the pages outside Narratives only, so a name
+  // known only from fiction (a narrative page of that name) is still a candidate. Canon filed under Narratives (a page
+  // whose name carries a lifecycle prefix: NA-43) is canon still, as the facts index reads it.
+  const narratives = env.roots.narratives.id;
   const nodes = env.ctx.tree
     .subtree(env.ctx.projectId, env.ctx.meta.rootId ?? '', { limit: 1_000_000 })
-    .data.entries.map((e) => e.node);
+    .data.entries.map((e) => e.node)
+    .filter(
+      (n) => n.id === narratives || !n.path.ids.includes(narratives) || lifecyclePrefix(n.rawName) !== null,
+    );
   const archivedOnly = (id: string) => {
     const n = env.ctx.tree.node(env.ctx.projectId, id).data;
     return !!n && (n.kind === 'barc' || n.path.names.some((x) => /^legacy canon archive$/i.test(x)));
@@ -685,9 +713,10 @@ export function narrativeReadTools(
   deps: ToolDeps,
   tool: (name: string) => McpToolProvider | undefined,
 ): McpToolProvider[] {
+  // CR-2026-11-R4 (LD-01): listed while the APPROVED version carries the narrative layout, as the writing tools.
   const listed = () => {
     const packs = deps.services?.packs;
-    return (packs?.toolListed(PACK) ?? false) && packs?.get(PACK)?.rules.narrative !== undefined;
+    return (packs?.toolListed(PACK) ?? false) && packs?.approvedRules(PACK)?.narrative !== undefined;
   };
   const runRead =
     <A>(name: string, fn: (o: Opened, args: A) => Promise<McpToolResult>) =>

@@ -23,6 +23,7 @@ import { lifecycleFrom, type LifecycleConfig } from '../lifecycle/settings.js';
 import type { RepoCtx } from '../mcp/tools/repo.js';
 import { textKey } from '../packs/engine/text.js';
 import {
+  characterTypeOf,
   currentCharacters,
   nameKeyOf,
   splitAliases,
@@ -44,7 +45,8 @@ import {
   type Label,
   type PageInfo,
   type ValueView,
-  identityKey,
+  principalKey,
+  valueKey,
 } from './compare.js';
 import type { Edit, Picker } from './fix.js';
 import type { ConsistencyAuditItem } from '../audits/context.js';
@@ -65,9 +67,20 @@ import {
   principalValue,
   type ChronologyRowInput,
   type Compiled,
+  type FactPlace,
   type MatchedAs,
 } from './extract.js';
 import { FactIndex, type StoredFact } from './facts-index.js';
+import {
+  agreesWithLives,
+  buildLives,
+  lifeName,
+  lifeStart,
+  stateAt,
+  type Life,
+  type LifeMark,
+  type LivesInput,
+} from './lives.js';
 
 type Obj = Record<string, unknown>;
 
@@ -135,6 +148,8 @@ export interface World {
   readonly names: ReadonlyMap<string, ReadonlySet<string>>;
   /** A given name's key → the identity pages whose given name it is. */
   readonly given: ReadonlyMap<string, ReadonlySet<string>>;
+  /** CR-2026-11-R4 (RC-19): a name's key is a title ("the Kaiser", "Kaiser"): it counts only on its own pages. */
+  titleLike(key: string): boolean;
   readonly chronologyPageId: string | null;
   readonly problems: readonly string[];
   /** A page's lifecycle, area, name and path (labels from the overlay; never guessed). */
@@ -159,10 +174,17 @@ export interface CharacterFacts {
   readonly ambiguous: number;
   /** ADR 0064 amendment 1 (F): facts left out because their section or row is marked non-current. */
   readonly nonCurrentLeftOut?: number;
+  /**
+   * CR-2026-11-R4 (RC-8): in an AU, the character's Main CANON facts (D9: inherited where the AU states nothing of its
+   * own: its resolved birth and death, its deaths and returns, its prose and chronology rows too).
+   */
+  readonly main?: CharacterFacts;
 }
 
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex');
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const iso = (t: number) => new Date(t).toISOString();
+const tidyText = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /** The fingerprint a consistency finding is known by in every run (and the audits' and the dashboard's). */
 export function consistencyId(
@@ -180,6 +202,7 @@ const GROUP_OF: Readonly<Record<Label, Group>> = {
   gap: 'gaps',
   historical: 'historical',
   unreadable: 'unreadable',
+  spelling: 'spelling',
 };
 
 export class Consistency {
@@ -362,7 +385,7 @@ export class Consistency {
       ...[...names].map(([k, v]) => `n:${k}:${[...v].sort().join(',')}`),
       ...[...given].map(([k, v]) => `g:${k}:${[...v].sort().join(',')}`),
     ].sort();
-    const key = sha1(JSON.stringify({ rules, entries, cal: this.calendarKey(cal), chron, v: 2 }));
+    const key = sha1(JSON.stringify({ rules, entries, cal: this.calendarKey(cal), chron, v: 3 }));
     const nameIndex = {
       lookup: (k: string): MatchedAs | null => (names.has(k) ? 'name' : given.has(k) ? 'given' : null),
     };
@@ -441,6 +464,11 @@ export class Consistency {
       byIdentity,
       names,
       given,
+      titleLike: (k: string) => {
+        const t = compiled.words.titles;
+        const bare = k.replace(/^(?:the|a|an)\s+/u, '');
+        return t.has(k) || t.has(bare);
+      },
       chronologyPageId,
       problems: [
         ...compiled.problems,
@@ -495,6 +523,13 @@ export class Consistency {
     const seen = new Set<string>();
     let ambiguous = 0;
     let nonCurrentLeftOut = 0;
+    /** The characters of this continuity a key names, as a name, an alias or a given name (CR-2026-11-R4, RC-3). */
+    const ownersOf = (k: string): string[] =>
+      [...new Set([...(w.names.get(k) ?? []), ...(w.given.get(k) ?? [])])].filter(
+        (x) => w.continuityOf(x) === continuity || w.continuityOf(x) === own,
+      );
+    /** The key is this character's given name only (not also one of its names or aliases). */
+    const onlyGiven = (k: string): boolean => givenKeys.has(k) && !keys.has(k);
     // ADR 0064 amendment 1 (F): non-current sections and rows inside current pages, left out while the switch is on.
     const leaveOutNonCurrent = w.rules.nonCurrent?.exclude === true && !include.has('pre-rewrite');
     const facts: StoredFact[] = [];
@@ -511,20 +546,25 @@ export class Consistency {
       }
       if (f.source !== 'chronology' && w.continuityOf(f.pageId) !== continuity) continue;
       if (f.source === 'chronology' && continuity !== MAIN) continue;
-      const ownPage = w.ownerOf(f.pageId) === id;
+      const pageOwner = w.ownerOf(f.pageId);
+      const ownPage = pageOwner === id;
       if (f.pageId !== id) {
-        if (f.matchedAs === 'given' && !ownPage) continue;
         if (f.matchedAs === 'mention' && w.ownerOf(f.subjectKey.slice(5)) !== id) continue;
-        if (f.matchedAs === 'name' || f.matchedAs === 'page') {
-          // A name several characters of this continuity share counts only on one's own pages.
-          const sharing = [...(w.names.get(f.subjectKey) ?? [])].filter(
-            (x) => w.continuityOf(x) === continuity || w.continuityOf(x) === own,
-          );
+        if (f.matchedAs === 'name' || f.matchedAs === 'given' || f.matchedAs === 'page') {
+          // A name several characters of this continuity share counts only on one's own pages. CR-2026-11-R4 (RC-3): the
+          // sharing is over names AND given names together, so one character's alias that is another's given name
+          // (Katsuragi Yamato's "Yamato", Hoshino Yamato's given name) counts only on the pages of the character who owns
+          // the page; on anyone else's it is not attributed.
+          const sharing = ownersOf(f.subjectKey);
           if (sharing.length > 1 && !ownPage) {
-            ambiguous++;
+            if (!(pageOwner !== null && sharing.includes(pageOwner))) ambiguous++;
             continue;
           }
           if (!sharing.includes(id) && !ownPage) continue;
+          // A given name alone (D2, chosen) and, CR-2026-11-R4 (RC-19), an alias that is a title ("the Kaiser") count
+          // only on the character's own pages.
+          if (!ownPage && f.matchedAs !== 'page' && (onlyGiven(f.subjectKey) || w.titleLike(f.subjectKey)))
+            continue;
         }
         // A page's own sidebar restates the character only when its subject IS the character (or it is one of its pages).
         if (f.matchedAs === 'page' && !ownPage && !keys.has(f.subjectKey)) continue;
@@ -536,13 +576,17 @@ export class Consistency {
     // D9: an AU without an identity page of its own shows Main CANON's identity facts, labelled.
     const inherited = new Map<string, StoredFact>();
     let identityPageId = id;
+    let main: CharacterFacts | undefined;
     if (continuity !== own && own === MAIN) {
-      const main = this.facts.factsOn(w.projectId, [id]).filter((f) => f.matchedAs === 'page');
-      for (const f of main) {
+      const mainFacts = this.facts.factsOn(w.projectId, [id]).filter((f) => f.matchedAs === 'page');
+      for (const f of mainFacts) {
         const k = f.kind === 'identity' ? `identity:${textKey(f.field ?? '')}` : f.kind;
         if (!inherited.has(k) && (f.gap || f.date || f.kind === 'identity')) inherited.set(k, f);
       }
       identityPageId = id;
+      // CR-2026-11-R4 (RC-8): Main CANON's own reading of the character (its identity page's prose and the chronology's
+      // rows too, not only its sidebar), inherited where the AU states nothing of its own.
+      main = this.characterFacts(w, c, { continuity: MAIN, include });
     }
     return {
       character: c,
@@ -552,7 +596,16 @@ export class Consistency {
       inherited,
       ambiguous,
       ...(nonCurrentLeftOut > 0 ? { nonCurrentLeftOut } : {}),
+      ...(main ? { main } : {}),
     };
+  }
+
+  /** CR-2026-11-R4 (RC-18): the identity fields that hold a name (the given name and the surname), as the pack keys them. */
+  private nameFields(w: World): readonly string[] {
+    const type = characterTypeOf(w.pack);
+    const keyOf = (field: string, fallback: string) =>
+      type?.identity.find((f) => f.field === field)?.key ?? fallback;
+    return [keyOf('givenName', 'Personal / Given Name'), keyOf('surname', 'Family / Surname')];
   }
 
   /** Whether a chronology row relates to a page: the row mentions it, or the page links to the row's table (D1). */
@@ -576,6 +629,15 @@ export class Consistency {
 
   /** Every disagreement of one character (D3, D4), with its stable id. */
   disagreements(w: World, cf: CharacterFacts): { id: string; d: Disagreement }[] {
+    // CR-2026-11-R4 (the owner's request L): a character with several lives agrees with any of its lives' births and
+    // deaths, and one life's own value is never compared with another's.
+    const lives = this.livesOf(w, cf);
+    const lifeOf = new Map<string, number>();
+    if (lives.length > 1)
+      lives.forEach((l, i) => {
+        for (const m of [...l.starts, ...l.deaths])
+          if (!m.inherited && !m.restated) lifeOf.set(`${m.fact.pageId}:${m.fact.seq}`, i);
+      });
     const list = compareCharacter({
       cal: w.cal,
       margin: w.rules.approxMargin,
@@ -586,6 +648,11 @@ export class Consistency {
       inheritedLabel: 'inherited from Main CANON',
       rowRelates: this.rowRelates(w),
       nonCurrentHistorical: w.rules.nonCurrent?.exclude === true,
+      ...(lives.length > 1
+        ? { lives: { lifeOf, agrees: (kind: 'birth' | 'death', s: Span) => agreesWithLives(lives, kind, s) } }
+        : {}),
+      person: { given: cf.character.names.given, surname: cf.character.names.surname },
+      nameFields: this.nameFields(w),
     });
     return list.map((d) => ({ id: consistencyId(w.projectId, d, cf.identityPageId, cf.continuity), d }));
   }
@@ -683,7 +750,9 @@ export class Consistency {
         ? `${cf.character.subject}: ${what}: ${d.reference.gap ? 'the identity page leaves it unestablished' : `the identity page records ${d.reference.value}`}, while ${d.restatements.length} other place(s) ${d.reference.gap ? 'give a value' : 'leave it unestablished'} (a gap, never a conflict).`
         : d.label === 'unreadable'
           ? `${cf.character.subject}: ${what}: ${d.restatements.length} date(s) the calendar cannot read (each reported with its text; never guessed).`
-          : `${label}: ${cf.character.subject}’s ${what} is ${d.reference.value} on “${d.reference.page.name}”${d.referenceFromRestatement ? ' (the identity page records none)' : ''}, but ${d.restatements.map((r) => `${r.value} on “${r.page.name}”`).join('; ')}.`;
+          : d.label === 'spelling'
+            ? `${cf.character.subject}: ${what} is “${d.reference.value}” on “${d.reference.page.name}”, spelt ${d.restatements.map((r) => `“${r.value}” on “${r.page.name}”`).join('; ')}: the same value but for accents or marks (information, never a conflict).`
+            : `${label}: ${cf.character.subject}’s ${what} is ${d.reference.value} on “${d.reference.page.name}”${d.referenceFromRestatement ? ' (the identity page records none)' : ''}, but ${d.restatements.map((r) => `${r.value} on “${r.page.name}”`).join('; ')}.`;
     return {
       id: x.id,
       tool: CONSISTENCY_TOOL,
@@ -1026,8 +1095,6 @@ export class Consistency {
     const cf = this.characterFacts(w, c, { continuity });
     const id = c.identity.id;
     const cal = w.cal!;
-    const span = (f: StoredFact) => spanOf(cal, f.date!, w.rules.approxMargin);
-    const valueOf = (kind: 'birth' | 'death') => this.lifeValue(w, cf, kind);
     const where = (f: StoredFact, inherited: boolean) => ({
       value: f.valueText,
       precision: f.date ? describeDate(f.date) : null,
@@ -1037,8 +1104,8 @@ export class Consistency {
       excerpt: f.excerpt,
       ...(inherited ? { label: 'inherited from Main CANON' } : {}),
     });
-    const birth = valueOf('birth');
-    const death = valueOf('death');
+    const birth = this.lifeValue(w, cf, 'birth');
+    const death = this.lifeValue(w, cf, 'death');
     const born = birth?.fact.date
       ? where(birth.fact, birth.inherited)
       : birth?.fact.gap
@@ -1048,130 +1115,110 @@ export class Consistency {
             recorded: birth.fact.valueText,
           }
         : 'birth unestablished';
-    let elapsed: Obj | string | null = null;
-    if (birth?.fact.date) {
-      const e = elapsedYears(cal, { reading: birth.fact.date, span: span(birth.fact) }, at);
-      elapsed =
-        e.kind === 'not_yet_born'
-          ? 'not yet born'
-          : e.kind === 'exact'
-            ? { years: e.years, exact: true }
-            : { min: e.min, max: e.max, exact: false, why: 'a date is approximate, or not a single day' };
-    }
-    // The state recorded (D7): Alive between birth and a recorded death, or inside the attested span; Deceased after a
-    // recorded death; Unestablished otherwise. An attested life never proves survival past it.
-    const deathSpan = death?.fact.date ? span(death.fact) : null;
-    const birthSpan = birth?.fact.date ? span(birth.fact) : null;
-    // D9: an AU with no identity page of its own inherits Main CANON's attested life as well as its birth and death
-    // (v3 F4c, ADR 0065: the AU's state is Main CANON's unless the AU states otherwise), labelled.
-    const inAu = cf.inherited.size > 0;
-    const ownAttested = cf.facts.filter((f) => f.kind === 'attested' && f.date && f.pageId === id);
-    const attested =
-      ownAttested.length || !inAu
-        ? ownAttested
-        : this.facts
-            .factsOn(w.projectId, [id])
-            .filter((f) => f.matchedAs === 'page' && f.kind === 'attested' && f.date !== null);
-    const attestedInherited = attested.length > 0 && ownAttested.length === 0;
     const presentSpan = (() => {
       const r = readLeading(cal, w.rules.present, w.style);
       return r.ok ? spanOf(cal, r.reading, 0) : null;
     })();
-    let window_: Span | null = null;
-    for (const f of attested) {
-      const s = span(f);
-      // The attested span runs from the recorded birth (once born and attested alive later, the life is attested in
-      // between) or, with no birth recorded, from the attestation's own start; never past the latest attestation.
-      const from = birthSpan ? Math.min(birthSpan.to, s.from) : f.bound === 'to' ? null : s.from;
-      // "alive at 5A 931": attested up to the present (D10).
-      const to = presentSpan && overlaps(s, presentSpan) ? Math.max(s.to, presentSpan.to) : s.to;
-      if (from === null) continue;
-      window_ = window_ ? { from: Math.min(window_.from, from), to: Math.max(window_.to, to) } : { from, to };
-    }
-    // v3 F4c (ADR 0065; the owner's ruling from F4b.1's review): "Deceased by <date>" in the Life State is an upper bound
-    // on death, read here only (never a fact, never compared): at or after it, "Deceased (recorded by <date>)".
+    // The Life State (the identity page's; in an AU with none of its own, Main CANON's, labelled: D9).
     const lifeState =
       cf.facts.find(
         (f) =>
           f.kind === 'identity' && textKey(f.field ?? '') === textKey(w.rules.lifeState) && f.pageId === id,
       ) ?? cf.inherited.get(`identity:${textKey(w.rules.lifeState)}`);
-    const deceasedBy = lifeState ? this.deceasedBy(w, lifeState.valueText) : null;
     const lifeInherited = lifeState
       ? cf.inherited.get(`identity:${textKey(w.rules.lifeState)}`) === lifeState
       : false;
+    // v3 F4c (ADR 0065; the owner's ruling from F4b.1's review): "Deceased by <date>" in the Life State is an upper bound
+    // on death, read here only (never a fact, never compared): at or after it, "Deceased (recorded by <date>)".
+    const deceasedBy = lifeState ? this.deceasedBy(w, lifeState.valueText) : null;
     // ADR 0065 (amending D7): a Life State recording the character alive (its principal part, "Alive") holds at the
-    // present. ADR 0064 amendment 2: the principal part STARTS with one of the alive values ("Alive in 5A 931", "Living
-    // and immortal at 5A 931"); a date there ("in / at <date>") is an attestation up to that date, not the present.
+    // present. ADR 0064 amendment 2: the principal part STARTS with one of the alive values; a date there ("in / at
+    // <date>") is an attestation up to that date, not the present. CR-2026-11-R4 (RC-13): never a value in doubt
+    // ("presumed", "unconfirmed", "?"), and the date is read over the whole value ("Alive (last attested 4A 500)").
     const alive = lifeState && !lifeState.gap ? this.aliveOf(w, lifeState.valueText) : null;
-    const aliveNow = alive !== null;
-    const aliveEnd = alive?.through ?? presentSpan;
-    const aliveEndText = alive?.throughText
-      ? `${alive.throughText} (the date the Life State gives)`
-      : `the present (${w.rules.present})`;
-    // v3 F4c (ADR 0065; the owner's guard on the Life State ruling): a recorded death always wins inside its own span. With
-    // a death recorded before the present and a current Life State recording the character alive (a rebirth, a return),
-    // the Life State never carries the life across the gap: from the death to the next recorded birth or return the
-    // character is Deceased (recorded); after the last death with no return, Unestablished (recorded death; current Life
-    // State …); after a return, alive from it to the present.
-    const afterDeath = aliveNow && aliveEnd ? this.afterDeath(w, cf, id, at.span, aliveEnd) : null;
-    let state: string;
-    let why: string;
-    let inherited = false;
-    if (afterDeath) {
-      if (afterDeath.state === 'deceased') {
-        state = 'Deceased (recorded)';
-        why = `after the recorded death (${afterDeath.death.valueText}), before the recorded return (${afterDeath.next!.valueText})`;
-      } else if (afterDeath.state === 'returned') {
-        state = 'Alive (recorded)';
-        why = `between the recorded return (${afterDeath.next!.valueText}) and ${aliveEndText}: the Life State records the character “${lifeState!.valueText}”`;
-      } else if (afterDeath.state === 'gap') {
-        state = `Unestablished (recorded death; current Life State ${principalValue(lifeState!.valueText)})`;
-        why = `a death is recorded (${afterDeath.death.valueText}) and the Life State records the character “${lifeState!.valueText}” now, but no return is recorded after it: never alive across the gap`;
-      } else {
-        state = 'Unestablished';
-        why = `the date spans the recorded death (${afterDeath.death.valueText}) or a recorded return`;
-      }
-      inherited = afterDeath.inherited;
-    } else if (deathSpan && at.span.from > deathSpan.to) {
-      state = 'Deceased (recorded)';
-      why = `after the recorded death (${death!.fact.valueText})`;
-      inherited = death!.inherited;
-    } else if (deceasedBy && at.span.from >= deceasedBy.span.from) {
-      state = `Deceased (recorded by ${deceasedBy.text})`;
-      why = `at or after the upper bound on death the Life State records (“${lifeState!.valueText}”); the exact death date is not recorded`;
-      inherited = lifeInherited;
-    } else if (birthSpan && deathSpan && at.span.from > birthSpan.to && at.span.to < deathSpan.from) {
-      state = 'Alive (recorded)';
-      why = 'between the recorded birth and the recorded death';
-      inherited = birth!.inherited || death!.inherited;
-    } else if (
-      window_ &&
-      at.span.from >= window_.from &&
-      at.span.to <= window_.to &&
-      !(deathSpan && at.span.to >= deathSpan.from)
-    ) {
-      state = 'Alive (recorded)';
-      why = 'inside the attested span';
-      inherited = attestedInherited || (birth?.inherited ?? false);
-    } else if (
-      aliveNow &&
-      aliveEnd &&
-      (birthSpan ? at.span.from > birthSpan.to : at.span.from >= aliveEnd.from) &&
-      at.span.to <= aliveEnd.to &&
-      !(deathSpan && at.span.to >= deathSpan.from)
-    ) {
-      state = 'Alive (recorded)';
-      why = birthSpan
-        ? `between the recorded birth and ${aliveEndText}: the Life State records the character “${lifeState!.valueText}”`
-        : `at ${aliveEndText}: the Life State records the character “${lifeState!.valueText}”`;
-      inherited = lifeInherited || (birth?.inherited ?? false);
-    } else {
-      state = 'Unestablished';
-      why =
-        birthSpan && at.span.to < birthSpan.from
-          ? 'before the recorded birth'
-          : 'nothing recorded places the character alive or dead at this date (an attested life does not prove survival past it)';
-    }
+    const aliveEnd = alive ? (alive.through ?? presentSpan) : null;
+    // CR-2026-11-R4 (the owner's request L; RC-5 to RC-8): the character's lives, from ALL of the identity page's dated
+    // births, deaths and starts (returns, restorations) whatever the Life State, the deaths other Authoritative pages
+    // restate when the identity page records none, and Main CANON's in an AU that states none of its own.
+    const lives = this.livesOf(w, cf);
+    const multi = lives.length > 1;
+    const st = stateAt({
+      lives,
+      at: at.span,
+      present: presentSpan,
+      alive:
+        alive && aliveEnd && lifeState
+          ? {
+              end: aliveEnd,
+              endText: alive.throughText
+                ? `${alive.throughText} (the date the Life State gives)`
+                : `the present (${w.rules.present})`,
+              value: lifeState.valueText,
+              principal: principalValue(lifeState.valueText),
+              inherited: lifeInherited,
+            }
+          : null,
+      deceasedBy:
+        deceasedBy && lifeState
+          ? {
+              span: deceasedBy.span,
+              text: deceasedBy.text,
+              approximate: deceasedBy.reading.approximate,
+              value: lifeState.valueText,
+              inherited: lifeInherited,
+            }
+          : null,
+    });
+    // Elapsed calendar years (D7): from the birth; for a character with several lives, within the life the date falls
+    // in, from that life's start (and said so); none between lives.
+    const lifeAt = st.life !== null ? lives[st.life]! : null;
+    let elapsed: Obj | string | null = null;
+    let elapsedNote: string | null = null;
+    const startOfLife =
+      multi && lifeAt && lifeAt.n > 1 ? lifeStart(lifeAt) : birth?.fact.date ? { fact: birth.fact } : null;
+    if (multi && st.position === 'between')
+      elapsedNote = 'no age: between lives, no life is running at this date';
+    else if (startOfLife?.fact.date) {
+      const s = startOfLife.fact;
+      const e = elapsedYears(cal, { reading: s.date!, span: spanOf(cal, s.date!, w.rules.approxMargin) }, at);
+      const within =
+        multi && lifeAt
+          ? {
+              counted: `within ${lifeName(lifeAt)}, from ${lifeAt.n > 1 ? (lifeAt.began === 'birth' ? 'its birth' : lifeAt.began === 'restoration' ? 'the restoration' : 'the return') : 'the birth'} (${s.valueText})`,
+            }
+          : {};
+      elapsed =
+        e.kind === 'not_yet_born'
+          ? 'not yet born'
+          : e.kind === 'exact'
+            ? { years: e.years, exact: true, ...within }
+            : {
+                min: e.min,
+                max: e.max,
+                exact: false,
+                why: 'a date is approximate, or not a single day',
+                ...(e.maybeUnborn
+                  ? { maybeUnborn: true, note: 'the birth may not have happened yet at this date' }
+                  : {}),
+                ...within,
+              };
+    } else elapsedNote = 'no age: the birth is not recorded';
+    // The death shown: the one recorded for the life the date falls in (several lives), else the resolver's.
+    const shownDeath = (() => {
+      if (!death?.fact.date) return null;
+      if (!multi) return where(death.fact, death.inherited);
+      const idx = st.position === 'between' ? st.between![0] : (st.life ?? 0);
+      const own = lives[idx]?.deaths[0];
+      const before = lives
+        .slice(0, idx + 1)
+        .flatMap((l) => l.deaths)
+        .at(-1);
+      const m = own ?? before;
+      const lifeOfDeath = m ? lives.find((l) => l.deaths.includes(m)) : undefined;
+      return m && lifeOfDeath
+        ? { ...where(m.fact, m.inherited), life: lifeName(lifeOfDeath) }
+        : where(death.fact, death.inherited);
+    })();
     // Around the date: the chronology rows naming the character, nearest each side.
     const names = new Set(
       [...w.names]
@@ -1185,11 +1232,18 @@ export class Consistency {
         (r.row.mentions.some((m) => w.ownerOf(m) === id) ||
           [...names].some((k) => ` ${nameKeyOf(r.row.event.replace(/['’]s\b/g, ''))} `.includes(` ${k} `))),
     );
+    // CR-2026-11-R4 (RC-8): in an AU, a row of Main CANON's chronology is Main CANON's, and says so.
+    const rowLabel =
+      continuity !== MAIN
+        ? (r: (typeof rows)[number]) =>
+            w.continuityOf(r.row.pageId) === MAIN ? { label: 'inherited from Main CANON' } : {}
+        : () => ({});
     const view = (r: (typeof rows)[number]) => ({
       date: r.row.date,
       event: r.row.event,
       row: r.row.rowId,
       table: r.row.documentId,
+      ...rowLabel(r),
     });
     const before = naming
       .filter((r) => r.span!.to < at.span.from)
@@ -1210,14 +1264,66 @@ export class Consistency {
         values: [x.d.reference, ...x.d.restatements].map((v) => ({ value: v.value, page: v.page.name })),
       }));
     const race = c.names && this.raceOf(w, cf);
+    const lifeView = (l: Life) => {
+      const s = l.starts[0];
+      return {
+        life: lifeName(l),
+        began: s ? { how: l.began, ...where(s.fact, s.inherited) } : 'no start is recorded',
+        ended:
+          l.deaths.length === 0
+            ? l.endedUnrecorded
+              ? 'ended before the next life began; no death of it is recorded'
+              : 'no death is recorded'
+            : l.disputed
+              ? {
+                  how: 'death (its statements disagree)',
+                  values: l.deaths.map((d) => where(d.fact, d.inherited)),
+                }
+              : { how: 'death', ...where(l.deaths[0]!.fact, l.deaths[0]!.inherited) },
+        ...(l.attested.length
+          ? {
+              attested: l.attested.map((a) => ({
+                value: a.fact.valueText,
+                page: w.page(a.fact.pageId).name,
+              })),
+            }
+          : {}),
+      };
+    };
+    const position = multi
+      ? st.position === 'between'
+        ? {
+            position: 'between lives',
+            after: lifeName(lives[st.between![0]]!),
+            before: lifeName(lives[st.between![1]]!),
+          }
+        : st.position === 'before'
+          ? { position: 'before the first life' }
+          : {
+              position:
+                st.position === 'in'
+                  ? lifeAt?.began === 'restoration'
+                    ? 'after the restoration'
+                    : 'in a life'
+                  : st.position === 'after'
+                    ? 'after the death of the life'
+                    : 'across a life’s start or end',
+              life: lifeAt ? lifeName(lifeAt) : null,
+            }
+      : null;
     return {
       character: c.subject,
       identityPage: { id, name: c.identity.name, lifecycle: c.lifecycle, continuity: w.continuityOf(id) },
       born,
       elapsedYears: elapsed,
-      ...(elapsed === null ? { elapsedNote: 'no age: the birth is not recorded' } : {}),
-      ...(death?.fact.date ? { died: where(death.fact, death.inherited) } : {}),
-      state: { value: state, why, ...(inherited ? { label: 'inherited from Main CANON' } : {}) },
+      ...(elapsedNote ? { elapsedNote } : {}),
+      ...(shownDeath ? { died: shownDeath } : {}),
+      state: {
+        value: st.value,
+        why: st.why,
+        ...(st.inherited ? { label: 'inherited from Main CANON' } : {}),
+      },
+      ...(position ? { life: position, lives: lives.map(lifeView) } : {}),
       ...(deceasedBy
         ? {
             deceasedBy: {
@@ -1249,9 +1355,11 @@ export class Consistency {
   /**
    * THE resolver of a character's birth or death (D7), shared by `arkona_as_of` and the coverage report (ADR 0064
    * amendment 2: the coverage report agrees with as-of): the identity page's own value (its Temporal Scope, its Life
-   * State, its own prose naming the character), else Main CANON's inherited one in an AU (D9), else the Authoritative
-   * restatements (prose elsewhere, chronology rows, by name or alias) when they all agree. A date before a gap; null
-   * when nothing is recorded. Needs the calendar (a date's span).
+   * State, its own prose naming the character), else the Authoritative restatements (prose elsewhere, chronology rows,
+   * by name or alias) when they all agree. A date before a gap; null when nothing is recorded. Needs the calendar (a
+   * date's span). CR-2026-11-R4: a character with several lives has its FIRST life's birth (request L; the coverage
+   * report counts it as the readable birth); in an AU, the AU's own restatements come before Main CANON's resolved value,
+   * which is inherited, labelled, only when the AU states none (RC-8, D9).
    */
   lifeValue(
     w: World,
@@ -1260,96 +1368,125 @@ export class Consistency {
   ): { fact: StoredFact; inherited: boolean } | null {
     const id = cf.character.identity.id;
     const own = cf.facts.filter((f) => f.kind === kind && f.pageId === id && f.source !== 'chronology');
-    const pick = own.find((f) => f.date !== null) ?? own.find((f) => f.gap) ?? null;
+    const ordered =
+      kind === 'birth'
+        ? [...own.filter((f) => (f.life ?? 1) === 1), ...own.filter((f) => (f.life ?? 1) !== 1)]
+        : own;
+    const pick = ordered.find((f) => f.date !== null) ?? ordered.find((f) => f.gap) ?? null;
     if (pick) return { fact: pick, inherited: false };
-    const inh = cf.inherited.get(kind);
-    if (inh && (inh.date || inh.gap)) return { fact: inh, inherited: true };
-    if (!w.cal) return null;
-    const cal = w.cal;
-    const span = (f: StoredFact) => spanOf(cal, f.date!, w.rules.approxMargin);
-    // No value on the identity page: the Authoritative restatements, when they agree.
-    const others = cf.facts.filter(
-      (f) => f.kind === kind && f.date !== null && w.page(f.pageId).lifecycle === 'Authoritative',
-    );
-    const first = others[0];
-    if (first && others.every((f) => overlaps(span(f), span(first))))
-      return { fact: first, inherited: false };
+    const restated = this.restated(w, cf, kind);
+    if (restated.length > 0) {
+      const first = restated[0]!;
+      return restated.every((m) => overlaps(m.span, first.span))
+        ? { fact: first.fact, inherited: false }
+        : null;
+    }
+    if (cf.main) {
+      const m = this.lifeValue(w, cf.main, kind);
+      return m ? { fact: m.fact, inherited: true } : null;
+    }
     return null;
   }
 
+  /** The Authoritative restatements of a birth or death (other pages, chronology rows), with their spans. */
+  private restated(w: World, cf: CharacterFacts, kind: 'birth' | 'death'): LifeMark[] {
+    const cal = w.cal;
+    if (!cal) return [];
+    const id = cf.character.identity.id;
+    return cf.facts
+      .filter(
+        (f) =>
+          f.kind === kind &&
+          f.date !== null &&
+          !(f.pageId === id && f.source !== 'chronology') &&
+          w.page(f.pageId).lifecycle === 'Authoritative',
+      )
+      .map((f) => ({
+        fact: f,
+        span: spanOf(cal, f.date!, w.rules.approxMargin),
+        inherited: false,
+        restated: true,
+      }));
+  }
+
   /**
-   * The guard on a Life State of "Alive" after a recorded death (ADR 0065): null when the date does not reach the first
-   * recorded death (the other rules apply). The identity page's dated deaths and starts (births, and attested lives with
-   * an open end: a return), Main CANON's in an AU with no identity page of its own.
+   * CR-2026-11-R4 (the owner's request L; RC-6 to RC-8): a character's lives in one continuity, as `arkona_as_of`, the
+   * coverage report and the consistency check read them. From ALL of the identity page's dated births, deaths and starts
+   * (returns, restorations), whatever its Life State; when it records no birth, the agreeing Authoritative restatements'
+   * (D7); when it records no death, every Authoritative restatement of one (agreeing: the death; disagreeing: a disputed
+   * one, RC-7). In an AU, its own pages' birth and deaths first, else Main CANON's, and Main CANON's starts and
+   * attestations (inherited, labelled: RC-8).
    */
-  private afterDeath(
-    w: World,
-    cf: CharacterFacts,
-    id: string,
-    at: Span,
-    present: Span,
-  ): {
-    state: 'deceased' | 'returned' | 'gap' | 'spans';
-    death: StoredFact;
-    next: StoredFact | null;
-    inherited: boolean;
-  } | null {
-    const leaveOut = (f: StoredFact) => f.nonCurrent && w.rules.nonCurrent?.exclude === true;
-    let pool = cf.facts.filter((f) => f.pageId === id && f.source !== 'chronology' && f.date !== null);
-    let inherited = false;
-    if (pool.length === 0 && cf.inherited.size > 0) {
-      pool = this.facts
-        .factsOn(w.projectId, [id])
-        .filter(
-          (f) => f.matchedAs === 'page' && f.source !== 'chronology' && f.date !== null && !leaveOut(f),
-        );
-      inherited = pool.length > 0;
-    }
-    const cal = w.cal!;
-    const withSpan = (f: StoredFact) => ({ f, s: spanOf(cal, f.date!, w.rules.approxMargin) });
-    const deaths = pool
-      .filter((f) => f.kind === 'death')
-      .map(withSpan)
-      .filter((x) => x.s.to < present.from)
-      .sort((a, b) => a.s.from - b.s.from);
-    const first = deaths[0];
-    if (!first || at.to < first.s.from) return null;
-    const starts = pool
-      .filter((f) => f.kind === 'birth' || (f.kind === 'attested' && f.bound === 'from'))
-      .map(withSpan)
-      .sort((a, b) => a.s.from - b.s.from);
-    const last = deaths.filter((d) => d.s.from <= at.to).at(-1)!;
-    const next = starts.find((b) => b.s.from > last.s.to) ?? null;
-    const out = (state: 'deceased' | 'returned' | 'gap' | 'spans') => ({
-      state,
-      death: last.f,
-      next: next?.f ?? null,
-      inherited,
+  livesOf(w: World, cf: CharacterFacts): Life[] {
+    return buildLives(this.livesInput(w, cf));
+  }
+
+  private livesInput(w: World, cf: CharacterFacts): LivesInput {
+    const cal = w.cal;
+    if (!cal) return { births: [], deaths: [], starts: [], attested: [] };
+    const mark = (f: StoredFact): LifeMark => ({
+      fact: f,
+      span: spanOf(cal, f.date!, w.rules.approxMargin),
+      inherited: false,
     });
-    if (at.from < last.s.from) return out('spans');
-    if (!next) return out('gap');
-    if (at.to < next.s.from) return out('deceased');
-    return at.from > next.s.to && at.to <= present.to ? out('returned') : out('spans');
+    const id = cf.character.identity.id;
+    const own = cf.facts.filter((f) => f.pageId === id && f.source !== 'chronology' && f.date !== null);
+    let births = own.filter((f) => f.kind === 'birth').map(mark);
+    let deaths = own.filter((f) => f.kind === 'death').map(mark);
+    let starts = own.filter((f) => f.kind === 'attested' && f.bound === 'from').map(mark);
+    let attested = own.filter((f) => f.kind === 'attested' && f.bound !== 'from').map(mark);
+    const restatedBirths = births.length === 0 ? this.restated(w, cf, 'birth') : [];
+    if (restatedBirths.length > 0 && restatedBirths.every((m) => overlaps(m.span, restatedBirths[0]!.span)))
+      births = [mark(restatedBirths[0]!.fact)];
+    if (deaths.length === 0) deaths = this.restated(w, cf, 'death');
+    if (cf.main) {
+      // D9 (RC-8): what the AU states of its own first, else Main CANON's, inherited.
+      const m = this.livesInput(w, cf.main);
+      const inherit = (x: LifeMark): LifeMark => ({ ...x, inherited: true });
+      if (births.length === 0 && restatedBirths.length === 0) births = m.births.map(inherit);
+      if (deaths.length === 0) deaths = m.deaths.map(inherit);
+      if (starts.length === 0) starts = m.starts.map(inherit);
+      if (attested.length === 0) attested = m.attested.map(inherit);
+    }
+    return { births, deaths, starts, attested };
   }
 
   /**
    * Whether a Life State records the character alive (ADR 0065, amended by ADR 0064 amendment 2): its principal part
    * (before the first ";", "(" or spaced dash) starts with one of `aliveValues` as a whole word ("Alive", "Living").
    * `through`: the date an `aliveAt` phrasing reads there ("Alive in 5A 931"), the attestation's end; null: the present.
+   * CR-2026-11-R4 (RC-13): a word of doubt anywhere in the value (`aliveDoubt`: "presumed", "unconfirmed", "?") makes it
+   * no record; only the pack's `aliveFollowers` may follow the alive value ("Living memory" is none); the date is read
+   * over the whole value ("Alive (last attested 4A 500)").
    */
   aliveOf(w: World, value: string): { through: Span | null; throughText: string | null } | null {
     const principal = principalValue(value);
     const k = textKey(principal);
+    const whole = textKey(value);
+    const doubt = (w.rules.aliveDoubt ?? []).some((d) => {
+      const dk = textKey(d);
+      if (dk === '') return false;
+      return /[\p{L}\p{N}]/u.test(dk)
+        ? new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(dk)}(?![\\p{L}\\p{N}])`, 'u').test(whole)
+        : whole.includes(dk);
+    });
+    if (doubt) return null;
+    const followers = w.rules.aliveFollowers?.map(textKey).filter((f) => f !== '');
     const starts = (w.rules.aliveValues ?? []).some((v) => {
       const vk = textKey(v);
-      return vk !== '' && (k === vk || k.startsWith(`${vk} `));
+      if (vk === '') return false;
+      if (k === vk) return true;
+      if (!k.startsWith(`${vk} `)) return false;
+      if (!followers) return true;
+      const rest = k.slice(vk.length + 1);
+      return followers.some((f) => rest === f || rest.startsWith(`${f} `) || rest.startsWith(`${f},`));
     });
     if (!starts) return null;
     if (w.cal)
       for (const p of w.rules.aliveAt ?? []) {
         let m: RegExpExecArray | null;
         try {
-          m = new RegExp(p.regex, 'iu').exec(principal);
+          m = new RegExp(p.regex, 'iu').exec(value);
         } catch {
           continue;
         }
@@ -1381,7 +1518,7 @@ export class Consistency {
         const r = readScan(w.cal, date, w.style);
         if (r?.ok)
           return {
-            text: date.trim(),
+            text: r.reading.text.trim(),
             reading: r.reading,
             span: spanOf(w.cal, r.reading, w.rules.approxMargin),
           };
@@ -1565,6 +1702,11 @@ export class Consistency {
     readonly continuity: string;
     readonly findingId: string;
     readonly side?: string;
+    /**
+     * CR-2026-11-R4 (PK-51): the side's value as the owner saw it (the dashboard shows the audit's stored value): the pick
+     * is refused (`SIDE_CHANGED`) when the side reads otherwise now, so the bridge never proposes a value nobody saw.
+     */
+    readonly shown?: string;
     readonly value?: string;
     readonly actor: string;
     readonly auditFindingId?: number;
@@ -1588,10 +1730,29 @@ export class Consistency {
     const values = [x.d.reference, ...x.d.restatements];
     const sideView = o.side !== undefined ? values.find((v) => v.key === o.side) : undefined;
     if (o.side !== undefined && !sideView)
-      throw new ConsistencyError('SIDE_NOT_FOUND', 'That value is not one of this finding’s.');
-    const picked = (sideView?.value ?? o.value ?? '').trim();
+      throw o.shown !== undefined
+        ? new ConsistencyError(
+            'SIDE_CHANGED',
+            `The value you picked (“${o.shown}”) is no longer one of this finding’s: its page changed since it was shown. Nothing was proposed; look at the finding again and pick again.`,
+            { shown: o.shown },
+          )
+        : new ConsistencyError('SIDE_NOT_FOUND', 'That value is not one of this finding’s.');
+    // CR-2026-11-R4 (PK-51): the side as the owner saw it, or nothing.
+    if (sideView && o.shown !== undefined && tidyText(sideView.value) !== tidyText(o.shown))
+      throw new ConsistencyError(
+        'SIDE_CHANGED',
+        `The value you picked has changed since it was shown: “${o.shown}” then, “${sideView.value}” now (on “${sideView.page.name}”). Nothing was proposed; look at the finding again and pick again.`,
+        { shown: o.shown, now: sideView.value, page: sideView.page.name },
+      );
+    let picked = (sideView?.value ?? o.value ?? '').trim();
     if (picked === '')
       throw new ConsistencyError('INVALID_PARAMS', 'Pick one of the values, or type the right one.');
+    // CR-2026-11-R4 (PK-55): a typed value is one line of text (a line break would be written into every page).
+    if (o.value !== undefined && /[\p{Cc}\u2028\u2029]/u.test(o.value))
+      throw new ConsistencyError(
+        'VALUE_UNREADABLE',
+        'The value holds a line break or another control character: type it on one line. Nothing was proposed.',
+      );
     const isDate = x.d.kind !== 'identity';
     let pickedSpan: Span | null = null;
     if (isDate) {
@@ -1606,11 +1767,20 @@ export class Consistency {
           'VALUE_UNREADABLE',
           `“${picked}” is not a date the calendar can read as a whole${r.ok ? '' : `: ${r.reason}`}. Nothing was proposed.`,
         );
+      // CR-2026-11-R4 (PK-54): a typed value is ONE date (ADR 0064 D6.2); a range is refused.
+      if (o.value !== undefined && r.reading.shape === 'range')
+        throw new ConsistencyError(
+          'VALUE_UNREADABLE',
+          `“${picked}” is a range, not one date: type the one date that is right (or pick the side that gives the range). Nothing was proposed.`,
+        );
+      // The calendar's own reading of a typed value is what is written (its text, spaces tidied).
+      if (o.value !== undefined) picked = r.reading.text;
       pickedSpan = spanOf(w.cal, r.reading, w.rules.approxMargin);
     }
     const agrees = (v: ValueView): boolean => {
       if (v === sideView) return true;
-      if (!isDate) return identityKey(v.value) === identityKey(picked);
+      // ADR 0064 amendment 1 (E): identity values agree when their principal parts do (their qualifiers aside).
+      if (!isDate) return principalKey(v.value) === principalKey(picked);
       const r =
         v.source === 'chronology'
           ? readCell(w.cal!, v.value, w.style)
@@ -1620,6 +1790,10 @@ export class Consistency {
     const edits: Edit[] = [];
     const untouched: Obj[] = [];
     const left: Obj[] = [];
+    // CR-2026-11-R4: each value's place as the check read it (its sentence or clause, the date's offset there), so the
+    // pick edits it there and nowhere else.
+    const placeOf = new Map<string, FactPlace>();
+    for (const f of cf.facts) if (f.place) placeOf.set(valueKey(f), f.place);
     for (const v of values) {
       if (agrees(v)) {
         untouched.push({
@@ -1642,8 +1816,16 @@ export class Consistency {
         continue;
       }
       const base = { pageId: v.page.id, pageName: v.page.name, from: v.value, to: picked };
+      const place = placeOf.get(v.key);
+      const at = place && place.at !== null ? { sha: place.sha, at: place.at } : null;
       if (v.source === 'chronology' && v.documentId && v.blockId)
-        edits.push({ ...base, kind: 'row', documentId: v.documentId, rowId: v.blockId });
+        edits.push({
+          ...base,
+          kind: 'row',
+          documentId: v.documentId,
+          rowId: v.blockId,
+          ...(place ? { event: place.sha } : {}),
+        });
       else if (v.source === 'prose' && v.documentId && v.blockId)
         edits.push({
           ...base,
@@ -1651,8 +1833,13 @@ export class Consistency {
           documentId: v.documentId,
           blockId: v.blockId,
           context: v.excerpt,
+          ...(at ? { sentence: at } : {}),
         });
-      else if (v.field) edits.push({ ...base, kind: 'fact', field: v.field, whole: v.source === 'sidebar' });
+      else if (v.field && v.source === 'sidebar')
+        // An identity value: its principal part becomes the picked one's; its own qualifier is kept (amendment 1 E).
+        edits.push({ ...base, kind: 'fact', field: v.field, whole: true, to: principalValue(picked) });
+      else if (v.field)
+        edits.push({ ...base, kind: 'fact', field: v.field, whole: false, ...(at ? { clause: at } : {}) });
       else
         left.push({
           page: v.page.name,
@@ -1687,6 +1874,12 @@ export class Consistency {
         ...(left.length ? { leftAsTheyAre: left } : {}),
       },
     });
+    if (r.items.length === 0 || r.proposalId === '')
+      throw new ConsistencyError(
+        'NOTHING_TO_PROPOSE',
+        'No page could be planned: every value that disagrees has changed since the check, is history now, or cannot be written this way (each is listed with why). Nothing was proposed.',
+        { notPlanned: r.notPlanned, untouched, ...(left.length ? { leftAsTheyAre: left } : {}) },
+      );
     const id = newPickId();
     this.d.db
       .prepare(

@@ -238,10 +238,20 @@ describe('consent screen: profile and scope', () => {
     const ask = await post({ profile: claude.id, scope: 'propose' });
     expect(ask.status).toBe(200);
     expect(bridge.policy.store.getProfile(claude.id)!.scope).toBe('read');
+    // CR-2026-11-R4 (ADR 0062 decision 5): the confirmed raise then asks for the step-up, on the page; nothing changes yet.
+    const stepUp = await post({
+      profile: claude.id,
+      scope: 'propose',
+      confirm_scope_change: `${claude.id}:read:propose`,
+    });
+    expect(stepUp.status).toBe(200);
+    expect(await stepUp.text()).toContain('name="stepup_password"');
+    expect(bridge.policy.store.getProfile(claude.id)!.scope).toBe('read');
     const t = await finish(c, {
       profile: claude.id,
       scope: 'propose',
       confirm_scope_change: `${claude.id}:read:propose`,
+      stepup_password: bridge.password,
     });
     expect(bridge.policy.store.getProfile(claude.id)!.scope).toBe('propose');
     expect(await toolNames(t.access)).toContain('stub_write');
@@ -256,7 +266,14 @@ describe('consent screen: profile and scope', () => {
 
   it('creates a new profile at the chosen scope; denial is unchanged', async () => {
     const c = await consentPage(CLAUDE);
-    await finish(c, { profile: 'new', new_label: 'Claude mobile', new_kind: 'claude', scope: 'write' });
+    // CR-2026-11-R4 (ADR 0062 decision 5): a new profile above the default scope needs the step-up (here, on the page).
+    await finish(c, {
+      profile: 'new',
+      new_label: 'Claude mobile',
+      new_kind: 'claude',
+      scope: 'write',
+      stepup_password: bridge.password,
+    });
     expect(bridge.policy.store.getProfileByLabel('claude mobile')).toMatchObject({
       kind: 'claude',
       scope: 'write',
@@ -299,7 +316,13 @@ describe("consent keeps an existing profile's scope unless the owner confirms a 
     expect(c.page.html).toContain('name="scope" value="keep" checked');
     expect(c.page.html).not.toMatch(/value="(read|propose|write)" checked/);
     expect(c.page.html).toContain('Keep the chosen profile’s current scope');
-    await finish(c); // the page's own defaults, unchanged
+    // CR-2026-11-R4 (ADR 0062 decision 5): a connection on a profile at scope write asks for the step-up first, on the
+    // page; nothing is issued without it.
+    const asked = await post(c, consentDefaults(c.page.html));
+    expect(asked.status).toBe(200);
+    expect(await asked.text()).toContain('Confirm it’s you');
+    expect(asked.headers.get('location')).toBeNull();
+    await finish(c, { stepup_password: bridge.password }); // the page's own defaults, unchanged
     expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
     expect(scopeAudits(chatgpt.id).length).toBe(before);
   });
@@ -334,6 +357,7 @@ describe("consent keeps an existing profile's scope unless the owner confirms a 
       profile: chatgpt.id,
       scope: 'write',
       confirm_scope_change: `${chatgpt.id}:read:write`,
+      stepup_password: bridge.password, // CR-2026-11-R4: a raise needs the step-up (ADR 0062 decision 5)
     });
     expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
     expect(scopeAudits(chatgpt.id)[0]).toMatchObject({

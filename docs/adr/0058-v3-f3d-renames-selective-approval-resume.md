@@ -19,6 +19,10 @@
   conflicts part-way are rebased item by item (A), the old name's parts are listed for review and never edited (B),
   agents are steered to `arkona_rename` (C), and custom mention labels are never written (D). Migration
   `3500_rename_review.sql`.
+- **Amended** on 21 November 2026, for CR-2026-11-R3's low findings
+  ([second amendment](#amendment-21-november-2026-cr-2026-11-r3s-low-findings)): the re-placing moves follow the names
+  written, in sequence (decision 1.8; R3-56); the low-level steering reads a sidebar the tree has not read (C; R3-58); the
+  token is judged inside each tag write's lock (decision 1.5; R3-60). No migration.
 - Numbered 0058, the next free number. The session's label is "v3 F3d (renames)": PR #63, titled "v3 F3d", was session
   F3.3 (lifecycle tags, [ADR 0053](0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md)).
 
@@ -280,3 +284,40 @@ labels" and departure 4 are withdrawn): any custom label holding the old name, i
 fact or a chronology row, goes into the review list (B) marked "custom label: change it in the app if wanted"; the text
 around it is still renamed. A job never fails on one. The sandbox check this ADR's Consequences left open (a custom label
 changed through `replaceBlock`) is therefore no longer needed.
+
+## Amendment (21 November 2026, CR-2026-11-R3's low findings)
+
+Three of the four low findings CR-2026-11-R3 left open (its section 7) are this ADR's; the owner queued them for this
+slice. Built and tested against the mock LegendKeeper only (no live system was touched). No migration. **For the owner to
+confirm:** the first point changes how decision 1.8 is worked out.
+
+1. **Decision 1.8, the re-placing moves, in sequence (R3-56).** The plan worked every move out against one simulation in
+   which every name of the set had changed at once, each page placed beside neighbours that later moved: a whole
+   approval could end out of alphabetical order, and a name the owner left out was still anchored on as renamed. Now
+   each page's move follows the names actually written, in the job's order (src/packs/rename/place.ts): once renamed,
+   the page belongs among its siblings whose names are final (one the rename does not touch, one whose rename was left
+   out, one already renamed; never beside one the job renames later, whose name is still to change), and it moves only
+   when it stands outside that place. The purpose of 1.8 is kept: a set already in order moves none of its pages; and the
+   pages with final names stay in order with each rename, so when those the rename does not touch are in order among
+   themselves, the parent ends in order (a seeded property test checks 2,000 cases). Where several pages of one parent
+   are renamed, each has a move that works its place out again inside its lock, from the parent's children as planned and
+   the renames the owner approved (the item filter keeps only those; "Propose these again" replays the approved part's
+   renames first); it reads its page there, as every move does, and sends nothing when the page is in its place. R3-36's
+   judgement stands (a page the owner moved is left where it is; a refused move is `placement_failed`). The test
+   character's job: 185 requests as before, 46 writes (47).
+2. **Amendment C, a sidebar the tree has not read (R3-58).** `lk_api_write`, `lk_op_updateResource` and `lk_api_batch`
+   judged a Subject fact on the sidebar the tree holds, which is unknown until the tree's properties pass has read the
+   page. When it is unknown and the answer turns on it (`subjectRenameNeedsFacts`: the page is not already known to be a
+   subject's), the page is read live once (`getResource`, in the calling tool's name, counted in its cost; once per page in
+   a batch), as `update_resource` reads it, and the guards and a captured proposal use that read. A page that cannot be
+   read is answered as `update_resource` answers it.
+3. **Decision 1.5 (D3), the token inside each tag write's lock (R3-60).** The job's first check judged the approved token
+   map once, before any write; the owner may approve another version while the job runs. Each character's tag write now
+   judges it again inside its own lock (its rebaser, `rename.resource`): when the approved version no longer maps the new
+   value to the new tag, the tag is not written and the character's item is skipped, saying so; the rest of its rename
+   stands. A proposal captured before this release carries no token in its tag writes and is judged as before.
+
+The fourth, R3-59 (`arkona_appraisal_fix`'s name fix), is ADR 0054's: a name fix that changes a subject's name carries a
+plain-rename reason (amendment C's `plainRename`), shown with the proposal, or for a fix run at once in the job's title
+and journal entry. It is not refused with `USE_ARKONA_RENAME`: the fix is the owner's proposal by default (ADR 0054
+decision 8), also made from the dashboard's **Propose a fix**, so the owner decides with the reason in front of them.

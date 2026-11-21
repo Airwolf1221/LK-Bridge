@@ -12,6 +12,9 @@
  * - `plainRename: { reason }` lets it through (to fix a typo in a descriptor, say): the reason is shown with the
  *   proposal, or on the Review page (the job's title and journal carry it).
  * - Renaming only the descriptor (after " - ") is never refused.
+ * - CR-2026-11-R3 (R3-58): a Subject fact is judged on the page's sidebar read live (`update_resource` always reads it;
+ *   the low-level tools read it, once, when the tree has not read it yet and the answer turns on it:
+ *   `subjectRenameNeedsFacts`).
  */
 import type { TreeNode } from '../../tree/types.js';
 import { classifyName } from '../../tree/classify.js';
@@ -40,7 +43,10 @@ export interface SubjectRenameContext {
   readonly newName: string;
   /** The character a page belongs to, when it does. */
   readonly characterOf: (pageId: string) => boolean;
-  /** The page's sidebar keys (any key-value rows), live or as the tree holds them; null when not known. */
+  /**
+   * The page's sidebar keys (any key-value rows), live or as the tree holds them; null when not known (taken as none:
+   * `subjectRenameNeedsFacts` says when the answer would turn on them).
+   */
   readonly factKeys: readonly string[] | null;
   /**
    * CR-2026-11-R3 (R3-48): the pages directly under an index, as the tree holds them: an index that heads a subject's
@@ -94,4 +100,15 @@ export function subjectRenameRefusal(c: SubjectRenameContext): {
     useTool: 'arkona_rename',
     subject: { id: c.node.id, from: before, to: after },
   };
+}
+
+/**
+ * CR-2026-11-R3 (R3-58): true when the answer turns on the page's facts while they are not known (`factKeys` null: the
+ * tree holds a page's sidebar only once its properties pass has read it). The rename changes a subject's name on a pack
+ * project and nothing else known refuses it (a page of a character's set, a pack owner, the index of a subject's set),
+ * but a Subject fact would. The caller then reads the page's sidebar live, once, and asks again with what it read.
+ */
+export function subjectRenameNeedsFacts(c: SubjectRenameContext): boolean {
+  if (c.factKeys !== null || subjectRenameRefusal(c) !== null) return false;
+  return subjectRenameRefusal({ ...c, factKeys: ['Subject'] }) !== null;
 }

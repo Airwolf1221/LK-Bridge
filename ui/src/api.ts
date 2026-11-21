@@ -2,6 +2,7 @@
  * The dashboard's only way to reach the bridge: same-origin JSON requests to `/api/admin`, authenticated by the owner's
  * session cookie. State-changing requests carry the CSRF token the bridge gave this session (`X-CSRF-Token`); the
  * browser adds `Origin` itself. A 401 means the session ended: the page goes to the sign-in page and comes back.
+ * CR-2026-11-R4: what the dashboard sends by itself is marked (`BACKGROUND_HEADER`), so it is not a use of the session.
  */
 
 export class ApiError extends Error {
@@ -40,22 +41,86 @@ export const apiConfig: ApiConfig = {
   },
 };
 
-async function request<T>(method: string, path: string, body?: unknown, binary?: Blob): Promise<T> {
+// ------------------------------------------------------------------------------- the dashboard's own requests
+
+/**
+ * CR-2026-11-R4 (ADR 0062 decision 1: an idle open tab does not keep the session alive): every request the dashboard
+ * sends without the owner's input carries this header, and the bridge then checks the session without counting the
+ * request as a use (its end does not move). Those requests are a refresh on a timer, a reload for a live event or for
+ * the stream starting afresh, and the session check after the stream drops. The owner's own actions and page loads are
+ * uses, as before.
+ */
+export const BACKGROUND_HEADER = 'x-lkb-background';
+
+/**
+ * A request counts as the owner's only this long after the owner's last input (a key, a click or a touch on the page,
+ * the browser's back or forward, the page's own load): anything else the dashboard sends is its own.
+ */
+export const OWNER_INPUT_MS = 60_000;
+
+let backgroundDepth = 0;
+let lastOwnerInput = Date.now();
+
+/** Records the owner's input now (the page's listeners call it; so does the page's load, above). */
+export function noteOwnerInput(): void {
+  lastOwnerInput = Date.now();
+}
+
+if (typeof window !== 'undefined')
+  for (const type of ['keydown', 'pointerdown', 'touchstart', 'popstate'])
+    window.addEventListener(type, noteOwnerInput, { capture: true, passive: true });
+
+/**
+ * Runs `fn` as the dashboard's own work (a timer, a live event): every request it sends, and every reload of `useApi`
+ * it asks for, is marked with `BACKGROUND_HEADER`.
+ */
+export function inBackground<T>(fn: () => T): T {
+  backgroundDepth++;
   try {
-    return await send<T>(method, path, body, binary);
+    return fn();
+  } finally {
+    backgroundDepth--;
+  }
+}
+
+/** `fn` as the dashboard's own work (`inBackground`), for a timer: `setInterval(background(list.reload), 15_000)`. */
+export const background =
+  (fn: () => void): (() => void) =>
+  () =>
+    inBackground(fn);
+
+/** Whether the code running now is the dashboard's own work (inside `inBackground`). */
+export const inBackgroundNow = (): boolean => backgroundDepth > 0;
+
+/** Whether a request sent now is the dashboard's own: asked so, inside `inBackground`, or no recent input. */
+const isOwn = (asked: boolean): boolean =>
+  asked || backgroundDepth > 0 || Date.now() - lastOwnerInput > OWNER_INPUT_MS;
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  binary?: Blob,
+  own = false,
+): Promise<T> {
+  // Decided when the request is made (a request sent from inside `inBackground` keeps its mark through the step-up).
+  const mark = isOwn(own);
+  try {
+    return await send<T>(method, path, body, binary, mark);
   } catch (e) {
-    // ADR 0062: any change may need the step-up; ask once, then send it again.
+    // ADR 0062: any change may need the step-up; ask once, then send it again (the owner has just confirmed it).
     if (!(e instanceof ApiError && e.code === 'REAUTH_REQUIRED') || !apiConfig.onReauthRequired) throw e;
     await apiConfig.onReauthRequired();
-    return send<T>(method, path, body, binary);
+    return send<T>(method, path, body, binary, isOwn(false));
   }
 }
 
 /** The 401 answers of a check the signed-in owner failed: not a signed-out session. */
 const OWNER_CHECK_FAILED: ReadonlySet<string> = new Set(['REAUTH_FAILED', 'WRONG_PASSWORD']);
 
-async function send<T>(method: string, path: string, body?: unknown, binary?: Blob): Promise<T> {
+async function send<T>(method: string, path: string, body?: unknown, binary?: Blob, own = false): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
+  if (own) headers[BACKGROUND_HEADER] = '1';
   if (method !== 'GET') {
     // v2 D3: a file is sent as it is (the Staging page's upload), everything else as JSON.
     headers['content-type'] = binary ? 'application/octet-stream' : 'application/json';
@@ -98,7 +163,9 @@ async function send<T>(method: string, path: string, body?: unknown, binary?: Bl
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>('GET', path),
+  /** `own`: the dashboard's own request (`BACKGROUND_HEADER`), whatever runs now (`useApi`'s refreshes say so). */
+  get: <T>(path: string, o: { readonly own?: boolean } = {}) =>
+    request<T>('GET', path, undefined, undefined, o.own === true),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   /** v2 D3: POSTs a file as the raw body (`application/octet-stream`), with the CSRF token. */

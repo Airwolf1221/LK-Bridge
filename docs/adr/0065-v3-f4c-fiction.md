@@ -297,3 +297,83 @@ amendment 2's alive phrasings, aliases without their notes, and race references 
 
 After deploying: approve `arkona-2026-11-20-f41`, then re-run `narrative-f4c` (its C1 reports where the calendar came
 from: kept, copied from the bridge's database, or read now).
+
+## Amendment 2: moving into and out of Narratives (CR-2026-11-R4, the narrative property)
+
+- Status: **Proposed** (21 November 2026). The review's design, decided by the lead reviewer; the owner's rule: **moving
+  any page into or out of Narratives is a proposal, and never changes its lifecycle silently.** Where the design left
+  room the choice is marked **chosen**, for the owner to confirm. No migration, no pack version.
+- **Write scope: changed.** E2 made narrative pages exempt from the lifecycle, and an agent at scope `write` could move a
+  `[BSRC]` page (or a canon index with its pages) into a story directly, where it lost its lifecycle tools, its
+  authority and the lifecycle audit, and the narrative tags fix then took `CANON` off it on an ordinary approval.
+- Nothing in this session touched a live system. Mocks and fixtures only (`test/review/r4-narrative/`,
+  `test/narrative/r4-guard.test.ts`).
+
+1. **Narratives is an area the lifecycle guard knows** (`src/lifecycle/guard.ts`, `NarrativeArea` from
+   `narrativeArea`, src/narrative/scope.ts): its one index by id, as the narrative tools resolve it (`rootsOf`); none
+   when it is missing or ambiguous, so every page keeps its lifecycle. On every route (`move_resource`, `lk_api_write`,
+   `lk_api_batch`, `lk_op_*`, creates and template copies, restores, an approved proposal) and again inside the lock
+   (the page's place and its new parent read live):
+   - a page or subtree moved INTO Narratives, or created, copied or restored there where no narrative job declares it
+     (a marker's `to: null`), is a proposal at every scope (`proposedBecause` says why);
+   - a page moved OUT of Narratives (or a narrative page, tagged `Narrative`, restored outside it) is a proposal at every
+     scope;
+   - when any page of it carries a lifecycle signal (src/narrative/signals.ts: a `[BSRC]`, `[BWRK]` or `[BARC]` prefix
+     read loosely, a status tag CANON, AU, Working or Archived in any spelling the facts fold reads as one, a Status of
+     Authoritative, Working or Archived) it needs the owner's canonical approval, and the proposal names each page and
+     its signals ("loses its lifecycle"). The subtree is listed live as a cascade is (at most 100 pages; more, or one
+     that cannot be read, counts as a signal: fail closed).
+   - **Chosen**: a move OUT with a lifecycle signal is canonical too (the page takes a status signal back into the
+     repository, where it reads as canon, Working or Archived). A narrative page restored to where it was (tagged
+     `Narrative`, no signal) crosses nothing. A create landing in Narratives counts no signal of its own (its name,
+     tags and Status are judged by the existing rules), so it is an ordinary proposal unless those make it canonical.
+   - Inside the lock a crossing passes only in work the owner approved (as canon when a page loses a lifecycle); a
+     direct job whose destination the owner moved into Narratives in the app meanwhile is refused there.
+   - The guard can now answer an ORDINARY proposal (`WriteGuardVerdict` `propose`, src/jobs/write-guard.ts); the engine
+     shows its reason as the proposal's `proposedBecause`, as a rail's.
+2. **Markers** (F2): a marker page's `to: null` declares where a page is placed (a move, a create, a crossing without
+   a signal) and the first state of a page the same job creates (its template's Status and tags, which the creation
+   tools replace: `made`, judged inside the lock from the job's own create steps); never a Status, prefix or tag change
+   of a page that exists. **The narrative tags fix only adds tags**: the narrative tags first, every tag the page holds
+   kept by its exact spelling (a status tag included). **Chosen**: inside Narratives `AU` is the narrative tag of an
+   AU's continuity on a page with no lifecycle prefix, not a status tag.
+3. **`create_resource` under Narratives** (F3) also refuses a Status in `facts` and any tag that folds to a status or
+   lifecycle tag (CANON, Working, Archived, AU; look-alikes included): `NARRATIVE_NO_LIFECYCLE`.
+4. **The narrative indexes' names** (F4) are never given to a page, on any create or rename route (the guard, every
+   route; `arkona_story_create` also refuses such a title first, `NARRATIVE_INDEX_NAME`), folded as the lifecycle
+   indexes' names are; the Narratives index itself is never renamed away by the tools (the owner renames it by hand).
+   **Chosen**: the narrative audit's "Propose a fix" may still make a missing Main CANON (declared by its marker,
+   directly under Narratives), and a page that already holds one of those names may be renamed within it. The facts
+   index leaves out the pages under Narratives resolved by id as the tools resolve it (`narrativeAuthorityRoots`); with
+   several indexes of that name, the pages under every one of them (fail closed for authority, while the guards treat
+   none of them as narrative). **Chosen** (the lead, NA-43): a page under Narratives whose name carries a lifecycle
+   prefix (`[BSRC]`, `[BWRK]`, `[BARC]`, read as the guard reads it) is canon filed there, not fiction, and stays
+   evidence: a canon set the owner moves into Narratives (approving the canonical proposal, or in the app) keeps its
+   births and deaths in the checks while `narrative_lifecycle_page` reports it.
+5. **The dateline fix** (F5) replaces the first block only when the audit read its text before the separator whole as a
+   calendar date (`replaceFirst`); otherwise it puts the dateline before it (an epigraph is kept). A finding stored
+   before the flag inserts.
+6. **`arkona_chapter_check`** (F6) resolves names against the pages outside Narratives only, and (the lead, LD-10)
+   against the pages under it whose name carries a lifecycle prefix, as the facts index reads them (4): a canon
+   character filed there is never "Not in canon (candidate)".
+7. **The lifecycle tools** (F7): a whole set rooted in Narratives, or holding Narratives or a narrative page, is refused
+   (`NARRATIVE_NO_LIFECYCLE`), and so is a `promote_page` or `unarchive_page` destination inside Narratives (an
+   `unarchive_page` record's previous parent there is not usable).
+8. **Canon inside a story** (F8): the story layout sets a page carrying a lifecycle signal apart (`lifecycle`), never a
+   map, act, plan or chapter; the four writing tools then change nothing in that story (`NARRATIVE_LIFECYCLE_PAGE`,
+   naming the pages); the audit reports each such page in Narratives (`narrative_lifecycle_page`, warning, no fix).
+   **Chosen**, the inside reading: `AU` and a Status of Working do not count there (the AU continuity's tag; the generic
+   Working sidebar's own value, which the tools never write, E3); a prefix, CANON, Working or Archived tags and a
+   Status of Authoritative or Archived do. The renumbering's items are labelled by the page's raw name.
+9. **A stale tree on save** (F9): `arkona_chapter_save`'s revision checks inside the lock (a `bridge.expect` step) that
+   the chapter is still in its act or story; otherwise nothing is written.
+
+### For the owner
+
+1. A move into or out of Narratives is now always yours (canonical when a page would lose or regain a lifecycle);
+   approve it on the Proposals page.
+2. Confirm the choices above: a move out with a signal is canonical; AU and Status Working do not count inside
+   Narratives; the audit's Main CANON fix keeps working.
+3. After deploying, run the narrative audit: `narrative_lifecycle_page` lists any canon, Working or Archived page sitting
+   in Narratives today; the writing tools leave such a story alone until you move the page out or make it a narrative
+   page by hand.
