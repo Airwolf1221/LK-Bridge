@@ -412,6 +412,12 @@ export class TreeModel {
       props: false,
     });
     if (typeof body.iconGlyph === 'string') r.iconGlyph = `fas fa-${body.iconGlyph}`;
+    if (this.createDocuments && Array.isArray(body.documents) && body.documents.length > 0) {
+      for (const d of r.docs) this.docs.delete(d);
+      r.docs = [];
+      for (const d of (body.documents as { name?: unknown; type?: unknown }[]).slice(0, 5))
+        this.addDoc(r.id, typeof d.name === 'string' ? d.name : 'Untitled', typeof d.type === 'string' ? d.type : 'blank');
+    }
     const placed = this.place(r, parentId, body.after, body.before);
     if (placed) {
       this.res.delete(id);
@@ -428,6 +434,12 @@ export class TreeModel {
    * order; `reversed`: the same, listed in the reverse order (another page document before Main).
    */
   copyTemplateDocuments: false | 'as-template' | 'reversed' = false;
+
+  /**
+   * CR-2026-11-R4 (the owner's request S): `createResource`'s `documents` (at most five, each a name and a type), made as
+   * LegendKeeper makes them. Off (the default, which every older test expects): one Main, whatever was sent.
+   */
+  createDocuments = false;
 
   private copyTemplate(
     t: Res,
