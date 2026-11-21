@@ -172,13 +172,17 @@
 
 ## Costs
 
-| Call                                                          | LegendKeeper requests                                                    |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` | 0                                                                        |
-| … with `live: true`                                           | 1 per identity page re-read (at most 25)                                 |
-| `arkona_consistency_suggest`; the audits' category; the brief | 0                                                                        |
-| Pick the right value (planning)                               | 1 per page edited (its sidebar or document); a chronology row: about 9   |
-| The approved pick's job                                       | each page's check, writes and read-back, as `set_facts` and `write_page` |
+| Call                                                          | LegendKeeper requests                                                                  |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` | 0                                                                                      |
+| … with `live: true`                                           | 1 per identity page re-read (at most 25)                                               |
+| `arkona_consistency_suggest`; the audits' category; the brief | 0                                                                                      |
+| Pick the right value (planning)                               | 2 per page edited (the page, then its sidebar or document)¹; a chronology row: about 9 |
+| The approved pick's job                                       | each page's check, writes and read-back, as `set_facts` and `write_page`               |
+
+¹ Amended by CR-2026-11-R4 (21 November 2026): the pick reads the page itself first (its name, parent and tags), so a
+page archived, renamed or moved since the check is left as it is (R4-15); one more for each further document edited.
+It was 1 per page edited.
 
 ## Consequences
 
