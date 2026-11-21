@@ -520,6 +520,14 @@ function remaining(
 }
 
 /** The context `buildJob` needs, from the documents as read. */
+/** A planned row block's cell's runs (its one paragraph's content): what a resumed rewrite puts in that cell. */
+function cellRuns(rowBlock: Obj, column: number): Obj[] | undefined {
+  const cell = Array.isArray(rowBlock.children) ? (rowBlock.children as Obj[])[column] : undefined;
+  const kids = cell && Array.isArray(cell.children) ? (cell.children as Obj[]) : [];
+  const para = kids.length === 1 && kids[0]!.kind === 'paragraph' ? kids[0]! : null;
+  return para && Array.isArray(para.content) ? (para.content as Obj[]) : undefined;
+}
+
 function writeContext(
   ch: Chrono,
   now: Now,
@@ -1950,13 +1958,39 @@ async function resumeChange(
       return { kind: 'answer', result: calendarError(pd, e) };
     }
   }
+  // CR-2026-11-R4 (LD-08; R3-35's class, as R4-17 for a first run): each row the resume rewrites or deletes is compared
+  // inside the lock with the row as read now, and a rewrite is that row with only the cells this change makes replaced,
+  // so its marks, links and mentions are kept. (It wrote the block the first run planned, so bold added to a row
+  // between the stop and the resume was lost.)
+  const rowBlocks: Record<string, Obj> = {};
+  const writes = left.writes.map((w): TargetWrite => {
+    if (w.kind !== 'row.replace' && w.kind !== 'row.delete') return w;
+    const t = tables.get(w.documentId);
+    const r = t?.table.rows.find((x) => x.id === w.rowId);
+    if (!t || !r) return w;
+    rowBlocks[rowKey(w.documentId, w.rowId)] = withoutVersions([r.row.block])[0]!;
+    if (w.kind === 'row.delete') return w;
+    const runs =
+      w.before.description !== w.texts.description ? cellRuns(w.block, t.table.columns.event) : undefined;
+    const dated = w.before.date.trim() !== w.texts.date.trim() || w.before.kcy.trim() !== w.texts.kcy.trim();
+    const block = replaceCells(
+      r.row.block,
+      t.table.columns,
+      {
+        ...(runs ? { descriptionRuns: runs } : {}),
+        ...(dated ? { date: w.texts.date, kcy: w.texts.kcy } : {}),
+      },
+      () => mintClientId(8),
+    );
+    return { ...w, block };
+  });
   return submit(pd, mctx, {
     lastMajorRevision: lastMajorRevision,
     tool,
     ch,
     target: rec.target,
-    writes: left.writes,
-    ctx: writeContext(ch, now, rows, { expectBefore: left.expectBefore, moves }),
+    writes,
+    ctx: writeContext(ch, now, rows, { expectBefore: left.expectBefore, moves, rowBlocks }),
     requestKey: rec.requestKey,
     ages: rec.ages,
     summary: `${rec.summary} (resumed)`,
