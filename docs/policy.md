@@ -39,7 +39,10 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 
 - Member and invite administration (`inviteMember`, `removeMember`, `revokeInvite`) is refused for every agent, at any
   scope, unless `LK_ALLOW_MEMBER_ADMIN=true`: by the engine's guard (`MEMBER_ADMIN_DISABLED`), after the gate, and at
-  proposal capture (so it is never captured).
+  proposal capture (so it is never captured). With it on, a member or an invite taken away (`removeMember`,
+  `revokeInvite`) is a delete for the deletes rail, at entry and at approval (CR-2026-11-R4; ADR 0066 part B, question
+  10, the owner's): at scope `write` it is a proposal, `proposed because: delete (1 project member)`, while the rail is on
+  (the default); `inviteMember` runs as before.
 - **Uploads are not proposable (v1).** At scope `propose`, `lk_upload_image`, and raw `createImageUpload` /
   `createImageAsset` calls through `lk_api_write` or `lk_api_batch`, are refused before anything is sent, with a
   message that uploads need scope `write` and that the owner can raise the profile's scope. (A proposal would have to

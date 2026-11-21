@@ -174,7 +174,9 @@ The dashboard's **Account** page ([ADR 0028](adr/0028-secrets-on-the-dashboard.m
   moved up or to a profile at scope `write`); the settings (the bridge's, a project's, the budgets' floors and writer
   limit, a maintenance job's switch, schedule and run size, the off-site copy's (every change), the retention of the
   tool-call log, the connections' clean-up, the audits', the canon and lifecycle settings) and releasing a brake
-  (read-only switched off, resuming writes, undraining); pack approval; and the guarded rails (approving a proposal that
+  (read-only switched off, resuming writes, undraining, and since CR-2026-11-R4, by the owner's decision in
+  [ADR 0066](adr/0066-cr-2026-11-r4-decisions.md) part B: resuming a paused job, resuming a job stopped part-way, a
+  forced step retry and starting a restore rehearsal); pack approval; and the guarded rails (approving a proposal that
   deletes, touches more than 10 pages, or deletes or moves an asset; the owner's own retag batch of more than 10 pages;
   a rehearsal's root deleted; a staged image's delete allowed; Revert). Tightenings and brakes stay one click: lowering a
   scope, moving a connection down, read-only on, ChatGPT's file source off, pausing writes and draining, Sign out

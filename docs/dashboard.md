@@ -78,6 +78,10 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   text taken off a pack page) and a member or invite removed counted as deletes; confirming a project's chronology asks
   too (a reset is one click); and the OAuth consent page asks for the same step-up, on the page itself, before a scope
   raise, a new profile above the default or a connection at scope `write` ([auth.md](auth.md#consent-and-profiles-chunk-2b)).
+  The owner's decisions on the fourth review ([ADR 0066](adr/0066-cr-2026-11-r4-decisions.md) part B, 21 November 2026):
+  releasing a job asks too, as resuming writes does: **Resume** of a paused job, **Resume** of one stopped part-way, a
+  **forced** step retry and starting a **restore rehearsal** (pausing a job, a normal retry and a rehearsal's plan stay
+  one click).
 - **Sessions (ADR 0062).** A session lasts 30 days from its last use (each use renews it and its cookie), survives a
   restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included, and
   those already past their end), at a password change (the other sessions) or after 30 days unused. A link to the
@@ -318,7 +322,7 @@ every route that changes a setting, a scope or a key, and of approving a proposa
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Session     | `GET /session` (user, CSRF token, version)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Overview †  | `GET /overview` (every project's status, health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice; where it stopped and Resume; v3 F3e: `split`, the split whose phase 1 it is), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                                                                                                                                                                                                                                                                                  |
+| Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice; where it stopped and Resume; v3 F3e: `split`, the split whose phase 1 it is), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume` (`resume` ‡), `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`; ‡ with `force: true`)                                                                                                                                                                                                                                                                               |
 | Errors †    | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Budgets †   | `GET /budgets` (one project's snapshot with its learned operation limits, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -346,7 +350,8 @@ CONFIRMATION_REQUIRED`, and every settings and reserve-floor change needs `confi
 
 `retry` on each step says whether it may be retried and whether it is _ambiguous_ (it may already have reached
 LegendKeeper). A normal retry re-checks first and cannot duplicate; `force: true` re-runs it as new work. The dashboard
-shows the warning and asks twice before forcing.
+shows the warning and asks twice before forcing, and a forced retry asks for the step-up as well (ADR 0066 part B,
+question 4).
 
 ## Tool calls (v2 E3)
 
@@ -591,7 +596,8 @@ again as prop_…"; the new proposal names the one it came from. Agents can neve
 The design's section 3 (decision D6). A package, a rename or a recreate whose job **stopped part-way** (a failed step, a
 cancel) shows a **Stopped part-way** card on its job page (and in the Review page's detail of a direct job): the step it
 stopped at and why, its last verified step (every step up to it succeeded and read back as planned), and how often it was
-resumed. **Resume** (after a confirmation that says from which step it continues and how many are left) continues the
+resumed. **Resume** (after a confirmation that says from which step it continues and how many are left, and the step-up:
+ADR 0066 part B, question 4) continues the
 same job: its own check runs again first, inside its locks; no step that succeeded is sent again, no page or document is
 made twice, and a step that is no longer safe is refused with its reason (the card shows it; resume again once the page
 is as it should be, or revert). Work you approved resumes without a new approval; every resume is audited (`job.resume`,
@@ -839,7 +845,8 @@ database copies), `GET /api/admin/snapshots/pages?project=&q=`, `GET /api/admin/
 `POST /api/admin/snapshots/runs/<run id>/abandon` `{ confirm: true }`, `POST /api/admin/snapshots/restore?project=`
 `{ page, snapshot, scope, document?, mode?, ids?, parent?, dryRun? }`, `POST /api/admin/snapshots/restore-image?project=`
 `{ snapshot, asset, updateReferences?, dryRun? }`, `POST /api/admin/snapshots/rehearsals/plan` `{ target, snapshot, mode,
-max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202), `GET
+max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202; it asks
+for the step-up, ADR 0066 part B, question 4), `GET
 /api/admin/snapshots/rehearsals/<id>`, `POST /api/admin/snapshots/rehearsals/<id>/delete-root` `{ confirm: true }`. A
 refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`, `snapshots.restore`,
 `snapshots.rehearsal` and `snapshots.rehearsal_delete_root`.

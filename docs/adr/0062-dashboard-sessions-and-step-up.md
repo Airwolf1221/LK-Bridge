@@ -118,9 +118,10 @@ docs/dashboard.md and `.env.example` say so.
 
 ## Amendment 1: the fourth review's session findings (CR-2026-11-R4)
 
-- Status: **Proposed** (21 November 2026). The fixes make decisions 1, 2, 4 and 5 hold on every route; where they go
-  further than the text above, the choice is marked **Chosen** and is the owner's to confirm. No migration, no new
-  setting. The review's tests are `test/review/r4-sessions/` (SE-01 to SE-52).
+- Status: **Accepted** (the owner, 21 November 2026, with [ADR 0066](0066-cr-2026-11-r4-decisions.md): its part A
+  confirmed every choice marked **Chosen** below, and its part B decided the questions this amendment left open: 3, and
+  "Not changed"). The fixes make decisions 1, 2, 4 and 5 hold on every route. No migration, no new setting. The review's
+  tests are `test/review/r4-sessions/` (SE-01 to SE-52) and `test/ui/r4-sessions-*.test.ts`.
 - Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
   spike, rehearsal or round-trip script. Mocks and fixtures only.
 
@@ -150,6 +151,9 @@ docs/dashboard.md and `.env.example` say so.
 3. **A member removal at approval** (SE-12): `removeMember` and `revokeInvite` (`MEMBER_REMOVALS`) are deletes for the
    approval's judgment. At entry they stay as before (refused unless `LK_ALLOW_MEMBER_ADMIN`); whether the deletes rail
    should catch them there too, for an agent at scope `write` with member administration on, is open for the owner.
+   **Decided (ADR 0066 part B, question 10: yes) and built:** the entry rails count them as deletes too, so with member
+   administration on an agent at scope `write` proposes a removal (`proposed because: delete (1 project member)`)
+   rather than making it; `inviteMember` is unchanged.
 4. **A project's chronology settings** (SE-16): `PUT /projects/:name/chronology` with `settings` asks for the step-up (a
    project's settings, which the timeline tools write by); `reset: true`, which makes the tools refuse until confirmed
    again, stays one click (a tightening).
@@ -179,14 +183,17 @@ docs/dashboard.md and `.env.example` say so.
 9. **A wrong current password is shown** (SE-44; decision 7): `useAction` stays quiet only for a 401 that means signed
    out (`UNAUTHENTICATED`), never for `WRONG_PASSWORD` or `REAUTH_FAILED`.
 
-**Not changed:** resuming a job the owner paused (SE-51) stays one click, as built (decision 6 names pausing a job among
-the brakes, not its release); whether releasing it asks, as resuming writes does, is the owner's decision.
+**Resuming a job, decided** (ADR 0066 part B, questions 3 and 4: yes): decision 6 names pausing a job among the brakes,
+and its release now asks too, as resuming writes and undraining do: resuming a paused job (`POST /jobs/:id/resume`;
+SE-51), resuming a stopped one (`resume-stopped`), a step retry sent with `force` (a normal retry checks LegendKeeper
+first and never duplicates, one click) and a rehearsal's start (its plan stays one click). The registry, the marks the
+bridge keeps in its own tables and "Mark resolved" stay one click.
 
-**For the owner.** Confirm the choices above (1, 2, 5 (a) to (c), 8), and decide SE-51 and the entry rail for member
-removals (3). Two of the review's tests, SE-42 and SE-43, also assert that the idle page sends no request at all
-(`firstRequestByItself: null`); the fix makes the session's end stay where it was (`endMovedBy: 0`, the safe behaviour
-the tests name), but the page still refreshes, marked, as the live dashboard must (the existing tests of live updates
-expect those requests). Those two assertions are left for the reviewer and the owner.
+**Confirmed** (the owner, 21 November 2026): the choices above (1, 2, 5 (a) to (c), 8), with ADR 0066 part A. SE-42 and
+SE-43 as first written also asserted that the idle page sends no request at all; the lead reviewer changed that
+assertion to the safe behaviour the tests name (the session's end does not move) and to every request the page sends by
+itself being marked, since the live dashboard must still refresh (the existing tests of live updates expect those
+requests).
 
 **Tests:** `test/auth/consent-stepup.test.ts` (the consent page's step-up, both factors, the window, what is not asked,
 the limits, the carried choice); `test/admin/approval-stepup.test.ts` (the approval's judgment for proposals made by
@@ -195,4 +202,6 @@ already stepped up); `test/auth/background-requests.test.ts` and `test/ui/backgr
 marked, and that a marked request is checked, not used); `test/policy/mcp.test.ts` (its raise, its new profile at
 `write` and its existing `write` profile now step up on the page); `test/e2e/dashboard.spec.ts` (the token is made, and
 stepped up, before the proposal is approved, so the approval of that `lk_api_write` replace that drops a block goes
-through within the step-up's window).
+through within the step-up's window); and, for the owner's decisions, SE-51 (`test/review/r4-sessions/misc.test.ts`),
+SE-13 and SE-14 (`routes-inventory.test.ts`: the routes that now ask) and `test/policy/member-admin.test.ts` (a member
+removal at entry).

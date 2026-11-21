@@ -10,10 +10,10 @@ R4-22). **Deploy this before anything else**; until then keep Claude's and ChatG
 Arkona, approve no narrative audit fix and use no pick. The review covers everything merged after the third review's
 fixes up to `b8da571` (#74 to #79: split completeness, F4a, F4b, F4b.1, F4c, F4.1, with ADR 0062's sessions from #73)
 ([docs/reviews/CR-2026-11-R4.md](reviews/CR-2026-11-R4.md); decisions in
-[ADR 0066](adr/0066-cr-2026-11-r4-decisions.md), proposed). 59 findings (6 critical, 28 high, 16 medium, 9 low): 58
-fixed, each with a test that fails on the reviewed code; one open, the owner's decision (R4-59, resuming a paused job),
-its test kept as `it.fails`. No migration. **After deploying, approve `arkona-2026-11-21-r4` on the Packs page** (it
-supersedes `arkona-2026-11-20-f41`). Nothing was run against a live system.
+[ADR 0066](adr/0066-cr-2026-11-r4-decisions.md), **accepted on 21 November 2026**: part A confirmed as built, part B
+decided and built). 59 findings (6 critical, 28 high, 16 medium, 9 low), all fixed, each with a test that fails on the
+reviewed code; one (R4-59) by the owner's decision. No migration. **After deploying, approve `arkona-2026-11-21-r4` on
+the Packs page** (it supersedes `arkona-2026-11-20-f41`). Nothing was run against a live system.
 
 ### Moving into and out of Narratives (R4-01 to R4-10; ADR 0065 amendment 2)
 
@@ -105,7 +105,11 @@ The owner's rule: moving any page into or out of Narratives is a proposal, and n
 - **The bounce page** answers top-level navigations only (never another site's image, fetch or frame) and is never
   framed.
 - **A wrong current password** on the Account page is shown again instead of being hidden as a sign-out.
-- Not changed: resuming a paused job stays one click (the review's SE-51 is the owner's decision).
+- **The owner's decisions** (ADR 0066 part B, 21 November 2026): **resuming a paused job** asks for the step-up (R4-59),
+  and so do **resuming a job stopped part-way** (`resume-stopped`), a **forced step retry** and **starting a restore
+  rehearsal**; pausing, a normal retry (it checks first) and a rehearsal's plan stay one click. With
+  `LK_ALLOW_MEMBER_ADMIN` on, **a member or an invite taken away is a delete at entry too**: an agent at scope `write`
+  proposes it (`proposed because: delete (1 project member)`).
 
 ### The lead's own, the owner's queued items and request S
 

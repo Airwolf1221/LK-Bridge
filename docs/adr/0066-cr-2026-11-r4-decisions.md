@@ -1,8 +1,9 @@
 # ADR 0066: Decisions from the fourth review (CR-2026-11-R4)
 
-Status: **Proposed** (21 November 2026). Part A records what this review's fixes chose where an earlier ADR said
-otherwise or said nothing, built and tested, for the owner to confirm. Part B lists the questions left open, each with a
-recommendation. The findings are in [docs/reviews/CR-2026-11-R4.md](../reviews/CR-2026-11-R4.md).
+Status: **Accepted** (the owner, 21 November 2026): part A confirmed, all of it, as built; part B decided 1 (a), 2 (a),
+3 (b), 4 (b), 5 (a), 6 (a), 7 (a), 8 (a), 9 (a) and 10 (b), and built the same day (see "As decided" under each). Part A
+records what this review's fixes chose where an earlier ADR said otherwise or said nothing. The findings are in
+[docs/reviews/CR-2026-11-R4.md](../reviews/CR-2026-11-R4.md).
 
 - Amends: [ADR 0058](0058-v3-f3d-renames-selective-approval-resume.md) decision 1.8 (the re-placing moves, A10);
   [ADR 0059](0059-v3-f3e-splits.md) amendment 1 (the sections a new owner answers for, A8);
@@ -23,7 +24,7 @@ review's four low findings, Aliases at commas) and two later requests (S: every 
 characters with more than one life). Most of the fixes make an existing rule hold on every route. These go further than
 a rule as written, or choose where it said nothing.
 
-## Part A: chosen by this review's fixes (built; for the owner to confirm)
+## Part A: chosen by this review's fixes (built; confirmed by the owner, 21 November 2026)
 
 ### The tool lists (scope 5)
 
@@ -203,50 +204,60 @@ S6. **The bounce pages' headers** (R4-48): the CSP is `default-src 'none'; img-s
 opener).
 S7. **Recorded as ADR 0062 amendment 1** (proposed), with `docs/auth.md`, `docs/dashboard.md` and `docs/policy.md`.
 
-## Part B: the owner's decisions (open)
+## Part B: the owner's decisions (decided 21 November 2026, built the same day; their tests pass)
 
 1. **The package tools while a version waits** (A1). Options: (a) as built, listed while the pack is attached, refusing
    `PACK_NOT_CURRENT` until the owner approves the new version; (b) listed only while the current version is approved,
    as the F4b and F4c tools now are. Recommended: **(a)**. The refusal tells the agent exactly what to ask the owner;
    hiding the tools would make them vanish and return at every new version (each a `list_changed`), and an agent mid-task
-   would lose the tool it was using rather than learn why it waits.
+   would lose the tool it was using rather than learn why it waits. **As decided: (a).**
 2. **The consent page and a new connection** (S1, R4-42). Options: (a) as built, asking for a raise, a new profile above
    the default scope, or a connection at `write`; (b) asking for every new connection, whatever its scope. Recommended:
    **(a)**. A `read` connection cannot write, and every write of a `propose` connection waits for the owner's approval
    (which asks for the step-up where ADR 0062 says so); asking for them would add a code to every read-only client
-   while a stolen cookie that got one could still write nothing.
+   while a stolen cookie that got one could still write nothing. **As decided: (a).**
 3. **Resuming a job the owner paused** (R4-59, SE-51). Options: (a) as built, one click; (b) asking for the step-up, as
    resuming writes and undraining do. Recommended: **(b)**, by the owner's own rule for ADR 0062 (tightening is one click,
    loosening asks): a pause is a brake, and its release runs writes. It costs one code at most every 10 minutes. SE-51
-   is kept as an expected failure until decided.
+   is kept as an expected failure until decided. **As decided and built: (b).** `POST /api/admin/jobs/:id/resume`
+   asks for the step-up (403 `REAUTH_REQUIRED`; the dashboard asks for the code and sends the request again); pausing
+   stays one click. Test: SE-51 (`test/review/r4-sessions/misc.test.ts`), now an ordinary test that passes.
 4. **The routes ADR 0062 does not list** (pass 4's note): the tool registry, the marks kept in the bridge's tables only,
    "Mark resolved", `resume-stopped`, a forced step retry, a rehearsal's start. Options: (a) as built, one click each;
    (b) the step-up for those that run or resume writes (`resume-stopped`, a forced step retry, a rehearsal's start), one
    click for those that change only the bridge's own bookkeeping (the registry, the marks, "Mark resolved").
-   Recommended: **(b)**, for the reason of question 3.
+   Recommended: **(b)**, for the reason of question 3. **As decided and built: (b).** `POST
+/api/admin/jobs/:id/resume-stopped`, a step retry sent with `force: true` (a normal retry, which checks LegendKeeper
+   first and never duplicates, stays one click) and `POST /api/admin/snapshots/rehearsals` (its plan stays one click)
+   ask for the step-up; the registry, the marks kept in the bridge's tables and "Mark resolved" stay one click. Tests:
+   SE-13 and SE-14 (`test/review/r4-sessions/routes-inventory.test.ts`).
 5. **The Narratives index by a confirmed id** (R4-04, N1). Options: (a) as built, the one index named Narratives found in
    the tree (none when it is missing or there are several: every page keeps its lifecycle), now that no page can be given
    that name; (b) the owner confirms the index's id once, on the dashboard, as the chronology's settings are confirmed,
    and a rename or a second index then changes nothing. Recommended: **(a)** for now: with the name protected on every
-   route, (b) adds a setting to keep without closing a gap the review found.
+   route, (b) adds a setting to keep without closing a gap the review found. **As decided: (a), not yet.**
 6. **Quotations in the pick** (P5, R4-19). Options: (a) as built, listed and never edited; (b) offered as an item the
    owner may tick, unticked by default. Recommended: **(a)**, as renames leave quotations (ADR 0058 D1 (a)): a quotation
-   records what was said, and a date in it is not the page's own claim.
+   records what was said, and a date in it is not the page's own claim. **As decided: (a).**
 7. **A typed range** (P7, R4-18). Options: (a) as built, a typed value is one date; (b) a range allowed where the side
    picked is itself a range. Recommended: **(a)**: a side that is a range can be picked as it stands, and a typed range
-   cannot be placed in a sentence that states one date.
+   cannot be placed in a sentence that states one date. **As decided: (a).**
 8. **Name order in identity values** (C7, R4-37). Options: (a) as built, word order matters except the character's own
    given name and surname swapped; (b) word order never matters (the words as a set); (c) word order always matters.
    Recommended: **(a)**: (b) hides "von Woerfels-Hohenfalk" against "von Hohenfalk-Woerfels" (two names), and (c)
-   reports every "Yamato Katsuragi" written in the other order on a page about him.
+   reports every "Yamato Katsuragi" written in the other order on a page about him. **As decided: (a).**
 9. **The lives design** (C1 to C5, the owner's request L). Options: (a) as built ("Between lives (recorded)", lives in
    date order, named "the first life" … "the restored life", elapsed years within the life, `born` the first life's);
    (b) as built but naming each life by the name it was lived under where the Temporal Scope gives one (Yasmin Arshama,
    Mehrana II), which needs a phrasing for it. Recommended: **(a)** now; (b) when the owner's Temporal Scopes name their
-   lives regularly (pass the phrasing as pack data).
+   lives regularly (pass the phrasing as pack data). **As decided: (a).**
 10. **Member removals at the entry rail** (S3, R4-44). Options: (a) as built, counted at approval only; (b) also at entry,
     so an agent at scope `write` with `LK_ALLOW_MEMBER_ADMIN` on proposes a removal rather than making it. Recommended:
-    **(b)**: removing a member is not revertible from the journal, which is what the guarded rails are for.
+    **(b)**: removing a member is not revertible from the journal, which is what the guarded rails are for. **As decided
+    and built: (b).** The entry rails count `removeMember` and `revokeInvite` as deletes too (`src/policy/gate.ts`), so
+    with the deletes rail on (the default) an agent at scope `write` with `LK_ALLOW_MEMBER_ADMIN` on makes a proposal,
+    `proposed because: delete (1 project member)`; `inviteMember` is unchanged. Test:
+    `test/policy/member-admin.test.ts`.
 
 ## Consequences
 
@@ -254,6 +265,7 @@ No migration. After deploying, approve `arkona-2026-11-21-r4` on the Packs page;
 first request (from the snapshots), and the full-text index's section paths as pages are next read. Agents see new
 refusals: `NARRATIVE_LIFECYCLE_PAGE`, `NARRATIVE_INDEX_NAME`, `NO_SNAPSHOT` (the chapter tools), and moves into or out
 of Narratives answered as proposals; the dashboard's pick may answer `SIDE_CHANGED`; the owner sees a step-up on the
-consent page, at the approval of a low-level removal or a member removal, and on the chronology settings. Every part A
-choice is pinned by a test; each finding's test fails on the reviewed code (or on this review's first fix, where the
-review says so) and passes now.
+consent page, at the approval of a low-level removal or a member removal, and on the chronology settings, and (part B)
+when resuming a paused job, resuming a stopped one (`resume-stopped`), forcing a step retry and starting a rehearsal; an
+agent's member removal at scope `write` is a proposal. Every part A choice is pinned by a test; each finding's test fails
+on the reviewed code (or on this review's first fix, where the review says so) and passes now.
