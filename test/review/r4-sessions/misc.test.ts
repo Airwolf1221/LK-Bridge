@@ -6,7 +6,8 @@
  * - SE-49: the bounce answering a cross-site request that is not a navigation (an image, a fetch): it would set the
  *   30-second marker from another site's page, so that the owner's own next link to the bridge is not bounced.
  * - SE-50: `AUTH_SESSION_TTL_SECONDS` outside 5 minutes to 30 days.
- * - SE-51: a job the owner paused (one of ADR 0062 decision 6's brakes) resumed from a session that has not stepped up.
+ * - SE-51: a job the owner paused (one of ADR 0062 decision 6's brakes) resumed from a session that has not stepped up
+ *   (the owner's decision, ADR 0066 part B, question 3: it asks).
  *
  * Each asserts the safe behaviour.
  */
@@ -137,9 +138,9 @@ describe('more of the session model', () => {
     expect(stack.runtime.engine.queries.controls().allowMemberAdmin ?? false).toBe(false);
   });
 
-  // CR-2026-11-R4: open, the owner's decision (ADR 0066 part B, question 3; the review's section 8). Kept as an expected
-  // failure until decided: on the reviewed code, and as built, a paused job is resumed with one click.
-  it.fails('SE-51: resuming a job the owner paused (releasing that brake) asks for the step-up', async () => {
+  // CR-2026-11-R4: the owner's decision (ADR 0066 part B, question 3, accepted 21 November 2026): resuming a paused job
+  // asks for the step-up. On the reviewed code a paused job was resumed with one click.
+  it('SE-51: resuming a job the owner paused (releasing that brake) asks for the step-up', async () => {
     s = await startAdminStack();
     const stack = s;
     await stack.runtime.ready;
@@ -165,6 +166,11 @@ describe('more of the session model', () => {
         status: 403,
         code: 'REAUTH_REQUIRED',
       });
+      // Nothing was released: the job is paused, or its pause still waits for the step its first write is held at.
+      const job = stack.runtime.engine.queries.getJob(PROJECT, sub.jobId!);
+      expect(job?.status === 'paused' || job?.pauseRequested === true, JSON.stringify(job?.status)).toBe(
+        true,
+      );
     } finally {
       release();
     }

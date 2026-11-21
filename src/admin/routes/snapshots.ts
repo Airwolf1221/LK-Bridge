@@ -449,7 +449,11 @@ export const registerSnapshots: Register = (api, ctx) => {
     }
   });
 
-  /** Starts a rehearsal (the owner's job): it runs in the background, and its row records its progress and results. */
+  /**
+   * Starts a rehearsal (the owner's job): it runs in the background, and its row records its progress and results.
+   * CR-2026-11-R4 (ADR 0066 part B, question 4, the owner's decision): it writes into a sandbox project, so it asks for
+   * the step-up (ADR 0062); its plan (no request to LegendKeeper) stays one click.
+   */
   api.post('/snapshots/rehearsals', async (req, reply) => {
     const b = parseInput(
       z
@@ -464,6 +468,7 @@ export const registerSnapshots: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
+    requireReauth(ctx.deps.services, req);
     const { rehearsals } = services();
     try {
       const row = await rehearsals.start({

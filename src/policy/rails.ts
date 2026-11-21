@@ -146,8 +146,9 @@ export interface RailContext {
    */
   readonly stagedPlacement?: boolean;
   /**
-   * CR-2026-11-R4 (SE-12): member administration's removals (`MEMBER_REMOVALS`) are deletes too. Set by the approval's
-   * judgment only (ADR 0062 decision 5): at entry they stay refused unless LK_ALLOW_MEMBER_ADMIN, as before.
+   * CR-2026-11-R4 (SE-12; ADR 0066 part B, question 10): member administration's removals (`MEMBER_REMOVALS`) are
+   * deletes too, set by the entry rails and by the approval's judgment (ADR 0062 decision 5). They reach the rails only
+   * with LK_ALLOW_MEMBER_ADMIN on: otherwise the engine refuses them first, as before.
    */
   readonly memberRemovals?: boolean;
 }
@@ -196,8 +197,9 @@ export const LOW_LEVEL_REMOVALS: Readonly<Record<string, string>> = Object.freez
 });
 
 /**
- * CR-2026-11-R4 (SE-12): the removals of member administration (registry `risk: admin`): someone taken off the
- * LegendKeeper project, or an invitation withdrawn. Deletes for the approval's step-up (`RailContext.memberRemovals`).
+ * CR-2026-11-R4 (SE-12; ADR 0066 part B, question 10): the removals of member administration (registry `risk: admin`):
+ * someone taken off the LegendKeeper project, or an invitation withdrawn. Deletes for the entry rails and for the
+ * approval's step-up (`RailContext.memberRemovals`): neither is revertible from the journal.
  */
 export const MEMBER_REMOVALS: Readonly<Record<string, string>> = Object.freeze({
   removeMember: 'project member',
@@ -401,7 +403,7 @@ export function railsVerdict(
           return;
         }
       }
-      // CR-2026-11-R4 (SE-12): at approval, a member or an invite taken away is a delete as well.
+      // CR-2026-11-R4 (SE-12, ADR 0066 B10): a member or an invite taken away is a delete as well (entry and approval).
       const member = ctx.memberRemovals === true ? MEMBER_REMOVALS[it.opId] : undefined;
       if (member) {
         kinds.set(member, (kinds.get(member) ?? 0) + 1);

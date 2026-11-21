@@ -279,6 +279,9 @@ export class LivePolicyGate implements PolicyGate {
       ...(ctx.tool !== undefined ? { tool: ctx.tool } : {}),
       ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
       readRestores: true,
+      // CR-2026-11-R4 (ADR 0066 part B, question 10, the owner's decision): a member or an invite taken away is a delete
+      // at entry too (it reaches the rails only with LK_ALLOW_MEMBER_ADMIN on; it is refused before them otherwise).
+      memberRemovals: true,
     });
   }
 

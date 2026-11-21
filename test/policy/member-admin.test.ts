@@ -89,9 +89,13 @@ describe('member administration is disabled (LK_ALLOW_MEMBER_ADMIN=false)', () =
   }
 });
 
+/** CR-2026-11-R4 (ADR 0066 part B, question 10, the owner's decision): the removals are deletes for the entry rails too. */
+const REMOVALS = new Set(['removeMember', 'revokeInvite']);
+
 describe('member administration is enabled (LK_ALLOW_MEMBER_ADMIN=true)', () => {
   for (const [op, params] of ADMIN_OPS) {
-    it(`${op}: denied at read, proposed at propose, executed at write`, async () => {
+    const atWrite = REMOVALS.has(op) ? 'proposed at write (the deletes rail)' : 'executed at write';
+    it(`${op}: denied at read, proposed at propose, ${atWrite}`, async () => {
       for (const scope of SCOPES) {
         const { r, origin } = await setup(true, scope);
         const out = await settle(r.h, r.e, r.e.engine.run(op, params, { project: PROJECT, origin }));
@@ -100,6 +104,14 @@ describe('member administration is enabled (LK_ALLOW_MEMBER_ADMIN=true)', () => 
         } else if (scope === 'propose') {
           expect(out.error).toBeUndefined();
           expect((out.value as { status: string }).status).toBe('proposal_captured');
+          expect(r.h.mock.calls.filter((c) => c.method !== 'GET')).toEqual([]);
+        } else if (REMOVALS.has(op)) {
+          // Someone taken off the LegendKeeper project, or an invitation withdrawn: not revertible from the journal, so
+          // the deletes rail (on by default) makes it a proposal, as at approval (R4-44).
+          expect(out.error).toBeUndefined();
+          expect((out.value as { status: string }).status).toBe('proposal_captured');
+          const [p] = r.policy.commands.listProposals('owner', { project: PROJECT });
+          expect(p?.proposedBecause ?? '').toMatch(/^proposed because: delete \(1 (project member|invite)\)/);
           expect(r.h.mock.calls.filter((c) => c.method !== 'GET')).toEqual([]);
         } else {
           expect(out.error).toBeUndefined();

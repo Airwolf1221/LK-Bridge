@@ -2,6 +2,7 @@ import * as z from 'zod';
 import type { JobStatus, JobWithSteps, StepView } from '../../jobs/index.js';
 import { SYSTEM_PRINCIPAL, TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
 import { ResumeError } from '../../resume/service.js';
+import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { redactDeep } from '../redact.js';
 import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
@@ -107,12 +108,15 @@ export const registerJobs: Register = (api, ctx) => {
 
   /**
    * Resumes it (`{ confirm: true }`): no fresh approval for an approved plan (decision D6), audited `job.resume`. A
-   * refusal is 409 with its code and reason; a recreate answers with the proposal its finish made.
+   * refusal is 409 with its code and reason; a recreate answers with the proposal its finish made. CR-2026-11-R4 (ADR
+   * 0066 part B, question 4, the owner's decision): it runs writes the job had stopped short of, so it asks for the
+   * step-up (ADR 0062).
    */
   api.post('/jobs/:id/resume-stopped', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     parseInput(z.object({ confirm: z.literal(true) }), req.body);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
+    requireReauth(ctx.deps.services, req);
     const resume = ctx.deps.runtime.resume;
     if (!resume) throw new AdminHttpError(503, 'UNAVAILABLE', 'Resuming jobs is not available here.');
     try {
@@ -165,15 +169,21 @@ export const registerJobs: Register = (api, ctx) => {
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     return { job: redactDeep(actions.pauseJob(project.id, id)) };
   });
+  // CR-2026-11-R4 (ADR 0066 part B, question 3, the owner's decision): a pause is a brake (one click) and its release
+  // runs writes again, so resuming a paused job asks for the step-up (ADR 0062: tightening is one click, loosening asks).
   api.post('/jobs/:id/resume', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
+    requireReauth(ctx.deps.services, req);
     return { job: redactDeep(actions.resumeJob(project.id, id)) };
   });
+  // CR-2026-11-R4 (ADR 0066 part B, question 4): a forced retry sends a step again as new work, unchecked, so it asks
+  // for the step-up; a normal retry checks LegendKeeper first and never duplicates, one click as before.
   api.post('/jobs/:id/steps/:stepNo/retry', (req) => {
     const p = parseInput(z.object({ id: idSchema, stepNo: z.coerce.number().int().min(0) }), req.params);
     const b = parseInput(z.object({ force: z.boolean().default(false) }), req.body);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
+    if (b.force) requireReauth(ctx.deps.services, req);
     return { job: redactDeep(actions.retryStep(project.id, p.id, p.stepNo, b.force)) };
   });
 

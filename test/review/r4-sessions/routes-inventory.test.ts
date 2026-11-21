@@ -25,11 +25,16 @@ interface Route {
 
 const ROUTES: Record<string, Route> = {
   // ---- jobs and errors
-  'POST /api/admin/jobs/:id/resume-stopped': { kind: 'outside' }, // an approved plan resumed (ADR 0058 D6)
+  // ADR 0066 part B, questions 3 and 4 (the owner, 21 November 2026): releasing a stopped or paused job asks.
+  'POST /api/admin/jobs/:id/resume-stopped': {
+    kind: 'asks',
+    params: { id: 'job_r4x' },
+    body: { confirm: true },
+  },
   'POST /api/admin/jobs/:id/cancel': { kind: 'one-click' },
   'POST /api/admin/jobs/:id/pause': { kind: 'one-click' },
-  'POST /api/admin/jobs/:id/resume': { kind: 'outside' }, // a paused job's brake released: see SE-16
-  'POST /api/admin/jobs/:id/steps/:stepNo/retry': { kind: 'outside' },
+  'POST /api/admin/jobs/:id/resume': { kind: 'asks', params: { id: 'job_r4x' } }, // a paused job's brake released
+  'POST /api/admin/jobs/:id/steps/:stepNo/retry': { kind: 'conditional' }, // a forced retry asks: SE-14
   'POST /api/admin/errors/resolve': { kind: 'outside' },
   'POST /api/admin/jobs/:id/revert': { kind: 'asks', params: { id: 'job_r4x' }, body: { confirm: true } },
   // ---- budgets and writers
@@ -159,7 +164,11 @@ const ROUTES: Record<string, Route> = {
   'POST /api/admin/snapshots/restore': { kind: 'outside' }, // makes a proposal
   'POST /api/admin/snapshots/restore-image': { kind: 'outside' }, // makes a proposal
   'POST /api/admin/snapshots/rehearsals/plan': { kind: 'one-click' },
-  'POST /api/admin/snapshots/rehearsals': { kind: 'outside' }, // writes into a sandbox project
+  // A rehearsal writes into a sandbox project (ADR 0066 part B, question 4): its start asks.
+  'POST /api/admin/snapshots/rehearsals': {
+    kind: 'asks',
+    body: { target: 'r4x', snapshot: '20261121T000000Z-full-0a1b2c', mode: 'sampled', confirm: true },
+  },
   'POST /api/admin/snapshots/rehearsals/:id/delete-root': {
     kind: 'asks',
     params: { id: 'rh_0123456789abcdef' },
@@ -309,6 +318,8 @@ describe('every mutating admin route, against ADR 0062', () => {
       key: 'fileSourceEnabled',
       value: null,
     });
+    // ADR 0066 part B, question 4: a forced step retry (sent again as new work) asks; a normal one checks first.
+    out.forcedRetry = await code('POST', `/jobs/job_r4x/steps/0/retry?project=${project}`, { force: true });
     out.retagBatchOf11 = await code('POST', '/tagging/batches', {
       runId: 'rtg_0123456789abcdef',
       pageIds: Array.from({ length: 11 }, (_, i) => `r4page${i}`),
@@ -324,6 +335,7 @@ describe('every mutating admin route, against ADR 0062', () => {
     });
     out.ordinaryJobOff = await code('POST', '/maintenance/journal-prune/disable', {});
     out.sweepOverrideOff = await code('PUT', '/maintenance/assign-block-ids-sweep/override', { on: false });
+    out.normalRetry = await code('POST', `/jobs/job_r4x/steps/0/retry?project=${project}`, { force: false });
     expect(out).toMatchObject({
       defaultScopeRaise: 'asks',
       connectionToWrite: 'asks',
@@ -333,8 +345,9 @@ describe('every mutating admin route, against ADR 0062', () => {
       projectSetting: 'asks',
       fileSourceBackToDefault: 'asks',
       retagBatchOf11: 'asks',
+      forcedRetry: 'asks',
     });
-    for (const k of ['fileSourceOff', 'connectionDown', 'ordinaryJobOff', 'sweepOverrideOff'])
+    for (const k of ['fileSourceOff', 'connectionDown', 'ordinaryJobOff', 'sweepOverrideOff', 'normalRetry'])
       expect(out[k], k).not.toBe('asks');
   });
 });
