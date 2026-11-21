@@ -125,7 +125,10 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerTagging(api, ctx); // v3 F3f: the retag audit, holds, batches and reconciliations
       registerReview(api, ctx); // v3 F3.4: the Review page and Revert (ADR 0055)
 
-      /** The one live stream (docs/dashboard.md › Stream). */
+      /**
+       * The one live stream (docs/dashboard.md › Stream). CR-2026-11-R4: opening it is not a use of the session either
+       * (the guard's `isBackgroundRequest`): the dashboard opens it again by itself after every drop.
+       */
       api.get('/stream', (req, reply) => {
         const token = sessionTokenOf(req);
         const raw = reply.raw;

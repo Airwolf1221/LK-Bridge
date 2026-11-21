@@ -7,7 +7,11 @@
  * (SE-42), or only an agent's job event arrives on the stream (SE-43).
  *
  * The safe behaviour asserted: with no input from the owner, the session's end does not move (it still ends within the
- * hour). The control (SE-41) shows that a request the owner makes moves it, as the ADR says.
+ * hour), and every request the page sends by itself says it is the dashboard's own (`X-LKB-Background: 1`). The control
+ * (SE-41) shows that a request the owner makes moves it, as the ADR says. (The lead, CR-2026-11-R4: as first written,
+ * SE-42 and SE-43 also asserted that the page sends no request at all; ADR 0062 asks only that such requests do not
+ * count as a use, and the live dashboard's refresh without input is pinned elsewhere: `test/ui/live.test.tsx`,
+ * `maintenance.test.tsx`, `staging.test.tsx`.)
  *
  * Set-up notes: this file runs in the node environment and installs vitest's own jsdom globals itself, AFTER the bridge
  * has started (under a jsdom docblock Vite rewrites `new URL('./migrations/', import.meta.url)` for a browser and the
@@ -56,14 +60,21 @@ afterEach(async () => {
 /** The browser: every dashboard request goes to the bridge, with the session cookie a same-origin request carries. */
 let inFlight = new Set<Promise<unknown>>();
 let answered: string[] = [];
+/** The requests forwarded without `X-LKB-Background: 1` (each as its line in `forwarded`, at its index there). */
+let unmarked: { readonly index: number; readonly line: string }[] = [];
 function forwardToBridge(): void {
   forwarded = [];
   answered = [];
+  unmarked = [];
   inFlight = new Set();
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init: RequestInit = {}) => {
     const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = raw.startsWith('http') ? raw.replace(/^https?:\/\/[^/]+/, '') : raw;
     const line = `${(init.method ?? 'GET').toUpperCase()} ${path.split('?')[0]}`;
+    const own = Object.entries((init.headers ?? {}) as Record<string, string>).some(
+      ([k, v]) => k.toLowerCase() === 'x-lkb-background' && v === '1',
+    );
+    if (!own) unmarked.push({ index: forwarded.length, line });
     forwarded.push(line);
     const headers: Record<string, string> = {
       ...((init.headers ?? {}) as Record<string, string>),
@@ -131,10 +142,12 @@ describe('an idle open tab', () => {
     await rtl.act(() => settle());
     await drained();
     const sent = forwarded.slice(before);
+    const notMarked = unmarked.filter((u) => u.index >= before).map((u) => u.line);
     expect(
-      { endMovedBy: owner.row().expires_at - ends, firstRequestByItself: sent[0] ?? null },
+      { endMovedBy: owner.row().expires_at - ends, sentByItselfUnmarked: notMarked },
       `the page sent ${sent.length} requests by itself; answered: ${answered.slice(-2).join(' | ')}`,
-    ).toEqual({ endMovedBy: 0, firstRequestByItself: null });
+    ).toEqual({ endMovedBy: 0, sentByItselfUnmarked: [] });
+    expect(sent.length, 'the page refreshed by itself (what the attempt relies on)').toBeGreaterThan(0);
   });
 
   it("SE-43: an agent's job event on the stream does not keep the owner's idle session alive", async () => {
@@ -154,9 +167,11 @@ describe('an idle open tab', () => {
     await rtl.act(() => settle(700)); // the page's debounce (400 ms); the reload's effect runs as `act` ends
     await drained();
     const sent = forwarded.slice(before);
+    const notMarked = unmarked.filter((u) => u.index >= before).map((u) => u.line);
     expect(
-      { endMovedBy: owner.row().expires_at - ends, firstRequestByItself: sent[0] ?? null },
+      { endMovedBy: owner.row().expires_at - ends, sentByItselfUnmarked: notMarked },
       `the page sent ${sent.length} requests by itself; answered: ${answered.slice(-2).join(' | ')}`,
-    ).toEqual({ endMovedBy: 0, firstRequestByItself: null });
+    ).toEqual({ endMovedBy: 0, sentByItselfUnmarked: [] });
+    expect(sent.length, 'the page refreshed by itself (what the attempt relies on)').toBeGreaterThan(0);
   });
 });

@@ -112,6 +112,29 @@ export interface ConsentProfileChoice {
    * when this matches exactly (v1.0.1, F-15), so it always takes an explicit, confirmed choice.
    */
   readonly confirmScopeChange?: string;
+  /**
+   * CR-2026-11-R4 (ADR 0062 decision 5): the owner has stepped up on this session within the window (the authenticator
+   * code, or the password without one). Without it, a choice that lets a connection do more (`StepUpToConfirm`) is not
+   * applied: the result asks for the step-up.
+   */
+  readonly steppedUp?: boolean;
+}
+
+/**
+ * CR-2026-11-R4 (ADR 0062 decision 5): a choice on the consent page that needs the step-up first, as the dashboard's own
+ * routes do: `raise`, an existing profile's scope raised; `new_profile`, a new profile given a scope above the default
+ * for new connections; `write`, a connection on a profile at scope `write` (a credential that writes, like a token).
+ */
+export interface StepUpToConfirm {
+  readonly why: 'raise' | 'new_profile' | 'write';
+  /** The profile's label (a new profile's, as entered). */
+  readonly label: string;
+  /** Its scope now; null for a new profile. */
+  readonly from: string | null;
+  /** The connection's scope once the choice is applied. */
+  readonly to: string;
+  /** The scope new connections start at (the configured default). */
+  readonly defaultScope: string;
 }
 
 /** A scope change on an existing profile that the owner has not yet confirmed. */
@@ -129,7 +152,9 @@ export interface ScopeChangeToConfirm {
 export type ConsentApplyResult =
   | { ok: true; profileId: string }
   | { ok: false; error: string }
-  | { ok: false; confirm: ScopeChangeToConfirm };
+  | { ok: false; confirm: ScopeChangeToConfirm }
+  /** CR-2026-11-R4: nothing was applied; the owner steps up first (`ConsentProfileChoice.steppedUp`). */
+  | { ok: false; stepUp: StepUpToConfirm };
 
 /**
  * The policy layer's side of consent (implemented in src/policy/consent.ts). The owner, signed in, picks the profile
@@ -146,8 +171,11 @@ export interface ConsentProfiles {
   /**
    * Applies the owner's choice (creates the profile, or sets an existing profile's scope, audited). A change to an
    * existing profile's scope without a matching `confirmScopeChange` is not applied: the result asks for confirmation.
+   * CR-2026-11-R4: nor is a choice that needs the step-up, without `steppedUp`: the result asks for the step-up.
    */
   apply(choice: ConsentProfileChoice): ConsentApplyResult;
+  /** CR-2026-11-R4: records a step-up made on the consent page (audited `owner.reauth`, as the dashboard's). */
+  recordStepUp?(r: { readonly ok: boolean; readonly reason?: string }): void;
   /** The profile id a PAT created without one gets. */
   defaultPatProfileId(): string;
   /**

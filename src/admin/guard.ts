@@ -7,6 +7,8 @@
  *   public URL; a missing or foreign one is refused) and the CSRF token bound to the session, in `X-CSRF-Token`.
  * - Unauthenticated requests get a 401 JSON body with no `WWW-Authenticate` header (it would suggest a bearer token).
  * - Requests a browser labels `Sec-Fetch-Site: cross-site` or `same-site` are refused (403 `CROSS_SITE`), reads too.
+ * - ADR 0062, CR-2026-11-R4: a request is a use of the session (its end moves 30 days on, its cookie is renewed) unless
+ *   it is the dashboard's own (`X-LKB-Background: 1`) or the live stream, which are only checked.
  */
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthServices } from '../auth/services.js';
@@ -26,14 +28,40 @@ export function sessionTokenOf(req: FastifyRequest): string {
 }
 
 /**
+ * CR-2026-11-R4 (ADR 0062 decision 1; SE-42, SE-43): the header the dashboard sends, `1`, on every request it makes
+ * without the owner's input (a refresh on a timer, a reload for a live event or for the stream starting afresh, the
+ * session check after the stream drops). Such a request is checked as the live stream's periodic check is: its session
+ * must be live, but it is not a use (its end does not move, its cookie is not renewed), so an idle open tab does not
+ * keep the session alive. The owner's own actions and page loads are uses, as before.
+ */
+export const BACKGROUND_HEADER = 'x-lkb-background';
+
+/** The live stream: the dashboard opens it by itself, and again after each drop; an EventSource cannot send a header. */
+const STREAM_ROUTE = '/api/admin/stream';
+
+/** Whether a request is the dashboard's own (`BACKGROUND_HEADER`, or the live stream), so not a use of the session. */
+export function isBackgroundRequest(req: FastifyRequest): boolean {
+  const h = req.headers[BACKGROUND_HEADER];
+  return (Array.isArray(h) ? h[0] : h) === '1' || req.routeOptions.url === STREAM_ROUTE;
+}
+
+/**
+ * ADR 0062: whether this request's session stepped up within the last 10 minutes (the authenticator code, or the
+ * password when no authenticator is set up). Read without counting as a use (the guard has already counted it).
+ */
+export function hasStepUp(s: AuthServices, req: FastifyRequest): boolean {
+  const session = s.owner.peekSession(sessionTokenOf(req));
+  return session !== undefined && s.owner.reauthUntil(session) !== null;
+}
+
+/**
  * OPS2: sensitive actions (adding, replacing or removing a key; the password; the authenticator) need the owner to have
  * stepped up on this session within the last 10 minutes (ADR 0062: the authenticator code, or the password when no
  * authenticator is set up), even when signed in. Throws 403 `REAUTH_REQUIRED` otherwise. Returns the session token.
  */
 export function requireReauth(s: AuthServices, req: FastifyRequest): string {
   const token = sessionTokenOf(req);
-  const session = s.owner.getSession(token);
-  if (!session || s.owner.reauthUntil(session) === null) {
+  if (!hasStepUp(s, req)) {
     throw new AdminHttpError(
       403,
       'REAUTH_REQUIRED',
@@ -51,7 +79,15 @@ export function adminGuard(s: AuthServices) {
       .header('x-content-type-options', 'nosniff')
       .header('referrer-policy', 'no-referrer');
     const token = req.cookies[s.owner.sessionCookie];
-    const used = token ? s.owner.useSession(token) : undefined;
+    // CR-2026-11-R4: the dashboard's own requests (and the live stream) are checked without counting as a use.
+    const background = isBackgroundRequest(req);
+    const used = !token
+      ? undefined
+      : background
+        ? s.owner.peekSession(token) !== undefined
+          ? { renewed: false }
+          : undefined
+        : s.owner.useSession(token);
     if (!token || !used) {
       return sendError(
         reply,

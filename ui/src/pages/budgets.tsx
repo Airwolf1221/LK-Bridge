@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api } from '../api';
+import { api, background } from '../api';
 import {
   Badge,
   Button,
@@ -33,10 +33,13 @@ const QUEUE_LABELS: Record<PriorityClass, string> = {
   P3: 'P3 · maintenance',
 };
 
-/** The 24 hour history changes slowly (one point per bucket): refresh it every minute. */
+/**
+ * The 24 hour history changes slowly (one point per bucket): refresh it every minute (CR-2026-11-R4: the page's own
+ * refresh, not the owner's use of the session).
+ */
 function useMinuteRefresh(reload: () => void): void {
   useEffect(() => {
-    const t = setInterval(reload, 60_000);
+    const t = setInterval(background(reload), 60_000);
     return () => clearInterval(t);
   }, [reload]);
 }

@@ -68,15 +68,29 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   retag) need a step-up on the session within the last ten minutes: the authenticator code (or a recovery code), or the
   password when no authenticator is set up. Otherwise the answer is `403 REAUTH_REQUIRED`; the dashboard asks in one
   dialog and sends the change again ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). A wrong code
-  stays in the dialog. Tightenings and brakes stay one click: lowering a scope, moving a connection down, read-only on,
-  ChatGPT's file source off, pausing writes and draining, Sign out everywhere, revoking a connection or a token,
-  cancelling a job, switching most maintenance jobs off, rejecting a proposal.
+  (`401 REAUTH_FAILED`) stays in the dialog, and a wrong current password (`401 WRONG_PASSWORD`) on the Account page is
+  shown there (CR-2026-11-R4); any other 401 means signed out. Tightenings and brakes stay one click: lowering a scope,
+  moving a connection down, read-only on, ChatGPT's file source off, pausing writes and draining, Sign out everywhere,
+  revoking a connection or a token, cancelling a job, switching most maintenance jobs off, rejecting a proposal.
+  CR-2026-11-R4 (ADR 0062 amendment 1): a guarded approval is judged on the whole proposal by the rail that made it a
+  proposal (its recorded reason: the deletes, bulk or assets rail) and by its operations, with the removals through a
+  low-level tool (`lk_api_write`, `lk_api_batch`, `lk_op_*`: a block or a row deleted, a list write that drops entries,
+  text taken off a pack page) and a member or invite removed counted as deletes; confirming a project's chronology asks
+  too (a reset is one click); and the OAuth consent page asks for the same step-up, on the page itself, before a scope
+  raise, a new profile above the default or a connection at scope `write` ([auth.md](auth.md#consent-and-profiles-chunk-2b)).
 - **Sessions (ADR 0062).** A session lasts 30 days from its last use (each use renews it and its cookie), survives a
-  restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included), at a
-  password change (the other sessions) or after 30 days unused. A link to the dashboard, Claude's consent page and
-  Google Drive's return come from another site, which a Strict cookie does not ride on: each answers once with a small
-  page of the bridge's own that opens the same address again from the bridge. When the live stream is refused, the
-  dashboard checks its session once and, signed out, goes to the sign-in page instead of reconnecting.
+  restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included, and
+  those already past their end), at a password change (the other sessions) or after 30 days unused. A link to the
+  dashboard, Claude's consent page and Google Drive's return come from another site, which a Strict cookie does not ride
+  on: each answers once (a top-level navigation only: never another site's image, fetch or frame) with a small page of
+  the bridge's own, never framed, that opens the same address again from the bridge. When the live stream is refused,
+  the dashboard checks its session once and, signed out, goes to the sign-in page instead of reconnecting.
+- **What counts as a use (CR-2026-11-R4, ADR 0062 amendment 1).** The owner's own actions and page loads. Not the
+  dashboard's own requests: every request it sends without the owner's input carries `X-LKB-Background: 1` (a page's
+  refresh timer, a reload for a live event or for the stream starting afresh, the session check after the stream
+  drops, anything sent more than a minute after the owner's last key, click or touch), and opening the live stream is
+  never one; the bridge checks such a request's session without moving its end or renewing its cookie. An idle open tab
+  therefore ends 30 days after the owner last used it.
 - **No secrets shown or logged.** An API key goes to the bridge once, from a write-only field; afterwards only its last
   four characters are shown (OPS2). The authenticator secret (while it is set up) and recovery codes are in one response
   each, marked `shownOnce`. A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
@@ -651,9 +665,10 @@ project.
   timeline's lanes (about three requests per age) and shows what it found: each age with its era, rows and count, any
   problem, and **how the tables write** dates and KCY values (each aspect's value, how many rows showed each way, up to
   three examples, and the aspects written more than one way). The style can be edited before **Confirm these settings**
-  (asks for a confirmation). **Clear the chronology settings** removes them (the tools refuse again). Every change is
-  audited as `project.set_chronology`. Until confirmed, the timeline tools refuse. The table is the authority; the
-  timeline is a derived view.
+  (asks for a confirmation and, since CR-2026-11-R4, the step-up: they are a project's settings, which the timeline
+  tools write by). **Clear the chronology settings** removes them (the tools refuse again; one click, a tightening).
+  Every change is audited as `project.set_chronology`. Until confirmed, the timeline tools refuse. The table is the
+  authority; the timeline is a derived view.
 - **Chronology check.** The last run of the check (state, when, requests, summary) and its findings in plain words: rows
   without an event, events without a row, a row and its event that disagree about the date or shape (**Row and event
   disagree about the date**), rows out of order, wrong KCY values, cells written differently from the confirmed style,
@@ -710,7 +725,7 @@ project.
   confirmation; audited `chronology.resolve`) is for one fixed by hand, after which other changes of its ages go ahead.
 
 Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lookup`, `PUT /projects/:name/chronology`
-(`{ confirm: true, settings }` or `{ confirm: true, reset: true }`), `GET /chronology/records`, `POST
+(`{ confirm: true, settings }`, which needs the step-up, or `{ confirm: true, reset: true }`, which does not), `GET /chronology/records`, `POST
 /chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`), `POST /chronology/propose-fix`
 (`{ confirm: true, project, age, rowId, confirmShapeChange? }`, `{ …, kind: 'count' }` or `{ …, kind: 'orphan', eventId }`:
 one proposal, or `nothing_to_do`), `GET /chronology/table-only` and `POST /chronology/table-only`

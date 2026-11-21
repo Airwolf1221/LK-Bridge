@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api, ApiError } from '../api';
+import { api, ApiError, inBackground } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtAgo, fmtInt, fmtTime, principalText } from '../format';
 import { useApi, useNow, type Resource } from '../hooks';
@@ -590,8 +590,9 @@ function CheckCard({
   const { reload } = r;
   useEffect(() => {
     if (!running && kick <= 0) return;
+    // CR-2026-11-R4: the card's own refresh, not the owner's use of the session.
     const t = setInterval(() => {
-      reload();
+      inBackground(reload);
       setKick((n) => Math.max(0, n - 1));
     }, 2000);
     return () => clearInterval(t);

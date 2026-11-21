@@ -597,7 +597,11 @@ Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PR
   `to`) and two buttons, _Change to … and approve_ and _Keep … and approve_. Only that confirmation, for exactly that
   change, applies it (audited `profile.set_scope`, `via: consent`); picking another existing profile in the list
   without choosing its scope therefore never changes it silently. A bad choice shows an error without using up the
-  request; denial is unchanged.
+  request; denial is unchanged. **The step-up (CR-2026-11-R4, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md)
+  amendment 1):** a raise (once confirmed), a new profile above the default scope, and a connection on a profile at
+  scope `write` also need the owner's step-up within the last 10 minutes, asked on the consent page itself ("Confirm
+  it’s you": the authenticator code, or the password without one) before anything is applied or any code issued; see
+  [auth.md](auth.md#consent-and-profiles-chunk-2b). An ordinary connection at `read` or `propose` and a lowering do not.
 - **Replace on reconnect (ADR 0033).** When the application being approved already has active connections, the page
   lists them in "This application's existing connections", each with a checkbox ticked by default (label, profile,
   created, last used). The same application is the same `client_id` for a Client ID Metadata Document client; for any

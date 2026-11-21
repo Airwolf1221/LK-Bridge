@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { api, qs } from '../api';
+import { api, background, qs } from '../api';
 import {
   Badge,
   Button,
@@ -1349,7 +1349,8 @@ export function SnapshotsPage() {
     (r.data?.overview.runs ?? []).some((x) => x.state === 'running') ||
     (r.data?.rehearsals ?? []).some((x) => x.state === 'running');
   useEffect(() => {
-    const t = setInterval(r.reload, active ? 3000 : 60_000);
+    // CR-2026-11-R4: the page's own refresh, not the owner's use of the session.
+    const t = setInterval(background(r.reload), active ? 3000 : 60_000);
     return () => clearInterval(t);
   }, [active, r.reload]);
   if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;

@@ -543,11 +543,17 @@ export class AuthStore {
       .run(now, expiresAt ?? null, sessionHash);
   }
 
-  /** ADR 0062: signs out every owner session, the caller's included ("Sign out everywhere"). Returns how many. */
+  /**
+   * ADR 0062: signs out every owner session, the caller's included ("Sign out everywhere"). Returns how many were live.
+   * CR-2026-11-R4 (SE-33): every session not yet revoked is revoked, those already past their end too, so that none comes
+   * back if the server's clock is later set back (an NTP step, a restored machine); only the live ones are counted.
+   */
   revokeAllSessions(now: number): number {
-    return this.db
-      .prepare('UPDATE auth_owner_sessions SET revoked_at = ? WHERE revoked_at IS NULL AND expires_at > ?')
-      .run(now, now).changes;
+    return this.tx(() => {
+      const live = this.activeSessions(now);
+      this.db.prepare('UPDATE auth_owner_sessions SET revoked_at = ? WHERE revoked_at IS NULL').run(now);
+      return live;
+    });
   }
 
   /** ADR 0062: how many owner sessions are live now. */

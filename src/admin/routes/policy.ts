@@ -2,7 +2,7 @@ import type { FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES, type Scope } from '../../policy/index.js';
 import { redactDeep } from '../redact.js';
-import { requireReauth } from '../guard.js';
+import { hasStepUp, requireReauth } from '../guard.js';
 import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const scope = z.enum(SCOPES);
@@ -21,9 +21,13 @@ export const registerPolicy: Register = (api, ctx) => {
     cmd.listProfiles('owner').find((p) => p.id === id)?.scope;
   /**
    * ADR 0062: approving a proposal of the owner's guarded kinds (a delete, more than 10 pages, an asset delete or move)
-   * needs the step-up; judged on the proposal's own operations (`LivePolicyGate.guardedVerdict`).
+   * needs the step-up; judged on the whole proposal (whatever is selected), every proposal of a bulk approval, by
+   * `LivePolicyGate.approvalVerdict`: CR-2026-11-R4, the rail that made it a proposal (its recorded reason) and its
+   * operations with the removals through a low-level tool (its recorded tool) and member administration's removals
+   * counted. A session that has stepped up within the window is not judged (nothing is read).
    */
-  const stepUpIfGuarded = (req: FastifyRequest, ids: readonly string[]) => {
+  const stepUpIfGuarded = async (req: FastifyRequest, ids: readonly string[]) => {
+    if (hasStepUp(ctx.deps.services, req)) return;
     for (const id of ids) {
       const d = policy.proposals.detail(id);
       if (!d) continue;
@@ -33,7 +37,12 @@ export const registerPolicy: Register = (api, ctx) => {
         params: o.params ?? {},
         options: o.options ?? {},
       }));
-      if (policy.gate.guardedVerdict(d.projectId, items) !== null) {
+      const tool = policy.proposals.originOf(id)?.tool;
+      const verdict = await policy.gate.approvalVerdict(d.projectId, items, {
+        ...(tool !== undefined ? { tool } : {}),
+        proposedBecause: d.proposedBecause,
+      });
+      if (verdict !== null) {
         requireReauth(ctx.deps.services, req);
         return;
       }
@@ -131,7 +140,7 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.post('/proposals/:id/approve', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    stepUpIfGuarded(req, [id]);
+    await stepUpIfGuarded(req, [id]);
     const b = parseInput(itemsBody, req.body ?? {});
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     return { proposal: redactDeep(await actions.approve(project.id, id, b.items)) };
@@ -144,7 +153,7 @@ export const registerPolicy: Register = (api, ctx) => {
    */
   api.post('/proposals/:id/approve-as-canon', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    stepUpIfGuarded(req, [id]);
+    await stepUpIfGuarded(req, [id]);
     const b = parseInput(itemsBody.extend({ confirm: z.literal(true) }), req.body);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     return { proposal: redactDeep(await actions.approveAsCanon(project.id, id, b.items)) };
@@ -184,7 +193,7 @@ export const registerPolicy: Register = (api, ctx) => {
       req.body,
     );
     const project = ctx.project(parseInput(projectQuery, req.query).project);
-    if (b.action !== 'reject') stepUpIfGuarded(req, b.ids);
+    if (b.action !== 'reject') await stepUpIfGuarded(req, b.ids);
     const results =
       b.action === 'approve'
         ? await actions.bulkApprove(project.id, b.ids)

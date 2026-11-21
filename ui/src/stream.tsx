@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { apiConfig } from './api';
+import { BACKGROUND_HEADER, apiConfig, inBackground } from './api';
 
 /**
  * The live stream (`/api/admin/stream`, Server-Sent Events). One connection for the whole dashboard; pages subscribe to
@@ -10,6 +10,10 @@ import { apiConfig } from './api';
  * ADR 0062: a stream the bridge refused (its session ended, a 401) is not opened again blindly every few seconds: the
  * session is checked once (`GET /api/admin/session`) and, signed out, the dashboard goes to the sign-in page (and comes
  * back where it was); so does the stream's own `unauthenticated` event.
+ *
+ * CR-2026-11-R4 (ADR 0062 decision 1): nothing the stream leads to is a use of the owner's session: the bridge does not
+ * count the stream's own requests, the session check is marked as the dashboard's own, and so is every reload a page
+ * makes for an event or for the stream starting afresh (`epoch`; see `useApi`).
  */
 
 export type StreamStatus = 'connecting' | 'live' | 'reconnecting' | 'ended';
@@ -57,13 +61,16 @@ const StreamContext = createContext<StreamApi | null>(null);
 
 const defaultFactory: SourceFactory = (url) => new EventSource(url, { withCredentials: true });
 
-/** ADR 0062: whether the owner is still signed in (false only on a 401; anything else counts as signed in). */
+/**
+ * ADR 0062: whether the owner is still signed in (false only on a 401; anything else counts as signed in).
+ * CR-2026-11-R4: the dashboard's own check (after the stream dropped), so not a use of the session.
+ */
 export const defaultCheckSession = async (): Promise<boolean> => {
   try {
     const res = await fetch(`${apiConfig.base}/api/admin/session`, {
       credentials: 'same-origin',
       cache: 'no-store',
-      headers: { accept: 'application/json' },
+      headers: { accept: 'application/json', [BACKGROUND_HEADER]: '1' },
     });
     return res.status !== 401;
   } catch {
@@ -118,8 +125,11 @@ export function StreamProvider({
       } catch {
         return;
       }
-      for (const cb of listeners.current.get(type) ?? [])
-        (cb as (d: unknown, at: number) => void)(parsed.data, parsed.at ?? Date.now());
+      // CR-2026-11-R4: a live event is not the owner's input: whatever a page asks for in answer is the dashboard's own.
+      inBackground(() => {
+        for (const cb of listeners.current.get(type) ?? [])
+          (cb as (d: unknown, at: number) => void)(parsed.data, parsed.at ?? Date.now());
+      });
     };
 
     const open = () => {

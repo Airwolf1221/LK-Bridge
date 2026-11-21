@@ -152,9 +152,13 @@ export function useAction() {
         if (okText) toast('ok', okText);
         return r;
       } catch (e) {
-        // A 401 sends the page to sign-in; a cancelled re-authentication (OPS2) is the owner's own choice.
-        if (!(e instanceof ApiError && (e.status === 401 || e.code === 'REAUTH_CANCELLED')))
-          toast('error', e instanceof Error ? e.message : String(e));
+        // A signed-out 401 sends the page to sign-in; a cancelled re-authentication (OPS2) is the owner's own choice.
+        // CR-2026-11-R4 (SE-44): any other refusal is shown, a 401 the signed-in owner's own check failed with (a wrong
+        // current password, `WRONG_PASSWORD`; a wrong code, `REAUTH_FAILED`) included (ADR 0062 decision 7).
+        const quiet =
+          e instanceof ApiError &&
+          ((e.status === 401 && e.code === 'UNAUTHENTICATED') || e.code === 'REAUTH_CANCELLED');
+        if (!quiet) toast('error', e instanceof Error ? e.message : String(e));
         return undefined;
       } finally {
         setBusy(false);

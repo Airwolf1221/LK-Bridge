@@ -184,7 +184,11 @@ The dashboard's **Account** page ([ADR 0028](adr/0028-secrets-on-the-dashboard.m
   also passes the Origin, CSRF and `Sec-Fetch-Site` checks of every admin change. Step-up attempts count against the
   **same limits as sign-in** (5 per address and 30 in all per 15 minutes), in both directions. Log events:
   `reauth.succeeded`, `reauth.failed`, `reauth.rate_limited`; audit: `owner.reauth` (success and failure). (OPS2 asked
-  for the password and the code within five minutes, and of fewer actions.)
+  for the password and the code within five minutes, and of fewer actions.) CR-2026-11-R4 ([ADR 0062](adr/0062-dashboard-sessions-and-step-up.md)
+  amendment 1): the consent page asks for the same step-up, on the page, before a choice that lets a connection do more
+  (see [Consent and profiles](#consent-and-profiles-chunk-2b)); a guarded approval is judged by the rail that made the
+  proposal and by its operations with the low-level tools' removals and member removals counted; confirming a
+  project's chronology asks too.
 - **Sessions** (ADR 0062). A session lasts **30 days from its last use** (`AUTH_SESSION_TTL_SECONDS`, default 2,592,000;
   an explicit lower value in the env file still wins): each use of the dashboard moves its end 30 days on, at most once
   a minute, and renews the cookie's `Max-Age`. The cookie is `__Host-lkb_session`: `HttpOnly`, `Secure`,
@@ -195,6 +199,12 @@ The dashboard's **Account** page ([ADR 0028](adr/0028-secrets-on-the-dashboard.m
   address again from the bridge, which carries it. The Account page shows how many sessions are active and has **Sign
   out everywhere** (`POST /api/admin/security/sessions/revoke-all`, `confirm: true`; no step-up: it only takes access
   away): every owner session ends, this one included. Event `logout.everywhere`; audit `owner.sessions_revoked`.
+  CR-2026-11-R4 (ADR 0062 amendment 1): Sign out everywhere also revokes the sessions already past their end (only the
+  live ones are counted in its answer), so none comes back if the server's clock is set back. The bounce answers a
+  top-level navigation only (a request with `Sec-Fetch-Dest` must say `document`: never another site's image, fetch or
+  frame) and is never framed (`X-Frame-Options: DENY`, `frame-ancestors 'none'`). The dashboard's own requests (its
+  refresh timers, its reloads for live events, the stream and the check after it drops) are not a use of the session:
+  they carry `X-LKB-Background: 1` and are only checked ([dashboard.md](dashboard.md), "What counts as a use").
 - **Password.** `POST /api/admin/security/password` with the current password and the new one (at least 12 characters).
   Hashed with Argon2id (64 MiB, t=3, p=4), stored encrypted. Every **other** owner session is signed out; the current one
   is kept. Event `password.changed`; audit `owner.password_change` (how many sessions were signed out, never a value).
@@ -233,6 +243,20 @@ claude.ai and claude.com → `claude`, chatgpt.com → `chatgpt`, loopback → `
 is shown HTML-escaped with an _untrusted name_ badge. The grant, and every refresh and access token issued from it,
 acts under the chosen profile; the scope is evaluated live on every call ([ADR 0012](adr/0012-live-policy-evaluation.md)).
 Grants and PATs from before chunk 2b are on a `legacy` profile at `read`.
+
+**The step-up on the consent page** (CR-2026-11-R4, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md) decision 5
+and amendment 1). The consent page is reached with the dashboard's session, so a choice there that lets a connection
+do more asks for the same step-up as the dashboard's routes: an existing profile's scope raised (after its "Confirm
+scope change" page), a new profile given a scope above the default for new connections, or a connection on a profile at
+scope `write` (a credential that writes, as a personal access token is). Unless the session stepped up within the last
+10 minutes, nothing is applied and no code is issued: a page "Confirm it’s you" asks, on the consent page itself, for
+the authenticator code (or a recovery code), or the password when no authenticator is set up, and goes on with the
+same pending request once it succeeds (the choice and the ticked connections carried through; Deny needs no step-up).
+The step-up is counted against the sign-in limits, logged (`reauth.*`, `consent.step_up_asked`) and audited
+(`owner.reauth`, `via: consent`), and holds for 10 minutes on the session, the dashboard included. A wrong code stays on
+the page (401), too many attempts answer 429 with `Retry-After`. An ordinary connection at `read` or `propose` (an
+existing profile at its own scope, a new one at the default or below) and every lowering are not asked: whether every
+new connection should ask is the owner's decision.
 
 ## For chunk 3: adding tools
 

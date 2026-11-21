@@ -1459,6 +1459,18 @@ export class ProposalService implements ProposalSink {
     return this.require(id);
   }
 
+  /**
+   * CR-2026-11-R4: the origin the proposal was captured with, as stored (`sanitiseOrigin`: its kind, client, tool and
+   * principal; never an approval), or null. The approval's step-up reads its tool (a low-level tool's removals are
+   * deletes for the rails).
+   */
+  originOf(id: string): JobOrigin | null {
+    const r = this.store.db.prepare('SELECT origin FROM proposals WHERE id = ?').get(id) as
+      { origin: string | null } | undefined;
+    const o = parseJson<unknown>(r?.origin, null);
+    return isObj(o) && typeof o.kind === 'string' ? (o as unknown as JobOrigin) : null;
+  }
+
   /** v2 C1: the high-level operation as captured (null for a v1 proposal). */
   private operationOf(id: string): Readonly<Record<string, unknown>> | null {
     const r = this.store.db.prepare('SELECT operation FROM proposals WHERE id = ?').get(id) as

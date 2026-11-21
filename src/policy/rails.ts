@@ -145,6 +145,11 @@ export interface RailContext {
    * the asset rail does not count its `updateAsset` (an asset delete still counts).
    */
   readonly stagedPlacement?: boolean;
+  /**
+   * CR-2026-11-R4 (SE-12): member administration's removals (`MEMBER_REMOVALS`) are deletes too. Set by the approval's
+   * judgment only (ADR 0062 decision 5): at entry they stay refused unless LK_ALLOW_MEMBER_ADMIN, as before.
+   */
+  readonly memberRemovals?: boolean;
 }
 
 export interface RailHit {
@@ -189,6 +194,37 @@ export const LOW_LEVEL_REMOVALS: Readonly<Record<string, string>> = Object.freez
   deletePropertyRow: 'sidebar row',
   deleteBlockPropertyRow: 'infobox row',
 });
+
+/**
+ * CR-2026-11-R4 (SE-12): the removals of member administration (registry `risk: admin`): someone taken off the
+ * LegendKeeper project, or an invitation withdrawn. Deletes for the approval's step-up (`RailContext.memberRemovals`).
+ */
+export const MEMBER_REMOVALS: Readonly<Record<string, string>> = Object.freeze({
+  removeMember: 'project member',
+  revokeInvite: 'invite',
+});
+
+/** The beginnings of the renames-and-moves rail's hits (`railsVerdict`), the one rail the step-up does not guard. */
+const RENAMES_MOVES_HIT =
+  /^(?:rename of a page \(|renames of \d+ pages$|move of a page \(|moves of \d+ pages$)/;
+
+/**
+ * CR-2026-11-R4 (SE-05 to SE-07; ADR 0062 decision 5): whether a proposal's recorded reason (its `proposedBecause`,
+ * `proposed because: …`, the hits of the rails that made it a proposal, joined by `; `) names a rail whose approval
+ * needs the step-up: the deletes rail (low-level removals and text removals included), the bulk rail or the assets
+ * rail. Every hit begins one of the parts, so a reason is let through only when every part is a renames-and-moves hit;
+ * anything else, a reason that cannot be read or one saying the rails could not be judged included, counts (fails
+ * closed). No reason (a proposal no rail made) is false.
+ */
+export function reasonNamesGuardedRail(reason: string | null | undefined): boolean {
+  if (reason === null || reason === undefined || reason === '') return false;
+  const prefix = 'proposed because: ';
+  if (!reason.startsWith(prefix)) return true;
+  return reason
+    .slice(prefix.length)
+    .split('; ')
+    .some((part) => !RENAMES_MOVES_HIT.test(part));
+}
 
 /**
  * ADR 0057 decision 4: the low-level writes that send a whole list (a document's blocks, a property's rows, items or
@@ -364,6 +400,13 @@ export function railsVerdict(
           only = null;
           return;
         }
+      }
+      // CR-2026-11-R4 (SE-12): at approval, a member or an invite taken away is a delete as well.
+      const member = ctx.memberRemovals === true ? MEMBER_REMOVALS[it.opId] : undefined;
+      if (member) {
+        kinds.set(member, (kinds.get(member) ?? 0) + 1);
+        only = null;
+        return;
       }
       const what = RAIL_DELETES[it.opId];
       if (!what) return;

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { api, ApiError, qs } from '../api';
+import { api, ApiError, background, qs } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtAgo, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
@@ -76,11 +76,11 @@ export function AuditsPage() {
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const now = useNow(30_000);
   useProjectReloadOn(['audits'], overview.reload);
-  // While an audit runs, look again every few seconds.
+  // While an audit runs, look again every few seconds (CR-2026-11-R4: the page's own refresh, not a use of the session).
   const running = overview.data?.running != null;
   useEffect(() => {
     if (!running) return;
-    const t = setInterval(overview.reload, 3000);
+    const t = setInterval(background(overview.reload), 3000);
     return () => clearInterval(t);
   }, [running, overview.reload]);
   return (

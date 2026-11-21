@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased: CR-2026-11-R4, the dashboard's sessions (ADR 0062 amendment 1, 21 November 2026)
+
+The fourth review's session findings (`test/review/r4-sessions/`). No migration, no new setting.
+
+- **The consent page asks for the step-up** before a scope raise, a new profile above the default scope, or a
+  connection on a profile at scope `write`: on the page itself ("Confirm it’s you": the authenticator code, or the
+  password without one; counted with the sign-in limits; audited `owner.reauth`, `via: consent`), then the same pending
+  request goes on. Nothing is applied and no code issued without it, so a stolen cookie alone no longer yields a
+  write-scope connection. Ordinary `read` and `propose` connections and lowerings are not asked.
+- **Approving a proposal** asks for the step-up when the rail that made it a proposal was the deletes, bulk or assets
+  rail (its recorded reason), and when its operations meet a guarded rail with the low-level tools' removals (a block or
+  a row deleted, a list write that drops entries, text taken off a pack page) and member administration's removals
+  (`removeMember`, `revokeInvite`) counted.
+- **A project's chronology settings**: confirming or changing them asks for the step-up; a reset stays one click.
+- **An idle open tab no longer keeps its session alive**: the dashboard marks every request it sends without the
+  owner's input (`X-LKB-Background: 1`: refresh timers, reloads for live events and for the stream starting afresh, the
+  session check after the stream drops, anything a minute after the owner's last input), and the bridge checks those,
+  and the live stream itself, without counting them as a use.
+- **Sign out everywhere** also revokes sessions already past their end (they cannot come back if the clock is set back).
+- **The bounce page** answers top-level navigations only (never another site's image, fetch or frame) and is never
+  framed.
+- **A wrong current password** on the Account page is shown again instead of being hidden as a sign-out.
+- Not changed: resuming a paused job stays one click (the review's SE-51 is the owner's decision).
+
 ## Unreleased: v3 F4.1, from the owner's check of the live tools (ADR 0064 amendment 2, ADR 0065 amendment 1, 20 November 2026)
 
 No migration, no new ADR. **After deploying, approve `arkona-2026-11-20-f41` on the Packs page** (it supersedes
