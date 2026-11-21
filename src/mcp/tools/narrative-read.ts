@@ -198,8 +198,14 @@ async function openRead(
     pack = ap ? ap.rules(o.value.ctx.projectId) : null;
     reader = ap ? (await ap.reader(o.value.ctx.projectId)).reader : null;
   } catch (e) {
-    note.push(
-      `The snapshots cannot be read (${e instanceof Error ? e.message : String(e)}): pass live: true.`,
+    // CR-2026-11-R4 (narrative-f4c N5): every page these tools read, live or not, is read through the snapshots'
+    // reader, and canon itself comes from the snapshots: without one, nothing can be read. It said "could not be read"
+    // (CHAPTER_UNREADABLE) and suggested `live: true`, which was already the check's default.
+    const code = typeof (e as { code?: unknown }).code === 'string' ? (e as { code: string }).code : null;
+    return no(
+      pd,
+      code === 'NO_SNAPSHOT' ? 'NO_SNAPSHOT' : 'SNAPSHOTS_UNREADABLE',
+      `${e instanceof Error ? e.message : String(e)} The chapter tools read the chapter, and compare it with canon, through the snapshots: take a full snapshot (the Snapshots page, or wait for the nightly one) and call again.`,
     );
   }
   if (!pack) return no(pd, 'TOOL_UNAVAILABLE', 'The Arkona pack’s rules cannot be read here.');

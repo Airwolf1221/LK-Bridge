@@ -30,6 +30,7 @@ import { PatService } from '../../src/auth/pats.js';
 import { AuthStore } from '../../src/auth/store.js';
 import type { Principal } from '../../src/jobs/index.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
+import { firstDifference, wordsOf } from '../../src/mcp/tools/narrative.js';
 import { deleteProbe, type RawLk } from './f4b-probe.js';
 import type { SoakRuntime } from './soak.js';
 import { copyBridgeState } from './write-scope.js';
@@ -176,7 +177,7 @@ export async function runNarrativeCheck(
     }
     const ok2 = await check('N2', 'arkona_story_create: one act, the Story Map first', async () => {
       const b = await tool('arkona_story_create', { continuity: rules.indexes.main, title, acts: ['One'] });
-      if (b.status !== 'written') throw new Error(JSON.stringify(b).slice(0, 300));
+      if (b.status !== 'written') throw new Error(`status ${String(b.status)}; the whole answer: ${JSON.stringify(b)}`);
       made.story = String(b.story.id);
       const kids = rt.tree.queries.children(pid, made.story).data.map((n) => n.displayName);
       if (kids[0] !== rules.names.storyMap) throw new Error(`children: ${kids.join(', ')}`);
@@ -187,6 +188,7 @@ export async function runNarrativeCheck(
       'N3',
       'two plans and two chapters, each read back word for word, its dateline first',
       async () => {
+        const seen: string[] = [];
         for (const n of [1, 2]) {
           await tool('arkona_chapter_plan', { story: title, number: n, act: 1, questionGate: 'closed' });
           const b = await tool('arkona_chapter_save', {
@@ -202,10 +204,27 @@ export async function runNarrativeCheck(
             draftStatus: 'Draft',
             markdown: `The probe chapter ${n}, written by the sandbox check.`,
           });
-          if (b.status !== 'written' || b.readBack?.matches !== true)
-            throw new Error(JSON.stringify(b).slice(0, 400));
+          // CR-2026-11-R4 (the owner's run: N3 failed with the answer cut at 400 characters, so which condition
+          // failed was lost): a job still running after the tool's inline wait is followed to its end and read back
+          // here as the tool reads back (what the job sent, to the document it sent it to); every failure says which
+          // condition failed and carries the whole answer.
+          let readBack = b.readBack as Obj | undefined;
+          if (b.status === 'queued' || b.status === 'waiting_budget') {
+            const job = await settleJob(rt, pid, String(b.jobId));
+            if (job.status !== 'succeeded')
+              throw new Error(
+                `the save's job ${String(b.jobId)} ended ${job.status}, not succeeded; the whole answer: ${JSON.stringify(b)}`,
+              );
+            readBack = await readBackSent(rt, raw, pid, String(b.jobId), String(b.chapter?.id ?? ''));
+          } else if (b.status !== 'written')
+            throw new Error(`status ${String(b.status)} (not written); the whole answer: ${JSON.stringify(b)}`);
+          if (readBack?.matches !== true)
+            throw new Error(
+              `the read-back did not match (readBack.matches is ${JSON.stringify(readBack?.matches ?? null)}): ${JSON.stringify(readBack ?? null)}; the whole answer: ${JSON.stringify(b)}`,
+            );
+          seen.push(`chapter ${n}: ${String(readBack.words)} words read back (${String(readBack.compared ?? 'the Markdown')})`);
         }
-        return 'chapters 1 and 2 saved and read back';
+        return `chapters 1 and 2 saved and read back: ${seen.join('; ')}`;
       },
     );
     if (!ok3) return items;
@@ -214,7 +233,7 @@ export async function runNarrativeCheck(
       'arkona_chapter_insert at 2: the later chapter and plan renumbered, read back live',
       async () => {
         const b = await tool('arkona_chapter_insert', { story: title, at: 2, title: 'Inserted' });
-        if (b.status !== 'written') throw new Error(JSON.stringify(b).slice(0, 400));
+        if (b.status !== 'written') throw new Error(`status ${String(b.status)}; the whole answer: ${JSON.stringify(b)}`);
         const live = async (id: string) => await raw.request('getResource', 'GET', `/resources/${id}`);
         const out: string[] = [];
         for (const r of b.renumbered as Obj[]) {
@@ -226,9 +245,11 @@ export async function runNarrativeCheck(
         return out.join('; ');
       },
     );
-    await check('N5', 'arkona_chapter_check, then the audit’s narrative findings for the story', async () => {
-      const c = await tool('arkona_chapter_check', { story: title, number: 1 });
+    await check('N5', 'a full snapshot, arkona_chapter_check, then the audit’s narrative findings for the story', async () => {
+      // CR-2026-11-R4: the snapshot first. The check reads the chapter and canon through the snapshots, and this run's
+      // own database has none until it takes one (on the mock, N5 answered CHAPTER_UNREADABLE).
       await rt.snapshots.full(pid, 'manual');
+      const c = await tool('arkona_chapter_check', { story: title, number: 1 });
       await rt.audits.run(pid, 'manual');
       const f = rt.audits
         .list(pid, { category: ['narrative'], limit: 1000 })
@@ -259,6 +280,53 @@ export async function runNarrativeCheck(
   return items;
 }
 
+
+/** A job followed to its end (at most ten minutes). */
+async function settleJob(rt: SoakRuntime['runtime'], pid: string, jobId: string) {
+  const end = Date.now() + 10 * 60_000;
+  for (;;) {
+    const j = rt.engine.queries.getJob(pid, jobId);
+    if (!j) throw new Error(`no job ${jobId}`);
+    if (['succeeded', 'failed', 'cancelled'].includes(j.status) || Date.now() > end) return j;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+}
+
+/**
+ * CR-2026-11-R4: a chapter read back as `arkona_chapter_save` reads it back once its job is done: what the job sent as
+ * the chapter's text (its last `replaceDocumentBlocks` step, as stored once bound and filled), against that document
+ * read now with the raw client, word for word.
+ */
+async function readBackSent(
+  rt: SoakRuntime['runtime'],
+  raw: RawLk,
+  pid: string,
+  jobId: string,
+  chapterId: string,
+): Promise<Obj> {
+  const job = rt.engine.queries.getJob(pid, jobId)!;
+  for (const s of [...job.steps].reverse()) {
+    if (s.opId !== 'replaceDocumentBlocks') continue;
+    const params = (s.params ??
+      (s.paramsArtifactId ? rt.engine.queries.readArtifact(pid, s.paramsArtifactId)?.data : null)) as Obj | null;
+    if (params?.path?.resourceId !== chapterId || typeof params.path.documentId !== 'string') continue;
+    const got = await raw.request(
+      'getDocumentBlocks',
+      'GET',
+      `/resources/${chapterId}/docs/${String(params.path.documentId)}/blocks`,
+    );
+    const want = wordsOf((params.body?.blocks ?? []) as unknown[]);
+    const diff = firstDifference(want, wordsOf((got.blocks ?? []) as unknown[]));
+    return {
+      matches: diff === null,
+      words: want.length,
+      documentId: params.path.documentId,
+      compared: 'what the job sent',
+      ...(diff ? { firstDifference: diff } : {}),
+    };
+  }
+  return { matches: null, note: `the job ${jobId} holds no text step for ${chapterId}` };
+}
 
 /** The report as the real run prints it: every item whole (CR-2026-11-R4: never a slice of a tool's answer). */
 export function formatNarrativeReport(items: readonly NarrativeCheckItem[]): string {

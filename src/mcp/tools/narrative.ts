@@ -16,6 +16,7 @@
 import * as z from 'zod';
 import { fromMarkdown, MarkdownError, type LkBlock } from '../../markdown/index.js';
 import { PACK_FILLER, shiftStep } from '../../packs/engine/job.js';
+import { mainDocumentId } from '../../jobs/engine.js';
 import { mintClientId } from '../../jobs/ids.js';
 import type { LifecycleMarker, StepSpec } from '../../jobs/index.js';
 import type { PlanItem } from '../../jobs/items.js';
@@ -51,7 +52,14 @@ import {
   type Tpl,
 } from './narrative-support.js';
 import { finish, liveRead } from './repo.js';
-import { errorFromThrown, errorResult, projectArg, withProject, type ToolDeps } from './shape.js';
+import {
+  errorFromThrown,
+  errorResult,
+  projectArg,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 
 const PACK = 'arkona';
@@ -994,6 +1002,35 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
   });
 }
 
+/**
+ * CR-2026-11-R4 (narrative-f4c N3): what a save's job sent as the chapter's text, and to which document: its last
+ * `replaceDocumentBlocks` step on the chapter, as stored once bound and filled (a large body is kept as an artefact).
+ * Null when the job has no such step with a bound document (the read-back then compares the Markdown's blocks).
+ */
+function sentText(
+  pd: ProjectDeps,
+  jobId: string,
+  chapterId: string,
+): { readonly documentId: string; readonly blocks: readonly unknown[] } | null {
+  const projectId = pd.project.id;
+  const job = pd.engine.queries.getJob(projectId, jobId);
+  if (!job) return null;
+  for (const s of [...job.steps].reverse()) {
+    if (s.opId !== 'replaceDocumentBlocks') continue;
+    const params = (s.params ??
+      (s.paramsArtifactId ? pd.engine.queries.readArtifact(projectId, s.paramsArtifactId)?.data : null)) as
+      | { path?: { resourceId?: unknown; documentId?: unknown }; body?: { blocks?: unknown } }
+      | null
+      | undefined;
+    if (params?.path?.resourceId !== chapterId) continue;
+    const documentId = params.path.documentId;
+    const blocks = params.body?.blocks;
+    if (typeof documentId !== 'string' || documentId === 'pending' || !Array.isArray(blocks)) continue;
+    return { documentId, blocks };
+  }
+  return null;
+}
+
 /** Submits a save, and (once written) reads the chapter back and compares it word for word (32B). */
 async function saveAndReadBack(
   env: Env,
@@ -1069,15 +1106,16 @@ async function saveAndReadBack(
     preview,
   });
   if (out.body.status !== 'written') return out.result;
-  // 32B: the prose verified by DIRECT read-back, word for word.
-  let documentId = o.chapter.documentId;
+  // 32B: the prose verified by DIRECT read-back, word for word. CR-2026-11-R4 (narrative-f4c N3): against what the job
+  // SENT, to the document it sent it to (its text step's stored params, the document bound and the body filled inside
+  // the lock). A new chapter is a template copy: LegendKeeper copies the template's documents in an order it does not
+  // state, so "the first page document listed" could be another one, and a block the template holds that Markdown
+  // cannot express is written back with the chapter; either made the read-back differ at its first word, the dateline.
+  const sent = out.jobId ? sentText(pd, out.jobId, o.chapter.id) : null;
+  let documentId = sent?.documentId ?? o.chapter.documentId;
   if (!documentId) {
     const res = await liveRead(pd, env.mctx, env.tool, 'getResource', { path: { resourceId: o.chapter.id } });
-    if (res.ok) {
-      const docs = ((res.value as { documents?: unknown }).documents ?? []) as Obj[];
-      const d = docs.find((x) => x.type === 'page' && !x.deletedAt) ?? null;
-      documentId = d && typeof d.id === 'string' ? d.id : undefined;
-    }
+    if (res.ok) documentId = mainDocumentId((res.value as { documents?: unknown }).documents);
   }
   let readBack: Obj;
   if (!documentId)
@@ -1096,13 +1134,14 @@ async function saveAndReadBack(
       };
     else {
       const got = (r.value as { blocks?: unknown[]; version?: unknown }).blocks ?? [];
-      const want = wordsOf(o.planted);
+      const want = wordsOf(sent?.blocks ?? o.planted);
       const diff = firstDifference(want, wordsOf(got));
       readBack = {
         matches: diff === null,
         words: want.length,
         version: (r.value as { version?: unknown }).version ?? null,
         documentId,
+        compared: sent ? 'what the job sent' : 'the chapter’s Markdown',
         ...(diff
           ? {
               firstDifference: diff,

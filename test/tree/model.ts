@@ -421,6 +421,14 @@ export class TreeModel {
     return { status: 201, body: this.resourceView(r) };
   }
 
+  /**
+   * CR-2026-11-R4 (the owner's request S; narrative-f4c's N3): LegendKeeper copies a template's documents, with their
+   * content, "in an order it does not state" (ADR 0050). Off (the default, which every older test expects): a copy gets
+   * a fresh, empty Main. `as-template`: each live document of the template copied with its blocks, in the template's
+   * order; `reversed`: the same, listed in the reverse order (another page document before Main).
+   */
+  copyTemplateDocuments: false | 'as-template' | 'reversed' = false;
+
   private copyTemplate(
     t: Res,
     id: string,
@@ -429,6 +437,16 @@ export class TreeModel {
     withChildren: boolean,
   ): Res {
     const r = this.seed({ id, name, parentId, props: false });
+    if (this.copyTemplateDocuments) {
+      for (const d of r.docs) this.docs.delete(d);
+      r.docs = [];
+      const from = this.liveDocs(t);
+      for (const d of this.copyTemplateDocuments === 'reversed' ? [...from].reverse() : from) {
+        const copy = this.addDoc(r.id, d.name, d.type);
+        const body = this.blocks.get(d.id);
+        if (body) this.blocks.set(copy.id, { version: 1, blocks: structuredClone(body.blocks) });
+      }
+    }
     // C2d (A1): LegendKeeper reuses the template's property and row ids in a copy (unique only within a page).
     r.props = structuredClone(t.props);
     if (withChildren) {
