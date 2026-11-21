@@ -23,7 +23,7 @@ import type { Calendar, DateTextStyle } from '../calendar/index.js';
 import { nameKeyOf, subjectPart } from '../packs/naming/namesakes.js';
 import { textKey } from '../packs/engine/text.js';
 import type { ConsistencyPattern, ConsistencyRules } from '../packs/types.js';
-import { readCell, readFirst, readLeading, readScan, type DateReading } from './dates.js';
+import { readCell, readFirst, readLeading, readRangeParts, readScan, type DateReading } from './dates.js';
 
 export type FactKind = 'birth' | 'death' | 'attested' | 'identity';
 export type FactSource = 'temporalScope' | 'lifeState' | 'prose' | 'chronology' | 'sidebar';
@@ -70,6 +70,40 @@ export interface ExtractedFact {
    * `at`: the date's offset in that sentence or clause (null: no date there, an identity value or a row).
    */
   readonly place?: FactPlace;
+  /**
+   * CR-2026-11-R4 (the owner's request L): the life a birth or death belongs to, when the phrasing names it ("First
+   * life …", "second life born …", "second-life actual death …"): 1 for the first.
+   */
+  readonly life?: number;
+  /**
+   * CR-2026-11-R4 (request L): an attested start that begins a new life: a `return` ("Reborn 4A 300", "born again 4A
+   * 300") or a `restoration` ("restored to life … Camue 1st, 5A 1").
+   */
+  readonly start?: 'return' | 'restoration';
+}
+
+/** The pack's ordinal words for lives when it names none (`lifeOrdinals`): "first" is life 1. */
+export const DEFAULT_LIFE_ORDINALS: readonly string[] = [
+  'first',
+  'second',
+  'third',
+  'fourth',
+  'fifth',
+  'sixth',
+  'seventh',
+  'eighth',
+  'ninth',
+  'tenth',
+];
+
+/** A life's ordinal as a phrasing's `life` group gives it ("second", "2nd"): 1-based, or null. */
+export function lifeOrdinal(text: string | undefined, ordinals: readonly string[]): number | null {
+  const t = (text ?? '').trim().toLocaleLowerCase('en-GB');
+  if (t === '') return null;
+  const i = ordinals.findIndex((o) => o.trim().toLocaleLowerCase('en-GB') === t);
+  if (i >= 0) return i + 1;
+  const n = /^(\d{1,3})(?:st|nd|rd|th)?$/u.exec(t);
+  return n ? Number(n[1]) : null;
 }
 
 /** Where a fact's value was read (see `ExtractedFact.place`). */
@@ -162,11 +196,18 @@ export interface Compiled {
   readonly words: SubjectWords;
   /** F's markers, normalised; null when the pack names none. */
   readonly nonCurrent: readonly string[] | null;
+  /** CR-2026-11-R4 (request L): the ordinal words a phrasing's `life` group is read with ("first" is life 1). */
+  readonly lifeOrdinals: readonly string[];
 }
 
 /** ADR 0064 amendment 1, rule A: what may stand between a clause's start and its subject, and what starts a clause. */
 export interface SubjectWords {
   readonly titles: ReadonlySet<string>;
+  /**
+   * CR-2026-11-R4 (RC-1): the relational particles (name keys: "of", "bint", "ibn", "née"…) that make the name after
+   * them someone else's relation, never the subject ("The daughter of Rashad al-Khalid was born").
+   */
+  readonly relational: ReadonlySet<string>;
   /** Splits a text before a verb into clauses: commas, semicolons, a spaced dash and the clause words (captured). */
   readonly split: RegExp;
   /** Where the text after a verb stops being its clause: a semicolon or a clause word. */
@@ -176,12 +217,50 @@ export interface SubjectWords {
 /** Rule A's defaults (the owner's words, 20 November 2026), when the pack names none. */
 export const DEFAULT_TITLES: readonly string[] = ['Kaiser', 'Kaiserin'];
 export const DEFAULT_CLAUSE_WORDS: readonly string[] = ['after', 'when', 'before', 'until', 'while'];
+/**
+ * CR-2026-11-R4 (RC-1): the relational particles when the pack names none: a name right after one of them is a
+ * relation of the subject (a parent, a spouse, a patronymic), never the subject.
+ */
+export const DEFAULT_RELATIONAL: readonly string[] = [
+  'of',
+  'bint',
+  'ibn',
+  'bin',
+  'ben',
+  'bat',
+  'née',
+  'by',
+  'with',
+  'for',
+  'to',
+  'from',
+  'and',
+  'or',
+  'nor',
+];
+
+/** Words before a name that are neither titles nor names ("the", "their"): read as lower-case words, whatever case. */
+const DETERMINERS = new Set([
+  'the',
+  'a',
+  'an',
+  'his',
+  'her',
+  'their',
+  'its',
+  'our',
+  'my',
+  'your',
+  'this',
+  'that',
+]);
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function subjectWords(
   titles: readonly string[] = DEFAULT_TITLES,
   clauseWords: readonly string[] = DEFAULT_CLAUSE_WORDS,
+  relational: readonly string[] = DEFAULT_RELATIONAL,
 ): SubjectWords {
   const words = clauseWords
     .map((w) => w.trim())
@@ -191,6 +270,7 @@ export function subjectWords(
   const wordAlt = words ? `|\\b(?:${words})\\b` : '';
   return {
     titles: new Set(titles.map(nameKeyOf).filter((t) => t !== '')),
+    relational: new Set(relational.map(nameKeyOf).filter((t) => t !== '')),
     split: new RegExp(`(,|;|\\s[-–—]\\s${wordAlt})`, 'iu'),
     cut: new RegExp(`;${wordAlt}`, 'iu'),
   };
@@ -200,14 +280,41 @@ export function subjectWords(
 const markerKey = (s: string) =>
   s
     .toLocaleLowerCase('en-GB')
-    .replace(/[\s\-–—_]+/gu, ' ')
+    // CR-2026-11-R4 (RC-16): every Unicode dash ("Pre‑Rewrite" with a non-breaking hyphen) is a dash.
+    .replace(/[\s\p{Pd}_]+/gu, ' ')
+    .replace(/^[^\p{L}\p{N}]+/u, '')
     .trim();
 
-/** Whether a text (a section's headings, a row) holds one of the non-current markers. */
-export function isNonCurrent(text: string | null | undefined, markers: readonly string[] | null): boolean {
+/** A segment's key starts with a marker, as whole words. */
+const startsWithMarker = (segment: string, markers: readonly string[]): boolean => {
+  const k = markerKey(segment);
+  return markers.some((m) => m !== '' && (k === m || k.startsWith(`${m} `)));
+};
+
+/**
+ * Whether a text (a section's headings, a row) carries one of the non-current markers. CR-2026-11-R4 (RC-16): only as
+ * a heading's own qualifier, never anywhere in it: a heading of the path (headings joined by " > ") is marked when it
+ * starts with a marker ("Author-Facing Notes") or one of its qualifiers does, after a spaced dash ("Key Life
+ * Transitions - Author-Facing Pre-Rewrite History") or in brackets ("History (Pre-Rewrite)"); "Birth and Upbringing
+ * (Current Canon, superseding the Pre-Rewrite History)" is current. A row (`row: true`) is marked only by a bracketed
+ * provenance note that starts with a marker ("(author-facing pre-rewrite provenance)"), never by a note quoting one
+ * ("(date confirmed; the pre-rewrite date is retired)").
+ */
+export function isNonCurrent(
+  text: string | null | undefined,
+  markers: readonly string[] | null,
+  o: { readonly row?: boolean } = {},
+): boolean {
   if (!text || !markers || markers.length === 0) return false;
-  const k = ` ${markerKey(text)} `;
-  return markers.some((m) => m !== '' && k.includes(m));
+  if (o.row) return [...text.matchAll(/\(([^()]*)\)/gu)].some((m) => startsWithMarker(m[1]!, markers));
+  return text.split(' > ').some((heading) => {
+    const qualifiers = heading
+      .replace(/\([^()]*\)/gu, ' ')
+      .split(/\s\p{Pd}\s|:/u)
+      .filter((x) => x.trim() !== '');
+    const own = [...heading.matchAll(/\(([^()]*)\)/gu)].map((m) => m[1]!);
+    return [...qualifiers, ...own].some((q) => startsWithMarker(q, markers));
+  });
 }
 
 /** What `{name}` becomes: a short run of words before the verb (resolved against the name index afterwards). */
@@ -239,8 +346,9 @@ export function compilePatterns(rules: ConsistencyRules): Compiled {
     problems,
     identity: new Set(rules.identityFields.map(textKey)),
     unestablished: new Set(rules.unestablished.map(textKey)),
-    words: subjectWords(rules.titles, rules.clauseWords),
+    words: subjectWords(rules.titles, rules.clauseWords, rules.relational),
     nonCurrent: rules.nonCurrent ? rules.nonCurrent.markers.map(markerKey).filter((m) => m !== '') : null,
+    lifeOrdinals: rules.lifeOrdinals ?? DEFAULT_LIFE_ORDINALS,
   };
 }
 
@@ -326,11 +434,21 @@ export function resolveName(
   let i = clauses.length - 1;
   const last = clauses[i]!;
   if (last.text !== '') {
-    // The clause runs straight into the verb: its last words name the subject, or nobody does.
+    // The clause runs straight into the verb: its last words name the subject, or nobody does. CR-2026-11-R4 (RC-1):
+    // the run must start the clause or follow a lower-case word ("Their son Murad al-Khalid") or a title ("Kaiser Soren
+    // von Woerfels"); after a relational particle ("The daughter of Rashad al-Khalid", "Layla bint Rashad al-Khalid") it
+    // is someone's relation, and after a capitalised word that is no title ("Karl Tobias von Hohenfalk") it is the end
+    // of a longer name: nobody, never the shorter name.
     const ws = wordsOf(last.text);
     for (let k = Math.min(8, ws.length); k >= 1; k--) {
       const r = tryText(ws.slice(-k).join(' '));
-      if (r) return r;
+      if (!r) continue;
+      const before = ws[ws.length - k - 1];
+      if (before === undefined) return r;
+      const bk = nameKeyOf(before);
+      if (words.relational.has(bk)) return null;
+      if (words.titles.has(bk) || DETERMINERS.has(bk)) return r;
+      return /^[\p{Lu}\p{Lt}]/u.test(before.replace(/^[^\p{L}]+/u, '')) ? null : r;
     }
     return null;
   }
@@ -369,13 +487,20 @@ function readDate(
   ctx: Ctx,
   text: string,
   how: 'leading' | 'first' | 'scan',
+  kind: ConsistencyPattern['kind'] = 'attested',
 ): { date: DateReading | null; unreadable: string | null; text?: string } | null {
   if (!ctx.cal)
     return { date: null, unreadable: 'the chronology’s calendar is not available to the bridge yet' };
   if (how === 'scan') {
     // The clause after the verb: up to a semicolon or a clause word ("…in Falkenau, when the war ended in 3A 98").
     const clause = text.split(ctx.compiled.words.cut)[0] ?? '';
-    const r = readScan(ctx.cal, clause, ctx.style);
+    // CR-2026-11-R4 (RC-2): never another date of the clause: brackets skipped, cut at a colon or a relative clause,
+    // and a birth's or death's date reached from the verb through at most one "in / on / at <place>".
+    const r = readScan(ctx.cal, clause, ctx.style, {
+      skipBrackets: true,
+      cutRelative: true,
+      reach: kind === 'birth' || kind === 'death',
+    });
     if (r === null) return null;
     return r.ok ? { date: r.reading, unreadable: null } : { date: null, unreadable: r.reason, text: r.text };
   }
@@ -449,13 +574,20 @@ export function extractPageFacts(
             if (!m) continue;
             const gap = cp.p.gap === true;
             const dateText = m.groups?.date ?? '';
-            const d = gap
-              ? { date: null, unreadable: null }
-              : readDate(ctx, dateText, cp.p.date ?? 'leading');
-            if (!d) continue; // nothing date-shaped: not a fact (rule B)
-            facts.push({
+            // CR-2026-11-R4 (request L): the life the phrasing names ("second life born …"), and a return or a
+            // restoration (an attested start that begins a new life).
+            const life = lifeOrdinal(m.groups?.life, ctx.compiled.lifeOrdinals);
+            const lifeOf = life !== null ? { life } : {};
+            const start =
+              cp.p.kind === 'attested' && (cp.p.bound ?? 'both') === 'from'
+                ? { start: cp.p.life === 'restoration' ? ('restoration' as const) : ('return' as const) }
+                : {};
+            const fact = (
+              kind: ExtractedFact['kind'],
+              d: { date: DateReading | null; unreadable: string | null; text?: string },
+            ): ExtractedFact => ({
               ...base(u),
-              kind: cp.p.kind,
+              kind,
               field: u.field,
               source,
               pattern: cp.p.id,
@@ -466,13 +598,28 @@ export function extractPageFacts(
               gap,
               date: d.date,
               unreadable: d.unreadable,
-              bound: cp.p.kind === 'attested' ? (cp.p.bound ?? 'both') : null,
+              bound: kind === 'attested' ? (cp.p.bound ?? 'both') : null,
               excerpt: clip(`${u.field}: ${tidy(u.text)}`),
               place: {
                 sha: placeSha(clause),
                 at: d.date ? dateOffset(clause, m.indices?.groups?.date?.[0] ?? 0, d.date.text) : null,
               },
+              ...lifeOf,
+              ...start,
             });
+            if (cp.p.life === 'span' && !gap) {
+              // "First life Camue 1st, 4A 100–Camue 33rd, 4A 325": that life's birth (its start) and its death (its end).
+              const parts = ctx.cal ? readRangeParts(ctx.cal, dateText, ctx.style) : null;
+              if (!parts) continue;
+              facts.push(fact('birth', { date: parts.from, unreadable: null }));
+              facts.push(fact('death', { date: parts.to, unreadable: null }));
+              continue;
+            }
+            const d = gap
+              ? { date: null, unreadable: null }
+              : readDate(ctx, dateText, cp.p.date ?? 'leading', cp.p.kind);
+            if (!d) continue; // nothing date-shaped: not a fact (rule B)
+            facts.push(fact(cp.p.kind, d));
           }
       }
       continue;
@@ -493,7 +640,9 @@ export function extractPageFacts(
           if (!who) continue; // a pronoun, another clause's name, or a name the bridge does not know: never read (D2)
           const gap = cp.p.gap === true;
           const dateText = m.groups?.date ?? '';
-          const d = gap ? { date: null, unreadable: null } : readDate(ctx, dateText, cp.p.date ?? 'leading');
+          const d = gap
+            ? { date: null, unreadable: null }
+            : readDate(ctx, dateText, cp.p.date ?? 'leading', cp.p.kind);
           if (!d) continue; // nothing date-shaped after the verb: not a fact (rule B)
           facts.push({
             ...base(u),
@@ -572,7 +721,7 @@ export function extractRowFacts(rows: readonly ChronologyRowInput[], ctx: Ctx): 
         section: null,
         excerpt: clip(`${tidy(row.event)} | ${tidy(row.date)}`),
         mentions: row.mentions,
-        ...(isNonCurrent(`${row.event} ${row.date}`, ctx.compiled.nonCurrent)
+        ...(isNonCurrent(`${row.event} ${row.date}`, ctx.compiled.nonCurrent, { row: true })
           ? { nonCurrent: true as const }
           : {}),
         place: { sha: placeSha(row.event), at: null },

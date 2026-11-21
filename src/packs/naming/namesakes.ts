@@ -47,26 +47,122 @@ export function subjectPart(name: string): string {
 }
 
 /**
- * What opens a bracketed NOTE on an alias rather than a part of its name (ADR 0064 amendment 2): a time ("from 4A 192",
- * "until …", "c. …"), or what kind of name it is ("birth", "birth name", "earlier birth/family name", "maiden name",
- * "regnal name", "childhood name", "nickname").
+ * The words of a bracketed NOTE on an alias rather than a part of its name (ADR 0064 amendment 2): a time ("from 4A
+ * 192", "until …", "c. …"), or what kind of name it is ("birth", "birth name", "earlier birth/family name", "maiden
+ * name", "regnal name", "childhood name", "nickname"). CR-2026-11-R4 (RC-4): a note is made of these words (with the
+ * fillers and tails below) or holds a date; a word that only begins like one ("as-Saffah") is no note word.
  */
-const NOTE_START =
-  /^(?:from|until|till|to|since|after|before|during|c\.|ca\.|circa|approx\.?|approximately|born|birth|earlier|later|former|formerly|original|originally|maiden|childhood|regnal|nickname|informal|formal|family|given|personal|courtesy|used|as|in|by|nee|née)\b/iu;
+const NOTE_WORDS = new Set([
+  'from',
+  'until',
+  'till',
+  'to',
+  'since',
+  'after',
+  'before',
+  'during',
+  'c.',
+  'ca.',
+  'circa',
+  'approx.',
+  'approx',
+  'approximately',
+  'born',
+  'birth',
+  'earlier',
+  'later',
+  'former',
+  'formerly',
+  'original',
+  'originally',
+  'maiden',
+  'childhood',
+  'regnal',
+  'nickname',
+  'informal',
+  'formal',
+  'family',
+  'given',
+  'personal',
+  'courtesy',
+  'used',
+  'as',
+  'at',
+  'in',
+  'by',
+  'nee',
+  'née',
+  'name',
+  'names',
+]);
+/** Words a note may hold besides its note words ("her birth name", "as a child", "used at court"). */
+const NOTE_FILLERS = new Set([
+  'the',
+  'a',
+  'an',
+  'her',
+  'his',
+  'their',
+  'its',
+  'of',
+  'and',
+  'or',
+  'only',
+  'also',
+]);
+const NOTE_TAILS = new Set([
+  'child',
+  'girl',
+  'boy',
+  'youth',
+  'adult',
+  'exile',
+  'marriage',
+  'infancy',
+  'life',
+  'court',
+  'use',
+]);
+/** CR-2026-11-R4 (RC-4): an ordinal designation is part of the name ("Leopold (Second of the Name)"), never a note. */
+const ORDINAL_DESIGNATION =
+  /^(?:the\s+)?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|\d+(?:st|nd|rd|th))(?:\s+of\s+(?:the|that|his|her)\s+name)?$/iu;
+/** CR-2026-11-R4 (RC-4): a bracket that gives a birth (or earlier) name: "(birth name Rita von Katzen)" is that alias. */
+const NAME_NOTE =
+  /^(?:(?:her|his|their)\s+)?(?:birth[\s-]+name|born|n[ée]e|maiden\s+name|former\s+name|earlier\s+name|formerly|previously)\s*:?\s+(.+)$/iu;
 
-/** Whether a bracket's inside is a note: it holds a digit (a date or range), opens as a note does, or ends "name(s)". */
+/**
+ * Whether a bracket's inside is a note: empty, or it holds a digit (a date or range), or its words are note words (its
+ * first one a note word), with fillers and tails ("birth", "her birth name", "as a child"). CR-2026-11-R4 (RC-4): an
+ * ordinal designation ("Second of the Name") and a word that only starts like a note word ("as-Saffah") are part of the
+ * name.
+ */
 function isAliasNote(inner: string): boolean {
   const t = inner.trim();
-  return t === '' || /\d/u.test(t) || NOTE_START.test(t) || /\bnames?$/iu.test(t);
+  if (t === '' || /\d/u.test(t)) return true;
+  if (ORDINAL_DESIGNATION.test(t)) return false;
+  const words = t
+    .toLocaleLowerCase('en-GB')
+    .split(/[\s/]+/u)
+    .map((w) => w.replace(/[,;:]+$/u, ''))
+    .filter((w) => w !== '' && !NOTE_FILLERS.has(w));
+  return (
+    words.length > 0 &&
+    NOTE_WORDS.has(words[0]!) &&
+    words.every((w) => NOTE_WORDS.has(w) || NOTE_TAILS.has(w))
+  );
 }
 
 /**
  * One alias as a bare name (ADR 0064 amendment 2): every trailing bracketed note dropped ("Rita von Katzen (4A 99-192)"
  * → "Rita von Katzen"; "Mizuno Rei (birth name)" → "Mizuno Rei"). A bracket that is not a note ("Leopold (the Elder)")
- * stays part of the name.
+ * stays part of the name. CR-2026-11-R4 (RC-4): a piece that is only a bracket giving a name ("(birth name Rita von
+ * Katzen)") is that name.
  */
 export function aliasName(s: string): string {
   let t = s.replace(/\s+/g, ' ').trim();
+  const whole = /^[([]([^()[\]]*)[)\]]$/u.exec(t);
+  const named = whole ? NAME_NOTE.exec(whole[1]!.trim()) : null;
+  if (named) return aliasName(named[1]!);
   for (;;) {
     const m = /\s*[([]([^()[\]]*)[)\]]\s*$/u.exec(t);
     if (!m || !isAliasNote(m[1]!) || m.index === 0) return t;
@@ -92,9 +188,10 @@ export function splitAliases(v: string | null | undefined): string[] {
 }
 
 /**
- * CR-2026-11-R4 (the owner's rule): an Aliases value's pieces: split at semicolons and line breaks (as F4.1 did) and at
- * commas outside brackets, so "Rita von Katzen, Yamato" is two aliases while "(from Zahras 1st, 4A 192)" and "Leopold
- * (the Elder, of Hohenfalk)" stay whole. An unclosed bracket keeps every comma after it (nothing is split on a guess).
+ * CR-2026-11-R4 (the owner's rule): an Aliases value's pieces: split at line breaks (as F4.1 did) and at semicolons and
+ * commas outside brackets, so "Rita von Katzen, Yamato" is two aliases while "(from Zahras 1st, 4A 192)", "(from 4A
+ * 192; regnal)" and "Leopold (the Elder, of Hohenfalk)" stay whole. An unclosed bracket keeps every comma and semicolon
+ * after it on its line (nothing is split on a guess).
  */
 function aliasPieces(v: string): string[] {
   const out: string[] = [];
@@ -103,9 +200,12 @@ function aliasPieces(v: string): string[] {
   for (const ch of v) {
     if (ch === '(' || ch === '[') depth++;
     else if ((ch === ')' || ch === ']') && depth > 0) depth--;
-    if (ch === ';' || ch === '\n' || (ch === ',' && depth === 0)) {
+    // CR-2026-11-R4 (RC-4, the lead's decision): ";" too splits only outside brackets ("Yamato (from 4A 192; regnal)"
+    // is one alias with one note); a line break always ends a piece.
+    if (ch === '\n' || ((ch === ';' || ch === ',') && depth === 0)) {
       out.push(cur);
       cur = '';
+      if (ch === '\n') depth = 0;
       continue;
     }
     cur += ch;

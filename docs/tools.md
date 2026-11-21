@@ -2115,8 +2115,9 @@ maturation rules; `state`: **Alive (recorded)** between the birth and a recorded
 the recorded birth, or the attestation's own start, to the latest attestation; "alive at" the present attests up to
 it; since F4c, a Life State of "Alive" records the life from the birth, or from a recorded return ("Reborn <date>"),
 to the present, but never across a recorded death: after the last death with no return it is **Unestablished (recorded
-death; current Life State Alive)**, and between a death and a return **Deceased (recorded)**), **Deceased (recorded)** after a
-recorded death, **Deceased (recorded by <date>)** at or after a Life State's "Deceased by <date>" (with `deceasedBy`; an
+death; current Life State Alive)**, and, since CR-2026-11-R4, between one life's death and the next life's start
+(a return, a restoration, a later life's birth) **Between lives (recorded)**, a date on a recorded death or a life's start
+**Unestablished**), **Deceased (recorded)** after a recorded death with no later life, **Deceased (recorded by <date>)** at or after a Life State's "Deceased by <date>" (with `deceasedBy`; an
 upper bound, never compared), **Unestablished** otherwise (an attested life never proves survival past it); in an AU
 with no identity page of its own, a state decided by Main CANON's values carries `label: "inherited from Main CANON"`; `around` (the chronology rows naming it, `window` each side, default 3); and `contradictions` on its birth or
 death. Since F4.1 (ADR 0064 amendment 2): a Life State whose principal part STARTS with "Alive" or "Living"
@@ -2126,6 +2127,18 @@ read by `aliveAt`) attests the life up to that date rather than the present; the
 principal part, through the pack's race token map, matched in the singular or the plural to a Race Core Reference under
 Races of Arkona ("High Elf" → "High Elves - Core Information"). Cost: none (1 read when the chronology's calendar is not
 kept yet, through the loader `calendar_date` uses); `live: true` 1 read a character.
+
+Since CR-2026-11-R4 (ADR 0064 amendment 3): **a character with more than one life** (the pack's life phrasings: "First
+life <date>–<date>", "second life born <date>", "second-life … death <date>", "restored to life … <date>", and the
+returns "Reborn / born again / Returned … <date>") is read life by life, from all of its identity page's dated births,
+deaths and starts whatever its Life State. The answer adds `life` (`{ position: "in a life" | "after the restoration" |
+"after the death of the life", life }`, or `{ position: "between lives", after, before }`) and `lives` (each life: how it
+began and ended, its attestations); `state.why` names the life ("in the second life: …"); `elapsedYears` is counted
+within the life the date falls in (`counted`), and none between lives; `died` is the death of that life (with its
+`life`). `born` stays the first life's birth (the coverage report counts it). A range of `elapsedYears` that may come
+before the birth says so (`maybeUnborn`). In an AU, the AU's own pages come first (its birth, its deaths), else Main
+CANON's resolved values, deaths, returns and attestations (its prose and chronology rows too), labelled; each `around`
+row of Main CANON's chronology is labelled "inherited from Main CANON".
 
 ### `arkona_as_of_coverage`
 

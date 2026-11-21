@@ -119,20 +119,22 @@ describe('arkona_consistency (D1 to D5)', () => {
     });
   });
 
-  it('an AU page is compared only within its AU (D9): the Main CANON value is shown labelled "inherited from Main CANON"', async () => {
+  // CR-2026-11-R4 (RC-8, D9): an AU's own pages come first, so Moonfall's own "born in 4A 150 in this telling" is the
+  // AU's value, never a Contradictory against Main CANON's inherited Camue 1st, 4A 100 (F4b compared the AU page with
+  // the inherited value, so the owner's pick could have rewritten the AU's deliberate difference).
+  it('an AU page is compared only within its AU (D9): its own value first, never against the inherited Main CANON value', async () => {
     const main = await consistency({ subject: 'Yasmin al-Naim' });
     expect(JSON.stringify(main.findings)).not.toMatch(/4A 150/);
     const au = await consistency({ subject: 'Yasmin al-Naim', continuity: 'Moonfall' });
-    expect(au.findings).toHaveLength(1);
-    expect(au.findings[0].details).toMatchObject({
-      continuity: 'Moonfall',
-      reference: { value: 'Camue 1st, 4A 100', inherited: 'inherited from Main CANON' },
-      restatements: [
-        expect.objectContaining({ value: '4A 150', page: expect.objectContaining({ id: K.auPage }) }),
-      ],
-    });
+    expect(au.findings).toEqual([]);
+    expect(au.scope).toMatchObject({ continuity: 'Moonfall' });
     // The Main pages (the Biography, the draft) are not compared in the AU's run.
     expect(JSON.stringify(au.findings)).not.toMatch(/4A 103|4A 110/);
+    // As of a date in Moonfall, the AU's own birth is the one used.
+    expect((await asOf('Yasmin al-Naim', '4A 200', { continuity: 'Moonfall' })).born).toMatchObject({
+      value: '4A 150',
+      page: { id: K.auPage },
+    });
   });
 
   it('a whole-repository run is stored as a run, read a page at a time; free (no LegendKeeper read)', async () => {
@@ -218,9 +220,10 @@ describe('arkona_as_of (D7, D9, D10)', () => {
     expect(b.characters[0].state.value).toBe('Alive (recorded)');
   });
 
+  // CR-2026-11-R4 (RC-8): Yasmin's AU states her birth (above); Rashad al-Khalid's states nothing, so his is inherited.
   it('an AU-inherited value is labelled', async () => {
-    const a = await asOf('Yasmin al-Naim', '4A 200', { continuity: 'Moonfall' });
-    expect(a.born).toMatchObject({ value: 'Camue 1st, 4A 100', label: 'inherited from Main CANON' });
+    const a = await asOf('Rashad al-Khalid', '4A 400', { continuity: 'Moonfall' });
+    expect(a.born).toMatchObject({ value: 'Camue 44th, 4A 360', label: 'inherited from Main CANON' });
   });
 
   it('a character in a Contradictory finding carries it; never apparent age; the race reference is pointed to', async () => {

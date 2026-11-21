@@ -65,6 +65,10 @@ export interface StoredFact {
   readonly nonCurrent?: true;
   /** CR-2026-11-R4: where the value was read (kept with the mentions, no migration; see `ExtractedFact.place`). */
   readonly place?: FactPlace;
+  /** CR-2026-11-R4 (request L): the life a phrasing names (1 for the first), kept with the mentions (no migration). */
+  readonly life?: number;
+  /** CR-2026-11-R4 (request L): an attested start that begins a new life (a return, a restoration). */
+  readonly start?: 'return' | 'restoration';
 }
 
 export interface FactIndexState {
@@ -128,6 +132,8 @@ function rowToFact(r: Obj): StoredFact {
     mentions?: string[];
     nonCurrent?: boolean;
     place?: { sha?: unknown; at?: unknown };
+    life?: number;
+    start?: StoredFact['start'];
   }>(r.mentions, {});
   const place =
     meta.place && typeof meta.place.sha === 'string'
@@ -155,6 +161,8 @@ function rowToFact(r: Obj): StoredFact {
     mentions: meta.mentions ?? [],
     ...(meta.nonCurrent === true ? { nonCurrent: true as const } : {}),
     ...(place ? { place } : {}),
+    ...(typeof meta.life === 'number' ? { life: meta.life } : {}),
+    ...(meta.start === 'return' || meta.start === 'restoration' ? { start: meta.start } : {}),
   };
 }
 
@@ -369,6 +377,8 @@ export class FactIndex {
           mentions: f.mentions,
           ...(f.nonCurrent ? { nonCurrent: true } : {}),
           ...(f.place ? { place: { sha: f.place.sha, at: f.place.at } } : {}),
+          ...(f.life !== undefined ? { life: f.life } : {}),
+          ...(f.start ? { start: f.start } : {}),
         }),
       ),
     );

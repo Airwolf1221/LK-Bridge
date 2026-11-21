@@ -141,13 +141,25 @@ function urlsIn(v: unknown, out: Set<string>, depth = 0): void {
 
 /** A heading stack: the section path of the blocks below. */
 class Sections {
-  private readonly stack: { level: number; title: string }[] = [];
+  private stack: { level: number; title: string }[] = [];
   heading(level: number, title: string): void {
     while (this.stack.length > 0 && this.stack[this.stack.length - 1]!.level >= level) this.stack.pop();
     this.stack.push({ level, title: tidy(title) || '(untitled heading)' });
   }
   get path(): string | null {
     return this.stack.length > 0 ? this.stack.map((s) => s.title).join(' > ') : null;
+  }
+  /**
+   * CR-2026-11-R4 (RC-17): a container (an expand, a layout column, a callout) opens a frame of its own: a heading inside
+   * it governs the blocks after it in the container only, never the blocks after the container.
+   */
+  frame<T>(fn: () => T): T {
+    const saved = [...this.stack];
+    try {
+      return fn();
+    } finally {
+      this.stack = saved;
+    }
   }
 }
 
@@ -317,7 +329,7 @@ function extractDocument(doc: DocumentInput, out: PageExtract): void {
         }
         addRefs(b.content, id, text);
       }
-      if (Array.isArray(b.children)) walk(b.children, false);
+      if (Array.isArray(b.children)) sections.frame(() => walk(b.children as unknown[], false));
     }
   };
   walk(blocks, true);

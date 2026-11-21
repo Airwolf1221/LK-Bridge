@@ -29,6 +29,7 @@ import { SidebarModel } from '../resources/world.js';
 import { F } from '../packs/f4a-world.js';
 import { IDENTITY_KEYS } from '../packs/world.js';
 import { L, liveRunWorld, type LiveWorld } from './live-world.js';
+import { K } from './world.js';
 
 vi.setConfig({ testTimeout: 120_000 });
 
@@ -236,14 +237,21 @@ describe('D9 in arkona_as_of: an AU with no identity page of its own inherits Ma
     expect(au.state).toMatchObject({ value: 'Deceased (recorded)', label: 'inherited from Main CANON' });
   });
 
-  it('Yasmin al-Naim in Moonfall at 4A 120 (no AU facts of her own): Alive (recorded), inherited from Main CANON', async () => {
+  // CR-2026-11-R4 (RC-8, D9: "a fact stated on that AU's own pages is used first"): Moonfall's own chronicle states her
+  // birth ("Yasmin al-Naim was born in 4A 150 in this telling"), so in Moonfall she is born in 4A 150, not Main CANON's
+  // Camue 1st, 4A 100 (F4c answered on the inherited birth: Alive at 4A 120). Her Life State is still Main CANON's.
+  it('Yasmin al-Naim in Moonfall: her AU’s own birth (4A 150) first; at 4A 120 not yet born, at 4A 200 Alive (recorded) by the inherited Life State', async () => {
     const au = await asOf('Yasmin al-Naim', '4A 120', { continuity: 'Moonfall' });
-    expect(au.born).toMatchObject({ value: 'Camue 1st, 4A 100', label: 'inherited from Main CANON' });
-    expect(au.state).toMatchObject({ value: 'Alive (recorded)', label: 'inherited from Main CANON' });
-    expect(au.state.why).toMatch(
+    expect(au.born).toMatchObject({ value: '4A 150', page: { id: K.auPage } });
+    expect(au.born).not.toHaveProperty('label');
+    expect(au.elapsedYears).toBe('not yet born');
+    expect(au.state.value).toBe('Unestablished');
+    const later = await asOf('Yasmin al-Naim', '4A 200', { continuity: 'Moonfall' });
+    expect(later.state).toMatchObject({ value: 'Alive (recorded)', label: 'inherited from Main CANON' });
+    expect(later.state.why).toMatch(
       /between the recorded birth and the present \(5A 931\): the Life State records/,
     );
-    // Main CANON gives the same, unlabelled.
+    // Main CANON: her own birth, unlabelled.
     const main = await asOf('Yasmin al-Naim', '4A 120');
     expect(main.state.value).toBe('Alive (recorded)');
     expect(main.state).not.toHaveProperty('label');
@@ -273,10 +281,12 @@ describe('the guard on the Life State ruling: a recorded death wins inside its o
     expect((await asOf('Nahla Stand-in', 'Isar 10th, 4A 260')).state.value).toBe(gap);
   });
 
-  it('Yue Stand-in (died 4A 150, reborn 4A 300): Deceased (recorded) between the death and the return, alive after it', async () => {
+  // CR-2026-11-R4 (the owner's request L): a death and a return are two lives, so between them the character is
+  // "Between lives (recorded)" (F4c said "Deceased (recorded)"), never Alive, and the reason names the lives.
+  it('Yue Stand-in (died 4A 150, reborn 4A 300): between lives from the death to the return, alive after it', async () => {
     expect((await asOf('Yue Stand-in', '4A 120')).state.value).toBe('Alive (recorded)');
     const dead = await asOf('Yue Stand-in', '4A 200');
-    expect(dead.state).toMatchObject({ value: 'Deceased (recorded)' });
+    expect(dead.state).toMatchObject({ value: 'Between lives (recorded)' });
     expect(dead.state.why).toMatch(/before the recorded return \(4A 300\)/);
     const back = await asOf('Yue Stand-in', '4A 400');
     expect(back.state).toMatchObject({ value: 'Alive (recorded)' });
@@ -290,7 +300,7 @@ describe('the guard on the Life State ruling: a recorded death wins inside its o
       label: 'inherited from Main CANON',
     });
     expect((await asOf('Yue Stand-in', '4A 200', moon)).state).toMatchObject({
-      value: 'Deceased (recorded)',
+      value: 'Between lives (recorded)',
       label: 'inherited from Main CANON',
     });
     expect((await asOf('Yue Stand-in', '4A 400', moon)).state).toMatchObject({

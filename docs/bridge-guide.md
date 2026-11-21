@@ -439,12 +439,15 @@ each character (at most 25) it returns where its birth is recorded (or "birth un
 years** (a number when both dates are exact days, a range when either is approximate or coarser, "not yet born" before
 the birth, none when the birth is unknown); the **state recorded**: Alive (recorded) between its birth and a recorded
 death, inside its attested span or, with a Life State of "Alive", up to the present (never across a recorded death: after
-a death with no recorded return it is "Unestablished (recorded death; current Life State Alive)"); Deceased (recorded) after a recorded
-death, or "Deceased (recorded by <date>)" at or after a Life State's "Deceased by <date>"; **Unestablished** otherwise; the
+a death with no recorded return it is "Unestablished (recorded death; current Life State Alive)", and between one life's
+death and the next life's start "Between lives (recorded)"); Deceased (recorded) after a recorded death with no later life, or "Deceased (recorded by <date>)" at or after a Life State's "Deceased by <date>"; **Unestablished** otherwise; the
 chronology rows naming it nearest the date on each side (`window`, default 3); and any open **contradiction** on its birth
 or death. **It never gives apparent or biological age**: Arkona's races mature and age differently, so read the race
 reference it links. An attested life never proves survival past it: never write a character as alive where the answer
-says Unestablished without asking the owner. `continuity` (an AU's name) uses the AU's own pages first, else Main CANON's
+says Unestablished without asking the owner. A character with more than one life (a return, a restoration, "First life
+…; second life born …") is answered life by life: `life` names the life the date falls in ("in the second life", "after
+the restoration") or the two lives it falls between, `lives` lists them, and the elapsed years are counted within the
+life the date falls in. `continuity` (an AU's name) uses the AU's own pages first, else Main CANON's
 values labelled "inherited from Main CANON".
 
 **`arkona_consistency { subject | under | all }`: before you change a date** (a birth, a death, a chronology row) or an

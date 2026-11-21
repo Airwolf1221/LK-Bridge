@@ -445,6 +445,15 @@ async function chapterCheck(
         // "Deceased by <date>" (an upper bound on death, the Life State's): the state says which.
         ...(c.deceasedBy ? { deceasedBy: c.deceasedBy, state: state.value } : {}),
       });
+    // CR-2026-11-R4 (the owner's request L): between two of a character's lives, recorded dead at the date.
+    else if (state.value?.startsWith('Between lives (recorded'))
+      items.push({
+        label: LABELS.contradicts,
+        kind: 'person',
+        what: `${who} is between lives at ${date} (${state.why ?? 'after one life’s death, before the next life'})`,
+        character: who,
+        ...(c.died ? { died: c.died } : {}),
+      });
     else if (state.value?.startsWith('Unestablished'))
       items.push({
         label: LABELS.unestablished,
@@ -543,11 +552,16 @@ async function chapterCheck(
             : readLeading(calendar, recorded.value)
           : null;
         const margin = cons?.approxMargin ?? 5;
-        if (
-          rv &&
-          rv.ok &&
-          !overlaps(spanOf(calendar, said.reading, margin), spanOf(calendar, rv.reading, margin))
-        )
+        // CR-2026-11-R4 (the owner's request L): a character with several lives: a birth (or death) written in the
+        // prose agrees with any life's start (or death).
+        const saidSpan = spanOf(calendar, said.reading, margin);
+        const anyLife = ((c?.lives as Obj[] | undefined) ?? []).some((l) => {
+          const v = ((p.kind === 'birth' ? l.began : l.ended) as { value?: unknown } | undefined)?.value;
+          if (typeof v !== 'string') return false;
+          const r = style ? readLeading(calendar, v, style) : readLeading(calendar, v);
+          return r.ok && overlaps(saidSpan, spanOf(calendar, r.reading, margin));
+        });
+        if (rv && rv.ok && !anyLife && !overlaps(saidSpan, spanOf(calendar, rv.reading, margin)))
           items.push({
             label: LABELS.contradicts,
             kind: 'date',
