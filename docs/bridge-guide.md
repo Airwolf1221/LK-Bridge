@@ -940,11 +940,13 @@ never a decision.
 - `summary` for each section that leaves a source that survives: a short interface summary; the bridge adds the exact link.
 - `dependencies`: each page that depends on the source, to the new owner it actually needs. `retire: true` (archive the
   source once phase 1 has verified) needs every one of them.
-- **Each new owner complete.** When the source has Source Boundaries or Unresolved Material, each new owner addresses
-  each one: move items of it there in the `map` (they go under that heading), give your own text (`sourceBoundaries`,
-  `unresolvedMaterial`, Markdown), or say it does not apply, with a reason the owner reads in the proposal
-  (`notApplicable: { "sourceBoundaries": "…" }`); never leave it out (`SPLIT_SECTIONS_UNADDRESSED`). The bridge never
-  writes these sections for you. Give each new owner its own Dependencies: start from the source's own (the dry run's
+- **Each new owner complete.** When the source has Source Boundaries or Unresolved Material, each new owner the pack
+  expects to carry them (on Arkona: a Core, a Compact Reference, a relationship owner and any non-character owner; an Art
+  page or a specialist page only when the pack names its Reference Type; the dry run says `by: "not expected"` for the
+  others) addresses each one: move items of it there in the `map` (they go under that heading), give your own text
+  (`sourceBoundaries`, `unresolvedMaterial`, Markdown), or say it does not apply, with a reason the owner reads in the
+  proposal (`notApplicable: { "sourceBoundaries": "…" }`); never leave it out (`SPLIT_SECTIONS_UNADDRESSED`). The bridge
+  never writes these sections for you. Give each new owner its own Dependencies: start from the source's own (the dry run's
   `completeness.suggestedDependencies`) and keep only those it relies on; when it has none, say why
   (`noDependencies: { "reason": "…" }`; otherwise `SPLIT_DEPENDENCIES_UNADDRESSED`).
 
