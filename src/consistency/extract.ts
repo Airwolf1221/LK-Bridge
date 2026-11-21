@@ -135,9 +135,26 @@ export function standsWhole(text: string, i: number, len: number): boolean {
  */
 export function dateOffset(text: string, from: number, date: string): number | null {
   if (date === '') return null;
-  for (let i = text.indexOf(date, Math.max(0, from)); i >= 0; i = text.indexOf(date, i + 1))
-    if (standsWhole(text, i, date.length)) return i;
-  return null;
+  const first = (t: string): number | null => {
+    for (let i = t.indexOf(date, Math.max(0, from)); i >= 0; i = t.indexOf(date, i + 1))
+      if (standsWhole(t, i, date.length)) return i;
+    return null;
+  };
+  // CR-2026-11-R4 (LD-09): the scan reads no date inside a closed bracketed parenthetical (RC-2), so the same text in
+  // brackets before the date read is never its place: outside the brackets first; inside them only when the date
+  // occurs nowhere else (a value read whole, as "(Camue 1st, 4A 100)").
+  return first(bracketsBlanked(text)) ?? first(text);
+}
+
+/** `text` with each closed bracketed parenthetical (nested ones too) blanked to as many spaces: every offset kept. */
+function bracketsBlanked(text: string): string {
+  let t = text;
+  for (let i = 0; i < 8; i++) {
+    const next = t.replace(/\([^()]*\)|\[[^[\]]*\]/gu, (m) => ' '.repeat(m.length));
+    if (next === t) break;
+    t = next;
+  }
+  return t;
 }
 
 /** A page's own subject and continuity, as its sidebar states them. */
