@@ -18,43 +18,56 @@
  *   dateline first;
  * - **N4** `arkona_chapter_insert` at 2: chapter 2 becomes 3, plan 2 becomes 3, a new Chapter 2 Plan: names and Chapter
  *   Number fields read back live;
- * - **N5** a full snapshot first (the chapter tools read through the snapshots), `arkona_chapter_check` on chapter 1,
- *   then an audit: the story's narrative findings listed.
+ * - **N5** the story's pages snapshotted first (the chapter tools read through the snapshots; R4.1: never the test
+ *   world), `arkona_chapter_check` on chapter 1, then an audit: the story's narrative findings listed.
  *
  * Clean-up: the throwaway story deleted with everything under it, and Main CANON if this run made it, with the raw
- * client, even after a failure; the report names what must be deleted by hand. Cost: about 60 writes and 40 reads, plus
- * a full snapshot of the test world.
+ * client, even after a failure or a step's timeout, and again in this file's `afterAll` (its own timeout); the report
+ * names what must be deleted by hand. Cost: about 60 writes and 60 reads (N5 snapshots the story's own pages, never the
+ * test world: R4.1).
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { rawLk } from './f4b-probe.js';
 import { formatNarrativeReport, runNarrativeCheck } from './narrative-f4c.js';
-import { createSoakRuntime } from './soak.js';
+import { createSoakRuntime, type SoakRuntime } from './soak.js';
+import { cleanupAfterAll, sandboxRun } from './steps.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
 
 describe.skipIf(!projectName)('LegendKeeper sandbox: the narrative tools (F4c, N1–N5)', () => {
+  // R4.1: each step printed as it starts and finishes, with its own timeout; the clean-up again here, with its own.
+  const steps = sandboxRun({ name: 'narrative-f4c' });
+  let sb: SoakRuntime | undefined;
+  afterAll(async () => {
+    try {
+      await cleanupAfterAll(steps);
+    } finally {
+      await sb?.close();
+    }
+  }, steps.hookTimeoutMs);
+
   it('makes a story, saves and renumbers chapters, checks and audits them, and cleans up', async () => {
     const target = resolveSandboxTarget(projectName);
-    const sb = await createSoakRuntime({
+    const started = await steps.step('runtime', 'the sandbox runtime started', () =>
+      createSoakRuntime({
+        apiKey: target.apiKey,
+        project: target.name,
+        ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+      }),
+    );
+    sb = started;
+    const raw = rawLk({
+      lk: started.lk,
+      projectId: started.projectId,
       apiKey: target.apiKey,
-      project: target.name,
       ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
     });
-    try {
-      const raw = rawLk({
-        lk: sb.lk,
-        projectId: sb.projectId,
-        apiKey: target.apiKey,
-        ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
-      });
-      const items = await runNarrativeCheck(sb, raw, target.name, {
-        bridgeDbPath: process.env.DB_PATH ?? './data/bridge.db',
-      });
-      process.stdout.write(formatNarrativeReport(items));
-      expect(items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
-    } finally {
-      await sb.close();
-    }
+    const items = await runNarrativeCheck(started, raw, target.name, {
+      bridgeDbPath: process.env.DB_PATH ?? './data/bridge.db',
+      run: steps,
+    });
+    process.stdout.write(formatNarrativeReport(items));
+    expect(items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
   }, 1_800_000);
 });

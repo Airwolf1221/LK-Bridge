@@ -40,6 +40,7 @@
  * The thin wrapper for the real run is `assumptions-r3.test.ts`; the ordinary suite runs these steps against the mock in
  * `test/sandbox-mock/assumptions-r3.test.ts`.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import { mintClientId, type OpParams, type StepOptions } from '../../src/jobs/index.js';
 import { stableJson } from '../../src/jobs/sidebar-state.js';
 import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
@@ -62,7 +63,11 @@ const para = (text: string): Obj => ({ id: mintClientId(), kind: 'paragraph', co
  * The checks (X1 to X8), for the real run (`assumptions-r3.test.ts`) and, CR-2026-11-R4 (the owner's request S), the
  * ordinary suite's run against the mock (`test/sandbox-mock/assumptions-r3.test.ts`), through the same runtime and harness.
  */
-export async function runAssumptionsR3(sb: SoakRuntime): Promise<AssumptionsR3Item[]> {
+export async function runAssumptionsR3(
+  sb: SoakRuntime,
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  steps: SandboxRun = sandboxRun({ name: 'assumptions-r3', out: () => undefined }),
+): Promise<AssumptionsR3Item[]> {
   const items: Item[] = [];
   const record = (id: string, title: string, verdict: Item['verdict'], detail: string) =>
     items.push({ id, title, verdict, detail });
@@ -79,7 +84,7 @@ export async function runAssumptionsR3(sb: SoakRuntime): Promise<AssumptionsR3It
   /** Runs a check; an unexpected error is a FAIL with what was answered. */
   const check = async (id: string, title: string, fn: () => Promise<void>) => {
     try {
-      await fn();
+      await steps.step(id, title, fn);
     } catch (e) {
       record(id, title, 'fail', `the check could not complete: ${wholeError(e)}`);
     }
@@ -103,9 +108,36 @@ export async function runAssumptionsR3(sb: SoakRuntime): Promise<AssumptionsR3It
   const idsIn = (bs: readonly Obj[]): string[] =>
     bs.flatMap((b) => [String(b.id), ...(Array.isArray(b.children) ? idsIn(b.children as Obj[]) : [])]);
 
+  steps.defer('the throwaway asset folders and pages deleted', async () => {
+    for (const id of folders.reverse()) {
+      try {
+        await run('deleteAsset', { path: { assetId: id } });
+      } catch (e) {
+        record(
+          'cleanup',
+          'the throwaway asset folder deleted',
+          'fail',
+          `${id}: ${wholeError(e)}. Delete it by hand.`,
+        );
+      }
+    }
+    for (const id of pages.reverse()) {
+      try {
+        await run(
+          'deleteResource',
+          { path: { resourceId: id }, query: { cascade: true } },
+          { confirm: 'cascade' },
+        );
+      } catch (e) {
+        record('cleanup', 'a throwaway page deleted', 'fail', `${id}: ${wholeError(e)}. Delete it by hand.`);
+      }
+    }
+  });
   try {
-    const A = await page('A');
-    const B = await page('B');
+    const { A, B } = await steps.step('setup', 'two throwaway pages', async () => ({
+      A: await page('A'),
+      B: await page('B'),
+    }));
 
     await check(
       'X1',
@@ -350,29 +382,7 @@ export async function runAssumptionsR3(sb: SoakRuntime): Promise<AssumptionsR3It
       },
     );
   } finally {
-    for (const id of folders.reverse()) {
-      try {
-        await run('deleteAsset', { path: { assetId: id } });
-      } catch (e) {
-        record(
-          'cleanup',
-          'the throwaway asset folder deleted',
-          'fail',
-          `${id}: ${wholeError(e)}. Delete it by hand.`,
-        );
-      }
-    }
-    for (const id of pages.reverse()) {
-      try {
-        await run(
-          'deleteResource',
-          { path: { resourceId: id }, query: { cascade: true } },
-          { confirm: 'cascade' },
-        );
-      } catch (e) {
-        record('cleanup', 'a throwaway page deleted', 'fail', `${id}: ${wholeError(e)}. Delete it by hand.`);
-      }
-    }
+    await steps.cleanup();
   }
   return items;
 }

@@ -276,7 +276,7 @@ Map not first is this category's own finding. Stable codes:
 | `narrative_dateline_mismatch`                                                                                                                                   | warning       | the first line made the dateline (the prose untouched) |
 | `narrative_date_unreadable`                                                                                                                                     | warning       | none                                                   |
 | `narrative_date_backwards` (earlier than the chapter before, no `Flashback` tag), `narrative_date_outside_span` (Act Span or Story Span, when the field exists) | info          | none                                                   |
-| `narrative_placeholder` (a field still holding template placeholder text, pack data)                                                                            | info          | none                                                   |
+| `narrative_placeholder` (a field still holding template placeholder text: pack data's patterns, or its template's default, R4.1)                                | info          | none                                                   |
 | `narrative_lifecycle_page` (a page in Narratives with a lifecycle prefix, a CANON, Working or Archived tag, or Status Authoritative or Archived)                | warning       | none                                                   |
 
 **Propose a fix** is offered only where the fix is mechanical, and is always ONE proposal for the owner: re-read live and

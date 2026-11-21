@@ -32,6 +32,12 @@ import { classifyName } from '../tree/classify.js';
 import type { RestoreSet } from '../lifecycle/deleted.js';
 import { canonConfigFrom, factKey, factValueKey, type CanonicalRule } from './rules.js';
 import {
+  isTemplateDefault,
+  templateDefaultsOf,
+  type TemplateDefaults,
+  type TemplateOfPage,
+} from './template-defaults.js';
+import {
   SIDEBAR_WRITE_OPS,
   applySidebarWrite,
   factRows,
@@ -82,12 +88,15 @@ const hasMention = (content: readonly Record<string, unknown>[]) =>
  * - `value` rule: protected if the number of rows holding one of its values (without case) changes.
  * - `change` rule: protected if the fact had a non-empty value before and its non-empty values after differ (as a
  *   multiset of value signatures: text and mentioned pages; marks do not count). Setting a fact that was empty or
- *   absent is allowed.
+ *   absent is allowed. R4.1 (ADR 0066 amendment 1): so is replacing a value IDENTICAL to the page's template default
+ *   for that fact (`defaults`, src/facts/template-defaults.ts): a first fill, not a change of an existing value. A
+ *   value that differs from the default in any way is existing, and stays protected; `value` rules ignore defaults.
  */
 export function assessFactChange(
   rules: readonly CanonicalRule[],
   before: readonly FactValue[],
   after: readonly FactValue[],
+  defaults?: TemplateDefaults | null,
 ): ProtectedChange[] {
   const out: ProtectedChange[] = [];
   for (const rule of rules) {
@@ -170,9 +179,12 @@ export function assessFactChange(
       }
       continue;
     }
-    const sb = b.filter((f) => valueText(f.content) !== '').map((f) => valueSignature(f.content));
-    if (sb.length === 0) continue; // empty or absent before: setting it is allowed
-    const sa = a.filter((f) => valueText(f.content) !== '').map((f) => valueSignature(f.content));
+    // R4.1: a template default counts as empty, before and after (a placeholder is no value of the page's own).
+    const filled = (f: FactValue) =>
+      valueText(f.content) !== '' && !isTemplateDefault(defaults, f.key, f.content);
+    const sb = b.filter(filled).map((f) => valueSignature(f.content));
+    if (sb.length === 0) continue; // empty, absent or the template's default before: setting it is allowed
+    const sa = a.filter(filled).map((f) => valueSignature(f.content));
     if ([...sb].sort().join('\u0000') !== [...sa].sort().join('\u0000')) {
       out.push({
         ruleId: rule.id,
@@ -378,6 +390,12 @@ export interface CanonicalGuardDeps {
    * they cannot be known, the restore needs canonical approval. Absent: only the page itself is judged.
    */
   readonly restoreSet?: (projectId: string, resourceId: string) => Promise<RestoreSet>;
+  /**
+   * R4.1 (ADR 0066 amendment 1): the template a page was made from, when the bridge can tell (inside the lock, the
+   * writing job's own copy of the page; else a narrative page's template by its kind); its sidebar's values are the
+   * page's template defaults, which a write may replace as a first fill. Absent: only the request's own copies count.
+   */
+  readonly templateOf?: TemplateOfPage;
 }
 
 /**
@@ -488,6 +506,27 @@ export class CanonicalGuard implements WriteGuard {
       const sb = await readLive(resourceId);
       sidebars.set(resourceId, sb);
       return sb;
+    };
+    // R4.1 (ADR 0066 amendment 1): the template each page was made from (this request's own copies first), and its
+    // defaults, read only when a write would otherwise be a protected change.
+    const copiedFrom = new Map<string, string>();
+    const defaultsOf = new Map<string, TemplateDefaults | null>();
+    const defaultsFor = async (resourceId: string): Promise<TemplateDefaults | null> => {
+      if (defaultsOf.has(resourceId)) return defaultsOf.get(resourceId)!;
+      const tid = copiedFrom.get(resourceId) ?? this.templateOf(input.project, resourceId);
+      const d = tid ? templateDefaultsOf(await read(tid)) : null;
+      defaultsOf.set(resourceId, d);
+      return d;
+    };
+    const factChanges = async (
+      resourceId: string,
+      before: SidebarProperty[],
+      after: SidebarProperty[],
+    ): Promise<ProtectedChange[]> => {
+      const found = assessFactChange(rules, rowsOf(before), rowsOf(after));
+      // Only a `change` rule reads defaults: no template read for anything else.
+      if (!found.some((c) => c.direction === 'change')) return found;
+      return assessFactChange(rules, rowsOf(before), rowsOf(after), await defaultsFor(resourceId));
     };
     // v3 F2 (ADR 0049 decision 5): a deleted page restored comes back with its sidebar, judged as a new page's facts.
     for (const it of input.items.map((x, i) => ({ ...x, i }))) {
@@ -607,8 +646,12 @@ export class CanonicalGuard implements WriteGuard {
           }
         }
         // v2 C2b: the new page starts as a copy of its template, so the facts the same request writes to it (with the
-        // template's ids, bound to the copy's in the job) are judged on that copy.
-        if (typeof body.id === 'string') sidebars.set(body.id, template);
+        // template's ids, bound to the copy's in the job) are judged on that copy; R4.1: its values are the page's
+        // template defaults.
+        if (typeof body.id === 'string') {
+          sidebars.set(body.id, template);
+          copiedFrom.set(body.id, templateId);
+        }
         continue;
       }
       if (it.op === 'deleteResource') {
@@ -716,7 +759,7 @@ export class CanonicalGuard implements WriteGuard {
       const after = applySidebarWrite(before, it.op, it.params);
       if (after) {
         sidebars.set(rid, after);
-        for (const c of assessFactChange(rules, rowsOf(before), rowsOf(after)))
+        for (const c of await factChanges(rid, before, after))
           changes.push({ ...c, stepIndex: it.i, resourceId: rid, page: name });
       }
       if (each) {
@@ -724,7 +767,7 @@ export class CanonicalGuard implements WriteGuard {
         const now = await readLive(rid);
         const alone = now ? applySidebarWrite(now, it.op, it.params) : null;
         if (now && alone)
-          for (const c of assessFactChange(rules, rowsOf(now), rowsOf(alone)))
+          for (const c of await factChanges(rid, now, alone))
             changes.push({ ...c, stepIndex: it.i, resourceId: rid, page: name });
       }
     }
@@ -1019,9 +1062,33 @@ export class CanonicalGuard implements WriteGuard {
     const whole = sidebarFrom(await input.read('listProperties', { path: { resourceId: rid } }));
     const after = applySidebarWrite(whole, input.opId, input.params);
     if (!after) return;
-    const changes = assessFactChange(rules, rowsOf(whole), rowsOf(after));
+    let changes = assessFactChange(rules, rowsOf(whole), rowsOf(after));
+    if (changes.some((c) => c.direction === 'change')) {
+      // R4.1 (ADR 0066 amendment 1): a value identical to the page's template default is replaced as a first fill. The
+      // page's template: this job's own copy of it (its stored step, so also after a restart), or a narrative page's
+      // template; read now (one more read, only for a Continuity-like change that would be refused).
+      const tid = this.templateOf(input.job.projectId, rid, input.job.id);
+      if (tid) {
+        let tpl: Sidebar | null;
+        try {
+          tpl = sidebarFrom(await input.read('listProperties', { path: { resourceId: tid } }));
+        } catch {
+          tpl = null; // the template cannot be read: no defaults (the safe side)
+        }
+        if (tpl) changes = assessFactChange(rules, rowsOf(whole), rowsOf(after), templateDefaultsOf(tpl));
+      }
+    }
     if (changes.length > 0) {
       throw new CanonicalApprovalRequiredError(input.opId, canonicalReason(changes), changes, ref);
+    }
+  }
+
+  /** R4.1: a page's template, when the bridge can tell (an error reads as unknown). */
+  private templateOf(projectId: string, resourceId: string, jobId?: string): string | null {
+    try {
+      return this.d.templateOf?.(projectId, resourceId, jobId) ?? null;
+    } catch {
+      return null;
     }
   }
 

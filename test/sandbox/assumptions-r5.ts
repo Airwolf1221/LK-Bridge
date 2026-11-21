@@ -26,6 +26,7 @@
  * CR-2026-11-R4 (the owner's request S): the runner is run on the mock in the ordinary suite too
  * (`test/sandbox-mock/assumptions-r5.test.ts`), every item failing the build.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import { mainDocumentId } from '../../src/jobs/engine.js';
 import { mintClientId, type OpParams, type StepOptions } from '../../src/jobs/index.js';
 import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
@@ -48,7 +49,11 @@ const blockWords = (blocks: readonly Obj[]) =>
     .join(' ')
     .trim();
 
-export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5Item[]> {
+export async function runAssumptionsR5(
+  sb: SoakRuntime,
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  steps: SandboxRun = sandboxRun({ name: 'assumptions-r5', out: () => undefined }),
+): Promise<AssumptionsR5Item[]> {
   const items: AssumptionsR5Item[] = [];
   const record = (id: string, title: string, verdict: AssumptionsR5Item['verdict'], detail: string) =>
     items.push({ id, title, verdict, detail });
@@ -65,7 +70,7 @@ export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5It
   };
   const check = async (id: string, title: string, fn: () => Promise<void>) => {
     try {
-      await fn();
+      await steps.step(id, title, fn);
     } catch (e) {
       record(id, title, 'fail', `the check could not complete: ${(e as Error).message}`);
     }
@@ -73,30 +78,54 @@ export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5It
   const stamp = new Date().toISOString();
   let pageId: string | null = null;
   let templateId: string | null = null;
+  steps.defer('the throwaway template and page deleted', async () => {
+    for (const [what, id, cascade] of [
+      ['the throwaway template', templateId, false],
+      ['the throwaway page (and the copy under it)', pageId, true],
+    ] as const)
+      if (id)
+        try {
+          await run(
+            'deleteResource',
+            { path: { resourceId: id }, ...(cascade ? { query: { cascade: true } } : {}) },
+            cascade ? { confirm: 'cascade' } : {},
+          );
+        } catch (e) {
+          record('cleanup', `${what} deleted`, 'fail', `${id}: ${(e as Error).message}. Delete it by hand.`);
+        }
+  });
   try {
-    const made = await run('createResource', {
-      body: {
-        id: mintClientId(8),
-        name: `lk-bridge r5 check ${stamp}`,
-        documents: [
-          { name: 'Main', type: 'page' },
-          { name: 'Notes', type: 'page' },
-        ],
-      },
-    });
-    pageId = String(made.id);
-    const docs = (made.documents ?? []) as Obj[];
-    const docOf = (name: string) => String(docs.find((d) => d.name === name)?.id ?? '');
     const MAIN_TEXT = 'The template’s own text.';
     const NOTES_TEXT = 'Notes kept beside it.';
-    await run('replaceDocumentBlocks', {
-      path: { resourceId: pageId, documentId: docOf('Main') },
-      body: { blocks: [{ id: mintClientId(), kind: 'paragraph', content: [{ text: MAIN_TEXT }] }] },
-    });
-    await run('replaceDocumentBlocks', {
-      path: { resourceId: pageId, documentId: docOf('Notes') },
-      body: { blocks: [{ id: mintClientId(), kind: 'paragraph', content: [{ text: NOTES_TEXT }] }] },
-    });
+    const docs = await steps.step(
+      'setup',
+      'a throwaway page with two documents, each with its text',
+      async () => {
+        const made = await run('createResource', {
+          body: {
+            id: mintClientId(8),
+            name: `lk-bridge r5 check ${stamp}`,
+            documents: [
+              { name: 'Main', type: 'page' },
+              { name: 'Notes', type: 'page' },
+            ],
+          },
+        });
+        pageId = String(made.id);
+        const docs = (made.documents ?? []) as Obj[];
+        const docOf = (name: string) => String(docs.find((d) => d.name === name)?.id ?? '');
+        await run('replaceDocumentBlocks', {
+          path: { resourceId: pageId, documentId: docOf('Main') },
+          body: { blocks: [{ id: mintClientId(), kind: 'paragraph', content: [{ text: MAIN_TEXT }] }] },
+        });
+        await run('replaceDocumentBlocks', {
+          path: { resourceId: pageId, documentId: docOf('Notes') },
+          body: { blocks: [{ id: mintClientId(), kind: 'paragraph', content: [{ text: NOTES_TEXT }] }] },
+        });
+        return docs;
+      },
+    );
+    const docOf = (name: string) => String(docs.find((d) => d.name === name)?.id ?? '');
 
     await check(
       'Z1',
@@ -201,20 +230,7 @@ export async function runAssumptionsR5(sb: SoakRuntime): Promise<AssumptionsR5It
       },
     );
   } finally {
-    for (const [what, id, cascade] of [
-      ['the throwaway template', templateId, false],
-      ['the throwaway page (and the copy under it)', pageId, true],
-    ] as const)
-      if (id)
-        try {
-          await run(
-            'deleteResource',
-            { path: { resourceId: id }, ...(cascade ? { query: { cascade: true } } : {}) },
-            cascade ? { confirm: 'cascade' } : {},
-          );
-        } catch (e) {
-          record('cleanup', `${what} deleted`, 'fail', `${id}: ${(e as Error).message}. Delete it by hand.`);
-        }
+    await steps.cleanup();
   }
   return items;
 }

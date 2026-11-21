@@ -17,15 +17,20 @@
  *   (the governor paces and counts them; no job, proposal or guard of the bridge is involved), as the assumptions checks
  *   make theirs: the Core is canon, which the bridge's governed route rightly refuses to make (the owner's sandbox run of
  *   20 November 2026). A tree sweep then shows them to the bridge;
- * - **F3** a full snapshot, then `arkona_consistency` for the probe: one Contradictory finding, the Core's value first;
+ * - **F3** a snapshot of the probe's pages only, then `arkona_consistency` for the probe: one Contradictory finding, the
+ *   Core's value first. R4.1 (the owner's run of 21 November 2026: a full snapshot of the test world, about 1,500 pages at
+ *   the governor's rate, outlasted the whole 30-minute timeout): the check's temporary database gets an EMPTY base (the
+ *   appraisal index is built on a full snapshot; this one holds no page, and never leaves the temporary database), then a
+ *   change snapshot of the probe's three pages (`SnapshotService.capturePages`), which the index lays over it;
  * - **F4** the owner's pick of the Core's value: ONE proposal with one item (the restating page), the Core untouched;
  * - **F5** approved, its job succeeds, and the page read live says "Camue 1st, 4A 100" in that sentence, the rest as it
  *   was; the Core's Temporal Scope is unchanged;
  * - **F6** the check run again over the job's change snapshot finds the pages agreeing.
  *
- * Clean-up: the throwaway index is deleted with everything under it (cascade), with the raw client, even after a failure;
- * the report names it if it must be deleted by hand. Cost: a full snapshot of the test world (its pages' reads), about 12 writes and 15 other
- * reads.
+ * Clean-up: the throwaway index is deleted with everything under it (cascade), with the raw client, even after a failure
+ * or a step's timeout (each step has its own, test/sandbox/steps.ts), and again from the test file's `afterAll` if the
+ * check never reached its own; the report names it if it must be deleted by hand. Cost: about 12 writes and 20 reads
+ * (the probe's snapshot: its three pages).
  *
  * The thin wrapper for the real run is `consistency-f4b.test.ts`; the ordinary suite runs these steps against the mock in
  * `test/sandbox-mock/consistency-f4b.test.ts`.
@@ -36,6 +41,8 @@ import type { SoakRuntime } from './soak.js';
 import { copyBridgeState } from './write-scope.js';
 import { createProbePages, deleteProbe, type RawLk } from './f4b-probe.js';
 import { notSucceeded, wholeError } from './whole.js';
+import { sandboxRun, type SandboxRun } from './steps.js';
+import { snapshotPagesOnly } from './page-snapshot.js';
 
 type Obj = Record<string, any>;
 
@@ -55,8 +62,13 @@ type Item = ConsistencyCheckItem;
 export async function runConsistencyCheck(
   sb: SoakRuntime,
   raw: RawLk,
-  o: { readonly bridgeDbPath: string },
+  o: {
+    readonly bridgeDbPath: string;
+    /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+    readonly run?: SandboxRun;
+  },
 ): Promise<ConsistencyCheckItem[]> {
+  const steps = o.run ?? sandboxRun({ name: 'consistency-f4b', out: () => undefined });
   const rt = sb.runtime;
   const pid = sb.projectId;
   const items: Item[] = [];
@@ -70,7 +82,7 @@ export async function runConsistencyCheck(
   };
   const check = async (id: string, title: string, fn: () => Promise<string>): Promise<boolean> => {
     try {
-      record(id, title, 'pass', await fn());
+      record(id, title, 'pass', await steps.step(id, title, fn));
       return true;
     } catch (e) {
       record(id, title, 'fail', wholeError(e));
@@ -101,6 +113,20 @@ export async function runConsistencyCheck(
   let coreId = '';
   let pageId = '';
   let pageDoc = '';
+  steps.defer('the throwaway index deleted with everything under it', async () => {
+    if (!made.index) return;
+    try {
+      await deleteProbe(raw, made.index);
+    } catch (e) {
+      record(
+        'cleanup',
+        'the throwaway index deleted',
+        'fail',
+        `${made.index}: ${wholeError(e)}. Delete it by hand.`,
+      );
+      throw e;
+    }
+  });
   try {
     const ok1 = await check(
       'F1',
@@ -144,10 +170,10 @@ export async function runConsistencyCheck(
     let side = '';
     const ok3 = await check(
       'F3',
-      'a full snapshot, then arkona_consistency finds one Contradictory birth',
+      'a snapshot of the probe’s pages only, then arkona_consistency finds one Contradictory birth',
       async () => {
-        await rt.snapshots.full(pid, 'manual');
-        await rt.appraisal.index.settled();
+        const snap = await snapshotPagesOnly(sb, [made.index!, coreId, pageId], 'consistency-f4b');
+        await rt.appraisal.ensureIndex(pid);
         const report = await rt.consistency.run({ projectId: pid, subject: coreId, actor: 'owner' });
         const f = report.findings.find((x) => x.group === 'contradictory' && x.check === 'consistency_birth');
         if (!f) throw new Error(`no Contradictory birth: ${JSON.stringify(report.counts)}`);
@@ -158,7 +184,7 @@ export async function runConsistencyCheck(
           );
         findingId = f.id;
         side = d.reference.key as string;
-        return `${f.id}: ${f.message}`;
+        return `${snap} ${f.id}: ${f.message}`;
       },
     );
     if (!ok3) return items;
@@ -214,17 +240,7 @@ export async function runConsistencyCheck(
       return 'no birth finding';
     });
   } finally {
-    if (made.index)
-      try {
-        await deleteProbe(raw, made.index);
-      } catch (e) {
-        record(
-          'cleanup',
-          'the throwaway index deleted',
-          'fail',
-          `${made.index}: ${wholeError(e)}. Delete it by hand.`,
-        );
-      }
+    await steps.cleanup();
   }
   return items;
 }

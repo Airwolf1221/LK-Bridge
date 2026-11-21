@@ -9,7 +9,9 @@
  * - **the four narrative templates**, outside the AI REPOSITORY, found by name: the Story Map and Act Map with the generic
  *   Working sidebar; the Chapter Plan with the design's suggested sidebar (E3) and the Workflow's headings as its body;
  *   the Chapter with its sidebar as made (placeholder text in its fields, a `Working` tag the owner is removing) and an
- *   empty body.
+ *   empty body. R4.1: each template's fields hold its DEFAULT values, which LegendKeeper copies into every page made
+ *   from it (the Chapter's: the owner's placeholder texts, `CHAPTER_SIDEBAR`; the others' Continuity fields:
+ *   `WORKING_DEFAULTS`).
  */
 import { SidebarModel } from '../resources/world.js';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
@@ -57,17 +59,33 @@ export const PLAN_SIDEBAR = [
   'Inheritance',
   'Subject',
 ];
+/**
+ * R4.1 (mock fidelity): the Chapter template's sidebar as the owner's live template holds it, its DEFAULT values the
+ * placeholder texts LegendKeeper copies into every new chapter (the owner's sandbox run of 21 November 2026, N3). The
+ * owner gave Story, Chapter Number, In-world Date, Continuity, POV, Chapter Plan and Draft Status; Act is written here
+ * in the same style (assumed, not read from the live template); Last Major Revision is left empty (not known).
+ */
 export const CHAPTER_SIDEBAR: [string, string][] = [
-  ['Story', 'Link to the story'],
-  ['Act', 'Link to the act'],
-  ['Chapter Number', ''],
-  ['In-world Date', 'Exact or an approximate range'],
-  ['Continuity', ''],
+  ['Story', "Link to the story's [INDEX]"],
+  ['Act', "Link to this chapter's Act [INDEX], if the story has acts"],
+  ['Chapter Number', '1 (numbered across the whole story, not per act)'],
+  ['In-world Date', 'Isar 27th, 4A 645 (exact) or c. 4A 640-645 (approximate)'],
+  ['Continuity', "Main CANON, or the AU's name"],
   ['POV', 'Link to the POV character'],
-  ['Chapter Plan', 'Link to the Chapter Plan'],
-  ['Draft Status', ''],
+  ['Chapter Plan', "Link to this chapter's Chapter Plan"],
+  ['Draft Status', 'Draft, Revised or Final'],
   ['Last Major Revision', ''],
 ];
+
+/**
+ * R4.1 (mock fidelity): the default values of the protected fields the narrative tools fill on the Story Map, Act Map and
+ * Chapter Plan templates (the generic Working sidebar's Continuity Type and Continuity), in the Chapter template's style.
+ * Assumed: the live text of these is not recorded; the Chapter template's Continuity is the owner's own.
+ */
+export const WORKING_DEFAULTS: Readonly<Record<string, string>> = {
+  'Continuity Type': 'CANON or AU',
+  Continuity: "Main CANON, or the AU's name",
+};
 
 const heading = (id: string, text: string) => ({ id, kind: 'heading', level: 2, content: [{ text }] });
 
@@ -96,7 +114,8 @@ export async function narrativeWorld(o: { readonly main?: boolean } = {}): Promi
     },
   });
   const sb = w.sidebars;
-  const blank = (keys: readonly string[]) => keys.map((k) => [k, ''] as [string, string]);
+  const blank = (keys: readonly string[]) =>
+    keys.map((k) => [k, WORKING_DEFAULTS[k] ?? ''] as [string, string]);
   sb.page(NT.storyMap, [
     SidebarModel.kv('kvnsm001', 'PROPERTIES', [['Status', 'Working'], ...blank(WORKING_SIDEBAR.slice(1))]),
     SidebarModel.links('depnsm01', 'Dependencies', []),

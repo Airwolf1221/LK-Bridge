@@ -450,3 +450,28 @@ The mock answers as LegendKeeper does only with its **faithful** setting on (`te
 these runs turn on and nothing else does): each behaviour there names the owner's run or the part of the spec it comes
 from, and one no real run has established yet is modelled as the bridge assumes it and says so. A failing item's detail
 carries the whole answer (`whole.ts`), never a slice of it.
+
+## Steps, timeouts and the clean-up (R4.1)
+
+The owner's run of 21 November 2026: consistency-f4b hung for its whole 30-minute timeout with no output, and left its
+probe pages on the test world because its clean-up never ran. Every check now runs through `steps.ts`:
+
+- **Each step prints a line as it starts and as it finishes** (`[consistency-f4b] start F3: … (timeout 10 min)`, then
+  `done F3 in 2.4 s`, `failed F3 after …: <the first line of the error>` or `timed out F3 after …`), so a run that stops
+  shows where.
+- **Each step has its own timeout, which names the step** (10 minutes unless the step says otherwise): a step that never
+  answers fails as `step F3 (<its title>) did not finish within its timeout of …`, a FAIL in the report, and the check
+  goes on to its clean-up.
+- **The clean-up is a registry**: each action runs once, newest first, with its own timeout (5 minutes; longer for
+  assumptions, assumptions-r2 and maps, whose clean-ups wait out the write minute) and its own start and finish lines.
+  The check runs it in its own `finally` as before (so its report says what was cleaned), and the test file runs it again
+  in an `afterAll` with its own timeout: an action not yet run (the test itself timed out, or something hung outside any
+  step) runs there; one already run is not run again. An action that fails or times out fails the `afterAll`, naming it.
+- **consistency-f4b and narrative-f4c snapshot only their own pages** (`page-snapshot.ts`), never the test world (about
+  1,500 pages at the governor's rate, which outlasted the whole timeout): their temporary database gets an empty base,
+  then one change snapshot of the probe's (or the story's) pages, which the readers lay over it.
+
+`test/sandbox-mock/steps-timeout.test.ts` proves it on the mock: consistency-f4b with its F3 never answering fails at F3's
+own timeout naming it, runs no later step, prints a start and a finish for each step and cleans up the probe; with a
+step timeout longer than the test's, the `afterAll` clean-up deletes the probe while the check is still stuck; and all
+17 test files and their 16 runners go through the harness.

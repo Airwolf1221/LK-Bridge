@@ -23,6 +23,7 @@
  * CR-2026-11-R4 (the owner's request S): the check's steps, for the real run (`split-ids.test.ts`) and the ordinary
  * suite's run against the mock (`test/sandbox-mock/split-ids.test.ts`), through the same runtime and harness.
  */
+import { sandboxRun, StepTimeoutError, type SandboxRun } from './steps.js';
 import { mintClientId, type OpParams, type StepOptions } from '../../src/jobs/index.js';
 import { stableJson } from '../../src/jobs/sidebar-state.js';
 import { withoutVersions } from '../../src/pages/blockwise.js';
@@ -61,7 +62,11 @@ function movedBlocks() {
   };
 }
 
-export async function runSplitIdsCheck(sb: SoakRuntime): Promise<SplitIdsItem[]> {
+export async function runSplitIdsCheck(
+  sb: SoakRuntime,
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  steps: SandboxRun = sandboxRun({ name: 'split-ids', out: () => undefined }),
+): Promise<SplitIdsItem[]> {
   const items: SplitIdsItem[] = [];
   const record = (id: string, title: string, verdict: SplitIdsItem['verdict'], detail: string) =>
     items.push({ id, title, verdict, detail });
@@ -95,20 +100,41 @@ export async function runSplitIdsCheck(sb: SoakRuntime): Promise<SplitIdsItem[]>
     stableJson(withoutVersions([x])) === stableJson(withoutVersions([y]));
 
   const made: string[] = [];
+  steps.defer('the throwaway pages deleted', async () => {
+    for (const id of made.reverse()) {
+      try {
+        await run(
+          'deleteResource',
+          { path: { resourceId: id }, query: { cascade: true } },
+          { confirm: 'cascade' },
+        );
+      } catch (e) {
+        record('cleanup', 'a throwaway page deleted', 'fail', `${id}: ${wholeError(e)}. Delete it by hand.`);
+      }
+    }
+  });
   try {
-    const A = await page('A');
-    made.push(A.resourceId);
-    const B = await page('B');
-    made.push(B.resourceId);
     const { paragraph, list } = movedBlocks();
     const heading = { id: mintClientId(), kind: 'heading', level: 2, content: [{ text: 'Purpose' }] };
-    await write(A, [heading, paragraph, list]);
-    const inA = await read(A);
+    const { A, B, inA } = await steps.step(
+      'setup',
+      'two throwaway pages, the blocks written to A',
+      async () => {
+        const A = await page('A');
+        made.push(A.resourceId);
+        const B = await page('B');
+        made.push(B.resourceId);
+        await write(A, [heading, paragraph, list]);
+        return { A, B, inA: await read(A) };
+      },
+    );
 
     // (1) and (2): written to B with A's ids.
-    const bHeading = { id: mintClientId(), kind: 'heading', level: 2, content: [{ text: 'Purpose' }] };
-    await write(B, [bHeading, ...inA.filter((b) => b.id !== heading.id).map((b) => structuredClone(b))]);
-    const inB = await read(B);
+    const inB = await steps.step('1-2', 'the blocks written to B with A’s ids, read back', async () => {
+      const bHeading = { id: mintClientId(), kind: 'heading', level: 2, content: [{ text: 'Purpose' }] };
+      await write(B, [bHeading, ...inA.filter((b) => b.id !== heading.id).map((b) => structuredClone(b))]);
+      return read(B);
+    });
     const ids = (bs: Obj[]): string[] =>
       bs.flatMap((b) => [String(b.id), ...(Array.isArray(b.children) ? ids(b.children as Obj[]) : [])]);
     const want = ids([paragraph, list]);
@@ -136,15 +162,17 @@ export async function runSplitIdsCheck(sb: SoakRuntime): Promise<SplitIdsItem[]>
     );
 
     // (3) A's own edit: the blocks out, an interface summary in their place.
-    await write(A, [
-      heading,
-      {
-        id: mintClientId(),
-        kind: 'paragraph',
-        content: [{ text: 'Summarised; see ' }, { mention: { resourceId: B.resourceId } }],
-      },
-    ]);
-    const after = await read(B);
+    const after = await steps.step('3', 'the source’s own edit, then the destination read', async () => {
+      await write(A, [
+        heading,
+        {
+          id: mintClientId(),
+          kind: 'paragraph',
+          content: [{ text: 'Summarised; see ' }, { mention: { resourceId: B.resourceId } }],
+        },
+      ]);
+      return read(B);
+    });
     record(
       '3',
       'the source’s own edit leaves the destination’s copy as it is',
@@ -154,11 +182,13 @@ export async function runSplitIdsCheck(sb: SoakRuntime): Promise<SplitIdsItem[]>
 
     // (4) An id B already uses: what LegendKeeper does is recorded.
     try {
-      await write(B, [
-        ...after,
-        { id: paragraph.id, kind: 'paragraph', content: [{ text: 'a second block, same id' }] },
-      ]);
-      const twice = await read(B);
+      const twice = await steps.step('4', 'a second block with an id B already uses', async () => {
+        await write(B, [
+          ...after,
+          { id: paragraph.id, kind: 'paragraph', content: [{ text: 'a second block, same id' }] },
+        ]);
+        return read(B);
+      });
       const n = twice.filter((b) => b.id === paragraph.id).length;
       record(
         '4',
@@ -169,6 +199,7 @@ export async function runSplitIdsCheck(sb: SoakRuntime): Promise<SplitIdsItem[]>
           : `LegendKeeper accepted the write and gave the second block another id (${twice.length} blocks)`,
       );
     } catch (e) {
+      if (e instanceof StepTimeoutError) throw e; // a hang is no refusal
       record(
         '4',
         'a requested id the destination already uses',
@@ -177,17 +208,7 @@ export async function runSplitIdsCheck(sb: SoakRuntime): Promise<SplitIdsItem[]>
       );
     }
   } finally {
-    for (const id of made.reverse()) {
-      try {
-        await run(
-          'deleteResource',
-          { path: { resourceId: id }, query: { cascade: true } },
-          { confirm: 'cascade' },
-        );
-      } catch (e) {
-        record('cleanup', 'a throwaway page deleted', 'fail', `${id}: ${wholeError(e)}. Delete it by hand.`);
-      }
-    }
+    await steps.cleanup();
   }
   return items;
 }

@@ -5,39 +5,52 @@
  * LegendKeeper project, and refuses to run unless the project is registered in the bridge's database (DB_PATH) and
  * marked as a sandbox there, and the key's own project is exactly the registered one (v2 A1, test/sandbox/target.ts).
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { formatReport, runSmoke } from './smoke.js';
-import { createSoakRuntime } from './soak.js';
+import { createSoakRuntime, type SoakRuntime } from './soak.js';
+import { cleanupAfterAll, sandboxRun } from './steps.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
 
 describe.skipIf(!projectName)('LegendKeeper sandbox smoke', () => {
+  // R4.1: each step printed as it starts and finishes, with its own timeout; the clean-up again here, with its own.
+  const steps = sandboxRun({ name: 'smoke' });
+  let runtime: SoakRuntime | undefined;
+  afterAll(async () => {
+    try {
+      await cleanupAfterAll(steps);
+    } finally {
+      await runtime?.close();
+    }
+  }, steps.hookTimeoutMs);
+
   it('checks the open assumptions and walks every entity family', async () => {
     // Refuses (throws) before any request unless the project is a registered sandbox with a key.
     const target = resolveSandboxTarget(projectName);
-    const sandbox = await createSoakRuntime({
-      apiKey: target.apiKey,
-      project: target.name,
-      ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
-    });
-    try {
-      const findings = await runSmoke(
-        {
-          engine: sandbox.runtime.engine,
-          lk: sandbox.lk,
-          projectId: sandbox.projectId,
-          baseUrl: sandbox.runtime.config.lk.baseUrl,
-          apiKey: target.apiKey,
-        },
-        target.projectId,
-      );
-      process.stdout.write(formatReport(findings));
-      // The assumption checks (a, b) are reported either way; a broken family or a leftover fails the run.
-      const broken = findings.filter((f) => f.verdict === 'fail' && !['a', 'b'].includes(f.id));
-      expect(broken.map((f) => `${f.id}: ${f.detail}`)).toEqual([]);
-    } finally {
-      await sandbox.close();
-    }
+    const sandbox = await steps.step('runtime', 'the sandbox runtime started', () =>
+      createSoakRuntime({
+        apiKey: target.apiKey,
+        project: target.name,
+        ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+      }),
+    );
+    runtime = sandbox;
+    const findings = await runSmoke(
+      {
+        engine: sandbox.runtime.engine,
+        lk: sandbox.lk,
+        projectId: sandbox.projectId,
+        baseUrl: sandbox.runtime.config.lk.baseUrl,
+        apiKey: target.apiKey,
+      },
+      target.projectId,
+      {},
+      steps,
+    );
+    process.stdout.write(formatReport(findings));
+    // The assumption checks (a, b) are reported either way; a broken family or a leftover fails the run.
+    const broken = findings.filter((f) => f.verdict === 'fail' && !['a', 'b'].includes(f.id));
+    expect(broken.map((f) => `${f.id}: ${f.detail}`)).toEqual([]);
   });
 });

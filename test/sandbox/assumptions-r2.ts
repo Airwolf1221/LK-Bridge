@@ -56,6 +56,7 @@
  * image; about 20 a minute) and 4 deletes (about 60 a minute; 5 if a folder delete leaves its sub-folder), plus 4
  * updateAsset. About a minute at the bridge's write pacing.
  */
+import { sandboxRun, StepTimeoutError, type SandboxRun } from './steps.js';
 import { createHash } from 'node:crypto';
 import { EVENT_STORED_FIELDS, replaceCells } from '../../src/chronology/plan.js';
 import { buildRow, runsText } from '../../src/chronology/table.js';
@@ -78,6 +79,8 @@ export interface AssumptionsR2Options {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Counted as the run goes: downloads from the asset host and PUTs to the upload host (neither is an API request). */
   readonly tally?: { downloads: number; puts: number };
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  readonly run?: SandboxRun;
 }
 
 /** Thrown inside a check: the assumption does not hold (a FAIL with this message). */
@@ -137,6 +140,7 @@ export async function runAssumptionsR2(
   expectedProjectId: string,
   o: AssumptionsR2Options = {},
 ): Promise<Finding[]> {
+  const steps = o.run ?? sandboxRun({ name: 'assumptions-r2', out: () => undefined });
   const findings: Finding[] = [];
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const hosts = o.assetHosts ?? DEFAULT_LK_ASSET_HOSTS;
@@ -210,18 +214,20 @@ export async function runAssumptionsR2(
     fn: () => Promise<string | { readonly verdict: Verdict; readonly detail: string }>,
   ) => {
     try {
-      const r = await fn();
+      const r = await steps.step(id, title, fn);
       if (typeof r === 'string') record(id, title, 'pass', r);
       else record(id, title, r.verdict, r.detail);
     } catch (e) {
-      if (e instanceof Fails) record(id, title, 'fail', e.message);
+      if (e instanceof Fails || e instanceof StepTimeoutError) record(id, title, 'fail', e.message);
       else if (e instanceof Unclear) record(id, title, 'inconclusive', e.message);
       else record(id, title, 'inconclusive', `the check could not complete: ${wholeError(e)}`);
     }
   };
 
   // ---- guard: the key must belong to exactly the sandbox project --------------------------------------------------
-  const projects = (await run('listProjects')) as { data?: { id: string }[] };
+  const projects = (await steps.step('guard', 'the key belongs to exactly the sandbox project', () =>
+    run('listProjects'),
+  )) as { data?: { id: string }[] };
   const ids = (projects.data ?? []).map((x) => x.id);
   if (ids.length !== 1 || ids[0] !== expectedProjectId || t.projectId !== expectedProjectId) {
     throw new SandboxGuardError(
@@ -233,9 +239,11 @@ export async function runAssumptionsR2(
   const stamp = new Date().toISOString();
   /** One per run, in every idempotency key the raw POSTs send. */
   const tag = mintClientId(8);
-  const root = (await run('createResource', {
-    body: { name: `lk-bridge assumptions-r2 ${stamp}` },
-  })) as Obj;
+  const root = (await steps.step('root', 'the throwaway root', () =>
+    run('createResource', {
+      body: { name: `lk-bridge assumptions-r2 ${stamp}` },
+    }),
+  )) as Obj;
   const rootId = root.id as string;
   /** The pages made directly under the root, deleted one at a time at the end (small cascades). */
   const topLevel: string[] = [];
@@ -432,6 +440,84 @@ export async function runAssumptionsR2(
       .filter((id) => !same(shapeOf(findBlock(after.children, id)), shapeOf(findBlock(before.children, id))))
       .map((id) => `${label(id)} changed: ${JSON.stringify(shapeOf(findBlock(after.children, id)))}`);
 
+  steps.defer('the assets by id, then the throwaway pages and root deleted', async () => {
+    // ---- clean-up: the assets by id, the deepest first; then each page (one small cascade each), then the root ------
+    // C2d's rule: already gone (404, "already deleted") counts as cleaned; any other failure is confirmed by a read
+    // before it is reported. A delete the canon guard could not judge for lack of budget is tried again after a minute.
+    const left: string[] = [];
+    for (const a of [...made].reverse()) {
+      if (gone.has(a.id)) continue;
+      try {
+        const del = await raw('deleteAsset', 'DELETE', `/assets/${a.id}`);
+        if (ok2xx(del) || assetGone(del) || del.code === 'ALREADY_DELETED') continue;
+        const now = await raw('getAsset', 'GET', `/assets/${a.id}`);
+        if (!assetGone(now)) left.push(`${a.what} ${a.id} (${answered(del)}; in the asset library)`);
+      } catch (e) {
+        left.push(`${a.what} ${a.id} (${(e as Error).message}; in the asset library)`);
+      }
+    }
+    const goneAlready = (e: unknown): boolean => {
+      const m = (e as Error).message ?? '';
+      const lk = (e as { lk?: { status?: number; code?: string } }).lk;
+      const codes = [(e as { code?: string }).code, lk?.code];
+      return (
+        /\b404\b|NOT_FOUND|ALREADY_DELETED|already deleted|is deleted|was deleted|not found/i.test(m) ||
+        lk?.status === 404 ||
+        codes.includes('NOT_FOUND') ||
+        codes.includes('ALREADY_DELETED')
+      );
+    };
+    const isGone = async (id: string): Promise<boolean> => {
+      try {
+        const r = await raw('getResource', 'GET', `/resources/${id}`);
+        return r.status === 404 || r.code === 'NOT_FOUND' || (r.status === 200 && r.body?.deletedAt != null);
+      } catch {
+        return false;
+      }
+    };
+    const remove = async (id: string): Promise<string | null> => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await run(
+            'deleteResource',
+            { path: { resourceId: id }, query: { cascade: true } },
+            { confirm: 'cascade' },
+          );
+          return null;
+        } catch (e) {
+          if (goneAlready(e)) return null;
+          const m = (e as Error).message;
+          if (attempt >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
+            return (await isGone(id)) ? null : m;
+          await sleep(65_000);
+        }
+      }
+    };
+    for (const id of [...topLevel].reverse()) {
+      const why = await remove(id);
+      if (why) left.push(`page ${id} (${why})`);
+    }
+    for (const x of templates) {
+      const why = await remove(x.id);
+      if (why) left.push(`${x.what} ${x.id} (${why}; a template, outside the root)`);
+    }
+    const why = await remove(rootId);
+    if (why) left.push(`root ${rootId} (${why})`);
+    if (left.length === 0)
+      record(
+        'cleanup',
+        'the throwaway root, its pages, the template and every asset made deleted',
+        'pass',
+        `root ${rootId} and ${topLevel.length} page(s); ${templates.length} template(s)${templates.length > 0 ? `: ${templates.map((x) => x.id).join(', ')}` : ''}; ${made.length} asset(s): ${made.map((a) => `${a.what} ${a.id}`).join(', ') || 'none'}`,
+      );
+    else
+      record(
+        'cleanup',
+        'throwaway pages, templates and assets deleted',
+        'fail',
+        `left: ${left.join('; ')}. Delete them by hand.`,
+      );
+  });
   try {
     // ================================================================================================ the asset library
     await check(
@@ -1269,82 +1355,7 @@ export async function runAssumptionsR2(
       },
     );
   } finally {
-    // ---- clean-up: the assets by id, the deepest first; then each page (one small cascade each), then the root ------
-    // C2d's rule: already gone (404, "already deleted") counts as cleaned; any other failure is confirmed by a read
-    // before it is reported. A delete the canon guard could not judge for lack of budget is tried again after a minute.
-    const left: string[] = [];
-    for (const a of [...made].reverse()) {
-      if (gone.has(a.id)) continue;
-      try {
-        const del = await raw('deleteAsset', 'DELETE', `/assets/${a.id}`);
-        if (ok2xx(del) || assetGone(del) || del.code === 'ALREADY_DELETED') continue;
-        const now = await raw('getAsset', 'GET', `/assets/${a.id}`);
-        if (!assetGone(now)) left.push(`${a.what} ${a.id} (${answered(del)}; in the asset library)`);
-      } catch (e) {
-        left.push(`${a.what} ${a.id} (${(e as Error).message}; in the asset library)`);
-      }
-    }
-    const goneAlready = (e: unknown): boolean => {
-      const m = (e as Error).message ?? '';
-      const lk = (e as { lk?: { status?: number; code?: string } }).lk;
-      const codes = [(e as { code?: string }).code, lk?.code];
-      return (
-        /\b404\b|NOT_FOUND|ALREADY_DELETED|already deleted|is deleted|was deleted|not found/i.test(m) ||
-        lk?.status === 404 ||
-        codes.includes('NOT_FOUND') ||
-        codes.includes('ALREADY_DELETED')
-      );
-    };
-    const isGone = async (id: string): Promise<boolean> => {
-      try {
-        const r = await raw('getResource', 'GET', `/resources/${id}`);
-        return r.status === 404 || r.code === 'NOT_FOUND' || (r.status === 200 && r.body?.deletedAt != null);
-      } catch {
-        return false;
-      }
-    };
-    const remove = async (id: string): Promise<string | null> => {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await run(
-            'deleteResource',
-            { path: { resourceId: id }, query: { cascade: true } },
-            { confirm: 'cascade' },
-          );
-          return null;
-        } catch (e) {
-          if (goneAlready(e)) return null;
-          const m = (e as Error).message;
-          if (attempt >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
-            return (await isGone(id)) ? null : m;
-          await sleep(65_000);
-        }
-      }
-    };
-    for (const id of [...topLevel].reverse()) {
-      const why = await remove(id);
-      if (why) left.push(`page ${id} (${why})`);
-    }
-    for (const x of templates) {
-      const why = await remove(x.id);
-      if (why) left.push(`${x.what} ${x.id} (${why}; a template, outside the root)`);
-    }
-    const why = await remove(rootId);
-    if (why) left.push(`root ${rootId} (${why})`);
-    if (left.length === 0)
-      record(
-        'cleanup',
-        'the throwaway root, its pages, the template and every asset made deleted',
-        'pass',
-        `root ${rootId} and ${topLevel.length} page(s); ${templates.length} template(s)${templates.length > 0 ? `: ${templates.map((x) => x.id).join(', ')}` : ''}; ${made.length} asset(s): ${made.map((a) => `${a.what} ${a.id}`).join(', ') || 'none'}`,
-      );
-    else
-      record(
-        'cleanup',
-        'throwaway pages, templates and assets deleted',
-        'fail',
-        `left: ${left.join('; ')}. Delete them by hand.`,
-      );
+    await steps.cleanup();
   }
   return [...findings].sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
 }

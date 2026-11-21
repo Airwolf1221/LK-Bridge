@@ -16,21 +16,25 @@
  *   (the governor paces and counts them; no job, proposal or guard of the bridge is involved), as the assumptions checks
  *   make theirs: the Core is canon, which the bridge's governed route rightly refuses to make (the owner's sandbox run of
  *   20 November 2026). A tree sweep then shows them to the bridge;
- * - **F3** a full snapshot, then `arkona_consistency` for the probe: one Contradictory finding, the Core's value first;
+ * - **F3** the probe's pages snapshotted on their own (a change snapshot over an empty base in the temporary database;
+ *   never a full snapshot of the test world, R4.1), then `arkona_consistency` for the probe: one Contradictory finding,
+ *   the Core's value first;
  * - **F4** the owner's pick of the Core's value: ONE proposal with one item (the restating page), the Core untouched;
  * - **F5** approved, its job succeeds, and the page read live says "Camue 1st, 4A 100" in that sentence, the rest as it
  *   was; the Core's Temporal Scope is unchanged;
  * - **F6** the check run again over the job's change snapshot finds the pages agreeing.
  *
- * Clean-up: the throwaway index is deleted with everything under it (cascade), with the raw client, even after a failure;
- * the report names it if it must be deleted by hand. Cost: a full snapshot of the test world (its pages' reads), about 12 writes and 15 other
- * reads. The steps are in `consistency-f4b.ts`; the ordinary suite runs them against the mock in
+ * Clean-up: the throwaway index is deleted with everything under it (cascade), with the raw client, even after a failure
+ * or a step's timeout, and again in this file's `afterAll` (its own timeout) if the check never reached its own; the
+ * report names it if it must be deleted by hand. Cost: about 12 writes and 20 reads (the probe's pages snapshotted on
+ * their own, never the test world: R4.1). The steps are in `consistency-f4b.ts`; the ordinary suite runs them against the mock in
  * `test/sandbox-mock/consistency-f4b.test.ts`.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { formatConsistencyReport, runConsistencyCheck } from './consistency-f4b.js';
 import { rawLk } from './f4b-probe.js';
-import { createSoakRuntime } from './soak.js';
+import { createSoakRuntime, type SoakRuntime } from './soak.js';
+import { cleanupAfterAll, sandboxRun } from './steps.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
@@ -38,29 +42,40 @@ const projectName = process.env.LKB_SANDBOX_PROJECT;
 describe.skipIf(!projectName)(
   'LegendKeeper sandbox: the consistency check and the owner’s pick (F4b, F1–F6)',
   () => {
+    // R4.1: each step printed as it starts and finishes, with its own timeout; the clean-up again here, with its own.
+    const steps = sandboxRun({ name: 'consistency-f4b' });
+    let sb: SoakRuntime | undefined;
+    afterAll(async () => {
+      try {
+        await cleanupAfterAll(steps);
+      } finally {
+        await sb?.close();
+      }
+    }, steps.hookTimeoutMs);
+
     it('finds a birth restated differently, proposes the owner’s pick, applies it on approval, and cleans up', async () => {
       // Refuses (throws) before any request unless the project is a registered sandbox with a key.
       const target = resolveSandboxTarget(projectName);
-      const sb = await createSoakRuntime({
+      const started = await steps.step('runtime', 'the sandbox runtime started', () =>
+        createSoakRuntime({
+          apiKey: target.apiKey,
+          project: target.name,
+          ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+        }),
+      );
+      sb = started;
+      const raw = rawLk({
+        lk: started.lk,
+        projectId: started.projectId,
         apiKey: target.apiKey,
-        project: target.name,
         ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
       });
-      try {
-        const raw = rawLk({
-          lk: sb.lk,
-          projectId: sb.projectId,
-          apiKey: target.apiKey,
-          ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
-        });
-        const items = await runConsistencyCheck(sb, raw, {
-          bridgeDbPath: process.env.DB_PATH ?? './data/bridge.db',
-        });
-        process.stdout.write(formatConsistencyReport(items));
-        expect(items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
-      } finally {
-        await sb.close();
-      }
+      const items = await runConsistencyCheck(started, raw, {
+        bridgeDbPath: process.env.DB_PATH ?? './data/bridge.db',
+        run: steps,
+      });
+      process.stdout.write(formatConsistencyReport(items));
+      expect(items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
     }, 1_800_000);
   },
 );

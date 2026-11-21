@@ -19,12 +19,14 @@
  *   dateline first;
  * - **N4** `arkona_chapter_insert` at 2: chapter 2 becomes 3, plan 2 becomes 3, a new Chapter 2 Plan: names and Chapter
  *   Number fields read back live;
- * - **N5** a full snapshot first (the chapter tools read through the snapshots), `arkona_chapter_check` on chapter 1,
- *   then an audit: the story's narrative findings listed.
+ * - **N5** the story's pages snapshotted first (the chapter tools read through the snapshots; R4.1: a change snapshot of
+ *   the story's own pages over an empty base in the temporary database, never the test world), `arkona_chapter_check`
+ *   on chapter 1, then an audit: the story's narrative findings listed.
  *
  * Clean-up: the throwaway story deleted with everything under it, and Main CANON if this run made it, with the raw
- * client, even after a failure; the report names what must be deleted by hand. Cost: about 60 writes and 40 reads, plus
- * a full snapshot of the test world.
+ * client, even after a failure or a step's timeout (test/sandbox/steps.ts), and again from the test file's `afterAll`;
+ * the report names what must be deleted by hand. Cost: about 60 writes and 60 reads (N5 snapshots the story's own
+ * pages, never the test world: R4.1).
  */
 import { pino } from 'pino';
 import { PatService } from '../../src/auth/pats.js';
@@ -35,6 +37,8 @@ import { firstDifference, wordsOf } from '../../src/mcp/tools/narrative.js';
 import { deleteProbe, type RawLk } from './f4b-probe.js';
 import type { SoakRuntime } from './soak.js';
 import { copyBridgeState } from './write-scope.js';
+import { snapshotPagesOnly } from './page-snapshot.js';
+import { sandboxRun, type SandboxRun } from './steps.js';
 
 type Obj = Record<string, any>;
 export interface NarrativeCheckItem {
@@ -53,14 +57,19 @@ export async function runNarrativeCheck(
   sb: SoakRuntime,
   raw: RawLk,
   name: string,
-  o: { readonly bridgeDbPath: string },
+  o: {
+    readonly bridgeDbPath: string;
+    /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+    readonly run?: SandboxRun;
+  },
 ): Promise<NarrativeCheckItem[]> {
+  const steps = o.run ?? sandboxRun({ name: 'narrative-f4c', out: () => undefined });
   const rt = sb.runtime;
   const pid = sb.projectId;
   const items: NarrativeCheckItem[] = [];
   const check = async (id: string, title: string, fn: () => Promise<string>): Promise<boolean> => {
     try {
-      items.push({ id, title, verdict: 'pass', detail: await fn() });
+      items.push({ id, title, verdict: 'pass', detail: await steps.step(id, title, fn) });
       return true;
     } catch (e) {
       items.push({ id, title, verdict: 'fail', detail: (e as Error).message });
@@ -135,6 +144,24 @@ export async function runNarrativeCheck(
     rt.tree.queries
       .children(pid, parent)
       .data.find((n) => n.displayName.toLowerCase() === display.toLowerCase()) ?? null;
+  steps.defer('the throwaway story deleted (and Main CANON, when this run made it)', async () => {
+    for (const [what, id] of [
+      ['the throwaway story', made.story],
+      ['Main CANON (made by this run)', made.main],
+    ] as const)
+      if (id)
+        try {
+          await deleteProbe(raw, id);
+        } catch (e) {
+          items.push({
+            id: 'cleanup',
+            title: `${what} deleted`,
+            verdict: 'fail',
+            detail: `${id}: ${(e as Error).message}. Delete it by hand.`,
+          });
+          throw e;
+        }
+  });
   try {
     // ADR 0064 amendment 2: the chronology's calendar first, as consistency-f4b's F1 does (the owner's run of 20 November
     // 2026 failed at N3 with CALENDAR_UNAVAILABLE: the copied state lacked the kept calendar). Through the loader every
@@ -254,11 +281,18 @@ export async function runNarrativeCheck(
     );
     await check(
       'N5',
-      'a full snapshot, arkona_chapter_check, then the audit’s narrative findings for the story',
+      'the story’s pages snapshotted, arkona_chapter_check, then the audit’s narrative findings for the story',
       async () => {
         // CR-2026-11-R4: the snapshot first. The check reads the chapter and canon through the snapshots, and this run's
-        // own database has none until it takes one (on the mock, N5 answered CHAPTER_UNREADABLE).
-        await rt.snapshots.full(pid, 'manual');
+        // own database has none until it takes one (on the mock, N5 answered CHAPTER_UNREADABLE). R4.1: only the story's
+        // pages (and Main CANON, and the POV's Core), never a full snapshot of the test world (consistency-f4b's hang).
+        await rt.tree.sweep(pid, 'manual');
+        await rt.tree.whenIdle();
+        const story = rt.tree.queries
+          .subtree(pid, made.story!, { limit: 1_000 })
+          .data.entries.map((e) => e.node.id);
+        const narrativesAbove = rt.tree.queries.node(pid, made.story!).data?.path.ids ?? [];
+        const snap = await snapshotPagesOnly(sb, [...narrativesAbove, ...story, pov.id], 'narrative-f4c');
         const c = await tool('arkona_chapter_check', { story: title, number: 1 });
         await rt.audits.run(pid, 'manual');
         const f = rt.audits
@@ -268,25 +302,11 @@ export async function runNarrativeCheck(
               x.pageName?.includes('f4c check') ||
               (x.pageId && rt.tree.queries.node(pid, x.pageId).data?.path.ids.includes(made.story!)),
           );
-        return `check: ${JSON.stringify(c.counts)}; audit: ${f.map((x) => x.code).join(', ') || 'no narrative finding on the story'}`;
+        return `${snap} check: ${JSON.stringify(c.counts)}; audit: ${f.map((x) => x.code).join(', ') || 'no narrative finding on the story'}`;
       },
     );
   } finally {
-    for (const [what, id] of [
-      ['the throwaway story', made.story],
-      ['Main CANON (made by this run)', made.main],
-    ] as const)
-      if (id)
-        try {
-          await deleteProbe(raw, id);
-        } catch (e) {
-          items.push({
-            id: 'cleanup',
-            title: `${what} deleted`,
-            verdict: 'fail',
-            detail: `${id}: ${(e as Error).message}. Delete it by hand.`,
-          });
-        }
+    await steps.cleanup();
   }
   return items;
 }

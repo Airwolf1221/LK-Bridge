@@ -20,6 +20,7 @@
  * Two date styles (ADR 0039): LegendKeeper's, for everything compared with its event text; the table's, for the Date and
  * KCY cells. The report says what the owner sends back; anything it finds becomes a follow-up.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import Database from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import {
@@ -95,7 +96,10 @@ export async function runChronologySandbox(o: {
   /** The chronology resource (the test world's Universal Chronology). */
   readonly resourceId: string;
   readonly names?: { readonly main?: string; readonly table?: string; readonly timeline?: string };
+  /** R4.1: the run that prints each step (its reads; the check is read-only, so it has nothing to clean up). */
+  readonly run?: SandboxRun;
 }): Promise<ChronologyReport> {
+  const steps = o.run ?? sandboxRun({ name: 'chronology', out: () => undefined });
   let reads = 0;
   const read: CheckReader = async (op, params) => {
     reads++;
@@ -118,9 +122,13 @@ export async function runChronologySandbox(o: {
   const mainName = o.names?.main ?? 'Main';
   out('# Chronology sandbox check (read-only)');
   out();
-  const docs =
-    ((await read('listDocuments', { path: { resourceId: o.resourceId } })) as { data?: Obj[] } | undefined)
-      ?.data ?? [];
+  const docs = await steps.step(
+    'documents',
+    'the chronology’s documents listed',
+    async () =>
+      ((await read('listDocuments', { path: { resourceId: o.resourceId } })) as { data?: Obj[] } | undefined)
+        ?.data ?? [],
+  );
   const live = docs.filter((d) => !d.deletedAt);
   const main = live.find((d) => d.name === mainName);
   const ages: { name: string; table: Obj; timeline: Obj }[] = [];
@@ -140,10 +148,12 @@ export async function runChronologySandbox(o: {
     return { text: lines.join('\n'), failures, drift, reads };
   }
   // The calendar of the timelines.
-  const tdoc = (await read('getDocument', {
-    path: { resourceId: o.resourceId, documentId: String(ages[0]!.timeline.id) },
-  })) as Obj | undefined;
-  const calendars = ((await read('listCalendars', {})) as { data?: Obj[] } | undefined)?.data ?? [];
+  const { tdoc, calendars } = await steps.step('calendar', 'the timelines’ calendar read', async () => ({
+    tdoc: (await read('getDocument', {
+      path: { resourceId: o.resourceId, documentId: String(ages[0]!.timeline.id) },
+    })) as Obj | undefined,
+    calendars: ((await read('listCalendars', {})) as { data?: Obj[] } | undefined)?.data ?? [],
+  }));
   const def = calendars.find((c) => c.id === tdoc?.calendarId);
   if (!def) {
     fail(`The timelines' calendar ${String(tdoc?.calendarId)} was not found.`);
@@ -153,12 +163,16 @@ export async function runChronologySandbox(o: {
   out(
     `Calendar ${cal.engine.id} “${cal.engine.name}”: eras ${cal.engine.eras.map((e) => e.abbr).join(', ')}; formats day “${cal.engine.formatText.day}”, month “${cal.engine.formatText.month}”, year “${cal.engine.formatText.year}”.`,
   );
-  const mainBlocks =
-    (
-      (await read('getDocumentBlocks', {
-        path: { resourceId: o.resourceId, documentId: String(main.id) },
-      })) as { blocks?: unknown[] } | undefined
-    )?.blocks ?? [];
+  const mainBlocks = await steps.step(
+    'main',
+    'the Main document read',
+    async () =>
+      (
+        (await read('getDocumentBlocks', {
+          path: { resourceId: o.resourceId, documentId: String(main.id) },
+        })) as { blocks?: unknown[] } | undefined
+      )?.blocks ?? [],
+  );
   const mainTable = readMainTable(mainBlocks, MAIN_COLUMNS);
   if (!mainTable)
     fail('The Main document has no Age | Event count | Complete dated table | Interactive timeline table.');
@@ -173,20 +187,26 @@ export async function runChronologySandbox(o: {
     timelineId: string;
   }[] = [];
   for (const a of ages) {
-    const blocks =
-      (
-        (await read('getDocumentBlocks', {
-          path: { resourceId: o.resourceId, documentId: String(a.table.id) },
-        })) as { blocks?: unknown[] } | undefined
-      )?.blocks ?? [];
+    const { blocks, lanes, events } = await steps.step(
+      `age ${a.name}`,
+      `${a.name}: its table, lanes and events read`,
+      async () => ({
+        blocks:
+          (
+            (await read('getDocumentBlocks', {
+              path: { resourceId: o.resourceId, documentId: String(a.table.id) },
+            })) as { blocks?: unknown[] } | undefined
+          )?.blocks ?? [],
+        lanes:
+          (
+            (await read('listLanes', {
+              path: { resourceId: o.resourceId, documentId: String(a.timeline.id) },
+            })) as { data?: Obj[] } | undefined
+          )?.data ?? [],
+        events: await readEvents(read, o.resourceId, String(a.timeline.id)),
+      }),
+    );
     const t = readAgeTable(blocks, cal.parser, undefined, AGE_COLUMNS);
-    const lanes =
-      (
-        (await read('listLanes', {
-          path: { resourceId: o.resourceId, documentId: String(a.timeline.id) },
-        })) as { data?: Obj[] } | undefined
-      )?.data ?? [];
-    const events = await readEvents(read, o.resourceId, String(a.timeline.id));
     if (!t) {
       fail(`${a.name}: no Historical Event | Date | KCY table.`);
       continue;

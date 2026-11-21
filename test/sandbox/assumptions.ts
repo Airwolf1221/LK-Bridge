@@ -21,6 +21,7 @@
  * lifecycle guard reads each copy's template at entry and inside the lock, two reads for each of the four copies; A10's
  * restore goes through the governor, as the engine can no longer tell this run's restore set: see A10).
  */
+import { sandboxRun, StepTimeoutError, type SandboxRun } from './steps.js';
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { mintClientId } from '../../src/jobs/ids.js';
 import {
@@ -49,6 +50,8 @@ export interface AssumptionOptions {
   /** Between search polls (default 5 s). */
   readonly searchPollMs?: number;
   readonly sleep?: (ms: number) => Promise<void>;
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  readonly run?: SandboxRun;
 }
 
 /** Thrown inside a check: the assumption does not hold (a FAIL with this message). */
@@ -71,6 +74,7 @@ export async function runAssumptions(
   expectedProjectId: string,
   o: AssumptionOptions = {},
 ): Promise<Finding[]> {
+  const steps = o.run ?? sandboxRun({ name: 'assumptions', out: () => undefined });
   const findings: Finding[] = [];
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const origin = { kind: 'test' as const, client: 'sandbox-assumptions', tool: 'sandbox-assumptions' };
@@ -135,15 +139,17 @@ export async function runAssumptions(
   };
   const check = async (id: string, title: string, fn: () => Promise<string>) => {
     try {
-      record(id, title, 'pass', await fn());
+      record(id, title, 'pass', await steps.step(id, title, fn));
     } catch (e) {
-      if (e instanceof Fails) record(id, title, 'fail', e.message);
+      if (e instanceof Fails || e instanceof StepTimeoutError) record(id, title, 'fail', e.message);
       else record(id, title, 'inconclusive', `the check could not complete: ${wholeError(e)}`);
     }
   };
 
   // ---- guard: the key must belong to exactly the sandbox project --------------------------------------------------
-  const projects = (await run('listProjects')) as { data?: { id: string }[] };
+  const projects = (await steps.step('guard', 'the key belongs to exactly the sandbox project', () =>
+    run('listProjects'),
+  )) as { data?: { id: string }[] };
   const ids = (projects.data ?? []).map((x) => x.id);
   if (ids.length !== 1 || ids[0] !== expectedProjectId || t.projectId !== expectedProjectId) {
     throw new SandboxGuardError(
@@ -152,9 +158,11 @@ export async function runAssumptions(
   }
 
   // ---- helpers ----------------------------------------------------------------------------------------------------
-  const root = (await run('createResource', {
-    body: { name: `lk-bridge assumptions ${new Date().toISOString()}` },
-  })) as Obj;
+  const root = (await steps.step('root', 'the throwaway root', () =>
+    run('createResource', {
+      body: { name: `lk-bridge assumptions ${new Date().toISOString()}` },
+    }),
+  )) as Obj;
   const rootId = root.id as string;
   const extraCleanup: { id: string; what: string }[] = [];
   /** The pages made directly under the root, deleted one subtree at a time at the end (small cascades). */
@@ -189,6 +197,71 @@ export async function runAssumptions(
 
   let tplA1: string | null = null;
 
+  steps.defer('the throwaway root, its pages and the templates deleted', async () => {
+    // Clean up: each check's pages (one small cascade each: the canon guard lists and reads every page of a cascade at
+    // entry and again inside the lock), the templates (outside the root), then the root. A delete the guard could not
+    // judge for lack of budget (the key's minute) is tried again after the minute.
+    // C2d (the owner's run of 11 November 2026): a page that is already gone counts as cleaned. A page under one
+    // already deleted by an earlier cascade answers "… is already deleted" (or 404): it was reported as left over
+    // although a read showed it gone. Any other failure is confirmed by a read before it is reported.
+    const goneAlready = (e: unknown): boolean => {
+      const m = (e as Error).message ?? '';
+      const lk = (e as { lk?: { status?: number; code?: string } }).lk;
+      const codes = [(e as { code?: string }).code, lk?.code];
+      return (
+        /\b404\b|NOT_FOUND|ALREADY_DELETED|already deleted|is deleted|was deleted|not found/i.test(m) ||
+        lk?.status === 404 ||
+        codes.includes('NOT_FOUND') ||
+        codes.includes('ALREADY_DELETED')
+      );
+    };
+    const isGone = async (id: string): Promise<boolean> => {
+      try {
+        const r = await raw('getResource', 'GET', `/resources/${id}`);
+        return r.status === 404 || r.code === 'NOT_FOUND' || (r.status === 200 && r.body?.deletedAt != null);
+      } catch {
+        return false;
+      }
+    };
+    const remove = async (id: string): Promise<string | null> => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await run(
+            'deleteResource',
+            { path: { resourceId: id }, query: { cascade: true } },
+            { confirm: 'cascade' },
+          );
+          return null;
+        } catch (e) {
+          if (goneAlready(e)) return null;
+          const m = (e as Error).message;
+          if (attempt >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
+            return (await isGone(id)) ? null : m;
+          await sleep(65_000);
+        }
+      }
+    };
+    const left: string[] = [];
+    for (const id of [...topLevel].reverse()) {
+      const why = await remove(id);
+      if (why) left.push(`${id} (${why})`);
+    }
+    for (const x of extraCleanup) {
+      const why = await remove(x.id);
+      if (why) left.push(`${x.what} ${x.id} (${why})`);
+    }
+    const why = await remove(rootId);
+    if (why) left.push(`root ${rootId} (${why})`);
+    if (left.length === 0)
+      record(
+        'cleanup',
+        'throwaway root and templates deleted',
+        'pass',
+        [rootId, ...extraCleanup.map((x) => x.id)].join(', '),
+      );
+    else
+      record('cleanup', 'throwaway pages deleted', 'fail', `left: ${left.join('; ')}. Delete them by hand.`);
+  });
   try {
     // ---- LIM1: LegendKeeper's own limits on its asset routes (v2 E5.5, ADR 0047) -------------------------------------
     // LegendKeeper reports the tier with the fewest requests left, and its asset routes evidently have tiers the spec's
@@ -247,57 +320,72 @@ export async function runAssumptions(
       };
       const made = (r: { status: number }) => r.status === 200 || r.status === 201;
       try {
-        const stamp = mintClientId(8);
-        const folder = await raw('createAssetFolder', 'POST', '/assets', {
-          body: { name: `lk-bridge assumptions LIM1 ${new Date().toISOString()}` },
-          idempotencyKey: `lkb.sandbox.lim1.folder.${stamp}`,
+        await steps.step(id, title, async () => {
+          const stamp = mintClientId(8);
+          const folder = await raw('createAssetFolder', 'POST', '/assets', {
+            body: { name: `lk-bridge assumptions LIM1 ${new Date().toISOString()}` },
+            idempotencyKey: `lkb.sandbox.lim1.folder.${stamp}`,
+          });
+          note('createAssetFolder', folder);
+          if (!made(folder))
+            throw new Unclear(`createAssetFolder answered ${folder.status} ${folder.code ?? ''}`);
+          folderId = typeof folder.body?.id === 'string' ? folder.body.id : null;
+          const png = Buffer.from(TINY_PNG, 'base64');
+          const up = await raw('createImageUpload', 'POST', '/assets/uploads', {
+            body: {
+              contentType: 'image/png',
+              contentLength: png.length,
+              contentHash: createHash('sha256').update(png).digest('hex'),
+            },
+            idempotencyKey: `lkb.sandbox.lim1.upload.${stamp}`,
+          });
+          note('createImageUpload', up);
+          if (!made(up) || typeof up.body?.uploadUrl !== 'string')
+            throw new Unclear(
+              `createImageUpload answered ${up.status} ${up.code ?? ''} without an upload URL`,
+            );
+          const put = await putSigned(up.body as Obj, png);
+          note('upload_image.put (the signed PUT)', put);
+          if (put.status < 200 || put.status >= 300)
+            throw new Unclear(`the signed PUT answered ${put.status}`);
+          const asset = await raw('createImageAsset', 'POST', '/assets/images', {
+            body: { uploadKey: up.body.uploadKey, name: 'LIM1 image', ...(folderId ? { folderId } : {}) },
+            idempotencyKey: `lkb.sandbox.lim1.asset.${stamp}`,
+          });
+          note('createImageAsset', asset);
+          if (!made(asset))
+            throw new Unclear(`createImageAsset answered ${asset.status} ${asset.code ?? ''}`);
+          imageId = typeof asset.body?.id === 'string' ? asset.body.id : null;
         });
-        note('createAssetFolder', folder);
-        if (!made(folder))
-          throw new Unclear(`createAssetFolder answered ${folder.status} ${folder.code ?? ''}`);
-        folderId = typeof folder.body?.id === 'string' ? folder.body.id : null;
-        const png = Buffer.from(TINY_PNG, 'base64');
-        const up = await raw('createImageUpload', 'POST', '/assets/uploads', {
-          body: {
-            contentType: 'image/png',
-            contentLength: png.length,
-            contentHash: createHash('sha256').update(png).digest('hex'),
-          },
-          idempotencyKey: `lkb.sandbox.lim1.upload.${stamp}`,
-        });
-        note('createImageUpload', up);
-        if (!made(up) || typeof up.body?.uploadUrl !== 'string')
-          throw new Unclear(`createImageUpload answered ${up.status} ${up.code ?? ''} without an upload URL`);
-        const put = await putSigned(up.body as Obj, png);
-        note('upload_image.put (the signed PUT)', put);
-        if (put.status < 200 || put.status >= 300) throw new Unclear(`the signed PUT answered ${put.status}`);
-        const asset = await raw('createImageAsset', 'POST', '/assets/images', {
-          body: { uploadKey: up.body.uploadKey, name: 'LIM1 image', ...(folderId ? { folderId } : {}) },
-          idempotencyKey: `lkb.sandbox.lim1.asset.${stamp}`,
-        });
-        note('createImageAsset', asset);
-        if (!made(asset)) throw new Unclear(`createImageAsset answered ${asset.status} ${asset.code ?? ''}`);
-        imageId = typeof asset.body?.id === 'string' ? asset.body.id : null;
       } catch (e) {
-        verdict = 'inconclusive';
-        detail = e instanceof Unclear ? e.message : `the check could not complete: ${wholeError(e)}`;
+        verdict = e instanceof StepTimeoutError ? 'fail' : 'inconclusive';
+        detail =
+          e instanceof Unclear || e instanceof StepTimeoutError
+            ? e.message
+            : `the check could not complete: ${wholeError(e)}`;
       } finally {
         // Deleted by id whatever happened: the image, then its folder (404 counts as gone).
         const left: string[] = [];
-        for (const [what, assetId] of [
-          ['image', imageId],
-          ['folder', folderId],
-        ] as const) {
-          if (!assetId) continue;
-          try {
-            const del = await raw('deleteAsset', 'DELETE', `/assets/${assetId}`);
-            note(`deleteAsset (the ${what})`, del);
-            if (!(del.status === 204 || del.status === 200 || del.status === 404))
-              left.push(`the ${what} ${assetId} (${del.status} ${del.code ?? ''})`);
-          } catch (e) {
-            left.push(`the ${what} ${assetId} (${(e as Error).message})`);
-          }
-        }
+        await steps
+          .step(`${id}-cleanup`, 'LIM1’s image and folder deleted by id', async () => {
+            for (const [what, assetId] of [
+              ['image', imageId],
+              ['folder', folderId],
+            ] as const) {
+              if (!assetId) continue;
+              try {
+                const del = await raw('deleteAsset', 'DELETE', `/assets/${assetId}`);
+                note(`deleteAsset (the ${what})`, del);
+                if (!(del.status === 204 || del.status === 200 || del.status === 404))
+                  left.push(`the ${what} ${assetId} (${del.status} ${del.code ?? ''})`);
+              } catch (e) {
+                left.push(`the ${what} ${assetId} (${(e as Error).message})`);
+              }
+            }
+          })
+          .catch((e: unknown) => {
+            left.push(`the image or folder (${(e as Error).message})`);
+          });
         const learned = t.lk.governor
           .snapshot()
           .operationTiers.map(
@@ -631,19 +719,22 @@ export async function runAssumptions(
     );
 
     // ---- B11–B17: sidebar rows ------------------------------------------------------------------------------------
-    const R = await mk('B rows');
-    const K = (await run('createProperty', {
-      path: { resourceId: R.id },
-      body: {
-        kind: 'keyValue',
-        title: 'PROPERTIES',
-        rows: [
-          { key: 'R1', text: 'one' },
-          { key: 'R2', text: 'two' },
-          { key: 'R3', text: 'three' },
-        ],
-      },
-    })) as Obj;
+    const { R, K } = await steps.step('B-setup', 'a page with three sidebar rows', async () => {
+      const R = await mk('B rows');
+      const K = (await run('createProperty', {
+        path: { resourceId: R.id },
+        body: {
+          kind: 'keyValue',
+          title: 'PROPERTIES',
+          rows: [
+            { key: 'R1', text: 'one' },
+            { key: 'R2', text: 'two' },
+            { key: 'R3', text: 'three' },
+          ],
+        },
+      })) as Obj;
+      return { R, K };
+    });
     const rowPath = (rowId?: string) => ({ resourceId: R.id, propertyId: K.id, ...(rowId ? { rowId } : {}) });
     const rowId = async (key: string) =>
       (await rowsOf(R.id, K.id)).data.find((r) => r.key === key)!.id as string;
@@ -1025,7 +1116,7 @@ export async function runAssumptions(
     });
 
     // ---- D21–D25: page content -------------------------------------------------------------------------------------
-    const Dp = await mk('D blocks');
+    const Dp = await steps.step('D-setup', 'a page for the content checks', () => mk('D blocks'));
     const doc = (Dp.documents?.[0]?.id ?? '') as string;
     const dpath = { resourceId: Dp.id, documentId: doc };
 
@@ -1293,43 +1384,46 @@ export async function runAssumptions(
       const id = 'LS1';
       const title =
         'a label written with labelSize md makes listFeatures refuse the map (400, issue path labelSize); deleting it makes the map listable again';
-      let page: Obj | null = null;
-      let featureId: string | null = null;
+      // Assigned inside the step's closure (so typed as a holder, not narrowed to null).
+      let page = null as Obj | null;
+      let featureId = null as string | null;
       let verdict: Verdict = 'inconclusive';
       let detail = '';
       const docPath = () => `/resources/${page!.id as string}/docs/${page!.documents[0].id as string}`;
       const issueOf = (r: { errors?: readonly Obj[] }) =>
         (r.errors ?? []).find((x) => /(^|[.\]])labelSize$/.test(String(x.path ?? '')));
       try {
-        page = await mk('LS1 map');
-        if (!page.documents?.[0]?.id) throw new Unclear('the new page has no first document');
-        const fid = mintClientId(24);
-        const made = await raw('createFeature', 'POST', `${docPath()}/features`, {
-          body: { id: fid, type: 'label', name: 'LS1 label', pos: [0, 0], labelSize: 'md' },
-          idempotencyKey: `lkb.sandbox.ls1.${fid}`,
+        await steps.step(id, title, async () => {
+          page = await mk('LS1 map');
+          if (!page.documents?.[0]?.id) throw new Unclear('the new page has no first document');
+          const fid = mintClientId(24);
+          const made = await raw('createFeature', 'POST', `${docPath()}/features`, {
+            body: { id: fid, type: 'label', name: 'LS1 label', pos: [0, 0], labelSize: 'md' },
+            idempotencyKey: `lkb.sandbox.ls1.${fid}`,
+          });
+          if (made.status !== 201 && made.status !== 200)
+            throw new Unclear(
+              `createFeature with labelSize md answered ${made.status} ${made.code ?? ''} ${JSON.stringify(made.errors ?? made.body ?? null)}`,
+            );
+          featureId = String(made.body?.id ?? fid);
+          const listed = await raw('listFeatures', 'GET', `${docPath()}/features`);
+          const issue = issueOf(listed);
+          if (listed.status === 400 && issue && /invalid enum value/i.test(String(issue.message ?? ''))) {
+            verdict = 'pass';
+            detail = `confirmed: listFeatures answered 400 ${listed.code ?? ''} (${String(issue.path)}: ${String(issue.message)})`;
+          } else if (listed.status === 200) {
+            verdict = 'noted';
+            const back = ((listed.body?.data ?? []) as Obj[]).find((f) => f.id === featureId);
+            detail = `LegendKeeper HAS FIXED IT: listFeatures answered 200 with the md label (labelSize read back as ${JSON.stringify(back?.labelSize ?? null)}). Set LABEL_SIZE_WRITABLE in src/maps/features.ts to true (ADR 0046 decision 14) once confirmed.`;
+          } else {
+            verdict = 'fail';
+            detail = `listFeatures answered ${listed.status} ${listed.code ?? ''} ${JSON.stringify(listed.errors ?? listed.body ?? null)}, neither the known 400 nor a fix`;
+          }
         });
-        if (made.status !== 201 && made.status !== 200)
-          throw new Unclear(
-            `createFeature with labelSize md answered ${made.status} ${made.code ?? ''} ${JSON.stringify(made.errors ?? made.body ?? null)}`,
-          );
-        featureId = String(made.body?.id ?? fid);
-        const listed = await raw('listFeatures', 'GET', `${docPath()}/features`);
-        const issue = issueOf(listed);
-        if (listed.status === 400 && issue && /invalid enum value/i.test(String(issue.message ?? ''))) {
-          verdict = 'pass';
-          detail = `confirmed: listFeatures answered 400 ${listed.code ?? ''} (${String(issue.path)}: ${String(issue.message)})`;
-        } else if (listed.status === 200) {
-          verdict = 'noted';
-          const back = ((listed.body?.data ?? []) as Obj[]).find((f) => f.id === featureId);
-          detail = `LegendKeeper HAS FIXED IT: listFeatures answered 200 with the md label (labelSize read back as ${JSON.stringify(back?.labelSize ?? null)}). Set LABEL_SIZE_WRITABLE in src/maps/features.ts to true (ADR 0046 decision 14) once confirmed.`;
-        } else {
-          verdict = 'fail';
-          detail = `listFeatures answered ${listed.status} ${listed.code ?? ''} ${JSON.stringify(listed.errors ?? listed.body ?? null)}, neither the known 400 nor a fix`;
-        }
       } catch (e) {
-        verdict = e instanceof Fails ? 'fail' : 'inconclusive';
+        verdict = e instanceof Fails || e instanceof StepTimeoutError ? 'fail' : 'inconclusive';
         detail =
-          e instanceof Unclear || e instanceof Fails
+          e instanceof Unclear || e instanceof Fails || e instanceof StepTimeoutError
             ? e.message
             : `the check could not complete: ${wholeError(e)}`;
       } finally {
@@ -1402,69 +1496,7 @@ export async function runAssumptions(
       },
     );
   } finally {
-    // Clean up: each check's pages (one small cascade each: the canon guard lists and reads every page of a cascade at
-    // entry and again inside the lock), the templates (outside the root), then the root. A delete the guard could not
-    // judge for lack of budget (the key's minute) is tried again after the minute.
-    // C2d (the owner's run of 11 November 2026): a page that is already gone counts as cleaned. A page under one
-    // already deleted by an earlier cascade answers "… is already deleted" (or 404): it was reported as left over
-    // although a read showed it gone. Any other failure is confirmed by a read before it is reported.
-    const goneAlready = (e: unknown): boolean => {
-      const m = (e as Error).message ?? '';
-      const lk = (e as { lk?: { status?: number; code?: string } }).lk;
-      const codes = [(e as { code?: string }).code, lk?.code];
-      return (
-        /\b404\b|NOT_FOUND|ALREADY_DELETED|already deleted|is deleted|was deleted|not found/i.test(m) ||
-        lk?.status === 404 ||
-        codes.includes('NOT_FOUND') ||
-        codes.includes('ALREADY_DELETED')
-      );
-    };
-    const isGone = async (id: string): Promise<boolean> => {
-      try {
-        const r = await raw('getResource', 'GET', `/resources/${id}`);
-        return r.status === 404 || r.code === 'NOT_FOUND' || (r.status === 200 && r.body?.deletedAt != null);
-      } catch {
-        return false;
-      }
-    };
-    const remove = async (id: string): Promise<string | null> => {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await run(
-            'deleteResource',
-            { path: { resourceId: id }, query: { cascade: true } },
-            { confirm: 'cascade' },
-          );
-          return null;
-        } catch (e) {
-          if (goneAlready(e)) return null;
-          const m = (e as Error).message;
-          if (attempt >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
-            return (await isGone(id)) ? null : m;
-          await sleep(65_000);
-        }
-      }
-    };
-    const left: string[] = [];
-    for (const id of [...topLevel].reverse()) {
-      const why = await remove(id);
-      if (why) left.push(`${id} (${why})`);
-    }
-    for (const x of extraCleanup) {
-      const why = await remove(x.id);
-      if (why) left.push(`${x.what} ${x.id} (${why})`);
-    }
-    const why = await remove(rootId);
-    if (why) left.push(`root ${rootId} (${why})`);
-    if (left.length === 0)
-      record(
-        'cleanup',
-        'throwaway root and templates deleted',
-        'pass',
-        [rootId, ...extraCleanup.map((x) => x.id)].join(', '),
-      );
-    else
-      record('cleanup', 'throwaway pages deleted', 'fail', `left: ${left.join('; ')}. Delete them by hand.`);
+    await steps.cleanup();
   }
   return findings;
 }

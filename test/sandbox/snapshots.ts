@@ -31,6 +31,7 @@
  * parked for budget or queued is waited for, never sent again). The restore proposals' jobs and the rehearsal's own
  * jobs are waited for the same way (the rehearsal waits for each of its jobs itself and never resends one).
  */
+import { sandboxRun, StepTimeoutError, type SandboxRun } from './steps.js';
 import sharp from 'sharp';
 import type { Db } from '../../src/db/open.js';
 import { ProjectStore } from '../../src/projects/index.js';
@@ -58,6 +59,8 @@ export interface SnapshotsTarget {
 export interface SnapshotsOptions {
   readonly wait?: WaitOptions;
   readonly sleep?: (ms: number) => Promise<void>;
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  readonly run?: SandboxRun;
 }
 
 export interface SnapshotsReport {
@@ -80,6 +83,7 @@ export async function runSnapshotsSandbox(
   t: SnapshotsTarget,
   o: SnapshotsOptions = {},
 ): Promise<SnapshotsReport> {
+  const steps = o.run ?? sandboxRun({ name: 'snapshots', out: () => undefined });
   const rt = t.runtime;
   const pid = t.projectId;
   const svc = rt.snapshots;
@@ -102,9 +106,9 @@ export async function runSnapshotsSandbox(
   const check = async (id: string, title: string, fn: () => Promise<string>) => {
     const before = mark();
     try {
-      record(id, title, 'pass', `${await fn()}; ${costText(before)}`);
+      record(id, title, 'pass', `${await steps.step(id, title, fn)}; ${costText(before)}`);
     } catch (e) {
-      const verdict: Verdict = e instanceof Fails ? 'fail' : 'inconclusive';
+      const verdict: Verdict = e instanceof Fails || e instanceof StepTimeoutError ? 'fail' : 'inconclusive';
       const why =
         e instanceof Fails || e instanceof Unclear ? e.message : `could not complete: ${wholeError(e)}`;
       record(id, title, verdict, `${why}; ${costText(before)}`);
@@ -163,7 +167,9 @@ export async function runSnapshotsSandbox(
   };
 
   // ---- guard: the key must belong to exactly this project --------------------------------------------------------
-  const projects = (await run('listProjects')) as { data?: { id: string }[] };
+  const projects = (await steps.step('guard', 'the key belongs to exactly this project', () =>
+    run('listProjects'),
+  )) as { data?: { id: string }[] };
   const ids = (projects.data ?? []).map((x) => x.id);
   if (ids.length !== 1 || ids[0] !== pid)
     throw new Error(`Refusing to run: the key's projects are [${ids.join(', ')}], not exactly ${pid}.`);
@@ -186,6 +192,43 @@ export async function runSnapshotsSandbox(
   let image: { id: string; url: string } | null = null;
   let manifest: Manifest | null = null;
 
+  steps.defer('the throwaway subtree and its images deleted', async () => {
+    // ================================================================================================ 7. clean-up
+    const before = mark();
+    const left: string[] = [];
+    const goneAlready = (m: string) => /404|not found|already deleted|NOT_FOUND|gone/i.test(m);
+    if (rootId) {
+      try {
+        await run(
+          'deleteResource',
+          { path: { resourceId: rootId }, query: { cascade: true } },
+          { confirm: 'cascade' },
+        );
+      } catch (e) {
+        const m = (e as Error).message;
+        const res = (await attempt('getResource', { path: { resourceId: rootId } })) as Obj;
+        if (!(goneAlready(m) || (res.ok && res.body?.deletedAt != null) || !res.ok))
+          left.push(`page ${rootId} (${m})`);
+      }
+    }
+    for (const id of made.assets) {
+      try {
+        await run('deleteAsset', { path: { assetId: id } });
+      } catch (e) {
+        const m = (e as Error).message;
+        if (!goneAlready(m)) left.push(`image ${id} (${m})`);
+      }
+    }
+    record(
+      'cleanup',
+      'everything the run made is deleted',
+      left.length === 0 ? 'pass' : 'fail',
+      left.length === 0
+        ? `root ${rootId || '(none)'} with its subtree, ${made.assets.length} image(s); ${costText(before)}`
+        : `left: ${left.join('; ')}. Delete them by hand.`,
+    );
+    costs.cleanup = spent(before);
+  });
   try {
     // ================================================================================================ 1. setup
     await check('setup', 'a throwaway subtree with every document type, an image and a sidebar', async () => {
@@ -659,41 +702,7 @@ export async function runSnapshotsSandbox(
       return summary;
     });
   } finally {
-    // ================================================================================================ 7. clean-up
-    const before = mark();
-    const left: string[] = [];
-    const goneAlready = (m: string) => /404|not found|already deleted|NOT_FOUND|gone/i.test(m);
-    if (rootId) {
-      try {
-        await run(
-          'deleteResource',
-          { path: { resourceId: rootId }, query: { cascade: true } },
-          { confirm: 'cascade' },
-        );
-      } catch (e) {
-        const m = (e as Error).message;
-        const res = (await attempt('getResource', { path: { resourceId: rootId } })) as Obj;
-        if (!(goneAlready(m) || (res.ok && res.body?.deletedAt != null) || !res.ok))
-          left.push(`page ${rootId} (${m})`);
-      }
-    }
-    for (const id of made.assets) {
-      try {
-        await run('deleteAsset', { path: { assetId: id } });
-      } catch (e) {
-        const m = (e as Error).message;
-        if (!goneAlready(m)) left.push(`image ${id} (${m})`);
-      }
-    }
-    record(
-      'cleanup',
-      'everything the run made is deleted',
-      left.length === 0 ? 'pass' : 'fail',
-      left.length === 0
-        ? `root ${rootId || '(none)'} with its subtree, ${made.assets.length} image(s); ${costText(before)}`
-        : `left: ${left.join('; ')}. Delete them by hand.`,
-    );
-    costs.cleanup = spent(before);
+    await steps.cleanup();
   }
   return { findings, costs };
 }

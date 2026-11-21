@@ -45,5 +45,11 @@ describe.each([
     expect(left).toEqual([]);
     if (!main)
       expect(w.repo.children(N.narratives).filter((r) => r.name === '[INDEX] Main CANON')).toEqual([]);
+    // R4.1: N5 snapshots the story's own pages, never the test world: the only full snapshot is the empty base.
+    expect(
+      on.sb.runtime.snapshots.index
+        .snapshots(on.sb.projectId, { kind: 'full', limit: 10 })
+        .map((x) => x.pages),
+    ).toEqual([0]);
   });
 });

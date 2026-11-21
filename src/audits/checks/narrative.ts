@@ -10,6 +10,7 @@ import {
   auDefinitions,
   continuityIndexes,
   nkey,
+  placeOf,
   rootsOf,
   storiesIn,
   storyLayout,
@@ -19,6 +20,7 @@ import {
 } from '../../narrative/layout.js';
 import { narrativeTags, type NarrativeKindTag } from '../../narrative/tags.js';
 import { lifecycleSignals } from '../../narrative/signals.js';
+import { KIND_TEMPLATE, templateNamed } from '../../narrative/templates.js';
 import type { NarrativeRules } from '../../packs/types.js';
 import { fact, isNarrativePage, modelView, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
@@ -123,7 +125,9 @@ export function narrativeCheck(ctx: AuditContext): FindingDraft[] {
       if (kind) tagCheck(rules, page(k.id), kind, au, out);
     }
   }
-  // Placeholder text left in a field of any narrative page.
+  // Placeholder text left in a field of any narrative page: a value matching the pack's placeholder patterns, or (R4.1,
+  // ADR 0066 amendment 1, Q2) a value identical to the page's template default for that field.
+  const defaultsOf = templateDefaults(ctx, rules, view, roots);
   const patterns = rules.placeholders.flatMap((p) => {
     try {
       return [new RegExp(p, 'iu')];
@@ -133,19 +137,65 @@ export function narrativeCheck(ctx: AuditContext): FindingDraft[] {
   });
   for (const id of ctx.narrativeIds ?? []) {
     const p = page(id);
+    const defaults = defaultsOf(id);
     for (const f of p.facts.values()) {
       const t = f.text.trim();
-      if (t !== '' && patterns.some((re) => re.test(t)))
+      if (t === '') continue;
+      const isDefault = defaults?.get(nkey(f.key)) === t;
+      if (isDefault || patterns.some((re) => re.test(t)))
         out.push({
           code: 'narrative_placeholder',
           pageId: p.id,
           key: nkey(f.key),
-          message: `“${p.rawName}”: ${f.key} still holds the template’s placeholder “${t.slice(0, 120)}”.`,
-          evidence: { field: f.key, value: t.slice(0, 200) },
+          message: isDefault
+            ? `“${p.rawName}”: ${f.key} still holds its template’s default “${t.slice(0, 120)}”.`
+            : `“${p.rawName}”: ${f.key} still holds the template’s placeholder “${t.slice(0, 120)}”.`,
+          evidence: { field: f.key, value: t.slice(0, 200), ...(isDefault ? { templateDefault: true } : {}) },
         });
     }
   }
   return out;
+}
+
+/**
+ * R4.1 (ADR 0066 amendment 1, Q2, the owner's): a narrative page's template defaults, by its kind's template (the pack's
+ * `narrative.templates`, found by name among the base snapshot's templates as the narrative tools find it), as
+ * `field key → value` (non-empty values only). Null for a page whose kind has no template, or when the snapshot holds
+ * no templates or not exactly one of that name.
+ */
+function templateDefaults(
+  ctx: AuditContext,
+  rules: NarrativeRules,
+  view: NView,
+  roots: ReturnType<typeof rootsOf>,
+): (pageId: string) => ReadonlyMap<string, string> | null {
+  const templates = ctx.model.templates ? [...ctx.model.templates.values()] : [];
+  const byKind = new Map<string, ReadonlyMap<string, string> | null>();
+  return (pageId) => {
+    if (templates.length === 0) return null;
+    const place = placeOf(view, rules, roots, pageId);
+    const which = place ? KIND_TEMPLATE[place.kind] : undefined;
+    if (!which) return null;
+    if (!byKind.has(which)) {
+      const t = templateNamed(
+        templates.map((x) => ({ page: x, name: x.rawName })),
+        rules.templates[which],
+      );
+      const m = new Map<string, string>();
+      // A Status the template gives that names a lifecycle state (the generic Working sidebar's "Working") is no
+      // placeholder: the copy gives the page that state (ADR 0066 amendment 1, Q1), so it is never reported as left over.
+      const lc = ctx.lifecycle;
+      const states = [lc.status.working, lc.status.archived, lc.status.authoritative].map(nkey);
+      for (const fv of t?.page.facts.values() ?? []) {
+        const v = fv.text.trim();
+        if (v === '' || fv.count !== 1) continue;
+        if (nkey(fv.key) === nkey(lc.fields.status) && states.includes(nkey(v))) continue;
+        m.set(nkey(fv.key), v);
+      }
+      byKind.set(which, t ? m : null);
+    }
+    return byKind.get(which)!;
+  };
 }
 
 function indexFix(rules: NarrativeRules, narratives: NNode, name: string, au: boolean) {
@@ -222,6 +272,7 @@ function storyChecks(
   const { rules } = input;
   const f = rules.fields;
   const page = (id: string) => ctx.model.pages.get(id)!;
+  const defaultsOf = templateDefaults(ctx, rules, view, rootsOf(view, rules));
   const story = l.story;
   // Structure.
   if (l.storyMaps.length === 0)
@@ -287,6 +338,8 @@ function storyChecks(
   ]) {
     const p = page(id);
     const v = fact(ctx, p, f.continuity);
+    // R4.1 (Q2): the template's own default is a leftover placeholder (reported as such), not another continuity.
+    if (v !== null && defaultsOf(id)?.get(nkey(f.continuity)) === v) continue;
     if (v !== null && !contOk(v))
       out.push({
         code: 'narrative_continuity_mismatch',
