@@ -269,3 +269,92 @@ consent page, at the approval of a low-level removal or a member removal, and on
 when resuming a paused job, resuming a stopped one (`resume-stopped`), forcing a step retry and starting a rehearsal; an
 agent's member removal at scope `write` is a proposal. Every part A choice is pinned by a test; each finding's test fails
 on the reviewed code (or on this review's first fix, where the review says so) and passes now.
+
+## Amendment 1: R4.1, after the owner's sandbox runs (21 November 2026)
+
+Status: decisions 1 and 3 are the owner's (21 November 2026); the choices marked **Chosen** were made building them;
+questions Q1 and Q2 are open for the owner. No migration; no pack version.
+
+### Context
+
+The owner's live sandbox runs after R4 found two problems. **narrative-f4c N3**: `arkona_chapter_save` made the chapter,
+then the canon guard captured a canonical proposal, because Continuity would change from the Chapter template's
+placeholder "Main CANON, or the AU's name" to "Main CANON": every chapter on Arkona would have become a canon proposal.
+The in-suite run had not caught it because the mock's Chapter template had empty fields. **consistency-f4b** hung for
+its whole 30-minute timeout with no output (a full snapshot of the test world, about 1,500 pages at the governor's rate)
+and left its probe pages behind, because its clean-up never ran.
+
+### Decision 1 (the owner's): a template's default values are not existing values
+
+Replacing a field value that is IDENTICAL to the page's template default for that field is a first fill, not a change
+of an existing value, for the canon guard and the lifecycle guard alike. A real existing value is still protected.
+
+As built (`src/facts/template-defaults.ts`, `src/facts/canonical.ts`, `src/narrative/templates.ts`):
+
+1. The canon guard's `change` rules (Continuity, Continuity Type) read a value identical to the template's default (its
+   text and mentions, as the guard compares values) as empty, before and after, at entry and inside the lock. Any other
+   value, one character off the default included, is existing and protected; so is a real value set BACK to the
+   template's text. **Chosen:** a `value` rule (Status Authoritative) ignores defaults: a template that gives a page
+   Authoritative is judged when it is copied, as before.
+2. The page's template (LegendKeeper does not say which template a page came from): the request's own template copy, at
+   entry; inside the lock, the writing job's own copy step (its stored steps, so also after a restart); and, for a page
+   under Narratives, the narrative template for its kind (Story Map, Act Map, Chapter Plan, Chapter), found by name in
+   the template list, so a chapter made in the app counts. **Chosen:** when none tells, there are no defaults (every
+   non-empty value is existing, as before), and a template that cannot be read gives none (the safe side). **Chosen:**
+   the template the repository tree recorded when the bridge copied a page in an earlier job (v2 C2b's `template_id`)
+   is NOT used: a template's default may be a real value (a Core template holding Continuity "Main", Arkona's fixed
+   fact), and every page copied from it would then read its own "Main" as a default, its Continuity changeable without
+   the owner's canonical approval. Outside the request or job that makes a page, only a narrative page's template
+   counts.
+3. **Chosen:** the defaults are the template's sidebar as LegendKeeper holds it when the write is judged (one more read,
+   only for a write a `change` rule would otherwise refuse; none for any other write, so the lifecycle tools' costs are
+   unchanged). Once the owner clears the placeholders from the live template, a
+   page still holding the old text (a chapter made in the app before) keeps it protected: filling it is then a canon
+   proposal, the safe side.
+4. The lifecycle guard needs nothing new: it counts only lifecycle Status values (Working, Archived, Authoritative), and
+   a placeholder is none, so replacing one was already a first fill there (pinned by
+   `test/narrative/r41-template-defaults.test.ts`). **Chosen:** a template default that IS a lifecycle value (the generic
+   Working sidebar's Status "Working") is no placeholder: the copy was judged as giving the page that state (R4 F2), so
+   it stays the lifecycle tools'. Question Q1.
+5. R4-01 is not reopened: a page whose Continuity differs from its template default still proposes, inside Narratives or
+   out, and a canon page moved into a story is still the owner's canonical decision (the same test file).
+
+### Decision 2 (the owner's): the mock templates as the pack's real ones
+
+The narrative test world's templates hold their default values (`test/narrative/world.ts`): the Chapter template's are
+the owner's placeholder texts (Story "Link to the story's [INDEX]", Chapter Number "1 (numbered across the whole story,
+not per act)", Continuity "Main CANON, or the AU's name", In-world Date "Isar 27th, 4A 645 (exact) or c. 4A 640-645
+(approximate)", POV "Link to the POV character", Chapter Plan "Link to this chapter's Chapter Plan", Draft Status
+"Draft, Revised or Final"). **Assumed** (not read from the live templates, written in the same style): the Chapter's Act
+and Last Major Revision, and the Continuity Type and Continuity of the Story Map, Act Map and Chapter Plan. With them, N3
+fails on the R4 code, as on the owner's run.
+
+**Chosen** (found by them): `arkona_chapter_plan` fills a NEW plan's Continuity Type and Continuity, as its Story Map and
+Act Map carry them; a template's placeholder was left in every plan, and the audit read it as another continuity
+(`narrative_continuity_mismatch`). An existing plan's are left as they are.
+
+### Decision 3 (the owner's): the sandbox checks' steps, timeouts and clean-up
+
+1. consistency-f4b snapshots only the probe's pages, as a change snapshot, and the index lays it over an empty base in
+   the check's temporary database (`test/sandbox/page-snapshot.ts`; `SnapshotService.capturePages`, a change snapshot of
+   given pages tied to no job). **Chosen:** narrative-f4c's N5, which took the same full snapshot of the test world, does
+   the same with the story's pages.
+2. Every one of the 17 sandbox checks prints each step as it starts and finishes, gives each step its own timeout naming
+   that step, and runs its clean-up in an `afterAll` with its own timeout as well as in its own `finally`, each action
+   once (`test/sandbox/steps.ts`). **Chosen:** a step's timeout is a FAIL (never INCONCLUSIVE, which the tests let
+   through); 10 minutes a step unless it says otherwise; 5 minutes a clean-up action (20 for assumptions and
+   assumptions-r2, 10 for maps, whose clean-ups wait out the write minute). Proved on the mock with a step that never
+   resolves (`test/sandbox-mock/steps-timeout.test.ts`).
+
+### Questions for the owner
+
+- **Q1.** Should a template default that is itself a lifecycle state (the generic Working sidebar's Status "Working") also
+  be a first fill, so set_facts may replace it without the lifecycle tools? (a) yes, literally as decision 1 reads; (b)
+  no, as built: the copy gave the page that state, and replacing it would take a page out of Working without the
+  lifecycle tools. Recommended: **(b)**.
+- **Q2.** The narrative audit's placeholder check (pack data `narrative.placeholders`, patterns) matches few of the real
+  placeholder texts above ("Link to …" only), so a chapter left with "Draft, Revised or Final" is not reported, and a
+  plan made before this amendment with Continuity "Main CANON, or the AU's name" is reported as
+  `narrative_continuity_mismatch`. (a) the audit also treats a value identical to the page's template default as a
+  placeholder (the snapshots' manifests hold the templates); (b) new patterns in the next pack version; (c) leave it,
+  as the owner is clearing the placeholders. Recommended: **(a)**. Not built.

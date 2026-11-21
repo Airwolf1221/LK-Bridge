@@ -23,9 +23,10 @@
  * tests: a registered sandbox project, with its own key. The steps are in `assign-block-ids.ts`; the ordinary suite
  * runs them against the mock in `test/sandbox-mock/assign-block-ids.test.ts`.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { formatBlockIdsReport, recordBlockIdsVerdict, runBlockIdsCheck } from './assign-block-ids.js';
-import { createSoakRuntime } from './soak.js';
+import { createSoakRuntime, type SoakRuntime } from './soak.js';
+import { cleanupAfterAll, sandboxRun } from './steps.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
@@ -33,26 +34,36 @@ const projectName = process.env.LKB_SANDBOX_PROJECT;
 describe.skipIf(!projectName)(
   'LegendKeeper sandbox: assignBlockIds, for the block-id sweep (writes, then cleans up)',
   () => {
+    // R4.1: each step printed as it starts and finishes, with its own timeout; the clean-up again here, with its own.
+    const steps = sandboxRun({ name: 'assign-block-ids' });
+    let runtime: SoakRuntime | undefined;
+    afterAll(async () => {
+      try {
+        await cleanupAfterAll(steps);
+      } finally {
+        await runtime?.close();
+      }
+    }, steps.hookTimeoutMs);
+
     it('gives every block a unique id, changes no content, moves the version, and is idempotent', async () => {
       const target = resolveSandboxTarget(projectName);
-      const sandbox = await createSoakRuntime({
-        apiKey: target.apiKey,
-        project: target.name,
-        ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
-      });
-      try {
-        const r = await runBlockIdsCheck(sandbox, { named: process.env.LKB_BLOCKIDS_DOCUMENT });
-        const where = recordBlockIdsVerdict(
-          process.env.DB_PATH ?? './data/bridge.db',
-          target.name,
-          r.verdict,
-          r.summary.slice(0, 3900),
-        );
-        process.stdout.write(formatBlockIdsReport(r, where, sandbox.counters));
-        expect(r.items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
-      } finally {
-        await sandbox.close();
-      }
+      const sandbox = await steps.step('runtime', 'the sandbox runtime started', () =>
+        createSoakRuntime({
+          apiKey: target.apiKey,
+          project: target.name,
+          ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+        }),
+      );
+      runtime = sandbox;
+      const r = await runBlockIdsCheck(sandbox, { named: process.env.LKB_BLOCKIDS_DOCUMENT, run: steps });
+      const where = recordBlockIdsVerdict(
+        process.env.DB_PATH ?? './data/bridge.db',
+        target.name,
+        r.verdict,
+        r.summary.slice(0, 3900),
+      );
+      process.stdout.write(formatBlockIdsReport(r, where, sandbox.counters));
+      expect(r.items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
     }, 900_000);
   },
 );

@@ -37,5 +37,14 @@ describe('consistency-f4b on the mock', () => {
       [...w.repo.res.values()].filter((r) => r.deletedAt === null && /^lk-bridge f4b /.test(r.name)),
       report,
     ).toEqual([]);
+    // R4.1: no full snapshot of the test world (the owner's run hung on one): the temporary database's only full
+    // snapshot is the empty base, and the probe's three pages are one change snapshot over it.
+    const snaps = on.sb.runtime.snapshots.index;
+    expect(snaps.snapshots(on.sb.projectId, { kind: 'full', limit: 10 }).map((x) => x.pages)).toEqual([0]);
+    expect(
+      snaps
+        .snapshots(on.sb.projectId, { kind: 'change', limit: 50 })
+        .some((x) => x.trigger.check === 'consistency-f4b' && x.pages === 3),
+    ).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ import {
   narrativeScope,
 } from './narrative/scope.js';
 import { narrativeCalendar } from './narrative/calendar.js';
+import { pageTemplateReader } from './narrative/templates.js';
 import { narrativeBlindAppraisal } from './narrative/authority.js';
 import { narrativeCompare } from './narrative/names.js';
 import { governanceAuditHook } from './packs/governance-audit.js';
@@ -607,6 +608,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       read: (projectId, opId, params) => engine.internalRead(projectId, opId, params, { priority: 'P1' }),
     }),
   });
+  // R4.1 (ADR 0066 amendment 1): the template a page was made from, for the guards' first-fill rule (a value identical to
+  // its template's default is replaced as a first fill, not changed).
+  const templateOf = pageTemplateReader({
+    packs,
+    queries: tree.queries,
+    templates: (projectId) => registry.forProject(projectId).store.templates().templates,
+    jobSteps: (projectId, jobId) => engine.queries.getJob(projectId, jobId)?.steps ?? null,
+  });
   const lifecycleGuard = new LifecycleGuard({
     settings: (projectId) => projectStore.byId(projectId)?.settings,
     engine,
@@ -644,6 +653,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       new PageScopeGuard(),
       new CanonicalGuard({
         settings: (projectId) => projectStore.byId(projectId)?.settings,
+        templateOf,
         engine,
         pageName,
         // v3 F2 (ADR 0049 decision 5): a deleted page restored is judged by the sidebar its newest snapshot holds.

@@ -15,7 +15,9 @@
  *
  * The rules are configuration (project settings `canonicalRules`), edited on the dashboard and audited. A project with
  * none stored uses the defaults below. The default status for pages agents create (`agentDefaultStatus`, "Working")
- * is kept here for C2b's creation tools; templates carry no fact defaults (the owner confirmed), so nothing is inherited.
+ * is kept here for C2b's creation tools. R4.1 (ADR 0066 amendment 1): templates DO carry default values (the narrative
+ * Chapter template's placeholders, which LegendKeeper copies into every new chapter); replacing a value identical to the
+ * page's template default is a first fill for a `change` rule (src/facts/template-defaults.ts), not a change.
  */
 import * as z from 'zod';
 

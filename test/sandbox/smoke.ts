@@ -7,6 +7,7 @@
  * the caller gave. Everything it creates lives under one throwaway root resource that is deleted at the end.
  * The same code runs, as a dry run, against the spec-driven mock in test/tools/sandbox-dryrun.test.ts.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import type { JobEngine } from '../../src/jobs/index.js';
 import type { LkClient } from '../../src/lk/index.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
@@ -40,6 +41,8 @@ export async function runSmoke(
   t: SmokeTarget,
   expectedProjectId: string,
   wait: WaitOptions = {},
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  steps: SandboxRun = sandboxRun({ name: 'smoke', out: () => undefined }),
 ): Promise<Finding[]> {
   const findings: Finding[] = [];
   const origin = { kind: 'test' as const, client: 'sandbox-smoke', tool: 'sandbox-smoke' };
@@ -53,7 +56,9 @@ export async function runSmoke(
   const p = (path: Obj, rest: Obj = {}) => ({ path, ...rest });
 
   // ---- guard: the key must belong to exactly the sandbox project --------------------------------------------------
-  const projects = (await run('listProjects')) as { data?: { id: string }[] };
+  const projects = (await steps.step('guard', 'the key belongs to exactly the sandbox project', () =>
+    run('listProjects'),
+  )) as { data?: { id: string }[] };
   const ids = (projects.data ?? []).map((x) => x.id);
   if (ids.length !== 1 || ids[0] !== expectedProjectId || t.projectId !== expectedProjectId) {
     throw new SandboxGuardError(
@@ -64,14 +69,16 @@ export async function runSmoke(
   // ---- (a) LK echoes a client-supplied x-request-id ---------------------------------------------------------------
   try {
     const rid = `lkb.smoke.${Date.now().toString(36)}`;
-    const res = await t.lk.call<Response>({
-      operationId: 'getProject',
-      priority: 'P0',
-      run: () =>
-        t.lk.fetch(`${t.baseUrl}/api/v3/projects/${t.projectId}`, {
-          headers: { authorization: `Bearer ${t.apiKey}`, 'x-request-id': rid },
-        }),
-    });
+    const res = await steps.step('a', 'LK echoes a client-supplied x-request-id', () =>
+      t.lk.call<Response>({
+        operationId: 'getProject',
+        priority: 'P0',
+        run: () =>
+          t.lk.fetch(`${t.baseUrl}/api/v3/projects/${t.projectId}`, {
+            headers: { authorization: `Bearer ${t.apiKey}`, 'x-request-id': rid },
+          }),
+      }),
+    );
     const echoed = res.headers.get('x-request-id');
     record(
       'a',
@@ -84,19 +91,32 @@ export async function runSmoke(
   }
 
   // ---- the throwaway root -----------------------------------------------------------------------------------------
-  const root = (await run('createResource', {
-    body: { name: `lk-bridge smoke ${new Date().toISOString()}` },
-  })) as Obj;
+  const root = (await steps.step('root', 'the throwaway root', () =>
+    run('createResource', {
+      body: { name: `lk-bridge smoke ${new Date().toISOString()}` },
+    }),
+  )) as Obj;
   const rootId = root.id as string;
   const mainDoc = (root.documents?.[0]?.id ?? '') as string;
   const family = async (id: string, title: string, fn: () => Promise<string>) => {
     try {
-      record(id, title, 'pass', await fn());
+      record(id, title, 'pass', await steps.step(id, title, fn));
     } catch (e) {
       record(id, title, 'fail', wholeError(e));
     }
   };
 
+  steps.defer('the throwaway root deleted (cascade)', async () => {
+    // Clean up: the whole throwaway tree goes (cascade, confirmed).
+    try {
+      await run('deleteResource', p({ resourceId: rootId }, { query: { cascade: true } }), {
+        confirm: 'cascade',
+      });
+      record('cleanup', 'throwaway root deleted', 'pass', rootId);
+    } catch (e) {
+      record('cleanup', 'throwaway root deleted', 'fail', `${rootId}: ${wholeError(e)}. Delete it by hand.`);
+    }
+  });
   try {
     // ---- (b) block / row / infobox-property reads carry the document version, and it works as If-Match ------------
     await family(
@@ -399,15 +419,7 @@ export async function runSmoke(
       return `template ${tpl.id}; new resource ${made.id}`;
     });
   } finally {
-    // Clean up: the whole throwaway tree goes (cascade, confirmed).
-    try {
-      await run('deleteResource', p({ resourceId: rootId }, { query: { cascade: true } }), {
-        confirm: 'cascade',
-      });
-      record('cleanup', 'throwaway root deleted', 'pass', rootId);
-    } catch (e) {
-      record('cleanup', 'throwaway root deleted', 'fail', `${rootId}: ${wholeError(e)}. Delete it by hand.`);
-    }
+    await steps.cleanup();
   }
 
   record(

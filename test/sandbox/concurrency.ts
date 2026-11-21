@@ -20,6 +20,7 @@
  * and about 12 reads. Run with the write spacing at 0 for this runtime only (the wrapper does), so the racing writes
  * really leave together; the governor's tier counters still apply.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import { mintClientId } from '../../src/jobs/ids.js';
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
@@ -31,6 +32,8 @@ type Obj = Record<string, unknown>;
 export interface ConcurrencyOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   readonly wait?: WaitOptions;
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  readonly run?: SandboxRun;
 }
 
 interface RawAnswer {
@@ -46,6 +49,7 @@ export async function runConcurrencySandbox(
   expectedProjectId: string,
   o: ConcurrencyOptions = {},
 ): Promise<{ findings: Finding[] }> {
+  const steps = o.run ?? sandboxRun({ name: 'concurrency', out: () => undefined });
   const findings: Finding[] = [];
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const origin = { kind: 'test' as const, client: 'sandbox-concurrency', tool: 'sandbox-concurrency' };
@@ -56,7 +60,9 @@ export async function runConcurrencySandbox(
     runSettled(t, op, params, { origin, priority: 'P1', project: t.projectId, ...extra }, wait);
 
   // The same guard as every sandbox script: the key's own project must be the sandbox project.
-  const projects = (await run('listProjects')) as { data?: { id: string }[] };
+  const projects = (await steps.step('guard', 'the key belongs to exactly the sandbox project', () =>
+    run('listProjects'),
+  )) as { data?: { id: string }[] };
   const seen = (projects.data ?? []).map((p) => p.id);
   if (seen.length !== 1 || seen[0] !== expectedProjectId)
     throw new SandboxGuardError(
@@ -103,20 +109,44 @@ export async function runConcurrencySandbox(
     a.map((x) => `${x.status}${x.code ? ` ${x.code}` : ''}${x.version ? ` → ${x.version}` : ''}`).join('; ');
 
   let rootId: string | null = null;
+  steps.defer('the throwaway page deleted', async () => {
+    if (rootId) {
+      try {
+        await run('deleteResource', { path: { resourceId: rootId } });
+        record('cleanup', 'the throwaway page is deleted', 'pass', `root ${rootId}`);
+      } catch (e) {
+        const gone =
+          e instanceof BridgeLkError &&
+          (e.status === 404 || e.code === 'ALREADY_DELETED' || e.code === 'NOT_FOUND');
+        record(
+          'cleanup',
+          'the throwaway page is deleted',
+          gone ? 'pass' : 'fail',
+          gone
+            ? `root ${rootId} (already gone)`
+            : `could not delete ${rootId}: delete it by hand (${wholeError(e)})`,
+        );
+      }
+    }
+  });
   try {
     // ---- the throwaway page, with one block (its Main becomes a page)
-    rootId = mintClientId(24);
-    await run('createResource', {
-      body: { id: rootId, name: `lk-bridge concurrency ${new Date().toISOString()}` },
-    });
-    const page = (await run('getResource', { path: { resourceId: rootId } })) as {
-      documents?: { id: string; name?: string }[];
-    };
-    const docId = (page.documents ?? []).find((d) => d.name === 'Main')?.id ?? page.documents?.[0]?.id;
-    if (!docId) throw new Error('the throwaway page has no document');
-    await run('insertBlock', {
-      path: { resourceId: rootId, documentId: docId },
-      body: { block: para(mintClientId(8), 'start') },
+    const id = mintClientId(24);
+    rootId = id;
+    const docId = await steps.step('setup', 'a throwaway page with one block', async () => {
+      await run('createResource', {
+        body: { id, name: `lk-bridge concurrency ${new Date().toISOString()}` },
+      });
+      const page = (await run('getResource', { path: { resourceId: id } })) as {
+        documents?: { id: string; name?: string }[];
+      };
+      const docId = (page.documents ?? []).find((d) => d.name === 'Main')?.id ?? page.documents?.[0]?.id;
+      if (!docId) throw new Error('the throwaway page has no document');
+      await run('insertBlock', {
+        path: { resourceId: id, documentId: docId },
+        body: { block: para(mintClientId(8), 'start') },
+      });
+      return docId;
     });
     const blocksPath = `/resources/${rootId}/docs/${docId}/blocks`;
     const versionNow = async () =>
@@ -127,7 +157,7 @@ export async function runConcurrencySandbox(
     record('setup', 'a throwaway page with one block', 'pass', `root ${rootId}, document ${docId}`);
 
     // ---- C1: two whole-document writes with one version, together
-    {
+    await steps.step('C1', 'two replaceDocumentBlocks with one If-Match, sent together', async () => {
       const v = await versionNow();
       const a = para(mintClientId(8), 'written by A');
       const b = para(mintClientId(8), 'written by B');
@@ -150,10 +180,10 @@ export async function runConcurrencySandbox(
         verdict,
         `answers: ${describe(answers)}; the page now holds: ${held}${ok >= 2 ? ' — LegendKeeper accepted both: its If-Match is not an atomic compare-and-swap (PLAN-v2 10.6: the bridge locks and checks itself)' : ''}`,
       );
-    }
+    });
 
     // ---- C2: five block inserts with one version, together
-    {
+    await steps.step('C2', 'five insertBlock with one If-Match, sent together', async () => {
       const v = await versionNow();
       const answers = await Promise.all(
         [0, 1, 2, 3, 4].map((i) =>
@@ -167,10 +197,10 @@ export async function runConcurrencySandbox(
         ok === 1 ? 'pass' : ok > 1 ? 'noted' : 'inconclusive',
         `${ok} of 5 accepted; answers: ${describe(answers)}`,
       );
-    }
+    });
 
     // ---- C3: the control, one after the other: the second (stale) must be refused
-    {
+    await steps.step('C3', 'the control: a stale If-Match one after the other', async () => {
       const v = await versionNow();
       const first = await raw('replaceDocumentBlocks', 'PUT', blocksPath, v, {
         blocks: [para(mintClientId(8), 'first')],
@@ -185,28 +215,11 @@ export async function runConcurrencySandbox(
         okFirst && second.status === 412 ? 'pass' : okFirst ? 'fail' : 'inconclusive',
         `first: ${describe([first])}; second: ${describe([second])}`,
       );
-    }
+    });
   } catch (e) {
     record('run', 'the checks ran to the end', 'fail', e instanceof Error ? e.message : String(e));
   } finally {
-    if (rootId) {
-      try {
-        await run('deleteResource', { path: { resourceId: rootId } });
-        record('cleanup', 'the throwaway page is deleted', 'pass', `root ${rootId}`);
-      } catch (e) {
-        const gone =
-          e instanceof BridgeLkError &&
-          (e.status === 404 || e.code === 'ALREADY_DELETED' || e.code === 'NOT_FOUND');
-        record(
-          'cleanup',
-          'the throwaway page is deleted',
-          gone ? 'pass' : 'fail',
-          gone
-            ? `root ${rootId} (already gone)`
-            : `could not delete ${rootId}: delete it by hand (${wholeError(e)})`,
-        );
-      }
-    }
+    await steps.cleanup();
   }
   return { findings };
 }

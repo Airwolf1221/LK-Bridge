@@ -1060,6 +1060,70 @@ export class SnapshotService {
     );
   }
 
+  /**
+   * R4.1: a change snapshot of the given pages (every piece of each, read now), tied to no job: how a sandbox check
+   * snapshots only the pages it made (consistency-f4b's probe; the owner's run of 21 November 2026 hung on a full
+   * snapshot of the whole test world, about 1,500 pages at the governor's rate). A page the repository tree does not hold
+   * (outside the AI REPOSITORY) is left out, as a job's change snapshot leaves it.
+   */
+  async capturePages(
+    projectId: string,
+    pageIds: readonly string[],
+    o: {
+      readonly trigger: Record<string, unknown>;
+      readonly priority?: PriorityClass;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<RunOutcome> {
+    const startedAt = this.o.now();
+    const priority = o.priority ?? 'P1';
+    const deps = this.captureDeps(projectId, priority, undefined, { download: false });
+    const read = this.reader(projectId, priority, o.signal ? { signal: o.signal } : {});
+    const c = newCounters();
+    const pages: PageEntry[] = [];
+    for (const id of [...new Set(pageIds)]) {
+      let node: TreeNode | null;
+      try {
+        node = this.o.tree.queries.node(projectId, id).data;
+      } catch {
+        node = null;
+      }
+      if (!node) continue;
+      const n: PageNode = {
+        id: node.id,
+        parentId: node.parentId,
+        rank: node.rank,
+        name: node.rawName,
+        kind: node.kind,
+      };
+      pages.push(await capturePage(deps, read, n, EVERYTHING, c));
+    }
+    if (pages.length === 0)
+      return { changed: false, skipped: true, summary: 'None of the pages is in the tree.' };
+    let rootId: string | null;
+    try {
+      rootId = this.o.tree.queries.root(projectId).data?.id ?? null;
+    } catch {
+      rootId = null;
+    }
+    const manifest = this.buildManifest({
+      projectId,
+      kind: 'change',
+      startedAt,
+      rootId,
+      trigger: o.trigger,
+      pages,
+      library: null,
+      counts: { reads: c.reads, downloads: c.downloads, newObjects: c.newObjects, newBytes: c.newBytes },
+    });
+    await this.writeSnapshot(manifest);
+    return {
+      changed: true,
+      snapshotId: manifest.id,
+      summary: `Took change snapshot ${manifest.id}: ${summaryOf(manifest)}.`,
+    };
+  }
+
   /** The info logger for background tasks (task-log.ts), when the runtime gave one. */
   private taskLog(): TaskLogger | undefined {
     const log = this.o.log;

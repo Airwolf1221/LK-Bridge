@@ -509,7 +509,8 @@ Routine organisation follows your scope (direct at `write`, on the Review page a
   proposes it to the owner).
 - **`arkona_chapter_plan { story, number, act?, title?, plannedDate?, pov?, questionGate? }`**: a Chapter Plan under the
   right map, or that plan's fields updated. Its body is the template's chapter-plan headings: write the planning text
-  with `write_page`. A new plan's **Question Gate** starts `Open`.
+  with `write_page`. A new plan's **Question Gate** starts `Open`, and it takes its story's Continuity Type and
+  Continuity, as the maps do.
 - **The Drafting Gate**: ask the plan's questions, record the answers, then close the gate (`questionGate: "closed"`).
 - **`arkona_chapter_save { story, number, title, inWorldDate, place?, pov, charactersPresent, locations, draftStatus,
 markdown, baseVersion? }`**: saves the prose (the Fiction Writing Reference, 32B). The tool writes the **dateline**

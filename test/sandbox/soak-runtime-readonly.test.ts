@@ -10,25 +10,33 @@
 import { mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { systemClock } from '../../src/lk/index.js';
 import { MockLk } from '../contract/mock-lk.js';
 import { API_KEY, PROJECT, startStack, type Stack } from '../tools/helpers.js';
 import { specRespond } from '../tools/spec-mock.js';
 import { createSoakRuntime, type SoakRuntime } from './soak.js';
+import { cleanupAfterAll, sandboxRun } from './steps.js';
 
 const restricted = process.env.LKB_FS_RESTRICTED === '1';
 
 let mock: MockLk | undefined;
 let soak: SoakRuntime | undefined;
 let stack: Stack | undefined;
+// R4.1: as every sandbox check, each step printed as it starts and finishes with its own timeout, and the clean-up (here
+// closing what a test started) run once, with its own timeout, after each test and again after all of them.
+const steps = sandboxRun({ name: 'soak-runtime-readonly' });
 afterEach(async () => {
-  await soak?.close();
-  await stack?.close();
-  await mock?.stop();
-  soak = stack = undefined;
-  mock = undefined;
-});
+  steps.defer('the runtimes and the mock LegendKeeper closed', async () => {
+    await soak?.close();
+    await stack?.close();
+    await mock?.stop();
+    soak = stack = undefined;
+    mock = undefined;
+  });
+  await cleanupAfterAll(steps);
+}, steps.hookTimeoutMs);
+afterAll(() => cleanupAfterAll(steps), steps.hookTimeoutMs);
 
 describe.skipIf(!restricted)(
   'the sandbox runtime where nothing but a temporary directory may be written',
@@ -50,32 +58,36 @@ describe.skipIf(!restricted)(
           }),
         }),
       });
-      const url = await mock.start();
-      soak = await createSoakRuntime({
-        apiKey: API_KEY,
-        project: 'sandbox',
-        baseUrl: url,
-        env: { WRITE_SPACING_MS: '0', WRITE_SPACING_STRETCHED_MS: '0' },
-      });
+      const started = mock;
+      const url = await steps.step('mock', 'the mock LegendKeeper started', () => started.start());
+      soak = await steps.step('runtime', 'the sandbox runtime started', () =>
+        createSoakRuntime({
+          apiKey: API_KEY,
+          project: 'sandbox',
+          baseUrl: url,
+          env: { WRITE_SPACING_MS: '0', WRITE_SPACING_STRETCHED_MS: '0' },
+        }),
+      );
       const images = soak.runtime.images;
       expect(images.dir.startsWith(join(tmpdir(), 'lkb-soak-'))).toBe(true);
       expect(images.dir).not.toContain(process.cwd());
       expect(existsSync(images.dir)).toBe(false); // a runtime that handles no upload touches no folder
       // v2 E1a: the snapshot store is inside the same temporary directory (it is created at start-up).
       const snaps = soak.runtime.snapshots;
-      await snaps.settled();
+      await steps.step('snapshots', 'the snapshot store settled', () => snaps.settled());
       expect(snaps.store.dir.startsWith(join(tmpdir(), 'lkb-soak-'))).toBe(true);
       expect(snaps.store.dir).not.toContain(process.cwd());
     });
 
     it('the real boot path with the default tool settings derives its directory from the database it was given', async () => {
-      stack = await startStack();
+      stack = await steps.step('stack', 'the real boot path started', () => startStack());
       const images = stack.runtime.images;
       expect(stack.runtime.config.server.dbPath).toBe('./data/bridge.db'); // the config's default: under the app folder
       expect(images.dir.startsWith(tmpdir())).toBe(true);
       expect(images.dir).not.toContain(process.cwd());
       expect(existsSync(images.dir)).toBe(false);
-      await stack.runtime.snapshots.settled();
+      const booted = stack;
+      await steps.step('snapshots', 'the snapshot store settled', () => booted.runtime.snapshots.settled());
       expect(stack.runtime.snapshots.store.dir.startsWith(tmpdir())).toBe(true);
       expect(stack.runtime.snapshots.store.dir).not.toContain(process.cwd());
     });

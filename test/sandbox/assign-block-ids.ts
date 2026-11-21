@@ -26,6 +26,7 @@
  * The thin wrapper for the real run is `assign-block-ids.test.ts`; the ordinary suite runs these steps against the mock in
  * `test/sandbox-mock/assign-block-ids.test.ts`.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import Database from 'better-sqlite3';
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
@@ -78,8 +79,13 @@ const LEGACY_ATTEMPT = [
  */
 export async function runBlockIdsCheck(
   sb: SoakRuntime,
-  o: { readonly named?: string | undefined } = {},
+  o: {
+    readonly named?: string | undefined;
+    /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+    readonly run?: SandboxRun;
+  } = {},
 ): Promise<BlockIdsCheckResult> {
+  const steps = o.run ?? sandboxRun({ name: 'assign-block-ids', out: () => undefined });
   const items: Item[] = [];
   const record = (id: string, title: string, verdict: Item['verdict'], detail: string) =>
     items.push({ id, title, verdict, detail });
@@ -102,27 +108,47 @@ export async function runBlockIdsCheck(
   let target: { resourceId: string; documentId: string };
   let throwaway: string | null = null;
   const named = o.named?.trim();
-  try {
-    if (named) {
-      const [resourceId, documentId] = named.split('/');
-      if (!resourceId || !documentId) throw new Error('LKB_BLOCKIDS_DOCUMENT is <resourceId>/<documentId>');
-      target = { resourceId, documentId };
-    } else {
-      // A throwaway page whose blocks are sent without ids.
-      const id = mintClientId(8);
-      const made = await run('createResource', {
-        body: {
-          id,
-          name: `lk-bridge block-ids check ${new Date().toISOString()}`,
-          documents: [{ name: 'Main', type: 'page', blocks: LEGACY_ATTEMPT }],
-        },
-      });
-      throwaway = String(made.id ?? id);
-      const doc =
-        (made.documents as Obj[] | undefined)?.find((d) => d.name === 'Main') ?? made.documents?.[0];
-      target = { resourceId: throwaway, documentId: String(doc?.id ?? '') };
+  steps.defer('the throwaway page deleted', async () => {
+    if (throwaway) {
+      try {
+        await run(
+          'deleteResource',
+          { path: { resourceId: throwaway }, query: { cascade: true } },
+          { confirm: 'cascade' },
+        );
+      } catch (e) {
+        record(
+          'cleanup',
+          'the throwaway page deleted',
+          'fail',
+          `${throwaway}: ${wholeError(e)}. Delete it by hand.`,
+        );
+      }
     }
-    const pre = await read(target.resourceId, target.documentId);
+  });
+  try {
+    const pre = await steps.step('setup', 'the document to give ids to, read', async () => {
+      if (named) {
+        const [resourceId, documentId] = named.split('/');
+        if (!resourceId || !documentId) throw new Error('LKB_BLOCKIDS_DOCUMENT is <resourceId>/<documentId>');
+        target = { resourceId, documentId };
+      } else {
+        // A throwaway page whose blocks are sent without ids.
+        const id = mintClientId(8);
+        const made = await run('createResource', {
+          body: {
+            id,
+            name: `lk-bridge block-ids check ${new Date().toISOString()}`,
+            documents: [{ name: 'Main', type: 'page', blocks: LEGACY_ATTEMPT }],
+          },
+        });
+        throwaway = String(made.id ?? id);
+        const doc =
+          (made.documents as Obj[] | undefined)?.find((d) => d.name === 'Main') ?? made.documents?.[0];
+        target = { resourceId: throwaway, documentId: String(doc?.id ?? '') };
+      }
+      return read(target.resourceId, target.documentId);
+    });
     if (!isLegacy(pre.blocks)) {
       record(
         'legacy',
@@ -137,8 +163,14 @@ export async function runBlockIdsCheck(
       );
     } else {
       const before = legacyProblems(pre.blocks);
-      const first = await run('assignBlockIds', { path: target });
-      const post = await read(target.resourceId, target.documentId);
+      const { first, post } = await steps.step(
+        '1-3',
+        'assignBlockIds, then the document read back',
+        async () => {
+          const first = await run('assignBlockIds', { path: target });
+          return { first, post: await read(target.resourceId, target.documentId) };
+        },
+      );
       const after = legacyProblems(post.blocks);
       record(
         '1',
@@ -161,8 +193,14 @@ export async function runBlockIdsCheck(
         post.version !== pre.version ? 'pass' : 'fail',
         `${pre.version} → ${post.version} (the call answered ${String(first.version)})`,
       );
-      const second = await run('assignBlockIds', { path: target });
-      const again = await read(target.resourceId, target.documentId);
+      const { second, again } = await steps.step(
+        '4',
+        'assignBlockIds a second time, then read back',
+        async () => {
+          const second = await run('assignBlockIds', { path: target });
+          return { second, again: await read(target.resourceId, target.documentId) };
+        },
+      );
       const same = stableJson(withoutVersions(again.blocks)) === stableJson(withoutVersions(post.blocks));
       record(
         '4',
@@ -172,22 +210,7 @@ export async function runBlockIdsCheck(
       );
     }
   } finally {
-    if (throwaway) {
-      try {
-        await run(
-          'deleteResource',
-          { path: { resourceId: throwaway }, query: { cascade: true } },
-          { confirm: 'cascade' },
-        );
-      } catch (e) {
-        record(
-          'cleanup',
-          'the throwaway page deleted',
-          'fail',
-          `${throwaway}: ${wholeError(e)}. Delete it by hand.`,
-        );
-      }
-    }
+    await steps.cleanup();
   }
   const verdict: SandboxVerdict = items.some((i) => i.verdict === 'fail')
     ? 'FAIL'

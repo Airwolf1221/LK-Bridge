@@ -68,7 +68,7 @@ describe('the narrative audit on a tree the tools made (E4, E8)', () => {
       expect(b.status, JSON.stringify(b)).toBe('written');
     }
     await w.snapshot();
-    expect(codes()).toEqual(['narrative_au_index_missing']);
+    expect(codes(), JSON.stringify(findings().map((f) => f.message))).toEqual(['narrative_au_index_missing']);
     // The ordering audit is silent on Narratives in narrative order (Story Map first, Act 1 then Act 2).
     expect(
       findings('ordering')

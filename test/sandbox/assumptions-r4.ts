@@ -29,6 +29,7 @@
  * The thin wrapper for the real run is `assumptions-r4.test.ts`; the ordinary suite runs these steps against the mock in
  * `test/sandbox-mock/assumptions-r4.test.ts`.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import { mintClientId, type OpParams, type StepOptions } from '../../src/jobs/index.js';
 import { stableJson } from '../../src/jobs/sidebar-state.js';
 import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
@@ -52,7 +53,11 @@ const para = (text: string, id = mintClientId()): Obj => ({ id, kind: 'paragraph
  * The checks (Y1 to Y3), for the real run (`assumptions-r4.test.ts`) and, CR-2026-11-R4 (the owner's request S), the
  * ordinary suite's run against the mock (`test/sandbox-mock/assumptions-r4.test.ts`), through the same runtime and harness.
  */
-export async function runAssumptionsR4(sb: SoakRuntime): Promise<AssumptionsR4Item[]> {
+export async function runAssumptionsR4(
+  sb: SoakRuntime,
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  steps: SandboxRun = sandboxRun({ name: 'assumptions-r4', out: () => undefined }),
+): Promise<AssumptionsR4Item[]> {
   const items: Item[] = [];
   const record = (id: string, title: string, verdict: Item['verdict'], detail: string) =>
     items.push({ id, title, verdict, detail });
@@ -68,25 +73,44 @@ export async function runAssumptionsR4(sb: SoakRuntime): Promise<AssumptionsR4It
   };
   const check = async (id: string, title: string, fn: () => Promise<void>) => {
     try {
-      await fn();
+      await steps.step(id, title, fn);
     } catch (e) {
       record(id, title, 'fail', `the check could not complete: ${wholeError(e)}`);
     }
   };
   const stamp = new Date().toISOString();
   let pageId: string | null = null;
+  steps.defer('the throwaway page deleted', async () => {
+    if (pageId)
+      try {
+        await run(
+          'deleteResource',
+          { path: { resourceId: pageId }, query: { cascade: true } },
+          { confirm: 'cascade' },
+        );
+      } catch (e) {
+        record(
+          'cleanup',
+          'the throwaway page deleted',
+          'fail',
+          `${pageId}: ${wholeError(e)}. Delete it by hand.`,
+        );
+      }
+  });
   try {
     const id = mintClientId(8);
-    const made = await run('createResource', {
-      body: {
-        id,
-        name: `lk-bridge r4 check ${stamp}`,
-        documents: [
-          { name: 'Main', type: 'page' },
-          { name: 'Second', type: 'page' },
-        ],
-      },
-    });
+    const made = await steps.step('setup', 'a throwaway page with two documents', () =>
+      run('createResource', {
+        body: {
+          id,
+          name: `lk-bridge r4 check ${stamp}`,
+          documents: [
+            { name: 'Main', type: 'page' },
+            { name: 'Second', type: 'page' },
+          ],
+        },
+      }),
+    );
     pageId = String(made.id ?? id);
     const docs = (made.documents ?? []) as Obj[];
     const main = { resourceId: pageId, documentId: String(docs.find((d) => d.name === 'Main')?.id ?? '') };
@@ -220,21 +244,7 @@ export async function runAssumptionsR4(sb: SoakRuntime): Promise<AssumptionsR4It
       },
     );
   } finally {
-    if (pageId)
-      try {
-        await run(
-          'deleteResource',
-          { path: { resourceId: pageId }, query: { cascade: true } },
-          { confirm: 'cascade' },
-        );
-      } catch (e) {
-        record(
-          'cleanup',
-          'the throwaway page deleted',
-          'fail',
-          `${pageId}: ${wholeError(e)}. Delete it by hand.`,
-        );
-      }
+    await steps.cleanup();
   }
   return items;
 }

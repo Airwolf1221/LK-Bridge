@@ -21,6 +21,7 @@
  * 6. R: another full snapshot and audit: the fixed paragraph's finding is gone.
  * 7. Clean-up: the root (cascade).
  */
+import { sandboxRun, StepTimeoutError, type SandboxRun } from './steps.js';
 import type { Db } from '../../src/db/open.js';
 import type { Runtime } from '../../src/runtime.js';
 import type { Finding, Verdict } from './smoke.js';
@@ -40,6 +41,8 @@ export interface AuditsTarget {
 export interface AuditsOptions {
   readonly wait?: WaitOptions;
   readonly sleep?: (ms: number) => Promise<void>;
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  readonly run?: SandboxRun;
 }
 
 export interface AuditsReport {
@@ -52,6 +55,7 @@ const text = (b: Obj): string =>
   ((b.content as Obj[] | undefined) ?? []).map((r) => String(r.text ?? '')).join('');
 
 export async function runAuditsSandbox(t: AuditsTarget, o: AuditsOptions = {}): Promise<AuditsReport> {
+  const steps = o.run ?? sandboxRun({ name: 'audits', out: () => undefined });
   const rt = t.runtime;
   const pid = t.projectId;
   const findings: Finding[] = [];
@@ -66,11 +70,11 @@ export async function runAuditsSandbox(t: AuditsTarget, o: AuditsOptions = {}): 
   const check = async (id: string, title: string, fn: () => Promise<string | { noted: string }>) => {
     const before = mark();
     try {
-      const r = await fn();
+      const r = await steps.step(id, title, fn);
       if (typeof r === 'string') record(id, title, 'pass', `${r}; ${costText(before)}`);
       else record(id, title, 'noted', `${r.noted}; ${costText(before)}`);
     } catch (e) {
-      const verdict: Verdict = e instanceof Fails ? 'fail' : 'inconclusive';
+      const verdict: Verdict = e instanceof Fails || e instanceof StepTimeoutError ? 'fail' : 'inconclusive';
       record(id, title, verdict, `${wholeError(e)}; ${costText(before)}`);
     }
   };
@@ -99,7 +103,9 @@ export async function runAuditsSandbox(t: AuditsTarget, o: AuditsOptions = {}): 
   };
 
   // ---- guard: the key must belong to exactly this project --------------------------------------------------------
-  const projects = (await run('listProjects')) as { data?: { id: string }[] };
+  const projects = (await steps.step('guard', 'the key belongs to exactly this project', () =>
+    run('listProjects'),
+  )) as { data?: { id: string }[] };
   const ids = (projects.data ?? []).map((x) => x.id);
   if (ids.length !== 1 || ids[0] !== pid)
     throw new Error(`Refusing to run: the key's projects are [${ids.join(', ')}], not exactly ${pid}.`);
@@ -118,6 +124,30 @@ export async function runAuditsSandbox(t: AuditsTarget, o: AuditsOptions = {}): 
     return rt.audits.list(pid, { code: ['line_break_paragraph'], limit: 50 }).findings;
   };
 
+  steps.defer('the throwaway root deleted with its subtree', async () => {
+    const before = mark();
+    let left = '';
+    if (rootId) {
+      try {
+        await run(
+          'deleteResource',
+          { path: { resourceId: rootId }, query: { cascade: true } },
+          { confirm: 'cascade' },
+        );
+      } catch (e) {
+        const m = (e as Error).message;
+        if (!/404|not found|already deleted|NOT_FOUND|gone/i.test(m)) left = `root ${rootId} (${m})`;
+      }
+    }
+    record(
+      'cleanup',
+      'everything the run made is deleted',
+      left === '' ? 'pass' : 'fail',
+      left === ''
+        ? `root ${rootId || '(none)'} with its subtree; ${costText(before)}`
+        : `left: ${left}. Delete it by hand.`,
+    );
+  });
   try {
     await check(
       'setup',
@@ -278,28 +308,7 @@ export async function runAuditsSandbox(t: AuditsTarget, o: AuditsOptions = {}): 
       return `still open: [${left.map((x) => x.blockId).join(', ')}]; sb-p1 resolved`;
     });
   } finally {
-    const before = mark();
-    let left = '';
-    if (rootId) {
-      try {
-        await run(
-          'deleteResource',
-          { path: { resourceId: rootId }, query: { cascade: true } },
-          { confirm: 'cascade' },
-        );
-      } catch (e) {
-        const m = (e as Error).message;
-        if (!/404|not found|already deleted|NOT_FOUND|gone/i.test(m)) left = `root ${rootId} (${m})`;
-      }
-    }
-    record(
-      'cleanup',
-      'everything the run made is deleted',
-      left === '' ? 'pass' : 'fail',
-      left === ''
-        ? `root ${rootId || '(none)'} with its subtree; ${costText(before)}`
-        : `left: ${left}. Delete it by hand.`,
-    );
+    await steps.cleanup();
   }
   return { findings };
 }

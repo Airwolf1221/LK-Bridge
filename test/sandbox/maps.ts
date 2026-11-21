@@ -14,6 +14,7 @@
  * Each check prints PASS, FAIL or INCONCLUSIVE with what LegendKeeper answered, as the assumptions test does. A FAIL is a
  * place where LegendKeeper differs from what the bridge relies on (docs/adr/0040-map-feature-tools.md, "To verify").
  */
+import { sandboxRun, StepTimeoutError, type SandboxRun } from './steps.js';
 import { deflateSync } from 'node:zlib';
 import { mintClientId } from '../../src/jobs/ids.js';
 import {
@@ -52,6 +53,8 @@ export interface MapsOptions {
   /** How long a freshly created page may take to become linkable (default 8 tries, 4 s apart). */
   readonly linkTries?: number;
   readonly linkWaitMs?: number;
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  readonly run?: SandboxRun;
 }
 
 /** Thrown inside a check: the assumption does not hold (a FAIL with this message). */
@@ -137,6 +140,7 @@ export async function runMapsSandbox(
   expectedProjectId: string,
   o: MapsOptions = {},
 ): Promise<MapsReport> {
+  const steps = o.run ?? sandboxRun({ name: 'maps', out: () => undefined });
   const findings: Finding[] = [];
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const origin = { kind: 'test' as const, client: 'sandbox-maps', tool: 'sandbox-maps' };
@@ -215,7 +219,9 @@ export async function runMapsSandbox(
   };
 
   // ---- guard: the key must belong to exactly the sandbox project --------------------------------------------------
-  const projects = (await run('listProjects')) as { data?: { id: string }[] };
+  const projects = (await steps.step('guard', 'the key belongs to exactly the sandbox project', () =>
+    run('listProjects'),
+  )) as { data?: { id: string }[] };
   const ids = (projects.data ?? []).map((x) => x.id);
   if (ids.length !== 1 || ids[0] !== expectedProjectId || t.projectId !== expectedProjectId) {
     throw new SandboxGuardError(
@@ -225,12 +231,16 @@ export async function runMapsSandbox(
 
   // ---- what it creates --------------------------------------------------------------------------------------------
   const stamp = new Date().toISOString();
-  const root = (await run('createResource', { body: { name: `lk-bridge maps ${stamp}` } })) as Obj;
+  const root = (await steps.step('root', 'the throwaway root', () =>
+    run('createResource', { body: { name: `lk-bridge maps ${stamp}` } }),
+  )) as Obj;
   const rootId = root.id as string;
   const mapDoc = root.documents[0].id as string; // the page's first document is `blank`
-  const target = (await run('createResource', {
-    body: { name: `lk-bridge maps link target ${stamp}`, parentId: rootId },
-  })) as Obj;
+  const target = (await steps.step('target', 'the link target under the root', () =>
+    run('createResource', {
+      body: { name: `lk-bridge maps link target ${stamp}`, parentId: rootId },
+    }),
+  )) as Obj;
   const assets: string[] = [];
   const path = { resourceId: rootId, documentId: mapDoc };
   const where = {
@@ -243,9 +253,9 @@ export async function runMapsSandbox(
 
   const check = async (id: string, title: string, fn: () => Promise<string> | string) => {
     try {
-      record(id, title, 'pass', await fn());
+      record(id, title, 'pass', await steps.step(id, title, async () => fn()));
     } catch (e) {
-      if (e instanceof Fails) record(id, title, 'fail', e.message);
+      if (e instanceof Fails || e instanceof StepTimeoutError) record(id, title, 'fail', e.message);
       else if (e instanceof Unclear) record(id, title, 'inconclusive', e.message);
       else record(id, title, 'inconclusive', `the check could not complete: ${wholeError(e)}`);
     }
@@ -321,6 +331,75 @@ export async function runMapsSandbox(
   let png1500 = null as { id: string; url: string } | null;
   let frame = null as MapFrame | null;
 
+  steps.defer('the throwaway pages and the uploaded assets deleted', async () => {
+    // Clean up: the throwaway pages (the cascade takes the documents and features with them), then each uploaded asset.
+    // C2d's rule: a page or asset that is already gone (404, "already deleted") counts as cleaned; any other failure is
+    // confirmed by a read before it is reported.
+    const goneAlready = (e: unknown): boolean => {
+      const m = (e as Error).message ?? '';
+      const lk = (e as { lk?: { status?: number; code?: string } }).lk;
+      const codes = [(e as { code?: string }).code, lk?.code];
+      return (
+        /\b404\b|NOT_FOUND|ALREADY_DELETED|already deleted|is deleted|was deleted|not found/i.test(m) ||
+        lk?.status === 404 ||
+        codes.includes('NOT_FOUND') ||
+        codes.includes('ALREADY_DELETED') ||
+        (e instanceof BridgeLkError && e.status === 404)
+      );
+    };
+    const isGone = async (op: string, params: Obj): Promise<boolean> => {
+      try {
+        const r = (await run(op, params)) as Obj;
+        return r?.deletedAt != null;
+      } catch (e) {
+        return goneAlready(e);
+      }
+    };
+    const remove = async (op: string, params: Obj, extra: Obj, readOp: string): Promise<string | null> => {
+      for (let attemptNo = 0; ; attemptNo++) {
+        try {
+          await run(op, params, extra);
+          return null;
+        } catch (e) {
+          const m = (e as Error).message;
+          // "Already gone" is believed only after a read says so (a failure that merely sounds like it, such as the
+          // image's bytes not being kept before its delete, must not count as cleaned).
+          if (goneAlready(e)) return (await isGone(readOp, { path: params.path })) ? null : m;
+          if (attemptNo >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
+            return (await isGone(readOp, { path: params.path })) ? null : m;
+          await sleep(65_000);
+        }
+      }
+    };
+    const left: string[] = [];
+    for (const id of [target.id as string, rootId]) {
+      const why = await remove(
+        'deleteResource',
+        { path: { resourceId: id }, query: { cascade: true } },
+        { confirm: 'cascade' },
+        'getResource',
+      );
+      if (why) left.push(`page ${id} (${why})`);
+    }
+    for (const id of assets) {
+      const why = await remove('deleteAsset', { path: { assetId: id } }, {}, 'getAsset');
+      if (why) left.push(`asset ${id} (${why})`);
+    }
+    if (left.length === 0)
+      record(
+        'cleanup',
+        'throwaway pages and images deleted',
+        'pass',
+        [rootId, target.id, ...assets].join(', '),
+      );
+    else
+      record(
+        'cleanup',
+        'throwaway pages and images deleted',
+        'fail',
+        `left: ${left.join('; ')}. Delete them by hand.`,
+      );
+  });
   try {
     // ---- M1: a generated PNG of an awkward size uploads through the existing path ---------------------------------
     await check('M1', 'a generated 1500×700 PNG uploads, and LegendKeeper reports its size', async () => {
@@ -907,73 +986,7 @@ export async function runMapsSandbox(
       },
     );
   } finally {
-    // Clean up: the throwaway pages (the cascade takes the documents and features with them), then each uploaded asset.
-    // C2d's rule: a page or asset that is already gone (404, "already deleted") counts as cleaned; any other failure is
-    // confirmed by a read before it is reported.
-    const goneAlready = (e: unknown): boolean => {
-      const m = (e as Error).message ?? '';
-      const lk = (e as { lk?: { status?: number; code?: string } }).lk;
-      const codes = [(e as { code?: string }).code, lk?.code];
-      return (
-        /\b404\b|NOT_FOUND|ALREADY_DELETED|already deleted|is deleted|was deleted|not found/i.test(m) ||
-        lk?.status === 404 ||
-        codes.includes('NOT_FOUND') ||
-        codes.includes('ALREADY_DELETED') ||
-        (e instanceof BridgeLkError && e.status === 404)
-      );
-    };
-    const isGone = async (op: string, params: Obj): Promise<boolean> => {
-      try {
-        const r = (await run(op, params)) as Obj;
-        return r?.deletedAt != null;
-      } catch (e) {
-        return goneAlready(e);
-      }
-    };
-    const remove = async (op: string, params: Obj, extra: Obj, readOp: string): Promise<string | null> => {
-      for (let attemptNo = 0; ; attemptNo++) {
-        try {
-          await run(op, params, extra);
-          return null;
-        } catch (e) {
-          const m = (e as Error).message;
-          // "Already gone" is believed only after a read says so (a failure that merely sounds like it, such as the
-          // image's bytes not being kept before its delete, must not count as cleaned).
-          if (goneAlready(e)) return (await isGone(readOp, { path: params.path })) ? null : m;
-          if (attemptNo >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
-            return (await isGone(readOp, { path: params.path })) ? null : m;
-          await sleep(65_000);
-        }
-      }
-    };
-    const left: string[] = [];
-    for (const id of [target.id as string, rootId]) {
-      const why = await remove(
-        'deleteResource',
-        { path: { resourceId: id }, query: { cascade: true } },
-        { confirm: 'cascade' },
-        'getResource',
-      );
-      if (why) left.push(`page ${id} (${why})`);
-    }
-    for (const id of assets) {
-      const why = await remove('deleteAsset', { path: { assetId: id } }, {}, 'getAsset');
-      if (why) left.push(`asset ${id} (${why})`);
-    }
-    if (left.length === 0)
-      record(
-        'cleanup',
-        'throwaway pages and images deleted',
-        'pass',
-        [rootId, target.id, ...assets].join(', '),
-      );
-    else
-      record(
-        'cleanup',
-        'throwaway pages and images deleted',
-        'fail',
-        `left: ${left.join('; ')}. Delete them by hand.`,
-      );
+    await steps.cleanup();
   }
   return { findings, assets };
 }

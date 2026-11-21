@@ -20,9 +20,10 @@
  * hand if that fails. The steps are in `split-ids.ts`; the ordinary suite runs them against the mock in
  * `test/sandbox-mock/split-ids.test.ts`.
  */
-import { describe, expect, it } from 'vitest';
-import { createSoakRuntime } from './soak.js';
+import { afterAll, describe, expect, it } from 'vitest';
+import { createSoakRuntime, type SoakRuntime } from './soak.js';
 import { formatSplitIdsReport, runSplitIdsCheck } from './split-ids.js';
+import { cleanupAfterAll, sandboxRun } from './steps.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
@@ -30,20 +31,29 @@ const projectName = process.env.LKB_SANDBOX_PROJECT;
 describe.skipIf(!projectName)(
   'LegendKeeper sandbox: block ids across documents, for arkona_split_owner (writes, then cleans up)',
   () => {
+    // R4.1: each step printed as it starts and finishes, with its own timeout; the clean-up again here, with its own.
+    const steps = sandboxRun({ name: 'split-ids' });
+    let sandbox: SoakRuntime | undefined;
+    afterAll(async () => {
+      try {
+        await cleanupAfterAll(steps);
+      } finally {
+        await sandbox?.close();
+      }
+    }, steps.hookTimeoutMs);
+
     it('a moved block keeps its id and arrives verbatim; the source’s edit leaves it as it is', async () => {
       const target = resolveSandboxTarget(projectName);
-      const sandbox = await createSoakRuntime({
-        apiKey: target.apiKey,
-        project: target.name,
-        ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
-      });
-      try {
-        const items = await runSplitIdsCheck(sandbox);
-        process.stdout.write(formatSplitIdsReport(items, sandbox.counters));
-        expect(items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
-      } finally {
-        await sandbox.close();
-      }
+      sandbox = await steps.step('runtime', 'the sandbox runtime started', () =>
+        createSoakRuntime({
+          apiKey: target.apiKey,
+          project: target.name,
+          ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+        }),
+      );
+      const items = await runSplitIdsCheck(sandbox, steps);
+      process.stdout.write(formatSplitIdsReport(items, sandbox.counters));
+      expect(items.filter((i) => i.verdict === 'fail').map((i) => `${i.id}: ${i.detail}`)).toEqual([]);
     }, 900_000);
   },
 );

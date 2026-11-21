@@ -17,6 +17,7 @@
  * 5. Everything is deleted: the throwaway folder and the run's own staging folder (404 or "already deleted" counts as
  *    cleaned). Writes parked for budget or queued are waited for (test/sandbox/wait.ts), the clean-up's too.
  */
+import { sandboxRun, type SandboxRun } from './steps.js';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
@@ -59,7 +60,12 @@ interface Uploaded {
   readonly expect: { width: number; height: number; frames: number; alpha: boolean };
 }
 
-export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}): Promise<Finding[]> {
+export async function runImagesSandbox(
+  t: ImagesTarget,
+  wait: WaitOptions = {},
+  /** R4.1: the run that prints each step and holds the clean-up (the test file's, for its `afterAll`). */
+  steps: SandboxRun = sandboxRun({ name: 'images', out: () => undefined }),
+): Promise<Finding[]> {
   const findings: Finding[] = [];
   const rt = t.runtime;
   const svc: ImageService = rt.images;
@@ -74,7 +80,7 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
   const check = async (id: string, title: string, fn: () => Promise<string>) => {
     const before = mark();
     try {
-      record(id, title, 'pass', `${await fn()}; ${cost(before)}`);
+      record(id, title, 'pass', `${await steps.step(id, title, fn)}; ${cost(before)}`);
     } catch (e) {
       const inconclusive = e instanceof Unclear;
       record(id, title, inconclusive ? 'inconclusive' : 'fail', `${wholeError(e)}; ${cost(before)}`);
@@ -90,10 +96,12 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
     );
 
   // ---- the asset tree (the planner needs it; about one request per folder)
-  const build = rt.assets.prepareBuild(pid, { trigger: 'sandbox-images', autoConfirm: true });
-  for (let i = 0; i < 600 && rt.assets.store.activePass(pid); i++)
-    await new Promise((r) => setTimeout(r, 500));
-  void build;
+  await steps.step('asset-tree', 'the asset tree built (about one request a folder)', async () => {
+    const build = rt.assets.prepareBuild(pid, { trigger: 'sandbox-images', autoConfirm: true });
+    for (let i = 0; i < 600 && rt.assets.store.activePass(pid); i++)
+      await new Promise((r) => setTimeout(r, 500));
+    void build;
+  });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const root = `lk-bridge images sandbox ${stamp}`;
   const stagingName = `${root} staging`;
@@ -127,6 +135,29 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
     return { row, img };
   };
 
+  steps.defer('the throwaway and staging folders deleted', async () => {
+    // ---- 5. clean-up: the throwaway folder (everything inside goes with it) and the run's staging folder
+    const before = mark();
+    const left: string[] = [];
+    for (const name of [root, stagingName]) {
+      const folders = rt.assets.queries.findFoldersByName(pid, name).data.filter((f) => f.parentId === null);
+      for (const f of folders) {
+        try {
+          await run('deleteAsset', { path: { assetId: f.id } });
+        } catch (e) {
+          const m = (e as Error).message;
+          if (!/404|NOT_FOUND|ALREADY_DELETED/i.test(m)) left.push(`${name} (${f.id}): ${m}`);
+        }
+      }
+    }
+    rt.projects.setSetting(pid, 'imageStagingFolder', null);
+    record(
+      '5',
+      'clean-up: the throwaway and staging folders deleted (404 counts as cleaned)',
+      left.length === 0 ? 'pass' : 'fail',
+      `${left.length === 0 ? 'nothing left' : `left behind: ${left.join('; ')}. Delete by hand.`}; ${cost(before)}`,
+    );
+  });
   try {
     // ---- 1. the ways in
     const cases: { file: string; expect: Uploaded['expect'] }[] = [
@@ -340,27 +371,7 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
       return `${row.folderPath?.join(' / ')}`;
     });
   } finally {
-    // ---- 5. clean-up: the throwaway folder (everything inside goes with it) and the run's staging folder
-    const before = mark();
-    const left: string[] = [];
-    for (const name of [root, stagingName]) {
-      const folders = rt.assets.queries.findFoldersByName(pid, name).data.filter((f) => f.parentId === null);
-      for (const f of folders) {
-        try {
-          await run('deleteAsset', { path: { assetId: f.id } });
-        } catch (e) {
-          const m = (e as Error).message;
-          if (!/404|NOT_FOUND|ALREADY_DELETED/i.test(m)) left.push(`${name} (${f.id}): ${m}`);
-        }
-      }
-    }
-    rt.projects.setSetting(pid, 'imageStagingFolder', null);
-    record(
-      '5',
-      'clean-up: the throwaway and staging folders deleted (404 counts as cleaned)',
-      left.length === 0 ? 'pass' : 'fail',
-      `${left.length === 0 ? 'nothing left' : `left behind: ${left.join('; ')}. Delete by hand.`}; ${cost(before)}`,
-    );
+    await steps.cleanup();
   }
   return findings;
 }

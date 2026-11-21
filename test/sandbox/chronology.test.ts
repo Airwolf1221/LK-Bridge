@@ -14,9 +14,10 @@
  * LKB_CHRONOLOGY_RESOURCE, else the test world's Universal Chronology (`h0gczxh7`, PLAN-v2 section 2)
  * (`chronologyResourceFor`). The ordinary suite runs the check against the mock in test/chronology/sandbox-dryrun.test.ts.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { chronologyResourceFor, runChronologySandbox } from './chronology.js';
-import { createSoakRuntime } from './soak.js';
+import { createSoakRuntime, type SoakRuntime } from './soak.js';
+import { cleanupAfterAll, sandboxRun } from './steps.js';
 import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
@@ -24,35 +25,46 @@ const projectName = process.env.LKB_SANDBOX_PROJECT;
 describe.skipIf(!projectName)(
   'LegendKeeper sandbox: the calendar engine and the chronology (read-only)',
   () => {
+    // R4.1: each step printed as it starts and finishes, with its own timeout; the clean-up again here, with its own.
+    const steps = sandboxRun({ name: 'chronology' });
+    let runtime: SoakRuntime | undefined;
+    afterAll(async () => {
+      try {
+        await cleanupAfterAll(steps);
+      } finally {
+        await runtime?.close();
+      }
+    }, steps.hookTimeoutMs);
+
     it('reads every age table and timeline and checks them against the engine', async () => {
       const target = resolveSandboxTarget(projectName);
       const resourceId = chronologyResourceFor(process.env.DB_PATH ?? './data/bridge.db', target.projectId);
-      const sandbox = await createSoakRuntime({
-        apiKey: target.apiKey,
-        project: target.name,
-        ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+      const sandbox = await steps.step('runtime', 'the sandbox runtime started', () =>
+        createSoakRuntime({
+          apiKey: target.apiKey,
+          project: target.name,
+          ...(process.env.LK_BASE_URL ? { baseUrl: process.env.LK_BASE_URL } : {}),
+        }),
+      );
+      runtime = sandbox;
+      const report = await runChronologySandbox({
+        run: steps,
+        resourceId,
+        read: (op, params) =>
+          sandbox.runtime.engine.internalRead(sandbox.projectId, op, params, {
+            priority: 'P2',
+            notFoundIsAnswer: true,
+          }),
       });
-      try {
-        const report = await runChronologySandbox({
-          resourceId,
-          read: (op, params) =>
-            sandbox.runtime.engine.internalRead(sandbox.projectId, op, params, {
-              priority: 'P2',
-              notFoundIsAnswer: true,
-            }),
-        });
-        process.stdout.write(`${report.text}\n`);
-        process.stdout.write(
-          `requests: ${sandbox.counters.reads} reads, ${sandbox.counters.writes} writes (counted at the transport)\n`,
-        );
-        process.stdout.write(
-          `drift between the tables and the timelines: ${report.drift.length} finding${report.drift.length === 1 ? '' : 's'}\n`,
-        );
-        expect(sandbox.counters.writes).toBe(0);
-        expect(report.failures, report.text).toEqual([]);
-      } finally {
-        await sandbox.close();
-      }
+      process.stdout.write(`${report.text}\n`);
+      process.stdout.write(
+        `requests: ${sandbox.counters.reads} reads, ${sandbox.counters.writes} writes (counted at the transport)\n`,
+      );
+      process.stdout.write(
+        `drift between the tables and the timelines: ${report.drift.length} finding${report.drift.length === 1 ? '' : 's'}\n`,
+      );
+      expect(sandbox.counters.writes).toBe(0);
+      expect(report.failures, report.text).toEqual([]);
     }, 900_000);
   },
 );

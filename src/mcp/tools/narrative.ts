@@ -556,6 +556,18 @@ async function chapterPlan(
         ? [{ key: f.questionGate, runs: text(rules.gate.open), needed: false }]
         : []),
     ...(isNew ? [{ key: f.planningStatus, runs: text(rules.planning.planned), needed: false }] : []),
+    // R4.1: a new plan's continuity, as its Story Map and Act Map carry it (a template's placeholder in these fields was
+    // left in every plan and read by the audit as another continuity). An existing plan's are left as they are.
+    ...(isNew && layout.continuity
+      ? [
+          {
+            key: f.continuityType,
+            runs: text(layout.continuity.main ? rules.continuityType.main : rules.continuityType.au),
+            needed: false,
+          },
+          { key: f.continuity, runs: text(layout.continuity.name), needed: false },
+        ]
+      : []),
     // The generic Working sidebar has no title field; its Subject holds the chapter's working title (chosen).
     ...(title ? [{ key: 'Subject', runs: text(title), needed: false }] : []),
   ];
@@ -1688,7 +1700,7 @@ function chapterTools(deps: ToolDeps, listed: () => boolean): McpToolProvider[] 
       title: 'Create or update a Chapter Plan (Arkona pack)',
       access: 'write',
       description:
-        'The Arkona pack (design F4c, E5): makes “Chapter <n> Plan” under the right map (the act’s Act Map, or the Story Map of a story without acts), from the Chapter Plan template (its body is the Workflow’s chapter-plan format: write the planning text with write_page), or updates the plan of that number: Story, Act, Chapter Number, the Chapter link, Planned Date (read by the calendar), POV, Question Gate and Planning Status, each only where the template has the field. A new plan’s Question Gate starts Open: arkona_chapter_save refuses the chapter until it is Closed (the Workflow’s Drafting Gate); close it with questionGate "closed" once the plan’s questions are answered. act: needed when the story has acts and the number does not say which. At scope write it is written directly; at scope propose, a proposal. Cost: 1 to 2 reads and about 4 writes.',
+        'The Arkona pack (design F4c, E5): makes “Chapter <n> Plan” under the right map (the act’s Act Map, or the Story Map of a story without acts), from the Chapter Plan template (its body is the Workflow’s chapter-plan format: write the planning text with write_page), or updates the plan of that number: Story, Act, Chapter Number, the Chapter link, Planned Date (read by the calendar), POV, Question Gate and Planning Status, and a new plan’s Continuity Type and Continuity (its story’s), each only where the template has the field. A new plan’s Question Gate starts Open: arkona_chapter_save refuses the chapter until it is Closed (the Workflow’s Drafting Gate); close it with questionGate "closed" once the plan’s questions are answered. act: needed when the story has acts and the number does not say which. At scope write it is written directly; at scope propose, a proposal. Cost: 1 to 2 reads and about 4 writes.',
       inputSchema: z.object({
         story: storyArg,
         continuity: continuityArg,

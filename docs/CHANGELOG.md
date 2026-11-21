@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased: R4.1, after the owner's sandbox runs (21 November 2026)
+
+Fixes from the owner's live sandbox runs after R4 ([ADR 0066 amendment 1](adr/0066-cr-2026-11-r4-decisions.md)). No
+migration; no pack version. Nothing was run against a live system: the mock only.
+
+- **A template's default values are not existing values** (narrative-f4c N3: every chapter saved on Arkona became a
+  canon proposal, because Continuity "would change" from the Chapter template's placeholder "Main CANON, or the AU's
+  name" to "Main CANON"). Replacing a field value identical to the page's template default is a first fill for the
+  canon guard's change rules (Continuity, Continuity Type), at entry and inside the lock; a real existing value, one
+  character off the default included, is still protected, so R4-01 stays closed (a page whose Continuity differs from
+  its template default still proposes, in Narratives or out). The page's template: the request's or job's own copy,
+  or a narrative page's template by its kind (a chapter made in the app); never the tree's record of an older copy (a
+  template's default may be a real value, as a Core template's Continuity "Main"). The
+  lifecycle guard already read a placeholder's replacement as a first fill (it counts only lifecycle values); a
+  template default that is itself a lifecycle state stays the lifecycle tools' (question Q1 for the owner).
+- **The mock's templates as the real ones**: the narrative test world's Chapter template holds the owner's placeholder
+  texts (Story, Chapter Number, In-world Date, Continuity, POV, Chapter Plan, Draft Status; Act and Last Major Revision
+  in the same style, assumed), the other narrative templates placeholders in their Continuity fields (assumed). N3
+  fails with them on the R4 code, as on the owner's run.
+- **`arkona_chapter_plan`** fills a new plan's Continuity Type and Continuity, as the Story Map and Act Map carry them
+  (found by the faithful templates: the placeholder was left in every plan and the audit read it as another
+  continuity).
+- **The sandbox checks** (all 17): each step prints a line as it starts and as it finishes and has its own timeout,
+  which names it (a timeout is a FAIL); the clean-up is a registry run in the check's `finally` and again in the test
+  file's `afterAll`, with its own timeout, each action once (`test/sandbox/steps.ts`). consistency-f4b no longer takes a
+  full snapshot of the test world (about 1,500 pages, which outlasted its 30-minute timeout with no output and left its
+  probe behind): it snapshots the probe's pages only, as a change snapshot over an empty base in its temporary database
+  (`SnapshotService.capturePages`); narrative-f4c's N5 does the same with the story's pages. Proved on the mock with a
+  step that never resolves (`test/sandbox-mock/steps-timeout.test.ts`).
+
 ## Unreleased: CR-2026-11-R4, the fourth independent review (21 November 2026)
 
 **Critical, fixed here: on the reviewed code an agent at scope `write` could launder canon through Narratives** (R4-01):

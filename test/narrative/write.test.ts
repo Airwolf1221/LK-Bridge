@@ -7,7 +7,15 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loopYields } from '../../src/mcp/tools/narrative-support.js';
-import { K, N, narrativeWorld, PLAN_SIDEBAR, PROJECT, type NarrativeWorld } from './world.js';
+import {
+  CHAPTER_SIDEBAR,
+  K,
+  N,
+  narrativeWorld,
+  PLAN_SIDEBAR,
+  PROJECT,
+  type NarrativeWorld,
+} from './world.js';
 
 let w: NarrativeWorld;
 beforeAll(async () => {
@@ -189,7 +197,7 @@ describe('arkona_chapter_plan and arkona_chapter_save (E5)', () => {
     expect(items(ch.id, 'Characters Present')).toEqual([K.leila, K.harun]);
     expect(facts(plan.id)).toMatchObject({ Chapter: `@${ch.id}`, 'Planning Status': 'Drafted' });
     // The placeholder text of fields the tool does not write is left for the audit to report (E8).
-    expect(facts(ch.id).Act).toBe('Link to the act');
+    expect(facts(ch.id).Act).toBe(Object.fromEntries(CHAPTER_SIDEBAR).Act);
   });
 
   it('reads back word for word', async () => {
