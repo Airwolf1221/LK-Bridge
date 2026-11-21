@@ -44,7 +44,8 @@ import {
   type Label,
   type PageInfo,
   type ValueView,
-  identityKey,
+  principalKey,
+  valueKey,
 } from './compare.js';
 import type { Edit, Picker } from './fix.js';
 import type { ConsistencyAuditItem } from '../audits/context.js';
@@ -65,6 +66,7 @@ import {
   principalValue,
   type ChronologyRowInput,
   type Compiled,
+  type FactPlace,
   type MatchedAs,
 } from './extract.js';
 import { FactIndex, type StoredFact } from './facts-index.js';
@@ -163,6 +165,7 @@ export interface CharacterFacts {
 
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex');
 const iso = (t: number) => new Date(t).toISOString();
+const tidyText = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /** The fingerprint a consistency finding is known by in every run (and the audits' and the dashboard's). */
 export function consistencyId(
@@ -1565,6 +1568,11 @@ export class Consistency {
     readonly continuity: string;
     readonly findingId: string;
     readonly side?: string;
+    /**
+     * CR-2026-11-R4 (PK-51): the side's value as the owner saw it (the dashboard shows the audit's stored value): the pick
+     * is refused (`SIDE_CHANGED`) when the side reads otherwise now, so the bridge never proposes a value nobody saw.
+     */
+    readonly shown?: string;
     readonly value?: string;
     readonly actor: string;
     readonly auditFindingId?: number;
@@ -1588,10 +1596,29 @@ export class Consistency {
     const values = [x.d.reference, ...x.d.restatements];
     const sideView = o.side !== undefined ? values.find((v) => v.key === o.side) : undefined;
     if (o.side !== undefined && !sideView)
-      throw new ConsistencyError('SIDE_NOT_FOUND', 'That value is not one of this finding’s.');
-    const picked = (sideView?.value ?? o.value ?? '').trim();
+      throw o.shown !== undefined
+        ? new ConsistencyError(
+            'SIDE_CHANGED',
+            `The value you picked (“${o.shown}”) is no longer one of this finding’s: its page changed since it was shown. Nothing was proposed; look at the finding again and pick again.`,
+            { shown: o.shown },
+          )
+        : new ConsistencyError('SIDE_NOT_FOUND', 'That value is not one of this finding’s.');
+    // CR-2026-11-R4 (PK-51): the side as the owner saw it, or nothing.
+    if (sideView && o.shown !== undefined && tidyText(sideView.value) !== tidyText(o.shown))
+      throw new ConsistencyError(
+        'SIDE_CHANGED',
+        `The value you picked has changed since it was shown: “${o.shown}” then, “${sideView.value}” now (on “${sideView.page.name}”). Nothing was proposed; look at the finding again and pick again.`,
+        { shown: o.shown, now: sideView.value, page: sideView.page.name },
+      );
+    let picked = (sideView?.value ?? o.value ?? '').trim();
     if (picked === '')
       throw new ConsistencyError('INVALID_PARAMS', 'Pick one of the values, or type the right one.');
+    // CR-2026-11-R4 (PK-55): a typed value is one line of text (a line break would be written into every page).
+    if (o.value !== undefined && /[\p{Cc}\u2028\u2029]/u.test(o.value))
+      throw new ConsistencyError(
+        'VALUE_UNREADABLE',
+        'The value holds a line break or another control character: type it on one line. Nothing was proposed.',
+      );
     const isDate = x.d.kind !== 'identity';
     let pickedSpan: Span | null = null;
     if (isDate) {
@@ -1606,11 +1633,20 @@ export class Consistency {
           'VALUE_UNREADABLE',
           `“${picked}” is not a date the calendar can read as a whole${r.ok ? '' : `: ${r.reason}`}. Nothing was proposed.`,
         );
+      // CR-2026-11-R4 (PK-54): a typed value is ONE date (ADR 0064 D6.2); a range is refused.
+      if (o.value !== undefined && r.reading.shape === 'range')
+        throw new ConsistencyError(
+          'VALUE_UNREADABLE',
+          `“${picked}” is a range, not one date: type the one date that is right (or pick the side that gives the range). Nothing was proposed.`,
+        );
+      // The calendar's own reading of a typed value is what is written (its text, spaces tidied).
+      if (o.value !== undefined) picked = r.reading.text;
       pickedSpan = spanOf(w.cal, r.reading, w.rules.approxMargin);
     }
     const agrees = (v: ValueView): boolean => {
       if (v === sideView) return true;
-      if (!isDate) return identityKey(v.value) === identityKey(picked);
+      // ADR 0064 amendment 1 (E): identity values agree when their principal parts do (their qualifiers aside).
+      if (!isDate) return principalKey(v.value) === principalKey(picked);
       const r =
         v.source === 'chronology'
           ? readCell(w.cal!, v.value, w.style)
@@ -1620,6 +1656,10 @@ export class Consistency {
     const edits: Edit[] = [];
     const untouched: Obj[] = [];
     const left: Obj[] = [];
+    // CR-2026-11-R4: each value's place as the check read it (its sentence or clause, the date's offset there), so the
+    // pick edits it there and nowhere else.
+    const placeOf = new Map<string, FactPlace>();
+    for (const f of cf.facts) if (f.place) placeOf.set(valueKey(f), f.place);
     for (const v of values) {
       if (agrees(v)) {
         untouched.push({
@@ -1642,8 +1682,16 @@ export class Consistency {
         continue;
       }
       const base = { pageId: v.page.id, pageName: v.page.name, from: v.value, to: picked };
+      const place = placeOf.get(v.key);
+      const at = place && place.at !== null ? { sha: place.sha, at: place.at } : null;
       if (v.source === 'chronology' && v.documentId && v.blockId)
-        edits.push({ ...base, kind: 'row', documentId: v.documentId, rowId: v.blockId });
+        edits.push({
+          ...base,
+          kind: 'row',
+          documentId: v.documentId,
+          rowId: v.blockId,
+          ...(place ? { event: place.sha } : {}),
+        });
       else if (v.source === 'prose' && v.documentId && v.blockId)
         edits.push({
           ...base,
@@ -1651,8 +1699,13 @@ export class Consistency {
           documentId: v.documentId,
           blockId: v.blockId,
           context: v.excerpt,
+          ...(at ? { sentence: at } : {}),
         });
-      else if (v.field) edits.push({ ...base, kind: 'fact', field: v.field, whole: v.source === 'sidebar' });
+      else if (v.field && v.source === 'sidebar')
+        // An identity value: its principal part becomes the picked one's; its own qualifier is kept (amendment 1 E).
+        edits.push({ ...base, kind: 'fact', field: v.field, whole: true, to: principalValue(picked) });
+      else if (v.field)
+        edits.push({ ...base, kind: 'fact', field: v.field, whole: false, ...(at ? { clause: at } : {}) });
       else
         left.push({
           page: v.page.name,
@@ -1687,6 +1740,12 @@ export class Consistency {
         ...(left.length ? { leftAsTheyAre: left } : {}),
       },
     });
+    if (r.items.length === 0 || r.proposalId === '')
+      throw new ConsistencyError(
+        'NOTHING_TO_PROPOSE',
+        'No page could be planned: every value that disagrees has changed since the check, is history now, or cannot be written this way (each is listed with why). Nothing was proposed.',
+        { notPlanned: r.notPlanned, untouched, ...(left.length ? { leftAsTheyAre: left } : {}) },
+      );
     const id = newPickId();
     this.d.db
       .prepare(

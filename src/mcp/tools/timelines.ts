@@ -61,6 +61,7 @@ import { mintClientId } from '../../jobs/ids.js';
 import { VERIFY_STEP } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
 import { pageConverterContext } from '../../pages/index.js';
+import { withoutVersions } from '../../pages/blockwise.js';
 import { nameKey } from '../../tree/index.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
@@ -523,7 +524,11 @@ function writeContext(
   ch: Chrono,
   now: Now,
   rows: WriteContext['rows'],
-  extra: { expectBefore?: Record<string, number>; moves?: Set<string> } = {},
+  extra: {
+    expectBefore?: Record<string, number>;
+    moves?: Set<string>;
+    rowBlocks?: Record<string, Obj>;
+  } = {},
 ): WriteContext {
   const tableIds: Record<string, string> = {};
   for (const [doc, t] of now.tables) tableIds[doc] = t.table.table.id ?? '';
@@ -545,6 +550,7 @@ function writeContext(
     events,
     ...(extra.expectBefore ? { expectBefore: extra.expectBefore } : {}),
     ...(extra.moves ? { moves: extra.moves } : {}),
+    ...(extra.rowBlocks ? { rowBlocks: extra.rowBlocks } : {}),
   };
 }
 
@@ -1527,6 +1533,10 @@ export async function planEventChange(
   }
   const target: ChronologyTarget = { writes, link, unlink };
   const now: Now = { tables, main: mr.value, events: new Map([[event.id, event.raw]]) };
+  // CR-2026-11-R4 (PK-37, PK-38; R3-35's class): the row it rewrites (or moves away) must still be exactly the block
+  // read now inside the lock, its marks, links and mentions included (as Revert passes it), not only its words: the
+  // change is written from this block, so a mark added between the plan and the write would otherwise be lost.
+  const rowBlocks = { [rowKey(age.tableDocumentId, row.id!)]: withoutVersions([row.row.block])[0]! };
   const counts = Object.fromEntries(mr.value.rows.map((r) => [r.age, r.countText]));
   const head: Obj = {
     event: {
@@ -1584,7 +1594,7 @@ export async function planEventChange(
       ch,
       target,
       writes,
-      ctx: writeContext(ch, now, rowsCtx, { moves }),
+      ctx: writeContext(ch, now, rowsCtx, { moves, rowBlocks }),
       requestKey,
       ages,
       summary: `${tool}: ${row.dateText} “${event.name}” (${age.name})${dateChanged ? ` → ${newDate.text}${newAge.name !== age.name ? ` (${newAge.name})` : ''}` : ''}`,

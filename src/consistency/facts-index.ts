@@ -20,6 +20,7 @@ import {
   type ChronologyRowInput,
   type ExtractedFact,
   type FactKind,
+  type FactPlace,
   type FactSource,
   type MatchedAs,
   type PageMeta,
@@ -62,6 +63,8 @@ export interface StoredFact {
   readonly mentions: readonly string[];
   /** ADR 0064 amendment 1 (F): read from a section or row marked non-current (kept with the mentions, no migration). */
   readonly nonCurrent?: true;
+  /** CR-2026-11-R4: where the value was read (kept with the mentions, no migration; see `ExtractedFact.place`). */
+  readonly place?: FactPlace;
 }
 
 export interface FactIndexState {
@@ -76,6 +79,12 @@ export interface FactIndexState {
 }
 
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex');
+
+/**
+ * What the stored facts hold, as a version (part of the index's key): an index stored in an older format is rebuilt once,
+ * on the first request after deploying. CR-2026-11-R4: `place-1`, each fact's place (`StoredFact.place`).
+ */
+export const INDEX_FORMAT = 'place-1';
 
 /** A page's stamp: its name and its pieces' hashes (content-addressed, so an identical re-take keeps it). */
 export function pageStamp(p: OverlayPage): string {
@@ -114,10 +123,16 @@ function rowToFact(r: Obj): StoredFact {
           ...(r.open_start === 1 ? { openStart: true } : {}),
           ...(r.open_end === 1 ? { openEnd: true } : {}),
         };
-  const meta = json<{ bound?: StoredFact['bound']; mentions?: string[]; nonCurrent?: boolean }>(
-    r.mentions,
-    {},
-  );
+  const meta = json<{
+    bound?: StoredFact['bound'];
+    mentions?: string[];
+    nonCurrent?: boolean;
+    place?: { sha?: unknown; at?: unknown };
+  }>(r.mentions, {});
+  const place =
+    meta.place && typeof meta.place.sha === 'string'
+      ? { sha: meta.place.sha, at: typeof meta.place.at === 'number' ? meta.place.at : null }
+      : null;
   return {
     pageId: String(r.page_id),
     seq: Number(r.seq),
@@ -139,6 +154,7 @@ function rowToFact(r: Obj): StoredFact {
     excerpt: String(r.excerpt),
     mentions: meta.mentions ?? [],
     ...(meta.nonCurrent === true ? { nonCurrent: true as const } : {}),
+    ...(place ? { place } : {}),
   };
 }
 
@@ -176,8 +192,10 @@ export class FactIndex {
   ): Promise<{ readonly built: boolean; readonly reread: number }> {
     const st = this.state(projectId);
     const t0 = Date.now();
-    if (!st || st.key !== env.key || st.baseSnapshotId !== overlay.baseSnapshotId) {
-      await this.build(projectId, overlay, env, t0);
+    // The stored format is part of the key, so facts stored without what this build keeps are read again.
+    const key = `${env.key}|${INDEX_FORMAT}`;
+    if (!st || st.key !== key || st.baseSnapshotId !== overlay.baseSnapshotId) {
+      await this.build(projectId, overlay, { ...env, key }, t0);
       return { built: true, reread: overlay.pages.size };
     }
     const stored = new Map(
@@ -350,6 +368,7 @@ export class FactIndex {
           ...(f.bound ? { bound: f.bound } : {}),
           mentions: f.mentions,
           ...(f.nonCurrent ? { nonCurrent: true } : {}),
+          ...(f.place ? { place: { sha: f.place.sha, at: f.place.at } } : {}),
         }),
       ),
     );

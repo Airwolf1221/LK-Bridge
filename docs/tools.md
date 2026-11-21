@@ -2146,14 +2146,28 @@ writes the bridge's own record). Agents can never pick.
 
 ### "Pick the right value" (the owner's, on the Audits page)
 
-`POST /api/admin/audits/findings/:id/consistency-pick` `{ side | value, confirm: true }`, a step-up action (ADR 0062).
-The bridge makes ONE proposal of items, one per page that disagrees with the pick: a sidebar field's date replaced inside
-the field (`set_facts`' plan), a sentence's date replaced in its one text run (`write_page`'s block-by-block path), a
-chronology row's date through `update_timeline_event`'s own plan (its Date and KCY cells and its timeline event together).
-The side picked, and every value agreeing with it, is never touched; a gap, a value inherited from Main CANON, or a date
-split by a mention is listed and left. Approval (selective, as every itemized proposal), the rails (more than 10 pages
-asks for the step-up at approval), Last Major Revision (the engine's rule) and Revert work as for any proposal. Audited
-`consistency.pick`.
+`POST /api/admin/audits/findings/:id/consistency-pick` `{ side, shown? | value, confirm: true }`, a step-up action (ADR
+0062). `side` is one of the values the dashboard shows (the audit's stored values; anything else is `SIDE_NOT_FOUND`) and
+`shown` its value as shown (the dashboard sends it): when the side reads otherwise now, the pick is refused with
+`SIDE_CHANGED` and nothing is proposed. A typed `value` must read, whole, as ONE date of the calendar (a range, or a line
+break, is `VALUE_UNREADABLE`); the calendar's own reading of it is written. The bridge makes ONE proposal of items, one
+per page that disagrees with the pick: a sidebar field's date replaced inside the field (`set_facts`' plan), a sentence's
+date replaced in its one text run (`write_page`'s block-by-block path), a chronology row's date through
+`update_timeline_event`'s own plan (its Date and KCY cells and its timeline event together). **Each edit is placed where
+the check read the value, never searched for** (CR-2026-11-R4): the sentence (or the field's `;` clause) the check read,
+found exactly once on the page as it is now, the date at its place there, whole and in one text run; only that run is
+edited, and every other run of the paragraph or field (a line break, bold, a link) is kept. An identity value keeps its
+qualifier: only its principal part (before the first `;`, `(` or spaced dash) is replaced. Each item shows the whole
+sentence or clause before and after. Not planned, and listed with why: a sentence or clause changed since the check, or
+written twice; a date split by a mention or formatting; a field holding a mention; a restatement inside a quotation
+(never edited, as for renames); a chronology row whose Date cell (or Historical Event) changed since the check (the newer
+date is kept); a page Archived, or filed under the Archived area, the Legacy Canon Archive or the Design References, since
+the check (each page's name, parent and tags are read live, and checked again inside the job's locks before it writes the
+page). The side picked, and every value agreeing with it, is never touched; a gap or a value inherited from Main CANON is
+listed and left. Approval (selective, as every itemized proposal), the rails (more than 10 pages asks for the step-up at
+approval), Last Major Revision (the engine's rule) and Revert work as for any proposal. Audited `consistency.pick`. Cost
+of the planning: 1 read per page (its name, parent and tags), plus 1 for its sidebar or each of its documents; a
+chronology row about 9.
 
 ## Setting packs: fiction (v3 F4c)
 

@@ -74,7 +74,9 @@ export function ConsistencyPick({
   const confirm = useConfirm();
   const [typed, setTyped] = useState('');
   const [result, setResult] = useState<PickResponse | null>(null);
-  const pick = async (choice: { side: string; label: string } | { value: string; label: string }) => {
+  const pick = async (
+    choice: { side: string; shown: string; label: string } | { value: string; label: string },
+  ) => {
     const yes = await confirm({
       title: 'Pick this value?',
       message: (
@@ -86,7 +88,8 @@ export function ConsistencyPick({
       confirmLabel: 'Pick and propose',
     });
     if (!yes) return;
-    const body = 'side' in choice ? { side: choice.side } : { value: choice.value };
+    // CR-2026-11-R4: a side goes with the value shown, so the bridge refuses it if the side reads otherwise now.
+    const body = 'side' in choice ? { side: choice.side, shown: choice.shown } : { value: choice.value };
     const out = await run(
       () =>
         api.post<PickResponse>(`/audits/findings/${findingId}/consistency-pick`, {
@@ -145,7 +148,13 @@ export function ConsistencyPick({
                         className="small"
                         busy={busy}
                         disabled={!project}
-                        onClick={() => void pick({ side: v.key, label: `${v.value} (as on ${v.page.name})` })}
+                        onClick={() =>
+                          void pick({
+                            side: v.key,
+                            shown: v.value,
+                            label: `${v.value} (as on ${v.page.name})`,
+                          })
+                        }
                       >
                         Pick this value
                       </Button>

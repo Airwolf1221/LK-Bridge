@@ -1147,4 +1147,8 @@ On the Audits page, a finding of the **Consistency** category has **Pick the rig
 each restatement side by side (page, lifecycle, where, excerpt), each with **Pick this value**, a field to type the
 right value, the agents' suggestions (shown, never applied) and the earlier picks. A pick asks for the step-up (ADR 0062:
 a pack-level decision), then makes ONE proposal editing every page that disagrees; approve it on the Proposals page
-(selectively if wanted; more than 10 pages asks for the step-up again). The job is revertible from the Jobs page.
+(selectively if wanted; more than 10 pages asks for the step-up again). The job is revertible from the Jobs page. **Pick
+this value** sends the value as shown with the side: when that side reads otherwise now (a page changed after the
+audit), the pick is refused ("SIDE_CHANGED") and nothing is proposed; run the audit again and pick again. Each edit is
+made where the check read the value, and only there; the proposal lists what it leaves as it is, with why (a value
+changed since, a quotation, a page archived since, a date split by formatting).

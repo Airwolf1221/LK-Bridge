@@ -97,9 +97,13 @@ export interface Disagreement {
 
 const lifecycleRank = (l: Lifecycle | null) => (l === 'Authoritative' ? 0 : l === 'Working' ? 1 : 2);
 
+/** A value's key within its finding (`ValueView.key`), from its fact. */
+export const valueKey = (f: StoredFact): string =>
+  `${f.pageId}:${f.documentId ?? ''}:${f.blockId ?? ''}:${f.pattern}:${f.seq}`;
+
 export function viewOf(f: StoredFact, page: PageInfo, inherited?: string): ValueView {
   return {
-    key: `${f.pageId}:${f.documentId ?? ''}:${f.blockId ?? ''}:${f.pattern}:${f.seq}`,
+    key: valueKey(f),
     page: { id: page.id, name: page.name, path: page.path },
     lifecycle: page.lifecycle,
     ...(page.area ? { area: page.area } : {}),

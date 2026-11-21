@@ -18,6 +18,7 @@
  *   rows by their columns); an identity value's principal part decides a gap (rule E); facts in sections or rows marked
  *   non-current are marked (F).
  */
+import { createHash } from 'node:crypto';
 import type { Calendar, DateTextStyle } from '../calendar/index.js';
 import { nameKeyOf, subjectPart } from '../packs/naming/namesakes.js';
 import { textKey } from '../packs/engine/text.js';
@@ -62,6 +63,47 @@ export interface ExtractedFact {
    * History"): left out unless `include: ["pre-rewrite"]` asks for it, while the pack's switch is on.
    */
   readonly nonCurrent?: true;
+  /**
+   * CR-2026-11-R4 (the pick's placement): where the value was read, so "Pick the right value" edits it in its place and
+   * nowhere else. `sha`: the SHA-1 of the sentence (prose), of the field's `;` clause (Temporal Scope, Life State), of the
+   * whole field (an identity fact) or of the row's Historical Event text (a chronology row), as the extractor read it;
+   * `at`: the date's offset in that sentence or clause (null: no date there, an identity value or a row).
+   */
+  readonly place?: FactPlace;
+}
+
+/** Where a fact's value was read (see `ExtractedFact.place`). */
+export interface FactPlace {
+  readonly sha: string;
+  readonly at: number | null;
+}
+
+/** The SHA-1 a fact's place keeps of its sentence or clause (as the extractor reads it: whitespace collapsed). */
+export const placeSha = (text: string): string =>
+  createHash('sha1').update(text.replace(/\s+/g, ' ').trim()).digest('hex');
+
+/**
+ * Whether `len` characters at `i` of `text` stand whole: not inside a longer word or number ("4A 10" inside "4A 100",
+ * "2A 73" inside "2A 73,511"). Used to place a date read from a phrasing, and again by the pick before it edits one.
+ */
+export function standsWhole(text: string, i: number, len: number): boolean {
+  if (i < 0 || len <= 0 || i + len > text.length) return false;
+  const before = i > 0 ? text[i - 1]! : '';
+  const after = text.slice(i + len, i + len + 2);
+  if (/[\p{L}\p{N}]/u.test(before)) return false;
+  return !/^(?:[\p{L}\p{N}]|[,.]\p{N})/u.test(after);
+}
+
+/**
+ * The offset of a date read from a phrasing's `date` group in its sentence or clause: the first place at or after the
+ * group's start where the date's text stands whole (the reader read the first date-shaped text there, so it is that
+ * one). Null when it cannot be found (the pick then never edits it).
+ */
+export function dateOffset(text: string, from: number, date: string): number | null {
+  if (date === '') return null;
+  for (let i = text.indexOf(date, Math.max(0, from)); i >= 0; i = text.indexOf(date, i + 1))
+    if (standsWhole(text, i, date.length)) return i;
+  return null;
 }
 
 /** A page's own subject and continuity, as its sidebar states them. */
@@ -225,6 +267,23 @@ export function sentences(text: string): string[] {
 }
 
 /**
+ * CR-2026-11-R4 (the pick's placement): `sentences` with where each stands in `text` (a text whose whitespace is
+ * collapsed, as the full-text index keeps it), each found in turn after the one before. Derived from `sentences` itself,
+ * so the pick splits a paragraph exactly as the extractor did; a sentence that is not found as written is left out.
+ */
+export function sentenceSpans(text: string): { start: number; end: number; text: string }[] {
+  const out: { start: number; end: number; text: string }[] = [];
+  let from = 0;
+  for (const s of sentences(text)) {
+    const i = text.indexOf(s, from);
+    if (i < 0) continue;
+    out.push({ start: i, end: i + s.length, text: s });
+    from = i + s.length;
+  }
+  return out;
+}
+
+/**
  * Who governs a verb (ADR 0064 amendment 1, rule A; D2 made precise): the name or alias directly before it in its own
  * clause, with only titles ("Kaiser") and appositives between; never a pronoun, and never a name elsewhere in the
  * sentence. `candidate` is the text of the sentence before the verb.
@@ -371,6 +430,7 @@ export function extractPageFacts(
           unreadable: null,
           bound: null,
           excerpt: clip(`${u.field}: ${tidy(u.text)}`),
+          place: { sha: placeSha(u.text), at: null },
         });
       const source =
         field === textKey(rules.temporalScope)
@@ -408,6 +468,10 @@ export function extractPageFacts(
               unreadable: d.unreadable,
               bound: cp.p.kind === 'attested' ? (cp.p.bound ?? 'both') : null,
               excerpt: clip(`${u.field}: ${tidy(u.text)}`),
+              place: {
+                sha: placeSha(clause),
+                at: d.date ? dateOffset(clause, m.indices?.groups?.date?.[0] ?? 0, d.date.text) : null,
+              },
             });
           }
       }
@@ -447,6 +511,10 @@ export function extractPageFacts(
             bound: cp.p.kind === 'attested' ? (cp.p.bound ?? 'both') : null,
             excerpt: clip(sentence),
             ...(isNonCurrent(u.section, ctx.compiled.nonCurrent) ? { nonCurrent: true as const } : {}),
+            place: {
+              sha: placeSha(sentence),
+              at: d.date ? dateOffset(sentence, m.indices?.groups?.date?.[0] ?? 0, d.date.text) : null,
+            },
           });
           break; // one fact a sentence: the first phrasing that reads it
         }
@@ -507,6 +575,7 @@ export function extractRowFacts(rows: readonly ChronologyRowInput[], ctx: Ctx): 
         ...(isNonCurrent(`${row.event} ${row.date}`, ctx.compiled.nonCurrent)
           ? { nonCurrent: true as const }
           : {}),
+        place: { sha: placeSha(row.event), at: null },
       });
       break;
     }

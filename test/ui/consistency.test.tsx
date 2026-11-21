@@ -293,10 +293,12 @@ describe('Pick the right value (v3 F4b)', () => {
     await user.click(within(rows[0]!).getByRole('button', { name: 'Pick this value' }));
     await user.click(await screen.findByRole('button', { name: 'Pick and propose' }));
     await waitFor(() => expect(api.find('POST', '/audits/findings/9/consistency-pick')).toHaveLength(1));
+    // CR-2026-11-R4 (PK-51): the side goes with its value as shown, so the bridge refuses it if it reads otherwise now.
     expect(api.find('POST', '/audits/findings/9/consistency-pick')[0]!.body).toEqual({
       confirm: true,
       project: 'baisheng',
       side: 'katscor1::kv:birth.scope:5',
+      shown: 'Isar 3rd, 4A 300',
     });
     expect(await screen.findByText('prop_88')).toBeInTheDocument();
   });
