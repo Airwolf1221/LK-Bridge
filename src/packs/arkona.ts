@@ -1077,9 +1077,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // bare-range attested phrasing and "Deceased by <date>" as an as-of-only upper bound (`deceasedBy`). `-f41` (ADR 0064
   // amendment 2 and ADR 0065 amendment 1, 20 November 2026; session F4.1, from the owner's check of the live tools): a
   // Life State STARTING with "Alive" or "Living" (`aliveValues`, with a date read by `aliveAt`), and the Temporal Scope
-  // phrasings "living at <date>" and "present <date>".
-  seed: 'arkona-2026-11-20-f41',
+  // phrasings "living at <date>" and "present <date>". `-r4` (CR-2026-11-R4, 21 November 2026; the fourth review and the
+  // owner's requests): which kinds of new owner of a split address Source Boundaries and Unresolved Material
+  // (`splits.sections`), and the consistency phrasings this review's fixes and the owner's lives (L) add.
+  seed: 'arkona-2026-11-21-r4',
   supersedes: [
+    'arkona-2026-11-20-f41',
     'arkona-2026-11-20-f4c',
     'arkona-2026-11-20-f4b1',
     'arkona-2026-11-20-f4b',

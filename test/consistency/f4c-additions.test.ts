@@ -57,8 +57,10 @@ const sidebar = (subject: string, fields: Record<string, string>) =>
   ).facts.filter((f) => f.kind !== 'identity');
 
 describe('the seed (on top of F4b.1’s)', () => {
-  it('arkona-2026-11-20-f41 (superseding -f4c) supersedes arkona-2026-11-20-f4b1 and keeps its consistency rules', () => {
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-20-f41');
+  // CR-2026-11-R4: the seed is now arkona-2026-11-21-r4, which supersedes -f41 and, through it, -f4c and -f4b1.
+  it('arkona-2026-11-21-r4 (superseding -f41 and -f4c) supersedes arkona-2026-11-20-f4b1 and keeps its consistency rules', () => {
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-21-r4');
+    expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f41');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b1');
     expect(rules.nonCurrent).toEqual({ markers: ['Pre-Rewrite', 'Author-Facing'], exclude: true });
     expect(rules.titles).toContain('Kaiser');

@@ -83,7 +83,7 @@ export async function runNarrativeCheck(
       id: 'N0',
       title: 'the approved Arkona pack has narrative rules',
       verdict: 'fail',
-      detail: 'approve arkona-2026-11-20-f41 (or arkona-2026-11-20-f4c) on the Packs page first',
+      detail: 'approve arkona-2026-11-21-r4 (or arkona-2026-11-20-f41, -f4c) on the Packs page first',
     });
     return items;
   }
