@@ -71,6 +71,9 @@ import {
   type RunCounts,
 } from './types.js';
 
+/** v3 F7.1 (ADR 0072): the pages whose blocks the `core_compact_wording` check reads (a Core and an Art page). */
+const CORE_OR_ART_PAGE = /\s-\sCharacter (Core|Art)\s*$/i;
+
 /** The checks, in the order the dashboard lists their categories. */
 export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'rules', run: rulesCheck },
@@ -377,7 +380,7 @@ export class Audits {
         tagSource: cfg.tagSource,
         ...(governance ? { keepBlocksOf: new Set(governance.roots) } : {}),
         // v3 F7 (G7): every page under each character's repository index, whose lines may name asset folders.
-        keepBlocksWhere: (p) => characterPages.has(p.id),
+        keepBlocksWhere: (p) => characterPages.has(p.id) || CORE_OR_ART_PAGE.test(p.name),
       });
       if (!built.ok) {
         const summary =
@@ -883,6 +886,13 @@ export class Audits {
         }
       })(),
       ...(this.d.outfits ? { outfitsOf: (id: string) => this.d.outfits!.forCharacter(projectId, id) } : {}),
+      mainBlocks: (pageId: string) => {
+        const p = model.pages.get(pageId);
+        if (!p || !model.blocks) return null;
+        const doc = p.documents.find((d) => d.name === 'Main') ?? p.documents.find((d) => d.type === 'page');
+        const blocks = doc ? model.blocks.get(doc.id) : undefined;
+        return doc && blocks ? { documentId: doc.id, blocks } : null;
+      },
       characterPages: (character: string): ArtPageText[] => {
         // v3 F7 (G7): every page under the character's repository index (the index too), from the snapshots.
         const out: ArtPageText[] = [];

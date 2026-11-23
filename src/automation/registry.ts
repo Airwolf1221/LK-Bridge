@@ -509,6 +509,21 @@ export const CATALOGUE: readonly CodeEntry[] = [
     applyDirect: true,
   }),
   defineCode({
+    code: 'core_compact_wording',
+    source: 'audit',
+    name: 'Character Core still called compact',
+    example:
+      '“This compact reference owns her identity.” on Emine al-Noor - Character Core becomes “This Character Core owns her identity.”',
+    transformation:
+      'ONE proposal per character: the Character Core upgrade’s own wording rules (“Compact Main CANON reference” → “Main CANON Character Core”; “compact (character) reference” → “Character Core”; on the Art page, “her character reference” → “her Character Core”) applied to the named blocks inside the lock, the Art page first, both pages read live first; any other sentence saying “compact” listed, never edited. Apply (only when the owner switches it) submits the same job, every guard judging it',
+    traits: ['text_punctuation', 'canon'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+  }),
+  defineCode({
     code: 'scope_overload',
     source: 'appraisal',
     name: 'Scope overload (a split candidate)',

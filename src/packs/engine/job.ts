@@ -45,7 +45,7 @@ import {
   type LmrDecision,
 } from './lmr.js';
 import type { PackPlan, PlannedPage } from './plan.js';
-import { coreTextWords, type CoreTextInput } from './core.js';
+import { CORE_TEXT_FILLER, coreTextWords, type CoreTextInput } from './core.js';
 import { mapArtRecordSteps } from '../../jobs/items.js';
 import type { PlanEnv } from './plan.js';
 
@@ -62,7 +62,7 @@ export const PACK_FILLER = 'pack.body';
 /** v3 F3b (ADR 0052): appends new image sections to an existing Art page inside the lock. */
 export const PACK_ART_FILLER = 'pack.art_append';
 /** v3 F7.1 (ADR 0072): the Compact → Core upgrade's text change (wording, images) inside the lock. */
-export const PACK_CORE_FILLER = 'pack.core_text';
+export const PACK_CORE_FILLER = CORE_TEXT_FILLER;
 export const PACK_RECORD_STORE = 'pack';
 
 /** Adds `base` to every step number a step names (its bindings, and the bridge's own steps' references). */

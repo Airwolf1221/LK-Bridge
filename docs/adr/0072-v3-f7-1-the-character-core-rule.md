@@ -1,4 +1,4 @@
-# ADR 0072: v3 F7.1: the Character Core rule in one place: a Compact Reference becomes the Core when its character gains an index with several owners (its wording and images too); the `character_core_missing` audit
+# ADR 0072: v3 F7.1: the Character Core rule in one place: a Compact Reference becomes the Core when its character gains an index with several owners (its wording and images too); the `character_core_missing` and `core_compact_wording` audits
 
 - Status: **Proposed** (v3 F7.1, 23 November 2026). Built and tested against the mock LegendKeeper only; nothing in this
   session touched a live system (no LegendKeeper, no bridge connector, no dashboard, no sandbox run). Where the brief
@@ -118,6 +118,27 @@ split keeps R3-66's path (its deletion proposal puts the Compact Reference back)
 - **On the live repository** it should find exactly Kamigawa Shirahime and Emine al-Noor, unless the owner has approved
   their repairs by then (Emine's `prop_bkgfpviunxb9`; Kamigawa's is still to be proposed).
 
+## Decision 5b: the audit check `core_compact_wording` (category `taxonomy`), added after the owner's review
+
+The owner's review of F7.1 (23 November 2026): a Core upgraded before F7.1 (or by hand) keeps the wording that calls it
+compact, and decision 3 only changes the text of an upgrade it makes. So a second check beside `character_core_missing`:
+
+- **Finds**: a Character Core (Reference Type Character Core, `[BSRC]` or `[BWRK]`) whose main document still says it is a
+  compact reference by exactly the shared helper's deterministic rules (`reword`, role `core`), and the character's Art
+  page (under its index, by name or Reference Type Character Art) where "character reference" means the identity page
+  by the helper's own test (role `art`). One finding per character, only where a rule would replace something (**chosen**:
+  a Core whose only "compact" sentence the rules do not cover gives no finding: nothing in it is the bridge's to fix).
+  Every other sentence still saying "compact" on either page is listed in the finding (`left`), never edited.
+- **Reads**: the snapshots only. The audit now keeps the blocks of every page named `… - Character Core` or
+  `… - Character Art` (beside F7's character pages) and exposes a page's main document to the checks (`mainBlocks`).
+- **The fix** (`core_wording`, src/audits/fixes.ts): each page read LIVE first (its name, its document); the replacements
+  the rules make now must be exactly those the finding recorded (block and text), else `FIX_STALE` and nothing is
+  proposed. Then ONE proposal per character: the Art page's write first, the Core's after, each filled inside the lock by
+  the upgrade's own filler (`pack.core_text`: the rules applied to the named blocks only; block ids, every other block
+  and every `unsupported` block kept), verified on read-back.
+- **Automation**: default **Propose**, Apply allowed only when the owner switches it (`applyDirect`), exactly as
+  `character_core_missing`: the same job submitted without being forced into a proposal, every guard judging it.
+
 ## Decision 6: guidance
 
 `arkona_add_character_art`'s and `arkona_create_owner`'s descriptions and the guide's character section each gain one
@@ -138,6 +159,6 @@ Character Core, its wording replaced) and the Art page; then everything it made 
   characters are repaired by the audit's proposals.
 - An upgrade costs one more read (the Core's document; and the Art page's when it exists) and, when the text changes,
   one or two more writes (the Core's document, the Art page's).
-- Tests: `test/f7_1/core-upgrade.test.ts` (art, the other callers, the refusals, Revert, the audit and its automation
+- Tests: `test/f7_1/core-upgrade.test.ts` (art, the other callers, the refusals, Revert, both audits and their automation
   default); the earlier upgrade tests updated where the Core's wording now changes (`test/packs/extend.test.ts`,
   `test/packs/pack-lmr.test.ts`); the split's tests unchanged.

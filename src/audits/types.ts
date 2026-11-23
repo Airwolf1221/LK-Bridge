@@ -98,7 +98,12 @@ export type FixKind =
    * Reference Type Character Core, the Core template recorded, its compact wording replaced, its images left to the Art
    * page. Read live first; always ONE proposal (Apply, when the owner switches it, lets the guards decide).
    */
-  | 'core_upgrade';
+  | 'core_upgrade'
+  /**
+   * v3 F7.1 (ADR 0072): a Core's compact wording replaced by the upgrade's own rules (src/packs/engine/core.ts), on its
+   * Art page first, then on the Core, inside the lock; both pages read live first (FIX_STALE when they changed).
+   */
+  | 'core_wording';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -280,6 +285,13 @@ export const CODES = {
     severity: 'warning',
     title: 'A character with an index and several owners has no Character Core',
     fix: 'core_upgrade',
+  },
+  // v3 F7.1 (ADR 0072): a Character Core whose text (or its Art page's) still calls it a compact reference.
+  core_compact_wording: {
+    category: 'taxonomy',
+    severity: 'warning',
+    title: 'A Character Core whose text still calls it a compact reference',
+    fix: 'core_wording',
   },
   race_index_mismatch: {
     category: 'taxonomy',

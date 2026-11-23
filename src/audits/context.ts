@@ -82,6 +82,13 @@ export interface AuditContext {
   /** v3 F7 (G7): every page under a character's repository index (by its name), with its blocks from the snapshots. */
   readonly characterPages?: (character: string) => readonly ArtPageText[];
   /**
+   * v3 F7.1 (ADR 0072): a page's main document as the snapshots hold it (its blocks are kept for every Character Core
+   * and Character Art page, and the pages above), or null.
+   */
+  readonly mainBlocks?: (
+    pageId: string,
+  ) => { readonly documentId: string; readonly blocks: readonly unknown[] } | null;
+  /**
    * v3 F3f (ADR 0060): the retag engine, when the project's approved pack has retag rules: the tag findings then come
    * from it (the same verdicts as `arkona_retag_audit`), never from the tag-definition document.
    */

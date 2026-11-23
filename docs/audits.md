@@ -86,6 +86,19 @@ identity facts, links and prose kept. An Authoritative page's rename is a canoni
 automation the code defaults to **Propose** (each finding its own proposal); the owner may switch it to Apply, which
 submits the same job with every guard judging it (ADR 0072).
 
+## A Character Core still called compact (`core_compact_wording`, category Taxonomy; v3 F7.1)
+
+A Character Core whose text still says it is a compact reference (a Core upgraded before F7.1, or by hand), by exactly
+the upgrade's own deterministic rules (`src/packs/engine/core.ts`): “Compact Main CANON reference” → “Main CANON
+Character Core”; “Compact Character Reference”, “compact character reference”, “compact reference” → “Character Core”;
+the old page name “<Name> - Character Reference” → “<Name> - Character Core”; and on the character's Art page
+“character reference” where it means the identity page (after “her”, “his”, “their”, “its”, “the” or “<Name>'s”, not
+followed by “images”, “sheet”, “art”, “pages” or “folder”). One finding per character, only where a rule would replace
+something; every other sentence still saying “compact” is listed in the finding, never edited. "Propose a fix" reads
+both pages live (`FIX_STALE` when the phrases to replace are not the ones the audit found), then makes ONE proposal:
+the Art page first, then the Core, each changed inside the lock on the named blocks only. In the automation: default
+**Propose**; Apply only when the owner switches it (ADR 0072).
+
 ## Authoritative without CANON (`lifecycle_inconsistent`, category Lifecycle)
 
 A `[BSRC]` page normally needs Status Authoritative, the `CANON` tag and a place outside the Working and Archived areas.

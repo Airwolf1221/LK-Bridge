@@ -26,6 +26,10 @@ const mainOf = (id: string) => {
   const main = w.repo.liveDocs(w.repo.res.get(id)!).find((d) => d.name === 'Main')!;
   return w.repo.blocks.get(main.id)!.blocks as any[];
 };
+const mainOfIn = (x: OwnersWorld, id: string) => {
+  const main = x.repo.liveDocs(x.repo.res.get(id)!).find((d) => d.name === 'Main')!;
+  return x.repo.blocks.get(main.id)!.blocks as any[];
+};
 const textOf = (b: any): string =>
   Array.isArray(b.content) ? b.content.map((r: any) => r.text ?? '').join('') : '';
 const templateOf = (id: string) => w.stack.runtime.tree.queries.node(PROJECT, id).data?.templateId;
@@ -365,5 +369,73 @@ describe('the audit: character_core_missing (taxonomy)', () => {
     const again = await x.stack.runtime.audits.run(PROJECT, 'manual');
     expect(again.state, again.summary).toBe('succeeded');
     expect(open().map((y) => y.pageId)).toEqual([F.aya]);
+  });
+
+  const openWording = () =>
+    x.stack.runtime.audits.store.list(PROJECT, { code: ['core_compact_wording'], state: 'open', limit: 100 })
+      .findings;
+
+  it('core_compact_wording: a Core upgraded before F7.1 is found; the other "compact" sentence is listed; a clean Core is not', () => {
+    const f = openWording();
+    // Hana Mori's (wording left behind); not Ren Ito's (clean), nor Kamigawa Shirahime's (upgraded by F7.1 above).
+    expect(f.map((y) => y.pageId)).toEqual([F.hana]);
+    const h = f[0]!;
+    expect(h.category).toBe('taxonomy');
+    expect(h.fix?.kind).toBe('core_wording');
+    const ev = h.evidence as any;
+    expect(ev.core.replacements.map((r: any) => r.after)).toEqual([
+      'Main CANON Character Core for Hana Mori, a lantern maker.',
+      'This Character Core owns her identity. A compact build, light on her feet.',
+    ]);
+    expect(ev.art.replacements.map((r: any) => r.after)).toEqual([
+      'Her approved visual references; her Character Core owns her identity.',
+    ]);
+    expect(ev.left).toEqual([
+      expect.objectContaining({
+        page: '[BSRC] Hana Mori - Character Core',
+        sentence: 'A compact build, light on her feet.',
+      }),
+    ]);
+  });
+
+  it('core_compact_wording: Propose by default, Apply the owner’s switch', () => {
+    const code = x.stack.runtime.automation.codes(PROJECT).find((c) => c.code === 'core_compact_wording');
+    expect(code).toMatchObject({ mode: 'propose', modes: ['off', 'propose', 'apply'] });
+  });
+
+  it('core_compact_wording: its fix is ONE proposal (Art page first), the unrelated sentence untouched; then the finding clears', async () => {
+    const f = openWording()[0]!;
+    const before = { core: mainOfIn(x, F.hana), art: mainOfIn(x, F.hanaArt) };
+    const r = await x.stack.runtime.audits.proposeFix('owner', PROJECT, f.id);
+    expect(r.status).toBe('proposal_captured');
+    if (r.status !== 'proposal_captured') return;
+    // Nothing written before the owner approves.
+    expect(mainOfIn(x, F.hana)).toEqual(before.core);
+    const d = await approve(x, r.proposalId);
+    expect(d.job?.status, JSON.stringify(d.job?.lastError)).toBe('succeeded');
+    const steps = x.stack.runtime.engine.queries.getJob(PROJECT, d.jobId!)!;
+    expect(steps.status).toBe('succeeded');
+    expect(mainOfIn(x, F.hana).map(textOf)).toEqual([
+      'Purpose',
+      'Main CANON Character Core for Hana Mori, a lantern maker.',
+      'Source Boundaries',
+      'This Character Core owns her identity. A compact build, light on her feet.',
+    ]);
+    expect(mainOfIn(x, F.hanaArt).map(textOf)).toEqual([
+      'Purpose',
+      'Her approved visual references; her Character Core owns her identity.',
+      'Source Boundaries',
+      'Visual references only; the character reference images stay here.',
+    ]);
+    // Block ids kept: only the phrases changed.
+    expect(mainOfIn(x, F.hana).map((b) => b.id)).toEqual(before.core.map((b) => b.id));
+    // The same finding again: its text has changed since the audit.
+    await expect(x.stack.runtime.audits.proposeFix('owner', PROJECT, f.id)).rejects.toMatchObject({
+      code: 'FIX_STALE',
+    });
+    await fullSnapshot(x);
+    const again = await x.stack.runtime.audits.run(PROJECT, 'manual');
+    expect(again.state, again.summary).toBe('succeeded');
+    expect(openWording()).toEqual([]);
   });
 });

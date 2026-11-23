@@ -333,6 +333,9 @@ export function planCoreImages(
 
 // ============================================================================================ inside the job's lock
 
+/** The filler that applies the upgrade's text change inside a job's lock (registered by the pack engine). */
+export const CORE_TEXT_FILLER = 'pack.core_text';
+
 /** The `pack.core_text` filler's input: what the plan named, re-applied to the page as it is when the job runs. */
 export interface CoreTextInput {
   readonly role: WordingRole;

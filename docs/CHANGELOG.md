@@ -18,6 +18,9 @@ system: the mock only.
 - **Revert** of such a package puts back the Compact Reference's name, Reference Type and template record.
 - **The audit** `character_core_missing` (category Taxonomy): its fix is the character tool's own upgrade, one proposal
   per character; in the automation, default Propose, Apply only when the owner switches it.
+- **The audit** `core_compact_wording` (category Taxonomy, after the owner's review): a Core whose text (or its Art
+  page's) still calls it compact, by the same rules; its fix applies them (Art page first, both read live first, one
+  proposal per character); other "compact" sentences listed, never edited. Default Propose, Apply the owner's switch.
 - **The sandbox check** `f7-1-core` (written, not run; passing on the mock in the ordinary suite).
 
 ## Unreleased: v3 F7b, seeing character art (23 November 2026)

@@ -24,6 +24,11 @@ export const F = {
   shira: 'shiracmp',
   shiraArt: 'shiraart',
   tomo: 'tomowkcp',
+  hanaIndex: 'hanaindx',
+  hana: 'hanacore',
+  hanaArt: 'hanaart1',
+  renIndex: 'renindex',
+  ren: 'rencore1',
 } as const;
 
 export const URL_EMINE = 'https://assets.legendkeeper.com/0b7f3a52-9c1e-4d7e-8f43-6a1d2b3c4d5e.webp';
@@ -141,6 +146,46 @@ export async function coreWorld(
         heading('tm3', 2, 'Source Boundaries'),
         para('tm4', 'Identity only.'),
       ]);
+      // Hana Mori: a Character Core upgraded before F7.1, its compact wording left behind (and on her Art page), and one
+      // sentence saying "compact" that the rules do not cover. Ren Ito: a clean Character Core.
+      page(F.hanaIndex, '[INDEX] Hana Mori', C.humans);
+      page(F.hana, '[BSRC] Hana Mori - Character Core', F.hanaIndex, {
+        referenceType: 'Character Core',
+        canonical: 'Hana Mori',
+        scope: 'A lantern maker',
+        tags: ['CANON', 'Character', 'Human'],
+      });
+      page(F.hanaArt, '[BSRC] Hana Mori - Character Art', F.hanaIndex, {
+        referenceType: 'Character Art',
+        scope: 'Her approved visual references',
+        tags: ['CANON', 'Character', 'Character Art'],
+      });
+      page(F.renIndex, '[INDEX] Ren Ito', C.humans);
+      page(F.ren, '[BSRC] Ren Ito - Character Core', F.renIndex, {
+        referenceType: 'Character Core',
+        canonical: 'Ren Ito',
+        scope: 'A boatwright',
+        tags: ['CANON', 'Character', 'Human'],
+      });
+      for (const id of [F.hana, F.ren]) r.outside.setRow(id, 'Race / Species', 'Human');
+      body(F.hana, [
+        heading('hn1', 2, 'Purpose'),
+        para('hn2', 'Compact Main CANON reference for Hana Mori, a lantern maker.'),
+        heading('hn3', 2, 'Source Boundaries'),
+        para('hn4', 'This compact reference owns her identity. A compact build, light on her feet.'),
+      ]);
+      body(F.hanaArt, [
+        heading('ha1', 2, 'Purpose'),
+        para('ha2', 'Her approved visual references; her character reference owns her identity.'),
+        heading('ha3', 2, 'Source Boundaries'),
+        para('ha4', 'Visual references only; the character reference images stay here.'),
+      ]);
+      body(F.ren, [
+        heading('rn1', 2, 'Purpose'),
+        para('rn2', 'The Character Core for Ren Ito, a boatwright.'),
+        heading('rn3', 2, 'Source Boundaries'),
+        para('rn4', 'Identity only.'),
+      ]);
       o.seed?.(world);
     },
   });
@@ -225,6 +270,22 @@ export async function coreWorld(
     Subject: 'Kamigawa Aya',
     'Reference Type': 'Character Biography',
     Scope: 'Her life',
+    Supersedes: 'None',
+  });
+  for (const [id, sub, given, surname, scope] of [
+    [F.hana, 'Hana Mori', 'Hana', 'Mori', 'A lantern maker'],
+    [F.ren, 'Ren Ito', 'Ren', 'Ito', 'A boatwright'],
+  ] as const)
+    identity(id, {
+      ...canon,
+      ...person(sub, given, surname, 'Fujimatsuan', 'Human', scope),
+      'Reference Type': 'Character Core',
+    });
+  general(F.hanaArt, {
+    ...canon,
+    Subject: 'Hana Mori',
+    'Reference Type': 'Character Art',
+    Scope: 'Her approved visual references',
     Supersedes: 'None',
   });
   general(F.shiraArt, {
