@@ -7,8 +7,8 @@
   ([ADR 0068](0068-v3-f5b-automatic-actions-for-audits.md)); H9 (geography evidence) is F5d. Every decision is
   implemented and tested against the mock LegendKeeper and fixtures; nothing in this session touched a live system (no
   LegendKeeper, no bridge connector, no dashboard, no sandbox, soak, spike, rehearsal or round-trip script). Where the
-  design and the brief were silent the choice is marked **chosen**; the points for the owner are in
-  [Questions](#questions-for-the-owner).
+  design and the brief were silent the choice is marked **chosen**; the owner's answers to its two questions are in
+  [The owner's answers](#the-owners-answers-23-november-2026).
 - Why: ChatGPT's report after several days at write scope. A Menkheti culture split gave it 27 identity changes (Naming
   Culture values such as "Al-Mansur XII → Ancient Menkheti", "Arin al-Jamail → Orzheni", "Azar al-Nafir → Khayali") and
   their tag corrections, done one character at a time by hand. Its request: "one clearly bounded, author-approved
@@ -211,13 +211,14 @@ planned with their tag arrays, nothing written); the run under a workstream labe
 back live (facts and tags); `query_facts` over them (free); the workstream report (both written and verified, nothing
 waiting); clean-up in its `finally` and the test file's `afterAll`.
 
-## Questions for the owner
+## The owner's answers (23 November 2026)
 
-1. **Stale identity tokens in the audit.** The reconcile replaces the token of the value it changes (decision 2.4). The
-   retag audit still reads any other identity token outside the page's grammar as an owner exception. Should the audit
-   treat "an identity token of the maps that the page's facts no longer give" as a deterministic correction too?
-2. **Deliberate gaps.** `Unestablished` (and the pack's other never-values) are accepted for Race and Naming Culture
-   (decision 1.4), holding the tag slot. Confirm, or refuse them as unmapped.
+1. **Stale identity tokens in the audit: yes, but not in this session.** An outdated identity tag (the previous value's
+   own race or culture token, where the facts now give a different token for the same slot) is to become a
+   deterministic correction in the retag audit, not an owner exception. Queued for R5; the audit engine is unchanged
+   here (decision 2.4 stands as built).
+2. **Deliberate gaps: confirmed.** `Unestablished` and the pack's other never-values are accepted for Race / Species and
+   Naming Culture, and the tag slot is held (decision 1.4 as built).
 
 ## Consequences
 
