@@ -90,6 +90,8 @@ export interface ReaderOptions {
   readonly tagSource?: { readonly pageId: string; readonly documentId: string } | null;
   /** v3 F4a (ADR 0063): pages whose page documents' blocks are kept whole (the governance root). */
   readonly keepBlocksOf?: ReadonlySet<string>;
+  /** v3 F7 (ADR 0070, G7): also keep the blocks of the pages this says yes to (characters' Art pages), by name. */
+  readonly keepBlocksWhere?: (page: { readonly id: string; readonly name: string }) => boolean;
   /** Concurrent store reads. */
   readonly concurrency?: number;
 }
@@ -209,7 +211,8 @@ export async function buildModel(
       });
       scans.push(scan);
       refs.push(...r);
-      if (o.keepBlocksOf?.has(w.entry.id)) kept.set(d.id, Array.isArray(piece.blocks) ? piece.blocks : []);
+      if (o.keepBlocksOf?.has(w.entry.id) || o.keepBlocksWhere?.({ id: w.entry.id, name: w.entry.name }))
+        kept.set(d.id, Array.isArray(piece.blocks) ? piece.blocks : []);
     }
     unreadable += unreadablePieces.length;
     const { kind: classified, displayName } = classifyName(w.entry.name);
@@ -266,7 +269,7 @@ export async function buildModel(
       deleted,
       templates,
       unreadable,
-      ...(o.keepBlocksOf ? { blocks: kept } : {}),
+      ...(o.keepBlocksOf || o.keepBlocksWhere ? { blocks: kept } : {}),
     },
   };
 }

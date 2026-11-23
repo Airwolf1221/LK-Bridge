@@ -5,6 +5,7 @@ import { fmtAgo, fmtBytes, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectApi, useScopedApi } from '../project';
 import { Link } from '../router';
+import { OutfitsCard } from './outfits';
 import type {
   AssetChildren,
   AssetCorrection,
@@ -108,6 +109,7 @@ export function AssetsPage() {
       <CorrectionLog />
       {data.counts.folders + data.counts.assets > 0 && <FolderBrowser />}
       {built && <TryIt />}
+      {built && <OutfitsCard />}
     </>
   );
 }

@@ -52,7 +52,7 @@ import {
   planParagraph,
   type ParagraphProblem,
 } from './governance.js';
-import { ELIGIBLE, entryOf, isEligible, type CodeEntry } from './registry.js';
+import { ELIGIBLE, entryOf, PROPOSE_ONLY, SWITCHABLE, type CodeEntry } from './registry.js';
 import { AutomationStore, type ItemOutcome, type ItemRow, type Mode, type RunRow } from './store.js';
 
 type Obj = Record<string, unknown>;
@@ -118,6 +118,8 @@ export interface CodeView {
   readonly transformation: string;
   readonly source: CodeEntry['source'];
   readonly mode: Mode;
+  /** v3 F7: the modes the owner can choose (a proposal-only code: Off or Propose). */
+  readonly modes: readonly Mode[];
   readonly paused: { readonly at: number; readonly reason: string } | null;
   readonly stopped: { readonly at: number; readonly reason: string } | null;
   readonly governancePending: string | null;
@@ -270,7 +272,7 @@ export class AutomationService {
 
   /** Every eligible code with its setting and what it did last (the Automation page). */
   codes(projectId: string): CodeView[] {
-    return ELIGIBLE.map((e) => {
+    return SWITCHABLE.map((e) => {
       const s = this.store.setting(projectId, e.code);
       const recent = this.store.codeItems(projectId, e.code, 20);
       return {
@@ -279,7 +281,12 @@ export class AutomationService {
         example: e.example,
         transformation: e.transformation,
         source: e.source,
-        mode: s?.mode ?? 'off',
+        mode: this.modeOf(projectId, e),
+        // v3 F7 (ADR 0070): a proposal-only code is Off or Propose, never Apply.
+        modes:
+          e.automatable === 'propose'
+            ? (['off', 'propose'] as Mode[])
+            : (['off', 'propose', 'apply'] as Mode[]),
         paused: s?.pausedAt ? { at: s.pausedAt, reason: s.pausedReason ?? '' } : null,
         stopped: s?.stoppedAt ? { at: s.stoppedAt, reason: s.stoppedReason ?? '' } : null,
         governancePending: s?.governancePending ?? null,
@@ -303,15 +310,26 @@ export class AutomationService {
     projectId: string,
   ): { code: string; name: string; mode: Exclude<Mode, 'off'>; paused: boolean }[] {
     const all = this.store.global().paused;
-    return this.store
-      .settings(projectId)
-      .filter((s) => s.mode !== 'off' && isEligible(s.code))
-      .map((s) => ({
-        code: s.code,
-        name: entryOf(s.code)!.name,
-        mode: s.mode as Exclude<Mode, 'off'>,
-        paused: all || s.pausedAt !== null,
+    return SWITCHABLE.map((e) => ({
+      e,
+      s: this.store.setting(projectId, e.code),
+      mode: this.modeOf(projectId, e),
+    }))
+      .filter((x) => x.mode !== 'off')
+      .map((x) => ({
+        code: x.e.code,
+        name: x.e.name,
+        mode: x.mode as Exclude<Mode, 'off'>,
+        paused: all || (x.s?.pausedAt ?? null) !== null,
       }));
+  }
+
+  /**
+   * A code's mode: its setting, else its default (v3 F7: the art layout's proposal-only codes default to Propose: their
+   * every fix is a proposal the owner approves; the others to Off).
+   */
+  modeOf(projectId: string, e: CodeEntry): Mode {
+    return this.store.setting(projectId, e.code)?.mode ?? e.defaultMode ?? 'off';
   }
 
   /** What automation did since `since` (the Overview's overnight tile): counts per code, with the jobs and proposals. */
@@ -732,12 +750,17 @@ export class AutomationService {
     if (actor !== 'owner')
       throw new AutomationError('NOT_OWNER', 'Only the owner changes an automation setting; agents cannot.');
     const e = entryOf(code);
-    if (!e || e.automatable !== 'mechanical')
+    if (!e || (e.automatable !== 'mechanical' && e.automatable !== 'propose'))
       throw new AutomationError(
         'NOT_ELIGIBLE',
         `${code} is not an automatable code: only codes whose fix the bridge fully determines can be switched on.`,
       );
-    const was = this.store.mode(projectId, code);
+    if (e.automatable === 'propose' && mode === 'apply')
+      throw new AutomationError(
+        'PROPOSE_ONLY',
+        `${code} is proposal-only: each of its fixes moves, renames or deletes assets, which is always a proposal for the owner. Choose Off or Propose.`,
+      );
+    const was = this.modeOf(projectId, e);
     const s = this.store.setting(projectId, code);
     if (was === mode && !s?.pausedAt && !s?.governancePending)
       return { mode, changed: false, governanceJobId: null, governance: 'unchanged' };
@@ -984,9 +1007,9 @@ export class AutomationService {
     try {
       const why = this.blocked(projectId);
       if (why) return finish('skipped', `Skipped: ${why}.`, why);
-      const enabled = ELIGIBLE.filter((e) => {
+      const enabled = [...ELIGIBLE, ...PROPOSE_ONLY].filter((e) => {
         const s = this.store.setting(projectId, e.code);
-        return s !== null && s.mode !== 'off' && s.pausedAt === null;
+        return this.modeOf(projectId, e) !== 'off' && (s?.pausedAt ?? null) === null;
       });
       await this.catchUpGovernance(projectId);
       if (enabled.length === 0)
@@ -1004,7 +1027,7 @@ export class AutomationService {
             `${done.join('; ') || 'nothing done'}. The cap of ${caps.perRun} pages a run was reached; the rest waits for the next run.`,
             'cap',
           );
-        const mode = this.store.mode(projectId, e.code);
+        const mode = this.modeOf(projectId, e);
         if (mode === 'off') continue;
         const out = await this.runCode(projectId, runId, e, mode, Math.min(caps.perCode, left), ctx);
         left -= out.attempted;
@@ -1101,6 +1124,7 @@ export class AutomationService {
     ctx: RunContext,
   ): Promise<CodeOutcome> {
     if (e.source === 'retag') return this.runRetag(projectId, runId, e, mode, cap, ctx);
+    if (e.automatable === 'propose') return this.runProposals(projectId, runId, e, cap);
     let candidates: Candidate[];
     try {
       candidates = (await this.candidates(projectId, e, ctx)).filter((c) => ctx.allows(c.pageId));
@@ -1147,6 +1171,63 @@ export class AutomationService {
       if (typeof r === 'object') return { kind: 'stopRun', why: r.why, attempted };
     }
     if (mode === 'propose' && proposals.length > 0) await this.proposeAll(projectId, runId, e, proposals);
+    return { kind: 'done', attempted, capped };
+  }
+
+  /**
+   * v3 F7 (ADR 0070, G7): a proposal-only code: each open finding with a fix becomes its OWN proposal through the
+   * audit's "Propose a fix" (which reads its targets live first), as the Automation principal. A finding already
+   * proposed by an earlier run is not proposed again (the owner decides it once).
+   */
+  private async runProposals(
+    projectId: string,
+    runId: string,
+    e: CodeEntry,
+    cap: number,
+  ): Promise<CodeOutcome> {
+    const list = this.d.audits.store
+      .list(projectId, { code: [e.code], state: 'open', limit: 5000 })
+      .findings.filter((f) => f.fix !== null)
+      .sort((a, b) => a.id - b.id);
+    const done = new Set(
+      this.store
+        .codeItems(projectId, e.code, 5000)
+        .filter((i) => i.proposalId !== null && i.pageId !== null)
+        .map((i) => i.pageId!),
+    );
+    let attempted = 0;
+    let capped = false;
+    for (const f of list) {
+      const key = `finding:${f.fingerprint}`;
+      if (done.has(key)) continue;
+      if (attempted >= cap) {
+        capped = true;
+        break;
+      }
+      const why = this.blocked(projectId);
+      if (why) return { kind: 'stopRun', why, attempted };
+      attempted++;
+      await yieldToLoop();
+      const c: Candidate = {
+        pageId: key,
+        pageName: f.message.slice(0, 200),
+        plan: () =>
+          Promise.resolve({ ok: false, code: 'PROPOSE_ONLY', reason: 'proposed through the audit' }),
+      };
+      try {
+        const r = await this.d.audits.proposeFix('automation', projectId, f.id, { origin: this.origin(e) });
+        if (r.status === 'proposal_captured')
+          this.item(projectId, runId, e.code, c, 'proposed', { proposalId: r.proposalId });
+        else
+          this.item(projectId, runId, e.code, c, 'skipped', {
+            reasonCode: 'NOTHING_TO_DO',
+            reason: r.message,
+          });
+      } catch (err) {
+        if (this.skipped(projectId, runId, e, c, errCode(err), errMessage(err)))
+          return { kind: 'done', attempted };
+      }
+    }
     return { kind: 'done', attempted, capped };
   }
 

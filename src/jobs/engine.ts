@@ -761,6 +761,16 @@ export class JobEngine {
    * v2 C2c (ADR 0035): sets the handler of `bridge.record` steps (the lifecycle record). A job that reaches such a step
    * with no handler fails there, before its writes. Returns an unregister.
    */
+  /**
+   * v3 F7 (ADR 0070): what an earlier step of a job returned (its whole result), for a record step that needs an id
+   * LegendKeeper minted in the same job (an art job's new assets). Undefined when the step has not succeeded.
+   */
+  stepValue(jobId: string, stepNo: number): unknown {
+    const step = this.repo.step(jobId, stepNo);
+    if (!step || step.status !== 'succeeded') return undefined;
+    return this.repo.stepResult(step);
+  }
+
   registerRecordHandler(handler: RecordHandler, store = 'lifecycle'): () => void {
     this.recordHandlers.set(store, handler);
     return () => {

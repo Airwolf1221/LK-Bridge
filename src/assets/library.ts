@@ -41,5 +41,8 @@ export function assetLibraryOf(assets: Pick<AssetService, 'store'>, projectId: s
       createdAt: f.created_at,
     })),
     items: items.map((i) => ({ id: i.id, name: i.name, folderId: i.folder_id })),
+    goneIds: (
+      db.prepare('SELECT id FROM asset_tombstones WHERE project_id = ?').all(projectId) as { id: string }[]
+    ).map((r) => r.id),
   };
 }

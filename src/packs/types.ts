@@ -131,18 +131,27 @@ export const typeRulesSchema = z
     specialistTags: z.array(text(100)).max(30),
     /** Suggested Reference Types for specialist pages: a title's key word → the suggestion. */
     suggestedReferenceTypes: z.record(text(100), text(200)),
-    /** Asset placement. */
-    assets: z
-      .object({
-        /** The subfolders a package may name, by kind (`form` → `Forms`), under the character's own folder. */
-        subfolders: z.record(z.enum(['form', 'outfit', 'details']), text(100)),
-        /** An image's display name; `{Subject}` and `{Label}`. */
-        displayName: text(200),
-        /** The section of the Art page the images go in, and the role that holds images. */
-        section: text(200),
-        role: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
-      })
-      .strict(),
+    /**
+     * Asset placement. v3 F7 (ADR 0070, G1 and G6): the old `subfolders` (Forms, Outfits, Details) is gone: design pieces
+     * go in the character's folder and outfit pieces in its Wardrobe, decided by the bridge. A stored pack version that
+     * still carries `subfolders` is read with it dropped.
+     */
+    assets: z.preprocess(
+      (v) => {
+        if (typeof v !== 'object' || v === null || Array.isArray(v) || !('subfolders' in v)) return v;
+        const { subfolders: _legacy, ...rest } = v as Record<string, unknown>;
+        return rest;
+      },
+      z
+        .object({
+          /** An image's display name; `{Subject}` and `{Label}`. */
+          displayName: text(200),
+          /** The section of the Art page the images go in, and the role that holds images. */
+          section: text(200),
+          role: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
+        })
+        .strict(),
+    ),
     /** The index: its role, and the drafted text's sections and wording (`{Name}`). */
     index: z
       .object({

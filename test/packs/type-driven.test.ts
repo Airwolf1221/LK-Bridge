@@ -65,7 +65,6 @@ const POLITY: TypeRules = {
   specialistTags: [],
   suggestedReferenceTypes: {},
   assets: {
-    subfolders: { form: 'Forms', outfit: 'Outfits', details: 'Details' },
     displayName: '{Subject} - {Label}',
     section: 'Reference Images',
     role: 'core',

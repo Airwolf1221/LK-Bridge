@@ -458,7 +458,10 @@ export const CHECKS = {
     title: 'An asset outside its subject’s character folder',
     group: 'candidates',
     evidence: 'Potential Maintenance Issue',
-    rule: { ...VISUAL, rule: 'Characters / <race path> / <Name> / Forms | Outfits | Details' },
+    rule: {
+      ...VISUAL,
+      rule: 'Characters / <race path> / <Name> (design pieces), its Wardrobe and Wardrobe / <Outfit>',
+    },
     judgement: {
       tool: 'lk_api_write',
       decide: 'which folder it belongs in (an asset may serve several subjects)',

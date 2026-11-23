@@ -32,6 +32,8 @@ export interface LibraryItem {
 export interface AssetLibrary {
   readonly folders: readonly LibraryFolder[];
   readonly items: readonly LibraryItem[];
+  /** v3 F7 (G7): ids the asset tree has seen deleted (its tombstones), for stale folder ids in page text. */
+  readonly goneIds?: readonly string[];
 }
 
 export interface MergePlan {

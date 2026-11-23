@@ -4,6 +4,7 @@
  * guard (versions, unsupported blocks, cascade confirmation, member admin, read-only, policy) applies.
  */
 import * as z from 'zod';
+import { isLegacyName } from '../../art/layout.js';
 import type { LmrMode } from '../../jobs/lmr-hook.js';
 import type { JobEngine, OpParams } from '../../jobs/index.js';
 import { getOperation, operations, type OperationDef } from '../../lk/index.js';
@@ -89,6 +90,23 @@ export interface SteeringCaller {
   readonly tool: string;
   /** Pages already read by this call (a batch reads each page once). */
   readonly reads?: Map<string, SteeringRead>;
+}
+
+/**
+ * v3 F7 (ADR 0070, G6): a raw createAssetFolder may not make a retired Forms, Outfits or Details folder (the art layout
+ * has the character's folder, its Wardrobe and Wardrobe / <Outfit> only).
+ */
+export function legacyFolderRefusal(
+  operationId: string,
+  params: unknown,
+): { code: string; message: string } | null {
+  if (operationId !== 'createAssetFolder') return null;
+  const name = ((params as { body?: { name?: unknown } } | null)?.body ?? {}).name;
+  if (typeof name !== 'string' || !isLegacyName(name)) return null;
+  return {
+    code: 'LEGACY_ART_FOLDER',
+    message: `A folder named “${name}” is never made: Forms, Outfits and Details are retired. Character art goes in the character’s folder (design pieces) and its Wardrobe (outfit pieces, through arkona_add_character_art with \`outfit\`).`,
+  };
 }
 
 /**
@@ -178,6 +196,8 @@ export async function executeOne(
       deps,
     );
   }
+  const legacy = legacyFolderRefusal(op.operationId, input.params);
+  if (legacy) return errorResult(legacy, deps);
   let steeringRead: SteeringRead | undefined;
   if (!input.plainRename) {
     const v = await subjectRenameIn(deps, op.operationId, input.params, { ctx, tool });
@@ -484,6 +504,8 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             if (c.operationId === 'updateResource') plain.push(c.plainRename.reason);
             continue;
           }
+          const legacy = legacyFolderRefusal(c.operationId, c.params);
+          if (legacy) return errorResult(legacy, pd);
           const v = await subjectRenameIn(pd, c.operationId, (c.params ?? {}) as OpParams, steering);
           if (v.failed) return v.failed;
           const refusal = v.refusal;

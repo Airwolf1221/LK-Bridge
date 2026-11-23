@@ -14,7 +14,6 @@
  */
 import type { McpToolContext, McpToolResult } from '../mcp/server.js';
 import { errorResult, type ProjectDeps } from '../mcp/tools/shape.js';
-import { liveRead } from '../mcp/tools/repo.js';
 import type { FromMarkdownContext, LkBlock } from '../markdown/index.js';
 import { pageConverterContext } from '../pages/index.js';
 import { cleanPrefixes, key as nameKey, subjectOf } from '../registry/names.js';
@@ -33,6 +32,8 @@ import {
 import { textKey } from './engine/text.js';
 import type { LmrMode } from '../jobs/lmr-hook.js';
 import { characterEnv, finishPackage, packBasis } from './run.js';
+import { placeArt, type ArtPlace } from './art-place.js';
+import type { ArtPathMove, ArtPlan, ImagePlacement } from './engine/plan.js';
 
 type Obj = Record<string, unknown>;
 
@@ -220,11 +221,17 @@ export interface ArtImageInput {
   readonly upload_id?: string | undefined;
   readonly label: string;
   readonly interpretation?: string | undefined;
-  readonly subfolder?: string | null | undefined;
 }
 
 export interface ArtInput {
   readonly character: string;
+  /**
+   * v3 F7 (ADR 0070, G1): the outfit every image of the call belongs to; absent or null: design pieces (the character's
+   * own folder). The bridge decides the folder (G2).
+   */
+  readonly outfit?: string | null | undefined;
+  /** v3 F7 (G3): the outfit is a new one although its name is close to an existing one's. */
+  readonly newOutfit?: boolean | undefined;
   readonly images: readonly ArtImageInput[];
   /** A ChatGPT conversation attachment: the source of the one image that names neither staged_id nor upload_id. */
   readonly file?: ChatGptFile | undefined;
@@ -290,7 +297,6 @@ export async function runArt(
       staged_id: id,
       label: im.label,
       ...(im.interpretation !== undefined ? { interpretation: im.interpretation } : {}),
-      ...(im.subfolder !== undefined ? { subfolder: im.subfolder } : {}),
     });
   }
   const stagedNote =
@@ -317,11 +323,24 @@ export async function runArt(
               (artRef !== null && n.referenceType !== null && textKey(n.referenceType) === textKey(artRef))),
         ) ?? null)
     : null;
+  // 3. v3 F7 (ADR 0070, G2, G9): the character's folders read live, then where the images go.
+  const placed = await placeArt(
+    env,
+    ch.hit,
+    subject,
+    { outfit: o.input.outfit, newOutfit: o.input.newOutfit, arriving: images.length },
+    pd.services?.outfits,
+  );
+  if (!placed.ok) return placed.result;
+  const place = placed.value;
+  const placement = imagePlacementOf(place);
+  const artPlan = artPlanOf(place, subject);
   if (!art) {
     const plan = await planPackage(env, {
       name: subject,
       target: ch.hit.identity.id,
       ...(o.input.status !== undefined ? { status: o.input.status } : {}),
+      imagePlacement: placement,
       identity: {},
       pages: [
         {
@@ -340,25 +359,128 @@ export async function runArt(
       );
     return finishPackage(pd, mctx, o, env, {
       ...plan,
+      art: artPlan,
+      notes: [...plan.notes, ...artNotes(place)],
       extra: {
         ...(plan.extra ?? {}),
         artPage: { create: plan.pages.find((p) => p.role === type.assets.role)?.rawName ?? null },
+        placement: placementSummary(place),
         ...stagedNote,
       },
     });
   }
-  const plan = await planArtExtension(env, ch.hit, subject, art, images);
-  return finishPackage(pd, mctx, o, env, { ...plan, extra: { ...(plan.extra ?? {}), ...stagedNote } });
+  const plan = planArtExtension(env, ch.hit, subject, art, images, place);
+  return finishPackage(pd, mctx, o, env, {
+    ...plan,
+    art: artPlan,
+    notes: [...plan.notes, ...artNotes(place)],
+    extra: { ...(plan.extra ?? {}), placement: placementSummary(place), ...stagedNote },
+  });
+}
+
+/**
+ * v3 F7 (G5): the moves a job makes, as the Art page's lines that name a moved piece's old folder are matched: the old
+ * folder's full path and id, the new folder's path, and each moved piece's name, id and address.
+ */
+function artPathLines(place: ArtPlace): ArtPathMove | null {
+  const p = place.placement;
+  if (p.kind !== 'outfit' || p.moves.length === 0) return null;
+  const base = (place.layout?.character.path ?? []).join(' / ');
+  const wardrobe = place.layout?.wardrobe;
+  if (!wardrobe) return null;
+  return {
+    fromPath: `${base} / ${wardrobe.name}`,
+    fromId: wardrobe.id,
+    toPath: [base, ...p.subfolders].join(' / '),
+    pieces: p.moves.map((m) => ({ id: m.id, name: m.name, ...(m.url ? { url: m.url } : {}) })),
+  };
+}
+
+/** v3 F7: the images' placement as planImages takes it. */
+function imagePlacementOf(place: ArtPlace): ImagePlacement {
+  const p = place.placement;
+  if (p.kind === 'design') return { subfolders: [], outfit: null };
+  return {
+    subfolders: p.subfolders,
+    outfit: p.outfit.name,
+    ...(p.moves.length > 0 ? { taken: new Set(p.moves.map((m) => m.name)) } : {}),
+  };
+}
+
+/** v3 F7: what the job needs besides the images (the moves, the outfit record, the Art page's place for them). */
+function artPlanOf(place: ArtPlace, subject: string): ArtPlan {
+  const p = place.placement;
+  const base = (place.layout?.character.path ?? []).join(' / ');
+  const wardrobe = place.layout?.wardrobe ?? null;
+  return {
+    characterName: subject,
+    characterFolderId: place.characterFolderId,
+    outfit:
+      p.kind === 'outfit'
+        ? {
+            name: p.outfit.name,
+            aliases: [...p.outfit.aliases],
+            into: p.into,
+            folderId: p.folderId,
+            moves: p.moves.map((m) => ({
+              assetId: m.id,
+              name: m.name,
+              fromFolderId: wardrobe?.id ?? null,
+              fromPath: wardrobe ? `${base} / ${wardrobe.name}` : null,
+              ...(m.url ? { url: m.url } : {}),
+            })),
+            toPath: [base, ...p.subfolders].filter(Boolean).join(' / '),
+          }
+        : null,
+  };
+}
+
+function artNotes(place: ArtPlace): string[] {
+  const p = place.placement;
+  const read = `The character’s asset folders were read live first (${place.live.requests} request${place.live.requests === 1 ? '' : 's'}).`;
+  if (p.kind === 'design') return [read, 'Design pieces: placed in the character’s own folder.'];
+  const where =
+    p.into === 'wardrobe'
+      ? `loose in ${p.subfolders.join(' / ')} (its only piece)`
+      : p.folderId
+        ? `in its folder ${p.subfolders.join(' / ')}`
+        : `in a new folder ${p.subfolders.join(' / ')}`;
+  return [
+    read,
+    `Outfit “${p.outfit.name}”${p.outfit.source === 'new' ? ' (new)' : ''}: ${p.existing.length} piece(s) already, ${p.total - p.existing.length} arriving: placed ${where}.`,
+    ...(p.moves.length > 0
+      ? [
+          `Its loose piece${p.moves.length === 1 ? '' : 's'} ${p.moves.map((m) => `“${m.name}”`).join(', ')} ${p.moves.length === 1 ? 'is' : 'are'} moved into the new folder in the same job.`,
+        ]
+      : []),
+    ...p.notes,
+  ];
+}
+
+function placementSummary(place: ArtPlace): Record<string, unknown> {
+  const p = place.placement;
+  if (p.kind === 'design') return { kind: 'design', folder: 'the character’s own folder' };
+  return {
+    kind: 'outfit',
+    outfit: p.outfit.name,
+    known: p.outfit.source,
+    ...(p.outfit.via && p.outfit.via !== p.outfit.name ? { matchedAlias: p.outfit.via } : {}),
+    into: p.subfolders.join(' / '),
+    existingPieces: p.existing.length,
+    total: p.total,
+    moves: p.moves.map((m) => m.name),
+  };
 }
 
 /** New images on an existing Art page (design section 3): appended under its images section, in one proposal. */
-async function planArtExtension(
+function planArtExtension(
   env: PlanEnv,
   hit: CharacterHit,
   subject: string,
   art: TreeNode,
   pkgImages: readonly PackageImage[],
-): Promise<PackPlan> {
+  place: ArtPlace,
+): PackPlan {
   const { pd, ctx, type, pack } = env;
   const refusals: PackPlan['refusals'] = [];
   const warnings: PackPlan['warnings'] = [];
@@ -376,29 +498,22 @@ async function planArtExtension(
       ? art.documents.find((d) => d.type === 'page')
       : undefined);
   if (!doc) refuse('ART_PAGE_UNREADABLE', `${art.rawName} has no main page document to add the images to.`);
-  // The race for the asset folder: as the repository tree has it (a fact read at the last pass).
-  let race = hit.race;
-  if (race === null) {
-    const read = await liveRead(pd, env.mctx, env.tool, 'getResource', {
-      path: { resourceId: hit.identity.id },
-    });
-    if (read.ok) {
-      const props = (read.value as { properties?: unknown }).properties;
-      for (const p of Array.isArray(props) ? (props as Obj[]) : [])
-        for (const r of Array.isArray(p.rows) ? (p.rows as Obj[]) : [])
-          if (typeof r.key === 'string' && textKey(r.key) === textKey('Race / Species'))
-            race =
-              (Array.isArray(r.content) ? (r.content as Obj[]) : [])
-                .map((x) => (typeof x.text === 'string' ? x.text : ''))
-                .join('')
-                .trim() || null;
-    }
-  }
-  const planned = planImages(env, { page: art.rawName, subject, race, images: pkgImages, refuse, warn });
+  const planned = planImages(env, {
+    page: art.rawName,
+    subject,
+    race: place.race,
+    images: pkgImages,
+    refuse,
+    warn,
+    placement: imagePlacementOf(place),
+  });
   const base = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
   const converter: FromMarkdownContext | undefined = base ? { ...base } : undefined;
   if (!converter) refuse('TOOL_UNAVAILABLE', 'The repository tree cannot resolve names now.');
-  const section = type.assets.section;
+  // v3 F7 (G5): design pieces under "Reference Images"; an outfit's under a heading naming it (found or made inside
+  // the job's lock, under the page's first "Wardrobe" heading, else a new "Wardrobe" section).
+  const outfit = place.placement.kind === 'outfit' ? place.placement.outfit : null;
+  const section = outfit ? outfit.name : type.assets.section;
   const boundaries = [
     ...(type.roles.find((r) => r.role === type.assets.role)?.warnMissing ?? []),
     'Source Boundaries',
@@ -424,6 +539,8 @@ async function planArtExtension(
               section,
               boundaries,
               images: planned,
+              ...(outfit ? { outfit: { name: outfit.name, aliases: [...outfit.aliases] } } : {}),
+              ...(artPathLines(place) ? { pathLines: artPathLines(place)! } : {}),
             },
           ]
         : [],
@@ -447,7 +564,9 @@ async function planArtExtension(
     absent: { reservation: null, under: [], kind: 'art', images: planned.map((i) => i.stagedId) },
     target: { identity: hit.identity, index: null, role: hit.role },
     notes: [
-      `${art.rawName} exists: the images are added at the end of its “${section}” section (made before its boundary sections if it has none) when the job runs; nothing else on the page changes.`,
+      outfit
+        ? `${art.rawName} exists: the images are added under its heading naming “${outfit.name}” (found anywhere on the page when the job runs; else made under the page’s first heading holding “Wardrobe”; else under a new “Wardrobe” section before its boundary sections).`
+        : `${art.rawName} exists: the images are added at the end of its “${section}” section (made before its boundary sections if it has none) when the job runs; nothing else on the page changes.`,
     ],
     extra: { artPage: { extend: art.rawName, id: art.id } },
     ...(planned.some((i) => i.takeover)

@@ -14,7 +14,12 @@ import type { StepPlanner } from './planners.js';
 import { withoutSkippedParts } from './items.js';
 import { excerpt, MAX_CONFLICTS, type RebaseResult, type Rebaser } from './rebase.js';
 import { backoffMs } from '../lk/governor/retry.js';
-import { compareStoredBlocks, VERIFY_IGNORED_FIELDS } from './verify-blocks.js';
+import {
+  compareStoredBlocks,
+  mismatchCause,
+  type MismatchCause,
+  VERIFY_IGNORED_FIELDS,
+} from './verify-blocks.js';
 import {
   CheckRefusedError,
   JobsError,
@@ -196,6 +201,12 @@ export interface WriteVerification {
   readonly targets?: readonly TargetVerification[];
   /** v2 C2a: the job's journal entries (what each write changed), for recovery. */
   readonly journalIds?: readonly number[];
+  /**
+   * v3 F7 (ADR 0070, G10), a mismatch only: `concurrent_edit` when a difference lies in a block the plan did not write
+   * (one it sent as it was before, or one it never sent) or the version read back is not the one the write returned;
+   * otherwise `stored_differently` (LegendKeeper may have changed what was written on save).
+   */
+  readonly cause?: MismatchCause;
 }
 
 /** The value of a verified page-write step (instead of LegendKeeper's whole answer, which the verify read repeats). */
@@ -2350,9 +2361,12 @@ export class StepExecutor {
               this.d.journal.setCreatedTarget(journalId, createdId);
           } else this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
           if (step.options.verifyAfterWrite === true && op.operationId === 'replaceDocumentBlocks') {
-            const verification = await this.verifyWrite(job, step, op, meta, params, journalId);
-            if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
             const sent = (value ?? {}) as { id?: unknown; version?: unknown };
+            const verification = await this.verifyWrite(job, step, op, meta, params, journalId, {
+              writtenVersion: typeof sent.version === 'string' ? sent.version : undefined,
+              before: (current?.body as { blocks?: unknown } | undefined)?.blocks,
+            });
+            if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
             const out: VerifiedWriteValue = {
               document: { id: sent.id ?? params.path?.documentId ?? null, version: sent.version ?? null },
               verification,
@@ -2460,6 +2474,7 @@ export class StepExecutor {
     meta: OpMeta,
     params: OpParams,
     journalId: number | undefined,
+    context: { readonly writtenVersion?: string | undefined; readonly before?: unknown } = {},
   ): Promise<WriteVerification> {
     const entry = journalId ?? this.d.journal.entryIdForStep(job.id, step.stepNo);
     const planned = (params.body as { blocks?: unknown } | undefined)?.blocks;
@@ -2478,6 +2493,11 @@ export class StepExecutor {
             differenceCount: cmp.count,
             journalId: entry,
             ignored: VERIFY_IGNORED_FIELDS,
+            // v3 F7 (ADR 0070, G10): whether the evidence points at another writer, or at LegendKeeper's own save.
+            cause: mismatchCause(cmp.differences, planned, context.before, {
+              written: context.writtenVersion,
+              stored: after.version,
+            }),
           };
     } catch (e) {
       return {

@@ -26,7 +26,7 @@
  *   again inside its lock from them; `keptItemsOnly`);
  * - any other reference to a dropped step is a planning error (`ITEM_FILTER`): nothing is approved.
  */
-import { LMR_STEP, VERIFY_STEP, EXPECT_STEP } from './internal-steps.js';
+import { RECORD_STEP, LMR_STEP, VERIFY_STEP, EXPECT_STEP } from './internal-steps.js';
 import type { StepSpec } from './types.js';
 
 type Obj = Record<string, unknown>;
@@ -247,8 +247,30 @@ export function mapStepRefs(s: StepSpec, f: (n: number) => number): StepSpec {
     };
   } else if (body && s.op === 'upload_image.verify' && typeof body.assetStep === 'number') {
     out.params = { ...s.params, body: { ...body, assetStep: f(body.assetStep) } };
+  } else if (body && s.op === RECORD_STEP && isArtRecord(body.record)) {
+    out.params = { ...s.params, body: { ...body, record: mapArtRecordSteps(body.record, f) } };
   }
   return out as unknown as StepSpec;
+}
+
+/** v3 F7 (ADR 0070): an art job's outfit record (its step references are mapped like a binding's). */
+const isArtRecord = (r: unknown): r is Obj =>
+  typeof r === 'object' && r !== null && (r as Obj).kind === 'art_outfit';
+
+/** v3 F7: an outfit record's step references (the character's and the outfit's folders, each piece's asset) mapped. */
+export function mapArtRecordSteps(r: Obj, f: (n: number) => number): Obj {
+  return {
+    ...r,
+    ...(typeof r.characterFolderStep === 'number' ? { characterFolderStep: f(r.characterFolderStep) } : {}),
+    ...(typeof r.folderStep === 'number' ? { folderStep: f(r.folderStep) } : {}),
+    ...(Array.isArray(r.pieces)
+      ? {
+          pieces: (r.pieces as Obj[]).map((p) =>
+            typeof p.assetStep === 'number' ? { ...p, assetStep: f(p.assetStep) } : p,
+          ),
+        }
+      : {}),
+  };
 }
 
 // ============================================================================================ dependencies

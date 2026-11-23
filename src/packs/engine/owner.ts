@@ -23,7 +23,7 @@ import type { LinkTarget } from '../../facts/plan.js';
 import { mintClientId } from '../../jobs/ids.js';
 import { readSidebar, statusValue } from '../../mcp/tools/create-support.js';
 import { fromMarkdown, MarkdownError, type FromMarkdownContext, type LkBlock } from '../../markdown/index.js';
-import { pageConverterContext } from '../../pages/index.js';
+import { pageConverterContext, withImageCheck } from '../../pages/index.js';
 import { cleanPrefixes, key as nameKey, singularFor } from '../../registry/names.js';
 import type { TreeNode } from '../../tree/index.js';
 import type {
@@ -125,7 +125,6 @@ export function ownerTypeRules(rules: PackRules, otype: OwnerType): TypeRules {
     specialistTags: otype.specialist,
     suggestedReferenceTypes: {},
     assets: {
-      subfolders: { form: 'Forms', outfit: 'Outfits', details: 'Details' },
       displayName: '{Subject} - {Label}',
       section: 'Reference Images',
       role: 'owner',
@@ -859,7 +858,9 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   if (rel.length) linkTargets.push({ title: linkTitle.related, targets: rel });
 
   // ---------------------------------------------------------------------------------- the text (design 1.4)
-  const base = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
+  const plain = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
+  // v3 F7 (ADR 0070, G11): an image in the page's text must be one of the project's assets (live once for a miss).
+  const base = plain ? await withImageCheck(pd.services?.assets, ctx.projectId, plain, markdown) : undefined;
   const converter: FromMarkdownContext | undefined = base
     ? {
         ...base,

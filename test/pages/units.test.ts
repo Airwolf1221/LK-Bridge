@@ -34,7 +34,7 @@ describe('verify: the stored blocks against the blocks sent', () => {
     stored[2]!.id = 'lkminted'; // a block sent without an id is given one
     (stored[3]!.children as Record<string, unknown>[])[0]!.version = 'b9';
     expect(compareStoredBlocks(sent, stored)).toEqual({ ok: true, differences: [], count: 0 });
-    expect(VERIFY_IGNORED_FIELDS).toHaveLength(5);
+    expect(VERIFY_IGNORED_FIELDS).toHaveLength(6);
   });
   it('normalises runs as LegendKeeper does on write: empty text dropped, same-mark neighbours merged', () => {
     expect(

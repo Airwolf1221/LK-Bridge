@@ -30,6 +30,10 @@ import { cleanPrefixes, key as nameKey } from '../../registry/names.js';
 import type { Packs } from '../service.js';
 import { PACK_ART_FILLER, PACK_CHECKS, PACK_FILLER, PACK_RECORD_STORE } from './job.js';
 import { blockText, sectionsOf, textKey } from './text.js';
+import { mintClientId } from '../../jobs/ids.js';
+import type { ArtPathMove } from './plan.js';
+import type { OutfitStore } from '../../art/store.js';
+import type { JobView } from '../../jobs/index.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -65,6 +69,10 @@ export interface PackEngineDeps {
     r: { readonly resourceId: string; readonly plural: string; readonly parentNodeId: string },
     actor: string,
   ) => Record<string, unknown>;
+  /** v3 F7 (ADR 0070, G3): the outfit record an art job writes after its uploads and moves. */
+  readonly outfits?: OutfitStore;
+  /** v3 F7: what an earlier step of a job returned (the ids LegendKeeper minted: folders, assets). */
+  readonly stepValue?: (jobId: string, stepNo: number) => unknown;
   /** v3 F3d (renames), ADR 0058: renames a race's taxonomy entry with its navigation index (an approved rename). */
   readonly renameTaxonomyEntry?: (
     projectId: string,
@@ -82,6 +90,7 @@ export function registerPackEngine(
     engine.registerAsyncChecker(PACK_CHECKS.governance, (ctx) => governanceCheck(d, ctx)),
     engine.registerAsyncChecker(PACK_CHECKS.absent, (ctx) => absentCheck(d, ctx)),
     engine.registerAsyncChecker(PACK_CHECKS.page, (ctx) => pageCheck(ctx)),
+    engine.registerAsyncChecker(PACK_CHECKS.art, (ctx) => artLayoutCheck(ctx)),
     engine.registerFiller(PACK_FILLER, fillBody),
     engine.registerFiller(PACK_ART_FILLER, appendImages),
     engine.registerRecordHandler((job, _step, params) => {
@@ -103,6 +112,7 @@ export function registerPackEngine(
           job.approvedBy ?? job.principalId,
         );
       }
+      if (r.kind === 'art_outfit' && d.outfits) return recordOutfit(d, job, r);
       if (
         r.kind === 'taxonomy_rename' &&
         typeof r.entryId === 'string' &&
@@ -547,7 +557,23 @@ export function fillBody(ctx: FillContext): FillResult {
  * the end. Nothing else on the page is touched, so every `unsupported` block stays where it is.
  */
 export function appendImages(ctx: FillContext): FillResult {
-  const input = (ctx.input ?? {}) as { section?: string; boundaries?: string[] };
+  const input = (ctx.input ?? {}) as {
+    section?: string;
+    boundaries?: string[];
+    outfit?: { name: string; aliases?: string[] };
+    pathLines?: ArtPathMove;
+  };
+  // v3 F7 (ADR 0070, G5): the lines that name a moved piece's old folder, updated before the images are placed.
+  const moved = input.pathLines ? updatePathLines(ctx.current.blocks as LkBlock[], input.pathLines) : null;
+  if (input.outfit) {
+    const r = placeOutfitImages(
+      { ...ctx, current: { ...ctx.current, blocks: moved?.blocks ?? ctx.current.blocks } },
+      input.outfit,
+      input.boundaries ?? [],
+    );
+    return moved ? { blocks: r.blocks, note: { ...r.note, pathLines: moved.note } } : r;
+  }
+  if (moved) ctx = { ...ctx, current: { ...ctx.current, blocks: moved.blocks } };
   const section = input.section ?? 'Reference Images';
   const boundaries = (input.boundaries ?? []).map(textKey);
   const current = [...(ctx.current.blocks as LkBlock[])];
@@ -575,4 +601,203 @@ export function appendImages(ctx: FillContext): FillResult {
   if (b >= 0) current.splice(offset(b), 0, ...withHead);
   else current.push(...withHead);
   return { blocks: current, note: { madeSection: section, blocks: withHead.length } };
+}
+
+// ============================================================================================ v3 F7: outfit art
+
+const isHeading = (b: unknown): boolean => isObj(b) && b.kind === 'heading';
+const levelOf = (b: unknown): number => (isObj(b) && typeof b.level === 'number' ? b.level : 1);
+
+/** A heading block of `text` at `level` (1 to 6), with a new id. */
+function heading(text: string, level: number): LkBlock {
+  return {
+    id: mintClientId(),
+    kind: 'heading',
+    level: Math.min(6, Math.max(1, level)),
+    content: [{ text }],
+  };
+}
+
+/** The pieces' blocks with each label heading set to `level` (capped at 6); every other block as planned. */
+function relevel(blocks: readonly LkBlock[], level: number): LkBlock[] {
+  return blocks.map((b) =>
+    isHeading(b) ? ({ ...(b as Obj), level: Math.min(6, Math.max(1, level)) } as unknown as LkBlock) : b,
+  );
+}
+
+/** Where a heading's section ends: the next heading of the same or a higher level (or the end). */
+function sectionEnd(blocks: readonly LkBlock[], at: number): number {
+  const level = levelOf(blocks[at]);
+  for (let i = at + 1; i < blocks.length; i++)
+    if (isHeading(blocks[i]) && levelOf(blocks[i]) <= level) return i;
+  return blocks.length;
+}
+
+/**
+ * v3 F7 (ADR 0070, G5): outfit pieces on an existing Art page, placed when the job runs, on the page as it is then:
+ *
+ * 1. under an existing heading anywhere on the page that names the outfit or one of its aliases (Soraya's page nests
+ *    them under "Approved Rangawan Wardrobe"): at the end of its section, the labels one level below it;
+ * 2. else a new heading naming the outfit at the end of the page's first heading holding "Wardrobe", one level below it;
+ * 3. else a new "Wardrobe" section (level 2) before the first boundary section (else at the end), the outfit's heading
+ *    at level 3 and the labels at level 4.
+ *
+ * The planned blocks are the outfit's heading, then per image its label, the image block and its interpretation. Nothing
+ * else on the page is touched.
+ */
+export function placeOutfitImages(
+  ctx: FillContext,
+  outfit: { name: string; aliases?: string[] },
+  boundaries: readonly string[],
+): FillResult {
+  const current = [...(ctx.current.blocks as LkBlock[])];
+  const planned = ctx.planned as LkBlock[];
+  const keys = new Set([outfit.name, ...(outfit.aliases ?? [])].map(textKey));
+  const head = planned[0];
+  const pieces =
+    head !== undefined && isHeading(head) && keys.has(textKey(blockText(head))) ? planned.slice(1) : planned;
+  const named = current.findIndex((b) => isHeading(b) && keys.has(textKey(blockText(b))));
+  if (named >= 0) {
+    const end = sectionEnd(current, named);
+    current.splice(end, 0, ...relevel(pieces, levelOf(current[named]) + 1));
+    return {
+      blocks: current,
+      note: { outfit: outfit.name, appendedTo: blockText(current[named]!), blocks: pieces.length },
+    };
+  }
+  const wardrobe = current.findIndex((b) => isHeading(b) && /wardrobe/i.test(blockText(b)));
+  if (wardrobe >= 0) {
+    const level = levelOf(current[wardrobe]) + 1;
+    const end = sectionEnd(current, wardrobe);
+    current.splice(end, 0, heading(outfit.name, level), ...relevel(pieces, level + 1));
+    return {
+      blocks: current,
+      note: {
+        outfit: outfit.name,
+        madeHeadingUnder: blockText(current[wardrobe]!),
+        blocks: pieces.length + 1,
+      },
+    };
+  }
+  const bounds = boundaries.map(textKey);
+  const b = current.findIndex((x) => isHeading(x) && bounds.includes(textKey(blockText(x))));
+  const add = [heading('Wardrobe', 2), heading(outfit.name, 3), ...relevel(pieces, 4)];
+  if (b >= 0) current.splice(b, 0, ...add);
+  else current.push(...add);
+  return { blocks: current, note: { outfit: outfit.name, madeSection: 'Wardrobe', blocks: add.length } };
+}
+
+/** The text runs of every block, at any depth, that holds text (paragraphs, list items, headings, cells). */
+function textBlocks(blocks: readonly unknown[], out: Obj[] = []): Obj[] {
+  for (const b of blocks) {
+    if (!isObj(b)) continue;
+    if (
+      Array.isArray(b.content) &&
+      (b.content as unknown[]).every((r) => isObj(r) && typeof r.kind !== 'string')
+    )
+      out.push(b);
+    for (const v of Object.values(b)) if (Array.isArray(v)) textBlocks(v as unknown[], out);
+  }
+  return out;
+}
+
+/**
+ * v3 F7 (ADR 0070, G5): when a job moves loose pieces into a new outfit folder, each line on the Art page that names a
+ * moved piece (its name, id or address) and its old folder's full path has that path replaced by the new folder's, in
+ * the run that holds it, inside the lock. A line that names a moved piece and its old folder in any other way (its id,
+ * or a path split across runs) is not touched: it is listed in the step's note for the owner. Prose that only mentions
+ * the outfit is never touched.
+ */
+export function updatePathLines(
+  blocks: readonly LkBlock[],
+  m: ArtPathMove,
+): { blocks: LkBlock[]; note: { updated: string[]; forOwner: string[] } } {
+  const copy = JSON.parse(JSON.stringify(blocks)) as LkBlock[];
+  const updated: string[] = [];
+  const forOwner: string[] = [];
+  const names = m.pieces.flatMap((p) => [p.name, p.id, ...(p.url ? [p.url] : [])]);
+  const pathRe = (path: string) =>
+    new RegExp(
+      path
+        .split(' / ')
+        .map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('\\s*/\\s*') + '(?!\\s*/)',
+      'g',
+    );
+  const from = pathRe(m.fromPath);
+  for (const b of textBlocks(copy)) {
+    const text = blockText(b);
+    if (!names.some((n) => text.includes(n))) continue;
+    const runs = b.content as Obj[];
+    let changed = false;
+    for (const r of runs) {
+      if (typeof r.text !== 'string') continue;
+      from.lastIndex = 0;
+      if (from.test(r.text)) {
+        from.lastIndex = 0;
+        r.text = r.text.replace(from, m.toPath);
+        changed = true;
+      }
+    }
+    if (changed) updated.push(blockText(b));
+    else if (text.includes(m.fromId) || /wardrobe/i.test(text)) forOwner.push(text);
+  }
+  return { blocks: copy, note: { updated, forOwner } };
+}
+
+/**
+ * v3 F7 (ADR 0070, G2, G9): before an art job writes, each loose piece it moves is read live: still there, still in
+ * the folder the plan read it in. Else the job stops (ART_LAYOUT_CHANGED) before any write: plan it again.
+ */
+async function artLayoutCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
+  const input = (ctx.input ?? {}) as { moves?: { assetId: string; name: string; folderId: string | null }[] };
+  const changed: string[] = [];
+  for (const m of input.moves ?? []) {
+    const r = await ctx.read('getAsset', { path: { assetId: m.assetId } });
+    const a = (r.body ?? {}) as Obj;
+    if (!r.exists) changed.push(`“${m.name}” is gone`);
+    else if ((a.folderId ?? null) !== m.folderId) changed.push(`“${m.name}” has been moved`);
+  }
+  if (changed.length === 0) return { differences: [] };
+  return {
+    differences: [],
+    refusal: {
+      code: 'ART_LAYOUT_CHANGED',
+      message: `The character’s Wardrobe changed since this was planned (${changed.join('; ')}). Nothing was written; plan it again.`,
+      details: { changed },
+    },
+  };
+}
+
+/** v3 F7 (ADR 0070, G3): the outfit record, from the ids the job's own steps returned. */
+function recordOutfit(d: PackEngineDeps, job: JobView, r: Obj): Record<string, unknown> {
+  const idOf = (n: unknown): string | null => {
+    if (typeof n !== 'number' || !d.stepValue) return null;
+    const v = d.stepValue(job.id, n) as { id?: unknown } | null | undefined;
+    return typeof v?.id === 'string' ? v.id : null;
+  };
+  const characterFolderId = str(r.characterFolderId) ?? idOf(r.characterFolderStep);
+  if (!characterFolderId) return { recorded: null, reason: 'the character’s folder is not known' };
+  const pieces = (Array.isArray(r.pieces) ? (r.pieces as Obj[]) : [])
+    .map((p) => ({ assetId: idOf(p.assetStep), name: str(p.name) ?? '' }))
+    .filter((p): p is { assetId: string; name: string } => p.assetId !== null);
+  const moved = (Array.isArray(r.moved) ? (r.moved as Obj[]) : [])
+    .map((p) => ({ assetId: str(p.assetId), name: str(p.name) ?? '' }))
+    .filter((p): p is { assetId: string; name: string } => p.assetId !== null);
+  const rec = d.outfits!.recordPlacement({
+    projectId: job.projectId,
+    characterFolderId,
+    characterName: str(r.characterName) ?? '',
+    outfit: str(r.outfit) ?? '',
+    folderId: str(r.folderId) ?? idOf(r.folderStep),
+    pieces: [...moved, ...pieces],
+    by: job.approvedBy ?? job.principalId,
+  });
+  return {
+    recorded: 'art_outfit',
+    outfitId: rec.id,
+    outfit: rec.name,
+    folderId: rec.folderId,
+    pieces: rec.pieces.length,
+  };
 }

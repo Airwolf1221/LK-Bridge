@@ -9,6 +9,7 @@ import { ROOT } from '../discover/world.js';
 import { LIFECYCLE } from '../resources/world.js';
 import { retagWorld, type RetagWorld } from '../packs/retag-world.js';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
+import { PROPOSE_ONLY } from '../../src/automation/registry.js';
 import { PROJECT } from '../tools/helpers.js';
 
 export { PROJECT };
@@ -108,7 +109,9 @@ export const DASH_WORKING = 'autdash2';
 /** A Working page outside the Working index: re-placing it after its rename is refused by the lifecycle guard. */
 export const DASH_STRAY = 'autdash3';
 
-export async function automationWorld(o: Parameters<typeof retagWorld>[0] = {}): Promise<AutomationWorld> {
+export async function automationWorld(
+  o: Parameters<typeof retagWorld>[0] & { readonly artCodes?: boolean } = {},
+): Promise<AutomationWorld> {
   const w = await retagWorld({
     ...o,
     seed: (world) => {
@@ -133,5 +136,10 @@ export async function automationWorld(o: Parameters<typeof retagWorld>[0] = {}):
       o.seed?.(world);
     },
   });
-  return withAutomationGovernance(w);
+  const g = await withAutomationGovernance(w);
+  // v3 F7 (ADR 0070): the art layout's proposal-only codes default to Propose; these F5b worlds test the other codes,
+  // so they start with them Off (the F7 tests switch them on: test/f7/art-layout.test.ts).
+  if (o.artCodes !== true)
+    for (const e of PROPOSE_ONLY) g.stack.runtime.automation.store.setMode(PROJECT, e.code, 'off', 'owner');
+  return g;
 }

@@ -19,6 +19,7 @@ import type { Audits } from '../../audits/service.js';
 import type { SnapshotService } from '../../snapshots/service.js';
 import type { Restores } from '../../snapshots/restores.js';
 import type { AssetQueries } from '../../assets/index.js';
+import type { OutfitStore } from '../../art/store.js';
 import type { DocumentVersions } from '../../pages/versions.js';
 import type { TemplateKeys } from '../../facts/templates.js';
 import type { FactsVersions } from '../../facts/version.js';
@@ -67,7 +68,20 @@ export type ToolProjects = ProjectsRuntime & SelectableProjects & { list(): Proj
 export interface DiscoverServices {
   readonly tree: { readonly queries: TreeQueries };
   readonly registry: Pick<Registry, 'forProject'>;
-  readonly assets: { readonly queries: AssetQueries };
+  readonly assets: {
+    readonly queries: AssetQueries;
+    /** v3 F7 (ADR 0070, G11): image URLs checked against the model, with one live refresh for those it lacks. */
+    readonly checkUrls?: (
+      projectId: string,
+      urls: readonly string[],
+    ) => Promise<{ known: Set<string>; refreshed: boolean; requests: number }>;
+    /** v3 F7 (ADR 0070, G9): a folder and its subfolders read live (the model updated) before anything is decided. */
+    readonly refreshFolder?: (
+      projectId: string,
+      folderId: string,
+      o?: { depth?: number },
+    ) => Promise<{ ok: boolean; requests: number; error?: string }>;
+  };
   /**
    * v2 C1: the bridge's memory of recent page versions (src/pages/versions.ts). read_document and write_page record
    * what they read; write_page checks a section edit made from an older version against it.
@@ -110,6 +124,8 @@ export interface DiscoverServices {
   readonly splits?: SplitService;
   /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
   readonly retag?: RetagService;
+  /** v3 F7 (ADR 0070, G3): each character's outfits (placement of outfit art, the art layout audit). */
+  readonly outfits?: OutfitStore;
   /** v3 F5b (ADR 0068): which finding codes the automation runs (bridge_info only; agents cannot change a setting). */
   readonly automation?: Pick<AutomationService, 'automated'> & { store: { global(): { paused: boolean } } };
 }

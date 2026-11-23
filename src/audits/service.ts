@@ -19,6 +19,8 @@ import type { ProjectSettings } from '../projects/settings.js';
 import { auditConfigInputSchema, effectiveRules, type AuditConfig, type AuditRule } from './config.js';
 import { chronologyCheck, keepRegionsCheck, lifecycleCheck } from './checks/lifecycle.js';
 import { duplicateFoldersCheck, type AssetLibrary } from './checks/assets.js';
+import { artLayoutCheck, isArtPageName, type ArtPageText } from './checks/art-layout.js';
+import type { OutfitRecord } from '../art/store.js';
 import {
   governanceCheck,
   type GovernanceAuditInput,
@@ -81,6 +83,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'keep-regions', run: keepRegionsCheck },
   { id: 'chronology', run: chronologyCheck },
   { id: 'assets', run: duplicateFoldersCheck },
+  // v3 F7 (ADR 0070, G7): the art layout (read-only; every fix a proposal).
+  { id: 'art-layout', run: artLayoutCheck },
   // v3 F4a (ADR 0063): the governance documents against the bridge (report only).
   { id: 'governance', run: governanceCheck },
   // v3 F4b (ADR 0064): dates and identity facts restated differently on Authoritative pages (Contradictory only).
@@ -129,6 +133,8 @@ export interface AuditDeps {
   };
   /** v3 F2: the asset library from the bridge's asset tree (null when it is not built), for duplicate folders. */
   readonly assetLibrary?: (projectId: string) => AssetLibrary | null;
+  /** v3 F7 (ADR 0070, G7): a character folder's outfit record, for the art layout check. */
+  readonly outfits?: { forCharacter(projectId: string, characterFolderId: string): readonly OutfitRecord[] };
   /** v3 F3d (ADR 0053): a project's lifecycle tag rules (`Packs.lifecycleRules`); absent: the defaults. */
   readonly lifecycleTags?: (projectId: string) => LifecycleTagRules;
   /** v3 F3f (ADR 0060): the retag engine's hook for a project (null: its approved pack has no retag rules). */
@@ -330,6 +336,8 @@ export class Audits {
         propertiesName: treeSettings.propertiesName,
         tagSource: cfg.tagSource,
         ...(governance ? { keepBlocksOf: new Set(governance.roots) } : {}),
+        // v3 F7 (G7): the characters' Art pages, whose lines may name asset folders.
+        keepBlocksWhere: (p) => isArtPageName(p.name),
       });
       if (!built.ok) {
         const summary =
@@ -830,6 +838,23 @@ export class Audits {
           return null;
         }
       })(),
+      ...(this.d.outfits ? { outfitsOf: (id: string) => this.d.outfits!.forCharacter(projectId, id) } : {}),
+      artPages: (character: string): ArtPageText[] => {
+        const out: ArtPageText[] = [];
+        if (!model.blocks) return out;
+        for (const p of model.pages.values()) {
+          if (
+            !isArtPageName(p.rawName) ||
+            !p.displayName.toLowerCase().startsWith(`${character.toLowerCase()} - `)
+          )
+            continue;
+          for (const doc of p.documents) {
+            const blocks = model.blocks.get(doc.id);
+            if (blocks) out.push({ pageId: p.id, documentId: doc.id, blocks });
+          }
+        }
+        return out;
+      },
       tombstone: (id) => {
         try {
           return this.d.tree.queries.tombstone(projectId, id);

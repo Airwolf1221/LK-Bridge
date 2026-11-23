@@ -272,7 +272,7 @@ function CodeRow({ code: c, now, onChanged }: { code: AutomationCode; now: numbe
           Setting for {c.name}
         </label>
         <select id={id} value={mode} onChange={(e) => setMode(e.target.value as AutomationMode)}>
-          {(['off', 'propose', 'apply'] as const).map((m) => (
+          {(c.modes ?? (['off', 'propose', 'apply'] as const)).map((m) => (
             <option key={m} value={m}>
               {MODE_LABEL[m]}
             </option>

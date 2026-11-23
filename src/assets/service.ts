@@ -1134,6 +1134,142 @@ export class AssetService {
     }
   }
 
+  // ============================================================================================ v3 F7: live reads
+
+  /**
+   * v3 F7 (ADR 0070, G9): a folder and its subfolders (to `depth` levels; default 3) read LIVE, at the caller's priority
+   * (P1 by default: an agent's own request), before anything is decided from them. Every item listed is applied; an item
+   * the model holds under a listed folder that the listing no longer shows is confirmed with a getAsset (a 404 removes
+   * it; an answer is applied where it now is). A folder whose listing answers 404 is confirmed the same way. Returns the
+   * requests made, and `ok: false` with the error when a read failed (the model is then left as it was for that folder).
+   */
+  async refreshFolder(
+    projectId: string,
+    folderId: string,
+    o: { depth?: number; priority?: PriorityClass; jobId?: string } = {},
+  ): Promise<{ ok: boolean; requests: number; error?: string }> {
+    const ro: ReadOptions = {
+      priority: o.priority ?? 'P1',
+      waitForBudget: false,
+      waitForProject: false,
+      ...(o.jobId !== undefined ? { jobId: o.jobId } : {}),
+    };
+    const ctx = this.ctx(projectId, 'refresh');
+    let requests = 0;
+    const queue: { id: string; depth: number }[] = [{ id: folderId, depth: 0 }];
+    const maxDepth = o.depth ?? 3;
+    try {
+      while (queue.length > 0) {
+        const { id, depth } = queue.shift()!;
+        const seen: AssetObservation[] = [];
+        let cursor: string | null = null;
+        let gone = false;
+        for (;;) {
+          const r = await this.read(
+            projectId,
+            'listAssets',
+            { query: { limit: this.pageSize, folderId: id, ...(cursor ? { cursor } : {}) } },
+            ro,
+          );
+          requests++;
+          if (r.gone) {
+            gone = true;
+            break;
+          }
+          const page = (r.value ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+          const items = (Array.isArray(page.data) ? page.data : [])
+            .map(observationFromAsset)
+            .filter((x): x is AssetObservation => x !== null)
+            .map((x) => ({ ...x, folderId: id }));
+          seen.push(...items);
+          await this.serial(projectId, () => {
+            for (const it of items) this.store.applyObservation(ctx, it, r.t);
+          });
+          if (page.hasMore === true && typeof page.nextCursor === 'string' && page.nextCursor !== '')
+            cursor = page.nextCursor;
+          else break;
+        }
+        const listed = new Set(seen.map((x) => x.id));
+        const held = this.store.children(projectId, id);
+        const missing = gone
+          ? [id]
+          : [...held.folders.map((f) => f.id), ...held.items.map((i) => i.id)].filter((x) => !listed.has(x));
+        for (const m of missing) {
+          const r = await this.read(projectId, 'getAsset', { path: { assetId: m } }, ro);
+          requests++;
+          await this.serial(projectId, () => {
+            if (r.gone) {
+              this.store.applyGone(ctx, m, r.t, 'not found when read live');
+              return;
+            }
+            const obs = observationFromAsset(r.value);
+            if (obs && (obs.folderId === null || this.store.folder(projectId, obs.folderId)))
+              this.store.applyObservation(ctx, obs, r.t);
+          });
+        }
+        if (gone) continue;
+        if (depth + 1 < maxDepth)
+          for (const f of seen) if (f.type === FOLDER_TYPE) queue.push({ id: f.id, depth: depth + 1 });
+      }
+      return { ok: true, requests };
+    } catch (e) {
+      return { ok: false, requests, error: errorText(e) };
+    }
+  }
+
+  /**
+   * v3 F7 (ADR 0070, G11): image URLs checked against the model, with ONE live refresh for those it does not hold: the
+   * re-reads owed after the bridge's own writes are made now, then each missing URL's asset is read by the id its file
+   * name gives (`<projectId>_<uuid>.webp` or the older `<uuid>.webp`: the uuid, and the whole name) and kept only when
+   * LegendKeeper answers with exactly that `url`. Returns the URLs that are assets of this project.
+   */
+  async checkUrls(
+    projectId: string,
+    urls: readonly string[],
+    o: { priority?: PriorityClass } = {},
+  ): Promise<{ known: Set<string>; refreshed: boolean; requests: number }> {
+    const known = new Set<string>();
+    const misses: string[] = [];
+    for (const u of new Set(urls)) {
+      if (this.queries.assetByUrl(projectId, u).data) known.add(u);
+      else misses.push(u);
+    }
+    if (misses.length === 0) return { known, refreshed: false, requests: 0 };
+    const ro: ReadOptions = { priority: o.priority ?? 'P1', waitForBudget: false, waitForProject: false };
+    const ctx = this.ctx(projectId, 'refresh');
+    let requests = 0;
+    try {
+      await this.processPending();
+    } catch {
+      // owed re-reads are retried by their own loop; the reads below still run
+    }
+    for (const u of misses) {
+      if (this.queries.assetByUrl(projectId, u).data) {
+        known.add(u);
+        continue;
+      }
+      for (const id of assetIdsFromUrl(u)) {
+        let r: ReadResult;
+        try {
+          r = await this.read(projectId, 'getAsset', { path: { assetId: id } }, ro);
+        } catch {
+          break;
+        }
+        requests++;
+        if (r.gone) continue;
+        const obs = observationFromAsset(r.value);
+        if (!obs || obs.url !== u) continue;
+        await this.serial(projectId, () => {
+          if (obs.folderId === null || this.store.folder(projectId, obs.folderId))
+            this.store.applyObservation(ctx, obs, r.t);
+        });
+        known.add(u);
+        break;
+      }
+    }
+    return { known, refreshed: true, requests };
+  }
+
   // ============================================================================================ retries
 
   /**
@@ -1303,6 +1439,28 @@ export class AssetService {
       }
     }
   }
+}
+
+/**
+ * v3 F7 (G11): the asset ids an image URL may name: its file name without the extension, and the part after the project
+ * prefix (`<projectId>_<uuid>.webp`); none for a URL off LegendKeeper's asset hosts' pattern.
+ */
+export function assetIdsFromUrl(url: string): string[] {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return [];
+  }
+  if (u.protocol !== 'https:') return [];
+  const file = decodeURIComponent(u.pathname.split('/').pop() ?? '');
+  const stem = file.replace(/\.[A-Za-z0-9]{2,5}$/, '');
+  if (!stem || !/^[A-Za-z0-9_-]{1,200}$/.test(stem)) return [];
+  const out = new Set<string>();
+  const us = stem.lastIndexOf('_');
+  if (us > 0 && us < stem.length - 1) out.add(stem.slice(us + 1));
+  out.add(stem);
+  return [...out];
 }
 
 function newPassId(kind: AssetPassKind): string {

@@ -448,6 +448,20 @@ fixes read back live; A6 both codes switched Off (each paragraph amended). Clean
 everything under it, in the check's `finally` and the test file's `afterAll`. Needs the seed `arkona-2026-11-23-f5b`
 deployed (A0 says so otherwise). On the mock: `test/sandbox-mock/automation-f5b.test.ts`.
 
+## Guided character art (v3 F7)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7-art` (`f7-art.ts`; ADR 0070). WRITES,
+then cleans up (about 20 writes and 40 reads). B0 the asset tree built; B1 one outfit piece uploaded into a throwaway
+character folder's Wardrobe (`lk-bridge f7 check <time> / F7 Probe / Wardrobe`), read live: loose in Wardrobe, and the
+bridge's placement for a second piece is "a new folder, the loose piece moved"; B2 the second piece uploaded into
+`Wardrobe / Probe Outfit` (the folder made by its job) and the first piece moved in (`updateAsset`, as the art job does),
+read back live: both in the folder, nothing loose, and the bridge's asset tree followed the move; B3 the titled-block
+probe for the verifier (G10): one block of each titled kind written without `title` and `isTitleHidden` on a throwaway
+page, and what LegendKeeper stored printed as NOTED, one line a kind: `F7 PROBE <kind>: title=… isTitleHidden=…`. Paste
+the values into `TITLED_BLOCK_DEFAULTS` (src/jobs/verify-blocks.ts); a kind refused in its minimal form says so.
+Clean-up: the throwaway asset folder (with everything in it) and the probe page, in the check's `finally` and the test
+file's `afterAll`. On the mock: `test/sandbox-mock/f7-art.test.ts`.
+
 ## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
 
 Each check's steps are an exported runner beside its thin `.test.ts` wrapper (the wrapper is the real run, unchanged in
@@ -471,6 +485,7 @@ always skips it and the run asserts its reason (the smoke's (c)).
 | maps                           | `test/maps/sandbox-dryrun.test.ts`                          |
 | snapshots                      | `test/snapshots/sandbox-dryrun.test.ts`                     |
 | split-ids, assign-block-ids    | `test/sandbox-mock/split-ids.test.ts`, `…assign-block-ids…` |
+| f7-art                         | `test/sandbox-mock/f7-art.test.ts`                          |
 
 The mock answers as LegendKeeper does only with its **faithful** setting on (`test/sandbox-mock/faithful.ts`, which
 these runs turn on and nothing else does): each behaviour there names the owner's run or the part of the spec it comes

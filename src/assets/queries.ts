@@ -55,6 +55,16 @@ export class AssetQueries {
     });
   }
 
+  /** v3 F7 (G11): the image asset whose file URL is exactly `url`, or null. */
+  assetByUrl(projectId: string, url: string): AssetAnswer<AssetItem | null> {
+    return this.answer(projectId, () => {
+      const r = this.db
+        .prepare('SELECT * FROM asset_items WHERE project_id = ? AND url = ? LIMIT 1')
+        .get(projectId, url) as ItemRow | undefined;
+      return r ? AssetStore.itemView(r) : null;
+    });
+  }
+
   /** A folder's ancestors and itself, top first (empty for an unknown folder). */
   path(projectId: string, id: string): AssetAnswer<AssetFolder[]> {
     return this.answer(projectId, () => {

@@ -437,7 +437,10 @@ describe('verify (the read after the write)', () => {
     expect(r.body.warning).toMatch(/^written but not as planned: .*1 difference.*journal entry \d+/);
     expect(r.body.verification).toMatchObject({ status: 'mismatch', differenceCount: 1 });
     expect(r.body.verification.differences[0]).toMatchObject({ expected: 'As planned.', actual: 'Mangled.' });
-    expect(r.body.verification.ignored).toHaveLength(5);
+    expect(r.body.verification.ignored).toHaveLength(6);
+    // v3 F7 (G10): the difference lies in what the write changed, so the warning says so (no other writer seen).
+    expect(r.body.warning).toMatch(/LegendKeeper may have changed it on save/);
+    expect(r.body.verification.cause).toBe('stored_differently');
     // On the job, and in the errors table (the dashboard's Errors page).
     const job = w.stack.runtime.engine.queries.getJob('proj_mock', r.body.jobId)!;
     expect(job.status).toBe('succeeded');

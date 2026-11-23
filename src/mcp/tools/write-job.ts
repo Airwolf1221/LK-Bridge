@@ -167,6 +167,42 @@ export function lmrSaid(view: JobView): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
+/**
+ * v3 F7 (ADR 0070, G10): a job's "not as planned" warning in words that fit the evidence: "something else may have
+ * edited" only when a page write's read-back shows another writer (`cause: concurrent_edit`); otherwise what differs,
+ * and that LegendKeeper may have changed it on save.
+ */
+export function jobMismatchWarning(ver: unknown, jobId: string): string {
+  const txt = (v: unknown): string => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+  const list = (Array.isArray(ver) ? ver : [ver]).filter(
+    (v): v is Record<string, unknown> => typeof v === 'object' && v !== null,
+  );
+  const tail =
+    'Nothing was retried. The journal holds what each write changed ' +
+    `(bridge_journal_lookup with jobId ${jobId}). Read the pages and check them.`;
+  const mismatched = list.filter((v) => v.status === 'mismatch');
+  if (mismatched.some((v) => v.cause === 'concurrent_edit'))
+    return `written but not as planned: what was read back after the writes differs from the plan; something else may have edited at the same moment. ${tail}`;
+  const firstOf = (v: Record<string, unknown>): Record<string, unknown> | undefined => {
+    const d = Array.isArray(v.differences)
+      ? (v.differences[0] as Record<string, unknown> | undefined)
+      : undefined;
+    if (d) return d;
+    for (const t of Array.isArray(v.targets) ? (v.targets as Record<string, unknown>[]) : []) {
+      const x = Array.isArray(t.differences)
+        ? (t.differences[0] as Record<string, unknown> | undefined)
+        : undefined;
+      if (x) return { ...x, path: `${txt(t.label)} ${txt(x.path)}`.trim() };
+    }
+    return undefined;
+  };
+  const first = mismatched.map(firstOf).find((d) => d !== undefined);
+  const what = first
+    ? ` (${txt(first.path)}: planned ${JSON.stringify(first.expected)}, stored ${JSON.stringify(first.actual)})`
+    : '';
+  return `written but not as planned: what was read back after the writes differs from the plan in what the job wrote${what}; LegendKeeper may have changed it on save. ${tail}`;
+}
+
 /** The answer for a job as it stands now (also used to answer an `operation_id` repeat). */
 export function describeJob(
   pd: ProjectDeps,
@@ -189,10 +225,7 @@ export function describeJob(
       ...(factsVersions(ver) ?? {}),
       ...(verified === false
         ? {
-            warning:
-              'written but not as planned: what was read back after the writes differs from the plan; something else ' +
-              'probably edited at the same moment. Nothing was retried. The journal holds what each write changed ' +
-              `(bridge_journal_lookup with jobId ${view.id}). Read the pages and check them.`,
+            warning: jobMismatchWarning(ver, view.id),
             verification: ver,
           }
         : verified === null
