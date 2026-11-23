@@ -435,3 +435,26 @@ test('v3 F5b: the Overview shows what automation did overnight, linking to Revie
   await expect(page).toHaveURL(/\/ui\/proposals/);
   expect(problems).toEqual([]);
 });
+
+// ============================================================================================ v3 F5c (ADR 0069)
+
+test('v3 F5c: the Workstreams page lists a workstream and opens its report', async ({ page, request }) => {
+  const problems = watch(page);
+  await request.get(`${CONTROL}/workstream-fixture`);
+  await signIn(page, '/ui');
+  await goTo(page, 'Workstreams', true);
+  await expect(page.getByRole('heading', { name: 'Workstreams', level: 1 })).toBeVisible();
+  const row = page.locator('tr[data-workstream="E2E stream"]');
+  await expect(row.getByRole('rowheader')).toHaveText('E2E stream');
+  await expect(row).toContainText('1 page written');
+  // By keyboard: the labelled Report button.
+  await row.getByRole('button', { name: 'Report of E2E stream' }).focus();
+  await page.keyboard.press('Enter');
+  const report = page.getByRole('region', { name: 'Report: E2E stream' });
+  await expect(report).toBeVisible();
+  await expect(report.getByRole('heading', { name: /Written and verified \(1 pages?\)/ })).toBeVisible();
+  await expect(report).toContainText('nothing was read from LegendKeeper');
+  await report.getByRole('button', { name: 'Close the report' }).click();
+  await expect(report).toHaveCount(0);
+  expect(problems).toEqual([]);
+});

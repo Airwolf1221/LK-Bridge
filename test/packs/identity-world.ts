@@ -41,7 +41,8 @@ export const M = {
 
 /** The bulk characters' ids (`mkbulk01` …). */
 export const BULK = Array.from({ length: 12 }, (_, i) => `mkbulk${String(i + 1).padStart(2, '0')}`);
-export const bulkName = (i: number) => `Sefet Ombra ${['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][i]}`;
+export const bulkName = (i: number) =>
+  `Sefet Ombra ${['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'][i]}`;
 
 const CANON_ROWS: [string, string][] = [
   ['Status', 'Authoritative'],
@@ -136,14 +137,21 @@ export async function identityWorld(): Promise<IdentityWorld> {
         'Compact Character Reference',
         identity('Human', 'Menkheti'),
       );
-      page(M.auChar, '[BSRC] Mehrana Sefet - Character Core', M.desk, ['AU', 'Character', 'Human', 'Menkheti'], 'Character Core', [
-        ['Status', 'Authoritative'],
-        ['Continuity Type', 'AU'],
-        ['Continuity', 'Shattered Crown'],
-        ['Inheritance', 'None'],
-        ['Race / Species', 'Human'],
-        ['Naming Culture', 'Menkheti'],
-      ]);
+      page(
+        M.auChar,
+        '[BSRC] Mehrana Sefet - Character Core',
+        M.desk,
+        ['AU', 'Character', 'Human', 'Menkheti'],
+        'Character Core',
+        [
+          ['Status', 'Authoritative'],
+          ['Continuity Type', 'AU'],
+          ['Continuity', 'Shattered Crown'],
+          ['Inheritance', 'None'],
+          ['Race / Species', 'Human'],
+          ['Naming Culture', 'Menkheti'],
+        ],
+      );
       BULK.forEach((id, i) =>
         page(
           id,
@@ -186,7 +194,10 @@ export async function identityWorld(): Promise<IdentityWorld> {
 }
 
 /** A mock page's tags and PROPERTIES rows now. */
-export function pageNow(w: IdentityWorld, id: string): { tags: string[]; rows: Record<string, string>; name: string } {
+export function pageNow(
+  w: IdentityWorld,
+  id: string,
+): { tags: string[]; rows: Record<string, string>; name: string } {
   const r = w.repo.live(id)!;
   const p = r.props.find((x) => x.kind === 'keyValue' && x.title === 'PROPERTIES')!;
   return { tags: [...r.tags], rows: Object.fromEntries(p.rows.map((x) => [x.key, x.text])), name: r.name };

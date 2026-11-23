@@ -28,6 +28,9 @@ const parse = (s: unknown): unknown => {
     return null;
   }
 };
+/** A value as text for a line of "still to do" (an object or an array is never stringified). */
+const t = (v: unknown, fallback = '?'): string =>
+  typeof v === 'string' ? v : typeof v === 'number' || typeof v === 'boolean' ? String(v) : fallback;
 const iso = (t: number | null | undefined) => (typeof t === 'number' ? new Date(t).toISOString() : null);
 
 /** What a report covers (at least one; together they narrow). */
@@ -149,7 +152,13 @@ export class WorkstreamReports {
            SUM(CASE WHEN outcome IN ('unknown') THEN 1 ELSE 0 END) AS unknown
          FROM write_journal WHERE workstream IS NOT NULL ${where} GROUP BY project_id, workstream`,
       )
-      .all(...args) as { project_id: string; workstream: string; n: number; pages: number; unknown: number }[];
+      .all(...args) as {
+      project_id: string;
+      workstream: string;
+      n: number;
+      pages: number;
+      unknown: number;
+    }[];
     const by = new Map<string, Obj>();
     const key = (p: string, w: string) => `${p}\u0001${w}`;
     const get = (p: string, w: string) => {
@@ -204,7 +213,7 @@ export class WorkstreamReports {
           lastAt: x.last,
         };
       })
-      .sort((a, b) => (b.lastAt as number) - (a.lastAt as number))
+      .sort((a, b) => b.lastAt - a.lastAt)
       .slice(0, limit)
       .map(({ lastAt: _l, ...rest }) => rest);
   }
@@ -357,13 +366,29 @@ export class WorkstreamReports {
         by: who(j.principal_id, j.approved_by),
       });
     }
-    const verificationOf = (jobId: string): { verified: boolean | null; detail: unknown } => {
+    // A job's read-back as it concerns one page: the verify steps whose targets name it (all of them when it has none).
+    const verificationOf = (
+      jobId: string,
+      pageName: string | null,
+    ): { verified: boolean | null; detail: unknown } => {
       const j = jobById.get(jobId);
       const r = parse(j?.result) as Obj | null;
       if (!r) return { verified: null, detail: null };
       const v = r.verification;
-      const list = Array.isArray(v) ? v : v ? [v] : [];
-      const brief = list.filter(isObj).map((x) => ({
+      const all = (Array.isArray(v) ? v : v ? [v] : []).filter(isObj);
+      const names = (x: Obj) =>
+        Array.isArray(x.targets) &&
+        (x.targets as Obj[]).some(
+          (t) => typeof t.label === 'string' && pageName !== null && t.label.includes(pageName),
+        );
+      const mine = pageName !== null && all.some(names) ? all.filter(names) : all;
+      const verified =
+        mine.length === 0
+          ? typeof r.verified === 'boolean'
+            ? r.verified
+            : null
+          : mine.every((x) => x.status === 'verified');
+      const brief = mine.map((x) => ({
         stepNo: x.stepNo ?? null,
         status: x.status ?? null,
         ...(Array.isArray(x.targets)
@@ -376,13 +401,14 @@ export class WorkstreamReports {
             }
           : {}),
       }));
-      return { verified: typeof r.verified === 'boolean' ? r.verified : null, detail: brief };
+      return { verified, detail: brief };
     };
     const written: Obj[] = [];
     const mismatches: Obj[] = [];
     for (const p of pages.values()) {
       const jobsOf = [...p.jobs].filter((x) => x !== '');
-      const ver = jobsOf.map((id) => ({ jobId: id, ...verificationOf(id) }));
+      const pageName = isObj(p.page) && typeof p.page.name === 'string' ? p.page.name : null;
+      const ver = jobsOf.map((id) => ({ jobId: id, ...verificationOf(id, pageName) }));
       const verified = ver.length > 0 && ver.every((v) => v.verified === true);
       const entry = {
         page: p.page,
@@ -394,7 +420,12 @@ export class WorkstreamReports {
       written.push(entry);
       for (const v of ver)
         if (v.verified === false)
-          mismatches.push({ page: p.page, jobId: v.jobId, verification: v.detail, why: 'written but not as planned' });
+          mismatches.push({
+            page: p.page,
+            jobId: v.jobId,
+            verification: v.detail,
+            why: 'written but not as planned',
+          });
     }
 
     // ---- accepted but not yet run
@@ -402,10 +433,22 @@ export class WorkstreamReports {
     const notRun: Obj[] = [
       ...jobs
         .filter((j) => OPEN.has(j.status))
-        .map((j) => ({ kind: 'job', jobId: j.id, title: j.title, status: j.status, by: who(j.principal_id, j.approved_by) })),
+        .map((j) => ({
+          kind: 'job',
+          jobId: j.id,
+          title: j.title,
+          status: j.status,
+          by: who(j.principal_id, j.approved_by),
+        })),
       ...proposals
         .filter((p) => p.state === 'approved' || p.state === 'executing')
-        .map((p) => ({ kind: 'proposal', proposalId: p.id, title: p.title, state: p.state, jobId: p.job_id })),
+        .map((p) => ({
+          kind: 'proposal',
+          proposalId: p.id,
+          title: p.title,
+          state: p.state,
+          jobId: p.job_id,
+        })),
     ];
 
     // ---- awaiting the author's judgement
@@ -535,8 +578,13 @@ export class WorkstreamReports {
       idConds.push(`job_id IN (${jobIds.map(() => '?').join(',')})`);
       idArgs.push(...jobIds);
     }
-    let identityRows: { id: string; job_id: string | null; proposal_id: string | null; plan: string; outcome: string | null }[] =
-      [];
+    let identityRows: {
+      id: string;
+      job_id: string | null;
+      proposal_id: string | null;
+      plan: string;
+      outcome: string | null;
+    }[] = [];
     try {
       identityRows = db
         .prepare(
@@ -648,17 +696,18 @@ export class WorkstreamReports {
 
     // ---- still to do (only from the groups above)
     const todo: string[] = [];
+    const nameOfObj = (v: unknown) => (isObj(v) ? t(v.name, t(v.id)) : '?');
     for (const a of awaiting)
       todo.push(
         a.kind === 'proposal'
-          ? `${a.state === 'conflicted' ? 'Conflicted' : 'Pending'} proposal ${String(a.proposalId)} waits for the owner: ${String(a.title)}`
-          : `Tags of ${String(a.character ?? (a.page as Obj | undefined)?.name ?? 'a page')} held: ${String(a.why)}`,
+          ? `${a.state === 'conflicted' ? 'Conflicted' : 'Pending'} proposal ${t(a.proposalId)} waits for the owner: ${t(a.title)}`
+          : `Tags of ${t(a.character, nameOfObj(a.page))} held: ${t(a.why)}`,
       );
     for (const n of notRun)
       todo.push(
         n.kind === 'job'
-          ? `Job ${String(n.jobId)} is ${String(n.status)}: ${String(n.title)}`
-          : `Approved proposal ${String(n.proposalId)} is ${String(n.state)}`,
+          ? `Job ${t(n.jobId)} is ${t(n.status)}: ${t(n.title)}`
+          : `Approved proposal ${t(n.proposalId)} is ${t(n.state)}`,
       );
     for (const u of unknownWrites)
       if (!(u.reconciliation && u.reconciliation.state === 'settled'))
@@ -666,18 +715,17 @@ export class WorkstreamReports {
           `Write ${u.journalId} (${u.op} on ${u.page.name ?? u.page.id ?? '?'}) has an unknown outcome: read the page before anything else`,
         );
     for (const m of mismatches)
-      todo.push(`Job ${String(m.jobId)} wrote ${String((m.page as Obj).name ?? (m.page as Obj).id)} but its read-back differs`);
+      todo.push(`Job ${t(m.jobId)} wrote ${nameOfObj(m.page)} but its read-back differs`);
     for (const f of failed)
-      todo.push(`Job ${f.jobId} ${f.status}${'code' in f && f.code ? ` (${String(f.code)})` : ''}: ${f.title}`);
+      todo.push(`Job ${f.jobId} ${f.status}${'code' in f && f.code ? ` (${t(f.code)})` : ''}: ${f.title}`);
     for (const e of excluded)
       if (e.kind === 'skipped' || e.kind === 'refused')
         todo.push(
-          `${e.kind === 'skipped' ? 'Skipped' : 'Refused'}: ${String(e.character ?? e.item ?? e.jobId)}: ${String(e.why)}`,
+          `${e.kind === 'skipped' ? 'Skipped' : 'Refused'}: ${t(e.character, t(e.item, t(e.tool, t(e.jobId))))}: ${t(e.why)}`,
         );
-    for (const f of findings)
-      todo.push(`Open ${String(f.severity)} finding ${String(f.code)} on ${String((f.page as Obj).name ?? (f.page as Obj).id)}`);
+    for (const f of findings) todo.push(`Open ${t(f.severity)} finding ${t(f.code)} on ${nameOfObj(f.page)}`);
     for (const f of followUps.slice(0, 50))
-      todo.push(`Consistency on ${String(f.character ?? '?')}: ${String(f.message ?? f.code ?? 'a disagreement')}`);
+      todo.push(`Consistency on ${t(f.character)}: ${t(f.message, t(f.code, 'a disagreement'))}`);
 
     const verifiedPages = written.filter((w) => w.verified === true).length;
     return {

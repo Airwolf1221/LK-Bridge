@@ -420,7 +420,9 @@ export class JobsRepo {
           json(job.options),
           at,
           at,
-          typeof job.origin.workstream === 'string' && job.origin.workstream !== '' ? job.origin.workstream : null,
+          typeof job.origin.workstream === 'string' && job.origin.workstream !== ''
+            ? job.origin.workstream
+            : null,
         );
       job.steps.forEach((s, i) => this.insertStepRow(job.id, job.projectId, i + 1, s, at));
     })();

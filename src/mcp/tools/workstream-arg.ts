@@ -46,8 +46,8 @@ export function frameFor(
 /** The result with `workstream` added to its JSON body (the first line), when it has one. */
 export function echoWorkstream(result: McpToolResult, frame: WorkstreamFrame): McpToolResult {
   if (frame.label === null) return result;
-  const content = result.content;
-  if (!Array.isArray(content) || content.length === 0) return result;
+  const content: readonly McpToolResult['content'][number][] = result.content;
+  if (content.length === 0) return result;
   const first = content[0] as { type?: unknown; text?: unknown };
   if (first.type !== 'text' || typeof first.text !== 'string') return result;
   const nl = first.text.indexOf('\n');
@@ -66,7 +66,7 @@ export function echoWorkstream(result: McpToolResult, frame: WorkstreamFrame): M
   if ('workstream' in b) {
     if (b.workstream !== frame.label || frame.source !== 'default' || 'workstreamSource' in b) return result;
     const text = JSON.stringify({ ...b, workstreamSource: 'default (bridge_workstream)' });
-    return { ...result, content: [{ ...first, text: `${text}${tail}` }, ...content.slice(1)] as McpToolResult['content'] };
+    return { ...result, content: [{ type: 'text', text: `${text}${tail}` }, ...content.slice(1)] };
   }
   const { project, ...rest } = b;
   const next = {
@@ -77,7 +77,7 @@ export function echoWorkstream(result: McpToolResult, frame: WorkstreamFrame): M
   };
   return {
     ...result,
-    content: [{ ...first, text: `${JSON.stringify(next)}${tail}` }, ...content.slice(1)] as McpToolResult['content'],
+    content: [{ type: 'text', text: `${JSON.stringify(next)}${tail}` }, ...content.slice(1)],
   };
 }
 
@@ -87,7 +87,7 @@ export function withWorkstreamArg(
   defaults: () => WorkstreamDefaults | undefined,
 ): McpToolProvider {
   if (tool.retired || toolAccess(tool) !== 'write') return tool;
-  const schema = tool.inputSchema as unknown as z.ZodObject;
+  const schema: unknown = tool.inputSchema;
   if (!(schema instanceof z.ZodObject) || 'workstream' in schema.shape) return tool;
   const inputSchema = schema.extend({ workstream: workstreamArg });
   return {
@@ -99,5 +99,5 @@ export function withWorkstreamArg(
       const result = await withWorkstream(frame, () => tool.handler(rest as never, mctx));
       return echoWorkstream(result, frame);
     },
-  } as McpToolProvider;
+  };
 }

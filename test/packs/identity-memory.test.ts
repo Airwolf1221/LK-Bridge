@@ -36,7 +36,12 @@ describe('memory', () => {
         { character: 'Daryan Sefet', facts: { 'Life State': life } },
         { character: 'Khepri Nadu', facts: { 'Life State': life } },
       ];
-      const dry = await w.call('arkona_identity_reconcile', { project: 'test', items, dryRun: true, workstream: 'mem' });
+      const dry = await w.call('arkona_identity_reconcile', {
+        project: 'test',
+        items,
+        dryRun: true,
+        workstream: 'mem',
+      });
       expect(dry.isError, dry.text).toBe(false);
       const run = await w.call('arkona_identity_reconcile', { project: 'test', items, workstream: 'mem' });
       expect(run.isError, run.text).toBe(false);
@@ -54,7 +59,9 @@ describe('memory', () => {
     const base = await heapMb();
     for (let i = 2; i < 10; i++) await round(i);
     const after = await heapMb();
-    console.info(`[F5c] reconciles, queries, reports: heap ${base.toFixed(1)} MB after 2 rounds, ${after.toFixed(1)} MB after 10`);
+    console.info(
+      `[F5c] reconciles, queries, reports: heap ${base.toFixed(1)} MB after 2 rounds, ${after.toFixed(1)} MB after 10`,
+    );
     expect(after - base).toBeLessThan(8);
   });
 });

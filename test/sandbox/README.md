@@ -448,6 +448,18 @@ fixes read back live; A6 both codes switched Off (each paragraph amended). Clean
 everything under it, in the check's `finally` and the test file's `afterAll`. Needs the seed `arkona-2026-11-23-f5b`
 deployed (A0 says so otherwise). On the mock: `test/sandbox-mock/automation-f5b.test.ts`.
 
+## Identity reconcile, query_facts and workstreams (v3 F5c)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- identity-f5c` (`identity-f5c.ts`;
+ADR 0069). WRITES, then cleans up (about 16 writes and 40 reads). In the check's TEMPORARY database only, the Arkona pack's
+governance sources are pointed at a throwaway governance page the check makes (the tagging policy check reads them), and
+the pack is approved there. I1 that page and the approval; I2 two throwaway characters made with the raw client (Human;
+Menkheti and Canthan), found by the tree's sweep; I3 `arkona_identity_reconcile`'s dry run (both planned with their tag
+arrays; nothing written, read back live); I4 the run under a workstream label (both done and verified); I5 both read back
+live (facts and tags); I6 `query_facts` over them (free); I7 `bridge_workstream_report` (both written and verified,
+nothing waiting). Clean-up: the throwaway index deleted with everything under it, in the check's `finally` and the test
+file's `afterAll`. Needs F5c deployed (I0 says so otherwise). On the mock: `test/sandbox-mock/identity-f5c.test.ts`.
+
 ## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
 
 Each check's steps are an exported runner beside its thin `.test.ts` wrapper (the wrapper is the real run, unchanged in

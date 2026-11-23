@@ -36,9 +36,9 @@ export function WorkstreamsPage() {
       <PageHeader title="Workstreams" project={selected} />
       <p className="muted">
         A workstream groups the writes and proposals of one maintenance objective, as the agent labelled them.
-        Its report lists what was written and verified, what is accepted but not yet run, what was deliberately
-        left out, what waits for your judgement and what still looks inconsistent. Nothing here reads
-        LegendKeeper.
+        Its report lists what was written and verified, what is accepted but not yet run, what was
+        deliberately left out, what waits for your judgement and what still looks inconsistent. Nothing here
+        reads LegendKeeper.
       </p>
       <section className="card" aria-labelledby="ws-h">
         <h2 id="ws-h">Workstreams</h2>
@@ -59,7 +59,13 @@ export function WorkstreamsPage() {
               </thead>
               <tbody>
                 {rows.map((w) => (
-                  <Row key={w.workstream} w={w} now={now} busy={busy} onShow={() => void show(w.workstream)} />
+                  <Row
+                    key={w.workstream}
+                    w={w}
+                    now={now}
+                    busy={busy}
+                    onShow={() => void show(w.workstream)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -168,16 +174,17 @@ function ReportView(props: { label: string; report: WorkstreamReport; onClose: (
 
 function Lines(props: { items: readonly Record<string, unknown>[] }) {
   if (props.items.length === 0) return <p className="muted">None.</p>;
+  const t = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
   return (
     <ul>
       {props.items.map((x, i) => (
         <li key={i}>
-          {String(x.kind ?? '')}
-          {x.title ? `: ${String(x.title)}` : ''}
-          {x.character ? `: ${String(x.character)}` : ''}
-          {x.label ? `: ${String(x.label)}` : ''}
-          {x.why ? ` (${String(x.why)})` : ''}
-          {x.state ? ` [${String(x.state)}]` : x.status ? ` [${String(x.status)}]` : ''}
+          {t(x.kind)}
+          {t(x.title) && `: ${t(x.title)}`}
+          {t(x.character) && `: ${t(x.character)}`}
+          {t(x.label) && `: ${t(x.label)}`}
+          {t(x.why) && ` (${t(x.why)})`}
+          {t(x.state) ? ` [${t(x.state)}]` : t(x.status) ? ` [${t(x.status)}]` : ''}
         </li>
       ))}
     </ul>

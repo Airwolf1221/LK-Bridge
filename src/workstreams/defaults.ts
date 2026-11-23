@@ -65,7 +65,8 @@ export class WorkstreamDefaults {
 
   /** Removes every lapsed default (housekeeping; `get` also does it one at a time). */
   prune(): number {
-    return this.db.prepare('DELETE FROM workstream_defaults WHERE last_used_at <= ?').run(this.now() - this.ttlMs)
-      .changes;
+    return this.db
+      .prepare('DELETE FROM workstream_defaults WHERE last_used_at <= ?')
+      .run(this.now() - this.ttlMs).changes;
   }
 }

@@ -72,7 +72,9 @@ tools, about 46,790 tokens**, in a `propose` or `write` profile (`arkona_split_o
 `arkona_split_appraisal`, a read tool, about 790; 75 with the low-level tools on), and **31, about 12,460**, in a `read`
 profile (34 with the low-level tools on). **Since v3 F3f** it lists fifteen ([below](#setting-packs-retagging-v3-f3f)):
 **72 tools** in a `propose` or `write` profile (`arkona_retag_apply` a write tool; 77 with the low-level tools on), and
-**32** in a `read` profile (`arkona_retag_audit` a read tool). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
+**32** in a `read` profile (`arkona_retag_audit` a read tool). **Since v3 F5c** ([below](#orchestration-v3-f5c)) every
+profile gains `bridge_workstream`, `bridge_workstream_report` and `query_facts` (read tools), and a `propose` or `write`
+profile `arkona_identity_reconcile` (a write tool, listed with the pack); every write tool takes `workstream`. The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -162,6 +164,9 @@ budget (arkona): writes 0/120·min …
 | `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_result_page`        | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_proposal_status`    | read   | true / false / true / false                                     | none (without `proposalId` it lists yours)                                                                 |
+| `bridge_workstream`         | read   | true / false / true / false                                     | none (the connection's default workstream label, held on the bridge)                                       |
+| `bridge_workstream_report`  | read   | true / false / true / false                                     | none (the bridge's own records); see [F5c](#orchestration-v3-f5c)                                          |
+| `query_facts`               | read   | true / false / true / false                                     | none (the tree's stored sidebars); `live: true` 1 read per row; see [F5c](#orchestration-v3-f5c)           |
 | `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                                                                                      |
 
 `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*` are **low-level tools**, and since v2 E3b (the owner's answers to P4 and P5, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md)) so are two **rarely used** ones, `lk_upload_image` (which `upload_image` replaces) and `create_bare_resource` (a page with no template; `create_resource` covers every templated page): they are left out of the tool list of a profile whose **show low-level and rarely used tools** setting is off (the default; [below](#visibility-of-the-low-level-tools)). They still work when called by name, under the same policy.
@@ -214,7 +219,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (181 tools in all with the Arkona pack's twenty-nine tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, v3 F4b's `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency_suggest`, v3 F4c's `arkona_story_create`, `arkona_chapter_plan`, `arkona_chapter_save`, `arkona_chapter_insert`, `arkona_chapter_move`, `arkona_chapter_context`, `arkona_chapter_check` and `arkona_promote_from_chapter`, and v3 F3d's `bridge_job_resume`; 183 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (185 tools in all with the Arkona pack's thirty tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, v3 F4b's `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency_suggest`, v3 F4c's `arkona_story_create`, `arkona_chapter_plan`, `arkona_chapter_save`, `arkona_chapter_insert`, `arkona_chapter_move`, `arkona_chapter_context`, `arkona_chapter_check` and `arkona_promote_from_chapter`, v3 F5c's `arkona_identity_reconcile`, and v3 F3d's `bridge_job_resume` and v3 F5c's `bridge_workstream`, `bridge_workstream_report` and `query_facts`; 187 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -2261,6 +2266,217 @@ revision: 3 reads and one write per changed field plus the text; a renumbering: 
 | `arkona_chapter_context { chapter \| plan \| story + number, live? }`         | Free (the snapshots, the tree, the calendar): the smallest sufficient canon for drafting one chapter, as of its In-world Date (or its plan's Planned Date): `arkona_as_of` and `arkona_brief` for its POV, Characters Present and Locations, the chronology rows around the date and open contradictions (from the as-of answers), the plan's Canon Constraints and Question Gate, the previous chapter's closing state (its last section, or its last paragraphs) and its plan's Closing State; every part labelled by its evidence class (the plan and earlier chapters: narrative, never canon).                                                                                                                                                                                                                                                                                                                                                        |
 | `arkona_chapter_check { chapter \| story + number, live? }`                   | Read-only (2 reads: the chapter, live; `live: false` reads the snapshots): people (not yet born, recorded deceased, nothing recording them alive at the date); `presence` (listed but not in the prose, in the prose but not listed); ages (`rules.consistency.ages`, when the pack has them) and births or deaths in the prose (the pack's prose phrasings, by name only) against the as-of values; new-lore candidates (capitalised names, never a sentence's first word, resolving to no page outside Narratives, or a page there whose name carries a lifecycle prefix; capped, `candidateCap`) and names resolving only to Archived or Legacy pages; Locations gone or only Archived. An AU chapter is read in its continuity. Each item: `Contradicts canon`, `Not in canon (candidate)` or `Unestablished in canon`. Never edits. Without a full snapshot yet (a new bridge), it and `arkona_chapter_context` refuse `NO_SNAPSHOT` (CR-2026-11-R4). |
 | `arkona_promote_from_chapter { chapter, candidates: [{ candidate, as, … }] }` | Canon proposals through the existing tools, whatever the scope: `character` (`arkona_create_character`, status authoritative: its namesake warning carried), `page` (`create_resource`, authoritative), `fact` and `text` on an existing owner page (`set_facts`' and `write_page`'s plans, ONE forced proposal of items, approvable one by one). The agent supplies the content. The chapter is cited in each proposal's note (its summary) only: never a Dependency or a Related Source. Nothing is ever applied by itself.                                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+## Orchestration (v3 F5c)
+
+[ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md), building H6 to H8 of the
+owner-approved design [design/F5-orchestration.md](design/F5-orchestration.md): each tool does more coordinated work per
+approved operation, with the approval boundaries unchanged.
+
+### `arkona_identity_reconcile` (H6, the Arkona pack; write)
+
+`{ items: [{ character, facts }] (at most 100), reconcileTags? (default true), dryRun?, lastMajorRevision?, workstream?,
+project? }`, or `{ report: reconcileId | jobId }` (the itemised result, free). One job, one item per character: the
+identity page resolved (Character Core, else Compact Character Reference, else the identity-owning Character Reference;
+an [INDEX] to its Core; several characters refused with the candidates), read fresh, only the facts given set
+(`set_facts`' plan, If-Match chained), the tags recomputed from the new facts by the retag engine under the approved
+policy (grammar order, Approved Supplementary Tags kept, the old value's own token replaced), both read back. Allowed: the
+six identity facts; `USE_ARKONA_RENAME` for a Canonical Display Name; `PROTECTED_FACT` (with the tool) for Status,
+Continuity Type, Continuity and the other protected facts; `UNMAPPED_VALUE` for a Race or Naming Culture outside the
+pack's maps; each refuses its item only. A Naming Culture gets `arkona_name_check`'s culture report. A hold or exception
+writes no tags (`partly_done`, with why). Inside the job a character changed since it was read is skipped
+(`FACTS_STALE`), a failed write fails its item only (the others carry on; the job is resumable), and a changed tag array is
+never written over. At scope `write`: direct for 10 pages or fewer; the bulk rail makes more ONE proposal with an item per
+character; at `propose`, a proposal (the pack's switch `scope`, in `arkona-2026-11-23-f5c`; always a proposal until the
+owner approves that version). Last Major Revision by the owner's rule. When the job ends: each item `done`,
+`partly_done`, `skipped`, `failed`, `not_run`, `refused` or `excluded`, with `arkona_consistency`'s findings as
+follow-ups. Cost: 1 read per character to plan; per character about 4 reads and 2 writes for one fact and its tags.
+
+Example of a dry run's preview (one item):
+
+```json
+{
+  "project": "test",
+  "status": "dry_run",
+  "reconcileTags": true,
+  "counts": { "items": 1, "planned": 1, "noChange": 0, "refused": 0, "tagsWritten": 1, "tagsHeld": 0 },
+  "items": [
+    {
+      "character": "Al-Mansur XII",
+      "page": { "id": "mkmansur", "name": "[BSRC] Al-Mansur XII - Character Core", "role": "Character Core" },
+      "status": "planned",
+      "facts": [
+        { "key": "Naming Culture", "before": "Menkheti", "after": "Ancient Menkheti", "change": "changed" }
+      ],
+      "tags": {
+        "status": "write",
+        "current": ["CANON", "Character", "Human", "Menkheti"],
+        "proposed": ["CANON", "Character", "Human", "Ancient Menkheti"],
+        "disposition": "correction",
+        "replaced": [
+          {
+            "tag": "Menkheti",
+            "why": "the token of the old Naming Culture (“Menkheti”), replaced by “Ancient Menkheti”, the token of “Ancient Menkheti”"
+          }
+        ]
+      },
+      "nameCheck": {
+        "value": "Ancient Menkheti",
+        "mapped": true,
+        "token": "Ancient Menkheti",
+        "owners": [],
+        "members": { "count": 0, "characters": [] },
+        "namesakes": []
+      }
+    }
+  ]
+}
+```
+
+### `query_facts` (H7; read, generic)
+
+`{ fields, type?, tag?, tagMode?, under?, kind?, lifecycle?, name?, characters?, continuity?, format?, limit?, offset?,
+cursor?, live?, confirm?, project? }`. The same fields of many pages as a compact table: `columns` once, then `rows` as
+arrays (`format: "csv"`: the same as CSV), paged by row (`limit` up to 500; `offset` or `nextCursor`). Fields: any sidebar
+fact key, and `id`, `name`, `canonicalDisplayName`, `referenceType`, `scope`, `tags`, `parent`, `path`,
+`lastMajorRevision`, `factsVersion`; `coverage` (`ok`, `stale`, `missing`, `live`) and `readAt` are always added, and
+`age` gives the tree's last confirmation and the oldest read. `characters: true`: every current identity page of Main
+CANON, or of an AU with `continuity`. Free (the tree's stored sidebars); `live: true` re-reads the page of rows (one read
+each, an estimate first above 10), and only then is `factsVersion` filled.
+
+```json
+{
+  "project": "test",
+  "continuity": "Main CANON",
+  "totalRows": 2,
+  "offset": 0,
+  "returned": 2,
+  "age": {
+    "source": "the repository tree’s stored sidebars",
+    "tree": { "status": "ready", "confirmedAt": "2026-11-23T16:00:00.000Z", "confirmed": "2 min ago" },
+    "oldestRead": "2026-11-23T16:00:00.000Z",
+    "oldest": "2 min ago"
+  },
+  "coverage": { "ok": 2, "stale": 0, "missing": 0, "live": 0 },
+  "columns": [
+    "canonicalDisplayName",
+    "Race / Species",
+    "Naming Culture",
+    "tags",
+    "parent",
+    "coverage",
+    "readAt"
+  ],
+  "rows": [
+    [
+      null,
+      "Human",
+      "Ancient Menkheti",
+      ["CANON", "Character", "Human", "Ancient Menkheti"],
+      "Al-Mansur XII",
+      "ok",
+      "2026-11-23T16:00:00.000Z"
+    ],
+    [
+      null,
+      "Genie",
+      "Khayali",
+      ["CANON", "Character", "Genie", "Khayali", "Cosmology"],
+      "Menkheti Desk",
+      "ok",
+      "2026-11-23T16:00:00.000Z"
+    ]
+  ],
+  "cost": "none"
+}
+```
+
+### Workstreams (H8)
+
+Every tool that writes or proposes takes an optional `workstream` (at most 80 characters), recorded on the job, its
+proposal (the approved job keeps it), each journal entry, and the tool-call log; the result echoes the label in force.
+**`bridge_workstream { set? }`** sets (or with `null` clears) this connection's default label, which lapses after 12 hours
+with no write using it; with no `set` it says which is in force. **`bridge_workstream_report { workstream? | since? |
+principal? | jobIds? }`** (read-only, free) reports in five groups: written and verified (each page, each write with its
+versions before and after and who made it, the read-back), accepted but not yet run, deliberately excluded (unticked,
+skipped and why, refusals such as `FIX_STALE`), awaiting the author's judgement (pending and conflicted proposals, tags
+held), residual inconsistencies (unknown outcomes and how they settled, read-backs that differed, failed jobs, open
+findings on the pages touched, consistency follow-ups), and a "still to do" list drawn only from them.
+
+```json
+{
+  "project": "test",
+  "scope": { "workstream": "Menkheti culture split" },
+  "cost": "free: the bridge’s own records; nothing was read from LegendKeeper",
+  "counts": {
+    "jobs": 3,
+    "proposals": 2,
+    "pagesChanged": 2,
+    "pagesVerified": 2,
+    "writes": 5,
+    "acceptedNotRun": 0,
+    "excluded": 1,
+    "awaitingJudgement": 1,
+    "unknownOutcomes": 0,
+    "openFindings": 0
+  },
+  "groups": {
+    "writtenAndVerified": [
+      {
+        "page": { "id": "mkazar01", "name": "[BSRC] Azar al-Nafir - Character Core" },
+        "writes": [
+          {
+            "journalId": 12,
+            "op": "updatePropertyRow",
+            "what": "Naming Culture: changed",
+            "tool": "arkona_identity_reconcile",
+            "versionBefore": "v8",
+            "versionAfter": "v9",
+            "outcome": "applied",
+            "by": { "principal": "pat_…" }
+          },
+          {
+            "journalId": 13,
+            "op": "updateResource",
+            "what": "tags",
+            "tool": "arkona_identity_reconcile",
+            "outcome": "applied",
+            "by": { "principal": "pat_…" }
+          }
+        ],
+        "verified": true
+      }
+    ],
+    "acceptedNotYetRun": [],
+    "deliberatelyExcluded": [
+      {
+        "kind": "skipped",
+        "item": "char:1",
+        "why": "conflicted: FACTS_STALE: its sidebar changed since it was read …"
+      }
+    ],
+    "awaitingJudgement": [
+      {
+        "kind": "proposal",
+        "proposalId": "p_…",
+        "state": "pending",
+        "title": "arkona_identity_reconcile: 1 character (Zahira al-Rachid)"
+      }
+    ],
+    "residualInconsistencies": {
+      "unknownOutcomes": [],
+      "verificationMismatches": [],
+      "failedJobs": [],
+      "openFindings": [],
+      "consistencyFollowUps": []
+    }
+  },
+  "stillToDo": [
+    "Pending proposal p_… waits for the owner: arkona_identity_reconcile: 1 character (Zahira al-Rachid)",
+    "Skipped: char:1: conflicted: FACTS_STALE: …"
+  ]
+}
+```
 
 ## The calendar and the timelines (v2 D1)
 

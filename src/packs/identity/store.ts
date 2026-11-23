@@ -53,7 +53,11 @@ export interface ItemOutcome {
   readonly page: { readonly id: string; readonly name: string } | null;
   readonly status: ItemStatus;
   readonly reason?: string;
-  readonly facts?: { readonly written: boolean; readonly verified: boolean | null; readonly detail?: unknown };
+  readonly facts?: {
+    readonly written: boolean;
+    readonly verified: boolean | null;
+    readonly detail?: unknown;
+  };
   readonly tags?: { readonly status: string; readonly reason?: string; readonly verified?: boolean | null };
   readonly followUps?: readonly Obj[];
 }
@@ -67,7 +71,7 @@ export interface IdentityRecord {
   readonly proposalId: string | null;
   readonly state: 'proposed' | 'running' | 'finished' | 'rejected';
   readonly plan: { readonly items: readonly PlannedItem[]; readonly reconcileTags: boolean } & Obj;
-  readonly outcome: { readonly items: readonly ItemOutcome[]; readonly summary: string } & Obj | null;
+  readonly outcome: ({ readonly items: readonly ItemOutcome[]; readonly summary: string } & Obj) | null;
   readonly createdAt: number;
   readonly finishedAt: number | null;
 }
@@ -141,7 +145,9 @@ export class IdentityRecords {
 
   byJob(projectId: string, jobId: string): IdentityRecord | null {
     const r = this.db
-      .prepare('SELECT * FROM identity_reconciles WHERE project_id = ? AND job_id = ? ORDER BY created_at DESC LIMIT 1')
+      .prepare(
+        'SELECT * FROM identity_reconciles WHERE project_id = ? AND job_id = ? ORDER BY created_at DESC LIMIT 1',
+      )
       .get(projectId, jobId) as Row | undefined;
     return r ? toRecord(r) : null;
   }
@@ -154,7 +160,9 @@ export class IdentityRecords {
 
   setJob(id: string, jobId: string): void {
     this.db
-      .prepare("UPDATE identity_reconciles SET job_id = ?, state = 'running', outcome = NULL, finished_at = NULL WHERE id = ?")
+      .prepare(
+        "UPDATE identity_reconciles SET job_id = ?, state = 'running', outcome = NULL, finished_at = NULL WHERE id = ?",
+      )
       .run(jobId, id);
   }
 

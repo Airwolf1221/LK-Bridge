@@ -34,6 +34,9 @@ describe('the MCP surface with the official client', () => {
         'bridge_journal_lookup',
         'bridge_proposal_status',
         'bridge_result_page',
+        // v3 F5c (ADR 0069, H8): workstreams
+        'bridge_workstream',
+        'bridge_workstream_report',
         // v2 B2: Discover, Read and the guides
         'browse_asset_tree',
         'browse_repository_tree',
@@ -52,6 +55,7 @@ describe('the MCP surface with the official client', () => {
         'lk_api_write',
         // lk_upload_image and create_bare_resource are rarely-used tools: hidden for a profile without
         // showLowLevelTools (v2 E3b, ADR 0045).
+        'query_facts', // v3 F5c (ADR 0069, H7)
         'read_document',
         'search',
         'set_facts', // v2 C2a
@@ -62,6 +66,7 @@ describe('the MCP surface with the official client', () => {
         // v3 F3b: the Arkona pack's owner, relationship, art and brief tools
         'arkona_create_owner',
         'arkona_create_relationship',
+        'arkona_identity_reconcile', // v3 F5c (ADR 0069, H6)
         'arkona_add_character_art',
         'arkona_character_brief',
         // v3 F3c: the Arkona pack's appraisal tools

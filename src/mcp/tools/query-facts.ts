@@ -21,7 +21,15 @@ import type { McpToolProvider } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
 import { factsVersionOfRead } from './discover.js';
 import { ago, finish, repoContext, resolvePage, treeInfo, type RepoCtx } from './repo.js';
-import { errorFromThrown, errorResult, mcpOrigin, projectArg, render, withProject, type ToolDeps } from './shape.js';
+import {
+  errorFromThrown,
+  errorResult,
+  mcpOrigin,
+  projectArg,
+  render,
+  withProject,
+  type ToolDeps,
+} from './shape.js';
 
 /** More rows than this re-read live first answer with an estimate. */
 export const LIVE_CONFIRM_ABOVE = 10;
@@ -51,9 +59,11 @@ const LIFECYCLES = ['Authoritative', 'Working', 'Archived'] as const;
 const MAIN = 'Main CANON';
 
 type Cell = string | readonly string[] | null;
+const txt = (v: unknown): string => (typeof v === 'string' ? v : '');
 
 const many = <T extends z.ZodType>(t: T) => z.union([t, z.array(t).min(1).max(50)]);
-const asList = <T>(v: T | readonly T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? [...v] : [v as T]);
+const asList = <T>(v: T | readonly T[] | undefined): T[] =>
+  v === undefined ? [] : Array.isArray(v) ? [...v] : [v as T];
 
 /** A sidebar's facts by key (`PROPERTIES`), as the tree stores them: key (normalised) → text. */
 function factMap(sb: readonly SidebarBlock[] | null, property: string): Map<string, string> | null {
@@ -73,9 +83,8 @@ function liveFactMap(res: unknown, property: string): Map<string, string> {
     (p) => p.kind === 'keyValue' && textKey(typeof p.title === 'string' ? p.title : '') === textKey(property),
   );
   const rows = Array.isArray(kv?.rows) ? (kv.rows as Record<string, unknown>[]) : [];
-  const sorted = [...rows].sort((a, b) =>
-    String(a.rank ?? '') < String(b.rank ?? '') ? -1 : String(a.rank ?? '') > String(b.rank ?? '') ? 1 : 0,
-  );
+  const rk = (r: Record<string, unknown>) => (typeof r.rank === 'string' ? r.rank : '');
+  const sorted = [...rows].sort((a, b) => (rk(a) < rk(b) ? -1 : rk(a) > rk(b) ? 1 : 0));
   for (const r of sorted) {
     const key = typeof r.key === 'string' ? r.key : '';
     if (key === '' || out.has(textKey(key))) continue;
@@ -86,7 +95,7 @@ function liveFactMap(res: unknown, property: string): Map<string, string> {
             .map((c) => {
               if (typeof c.text === 'string') return c.text;
               const m = c.mention as Record<string, unknown> | undefined;
-              return m ? String(m.text ?? m.name ?? '') : '';
+              return m ? txt(m.text) || txt(m.name) : '';
             })
             .join('');
     out.set(textKey(key), text.trim());
@@ -108,7 +117,9 @@ function characterRules(ctx: RepoCtx): PackRules | null {
 /** The Reference Types of the identity pages: the identity roles', and the retag's identity-owning Character References. */
 export function identityReferenceTypes(rules: PackRules): string[] {
   const type = rules.types.find((t) => t.hook === 'character');
-  const roles = (type?.roles ?? []).filter((r) => r.facts === 'identity' && r.referenceType).map((r) => r.referenceType!);
+  const roles = (type?.roles ?? [])
+    .filter((r) => r.facts === 'identity' && r.referenceType)
+    .map((r) => r.referenceType!);
   return [...new Set([...roles, ...(rules.retag?.identityReferenceTypes ?? [])])];
 }
 
@@ -133,11 +144,19 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
       type: many(z.string().min(1).max(200)).optional().describe('Reference Type(s).'),
       tag: many(z.string().min(1).max(100)).optional(),
       tagMode: z.enum(['any', 'all']).optional().describe('With several tags: any (default) or all.'),
-      under: z.string().min(1).max(500).optional().describe('A branch: the page (name or id) whose subtree is read.'),
+      under: z
+        .string()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe('A branch: the page (name or id) whose subtree is read.'),
       kind: many(z.enum(KINDS)).optional(),
       lifecycle: many(z.enum(LIFECYCLES)).optional(),
       name: z.string().min(1).max(200).optional().describe('A substring of the page’s name (without case).'),
-      characters: z.boolean().optional().describe('Every current identity page (needs a setting pack with characters).'),
+      characters: z
+        .boolean()
+        .optional()
+        .describe('Every current identity page (needs a setting pack with characters).'),
       continuity: z
         .string()
         .min(1)
@@ -145,7 +164,13 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
         .optional()
         .describe('With characters: "Main CANON" (default) or an AU’s Continuity.'),
       format: z.enum(['table', 'csv']).optional(),
-      limit: z.number().int().min(1).max(MAX_ROWS).optional().describe(`Rows per page (default ${DEFAULT_ROWS}).`),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_ROWS)
+        .optional()
+        .describe(`Rows per page (default ${DEFAULT_ROWS}).`),
       offset: z.number().int().min(0).max(100_000).optional(),
       cursor: z.string().min(1).max(500).optional().describe('nextCursor of the previous page.'),
       live: z.boolean().optional().describe('Re-read this page of rows (1 read each).'),
@@ -218,12 +243,20 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
           nodes = nodes.filter((n) => {
             const l =
               labels(n).lifecycle ??
-              (n.kind === 'bsrc' ? 'Authoritative' : n.kind === 'bwrk' ? 'Working' : n.kind === 'barc' ? 'Archived' : null);
+              (n.kind === 'bsrc'
+                ? 'Authoritative'
+                : n.kind === 'bwrk'
+                  ? 'Working'
+                  : n.kind === 'barc'
+                    ? 'Archived'
+                    : null);
             return l !== null && (lcs as string[]).includes(l);
           });
         if (args.name !== undefined) {
           const part = args.name.normalize('NFC').toLocaleLowerCase('en-GB');
-          nodes = nodes.filter((n) => n.displayName.normalize('NFC').toLocaleLowerCase('en-GB').includes(part));
+          nodes = nodes.filter((n) =>
+            n.displayName.normalize('NFC').toLocaleLowerCase('en-GB').includes(part),
+          );
         }
         // The stored sidebars of the selection (one query), for the continuity and the cells.
         const stored = ctx.tree.sidebars(
@@ -233,7 +266,8 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
         const continuityLabel = args.characters === true ? (args.continuity?.trim() ?? MAIN) : null;
         if (continuityLabel !== null) {
           const ctKey = textKey(lifecycle.fields.continuityType);
-          const main = textKey(continuityLabel) === textKey(MAIN) || textKey(continuityLabel) === textKey('Main');
+          const main =
+            textKey(continuityLabel) === textKey(MAIN) || textKey(continuityLabel) === textKey('Main');
           nodes = nodes.filter((n) => {
             const f = factMap(stored.get(n.id) ?? null, property);
             const ct = f?.get(ctKey) ?? null;
@@ -265,14 +299,18 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
         let offset = args.offset ?? 0;
         if (args.cursor !== undefined) {
           try {
-            const c = JSON.parse(Buffer.from(args.cursor, 'base64url').toString('utf8')) as { o?: unknown; h?: unknown };
+            const c = JSON.parse(Buffer.from(args.cursor, 'base64url').toString('utf8')) as {
+              o?: unknown;
+              h?: unknown;
+            };
             if (typeof c.o !== 'number' || c.h !== selectionHash) throw new Error('mismatch');
             offset = c.o;
           } catch {
             return errorResult(
               {
                 code: 'CURSOR_INVALID',
-                message: 'The cursor is not one this selection gave (the fields or filters changed). Start again without it.',
+                message:
+                  'The cursor is not one this selection gave (the fields or filters changed). Start again without it.',
               },
               pd,
             );
@@ -340,7 +378,10 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
             results.forEach((st, i) => {
               const n = page[i]!;
               if (st.status === 'succeeded') live.set(n.id, st.value);
-              else liveFailed.set(n.id, String((st.error as { message?: unknown } | null)?.message ?? st.status));
+              else {
+                const e = st.error as { message?: unknown } | null;
+                liveFailed.set(n.id, typeof e?.message === 'string' ? e.message : st.status);
+              }
             });
           } catch (e) {
             return errorFromThrown(e, pd);
@@ -354,7 +395,8 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
         let oldest: number | null = null;
         const rows: Cell[][] = page.map((n) => {
           const res = live.get(n.id);
-          const facts = res !== undefined ? liveFactMap(res, property) : factMap(stored.get(n.id) ?? null, property);
+          const facts =
+            res !== undefined ? liveFactMap(res, property) : factMap(stored.get(n.id) ?? null, property);
           const coverage =
             res !== undefined
               ? 'live'
@@ -365,8 +407,10 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
                   : n.stale || ctx.now - n.lastReadAt > STALE_AFTER_MS
                     ? 'stale'
                     : 'ok';
+          // The tree stamps a read with its own increasing clock (never ahead of now in a real build).
+          const readAt = Math.min(n.lastReadAt, ctx.now);
           if (res === undefined && coverage !== 'missing')
-            oldest = oldest === null ? n.lastReadAt : Math.min(oldest, n.lastReadAt);
+            oldest = oldest === null ? readAt : Math.min(oldest, readAt);
           const resObj = (res ?? null) as Record<string, unknown> | null;
           const parent = n.parentId ? ctx.tree.node(ctx.projectId, n.parentId).data : null;
           const cell = (f: string): Cell => {
@@ -401,7 +445,11 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
           return [
             ...args.fields.map(cell),
             coverage,
-            res !== undefined ? new Date(ctx.now).toISOString() : coverage === 'missing' ? null : new Date(n.lastReadAt).toISOString(),
+            res !== undefined
+              ? new Date(ctx.now).toISOString()
+              : coverage === 'missing'
+                ? null
+                : new Date(readAt).toISOString(),
           ];
         });
         const counts = { ok: 0, stale: 0, missing: 0, live: 0 } as Record<string, number>;
@@ -409,21 +457,36 @@ export function queryFactsTool(deps: ToolDeps): McpToolProvider {
         const notes = [
           ...(charNote ? [charNote] : []),
           ...(args.fields.includes('factsVersion') && args.live !== true
-            ? ['factsVersion is filled only by live: true (the tree keeps each fact’s text, not the sidebar’s version)']
+            ? [
+                'factsVersion is filled only by live: true (the tree keeps each fact’s text, not the sidebar’s version)',
+              ]
             : []),
           ...(unseen.size > 0 && rows.length > 0
-            ? [`no page of this page of rows has: ${args.fields.filter((f) => unseen.has(textKey(f))).join(', ')}`]
+            ? [
+                `no page of this page of rows has: ${args.fields.filter((f) => unseen.has(textKey(f))).join(', ')}`,
+              ]
             : []),
-          ...(counts.missing! > 0 ? [`${counts.missing} row(s) missing: their sidebar was never read; their facts are null`] : []),
-          ...(counts.stale! > 0 ? [`${counts.stale} row(s) stale: their stored read is old or could not be refreshed`] : []),
+          ...(counts.missing! > 0
+            ? [`${counts.missing} row(s) missing: their sidebar was never read; their facts are null`]
+            : []),
+          ...(counts.stale! > 0
+            ? [`${counts.stale} row(s) stale: their stored read is old or could not be refreshed`]
+            : []),
         ];
         const age = {
-          source: args.live === true ? 'live reads (this page of rows), the tree for the rest' : 'the repository tree’s stored sidebars',
+          source:
+            args.live === true
+              ? 'live reads (this page of rows), the tree for the rest'
+              : 'the repository tree’s stored sidebars',
           tree: treeInfo(ctx.meta, ctx.now),
-          ...(oldest !== null ? { oldestRead: new Date(oldest).toISOString(), oldest: ago(ctx.now - oldest) } : {}),
+          ...(oldest !== null
+            ? { oldestRead: new Date(oldest).toISOString(), oldest: ago(ctx.now - oldest) }
+            : {}),
         };
         const cursor =
-          next !== null ? Buffer.from(JSON.stringify({ o: next, h: selectionHash })).toString('base64url') : null;
+          next !== null
+            ? Buffer.from(JSON.stringify({ o: next, h: selectionHash })).toString('base64url')
+            : null;
         const body = {
           ...(continuityLabel ? { continuity: continuityLabel } : {}),
           totalRows: total,

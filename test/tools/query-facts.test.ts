@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- tool JSON */
 /**
  * v3 F5c (ADR 0069, H7): `query_facts` against the Menkheti world's tree (the real tree store, filled from the mock's
  * pages as a build leaves it): each selector; the characters shortcut in Main CANON and in an AU; columns and rows
@@ -27,13 +27,21 @@ const col = (body: any, name: string) => (body.rows as any[]).map((r) => r[body.
 describe('selection', () => {
   it('by Reference Type, as a table: columns once, then rows as arrays; zero LegendKeeper reads', async () => {
     const before = w.requests().all;
-    const b = await q({ type: 'Compact Character Reference', fields: ['id', 'name', 'Naming Culture', 'tags'] });
+    const b = await q({
+      type: 'Compact Character Reference',
+      fields: ['id', 'name', 'Naming Culture', 'tags'],
+    });
     expect(w.requests().all).toBe(before);
     expect(b.columns).toEqual(['id', 'name', 'Naming Culture', 'tags', 'coverage', 'readAt']);
     expect(Array.isArray(b.rows[0])).toBe(true);
     expect(col(b, 'id')).toContain(M.khepri);
     const k = b.rows.find((r: any[]) => r[0] === M.khepri);
-    expect(k.slice(1, 5)).toEqual(['Khepri Nadu - Character Reference', 'Menkheti', ['CANON', 'Character', 'Human', 'Menkheti'], 'ok']);
+    expect(k.slice(1, 5)).toEqual([
+      'Khepri Nadu - Character Reference',
+      'Menkheti',
+      ['CANON', 'Character', 'Human', 'Menkheti'],
+      'ok',
+    ]);
     expect(b.cost).toBe('none');
     expect(b.age.tree.status).toBeDefined();
   });
@@ -60,7 +68,16 @@ describe('selection', () => {
     const main = await q({
       characters: true,
       type: 'Character Core',
-      fields: ['canonicalDisplayName', 'Race / Species', 'Naming Culture', 'Life State', 'Temporal Scope', 'tags', 'parent', 'id'],
+      fields: [
+        'canonicalDisplayName',
+        'Race / Species',
+        'Naming Culture',
+        'Life State',
+        'Temporal Scope',
+        'tags',
+        'parent',
+        'id',
+      ],
     });
     expect(main.continuity).toBe('Main CANON');
     const ids = col(main, 'id');
@@ -70,7 +87,15 @@ describe('selection', () => {
     expect(ids).not.toContain(M.auChar);
     expect(ids).not.toContain(M.mansurBio); // not an identity page
     const mansur = main.rows.find((r: any[]) => r[7] === M.mansur);
-    expect(mansur.slice(0, 7)).toEqual([null, 'Human', 'Menkheti', 'Alive', null, ['CANON', 'Character', 'Human', 'Menkheti'], 'Al-Mansur XII']);
+    expect(mansur.slice(0, 7)).toEqual([
+      null,
+      'Human',
+      'Menkheti',
+      'Alive',
+      null,
+      ['CANON', 'Character', 'Human', 'Menkheti'],
+      'Al-Mansur XII',
+    ]);
     const au = await q({ characters: true, continuity: 'Shattered Crown', fields: ['id', 'Naming Culture'] });
     expect(au.rows).toEqual([[M.auChar, 'Menkheti', 'ok', expect.any(String)]]);
     const all = await q({ characters: true, fields: ['id'] });
@@ -86,7 +111,8 @@ describe('shape and paging', () => {
     expect(page1.nextCursor).toEqual(expect.any(String));
     const page2 = await q({ characters: true, fields: ['id', 'name'], limit: 5, cursor: page1.nextCursor });
     const byOffset = await q({ characters: true, fields: ['id', 'name'], limit: 5, offset: 5 });
-    expect(page2.rows).toEqual(byOffset.rows);
+    const noTime = (rows: any[][]) => rows.map((r) => r.slice(0, -1));
+    expect(noTime(page2.rows)).toEqual(noTime(byOffset.rows));
     expect(page2.offset).toBe(5);
     const bad = await w.callRead('query_facts', {
       project: 'test',
@@ -108,7 +134,9 @@ describe('coverage and live', () => {
   it('stale and missing sidebars are flagged per row, never silently', async () => {
     w.stack.runtime.tree.store.markStale(PROJECT, [M.arin], 'test: a re-read failed');
     w.stack.db
-      .prepare('UPDATE tree_nodes SET sidebar = NULL, props_observed_at = NULL WHERE project_id = ? AND id = ?')
+      .prepare(
+        'UPDATE tree_nodes SET sidebar = NULL, props_observed_at = NULL WHERE project_id = ? AND id = ?',
+      )
       .run(PROJECT, M.zahira);
     const b = await q({ under: M.desk, type: 'Character Core', fields: ['id', 'Naming Culture'] });
     const row = (id: string) => b.rows.find((r: any[]) => r[0] === id);
@@ -121,7 +149,13 @@ describe('coverage and live', () => {
 
   it('live: an estimate above 10 rows, then confirm reads each row once and fills factsVersion', async () => {
     const before = w.requests().all;
-    const est = await q({ characters: true, type: 'Character Core', fields: ['id', 'factsVersion'], live: true, limit: 12 });
+    const est = await q({
+      characters: true,
+      type: 'Character Core',
+      fields: ['id', 'factsVersion'],
+      live: true,
+      limit: 12,
+    });
     expect(est).toMatchObject({ status: 'estimate', reads: 12 });
     expect(w.requests().all).toBe(before);
     const b = await q({
@@ -136,7 +170,7 @@ describe('coverage and live', () => {
     expect(col(b, 'factsVersion').every((v: unknown) => typeof v === 'string' && /^fv2_/.test(v))).toBe(true);
     expect(col(b, 'coverage').every((v: unknown) => v === 'live')).toBe(true);
     expect(b.cost).toBe('12 read(s)');
-    const small = await q({ ids: undefined, under: M.mansurIndex, fields: ['id'], live: true });
+    const small = await q({ under: M.mansurIndex, fields: ['id'], live: true });
     expect(small.status).toBeUndefined();
   });
 });

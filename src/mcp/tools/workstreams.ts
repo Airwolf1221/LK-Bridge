@@ -59,7 +59,11 @@ export function workstreamTools(deps: ToolDeps): McpToolProvider[] {
                     expiresAt: iso(d.expiresAt),
                     note: `Every write or proposal you make without a workstream argument is now recorded under “${d.label}”. It lapses after ${DEFAULT_TTL_MS / 3_600_000} hours with no write using it; bridge_workstream_report reports it.`,
                   }
-                : { status: 'cleared', workstream: null, note: 'No default label: writes are grouped only by their own argument.' },
+                : {
+                    status: 'cleared',
+                    workstream: null,
+                    note: 'No default label: writes are grouped only by their own argument.',
+                  },
               pd,
             );
           }
@@ -109,7 +113,10 @@ export function workstreamTools(deps: ToolDeps): McpToolProvider[] {
             since = Date.parse(args.since);
             if (Number.isNaN(since))
               return errorResult(
-                { code: 'INVALID_PARAMS', message: `“${args.since}” is not a date or time (use ISO, 2026-11-23).` },
+                {
+                  code: 'INVALID_PARAMS',
+                  message: `“${args.since}” is not a date or time (use ISO, 2026-11-23).`,
+                },
                 pd,
               );
           }

@@ -12,7 +12,8 @@ import { parseInput, projectParam, type Register } from './util.js';
 export const registerWorkstreams: Register = (api, ctx) => {
   const reports = () => {
     const r = ctx.deps.runtime.workstreamReports;
-    if (!r) throw new AdminHttpError(503, 'WORKSTREAMS_UNAVAILABLE', 'Workstream reports are not available here.');
+    if (!r)
+      throw new AdminHttpError(503, 'WORKSTREAMS_UNAVAILABLE', 'Workstream reports are not available here.');
     return r;
   };
 

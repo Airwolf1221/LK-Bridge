@@ -22,11 +22,14 @@ beforeAll(async () => {
 afterAll(async () => w?.close());
 
 const jobWs = (id: string) =>
-  (w.stack.db.prepare('SELECT workstream FROM jobs WHERE id = ?').get(id) as { workstream: string | null }).workstream;
+  (w.stack.db.prepare('SELECT workstream FROM jobs WHERE id = ?').get(id) as { workstream: string | null })
+    .workstream;
 const journalWs = (jobId: string) =>
-  (w.stack.db.prepare('SELECT DISTINCT workstream FROM write_journal WHERE job_id = ?').all(jobId) as { workstream: string | null }[]).map(
-    (r) => r.workstream,
-  );
+  (
+    w.stack.db.prepare('SELECT DISTINCT workstream FROM write_journal WHERE job_id = ?').all(jobId) as {
+      workstream: string | null;
+    }[]
+  ).map((r) => r.workstream);
 const reconcile = (items: unknown[], extra: Record<string, unknown> = {}) =>
   w.call('arkona_identity_reconcile', { project: 'test', items, ...extra });
 
@@ -45,12 +48,19 @@ describe('the label', () => {
     const set = await w.call('bridge_workstream', { set: 'Default stream' });
     expect(set.body).toMatchObject({ status: 'set', workstream: 'Default stream' });
     const r = await reconcile([{ character: 'Daryan Sefet', facts: { 'Life State': 'Wounded' } }]);
-    expect(r.body).toMatchObject({ workstream: 'Default stream', workstreamSource: 'default (bridge_workstream)' });
+    expect(r.body).toMatchObject({
+      workstream: 'Default stream',
+      workstreamSource: 'default (bridge_workstream)',
+    });
     expect(jobWs(r.body.jobId)).toBe('Default stream');
-    const own = await reconcile([{ character: 'Daryan Sefet', facts: { 'Life State': 'Alive' } }], { workstream: WS });
+    const own = await reconcile([{ character: 'Daryan Sefet', facts: { 'Life State': 'Alive' } }], {
+      workstream: WS,
+    });
     expect(own.body.workstream).toBe(WS);
     // Lapsed: no write for more than 12 hours.
-    w.stack.db.prepare('UPDATE workstream_defaults SET last_used_at = ?').run(Date.now() - DEFAULT_TTL_MS - 1000);
+    w.stack.db
+      .prepare('UPDATE workstream_defaults SET last_used_at = ?')
+      .run(Date.now() - DEFAULT_TTL_MS - 1000);
     const read = await w.call('bridge_workstream', {});
     expect(read.body.workstream).toBeNull();
     const after = await reconcile([{ character: 'Daryan Sefet', facts: { 'Life State': 'Resting' } }]);
@@ -128,12 +138,18 @@ describe('the report', () => {
     await jobOf(stale.body.proposalId);
     // A refused fix (FIX_STALE): the dash was removed in the app after the appraisal saw it.
     const appraised = await w.call('arkona_appraise_owner', { under: P.desk, limit: 200, project: 'test' });
-    const dash = (appraised.body.findings as any[]).find((f) => f.check === 'em_dash_text' && f.page?.id === P.dashText);
+    const dash = (appraised.body.findings as any[]).find(
+      (f) => f.check === 'em_dash_text' && f.page?.id === P.dashText,
+    );
     expect(dash).toBeDefined();
     const doc = w.repo.blocks.get(w.mainOf(P.dashText))!;
     doc.blocks = JSON.parse(JSON.stringify(doc.blocks).replace(/—/g, ', '));
     doc.version++;
-    const refused = await w.call('arkona_appraisal_fix', { project: 'test', findingId: dash.id, workstream: WS });
+    const refused = await w.call('arkona_appraisal_fix', {
+      project: 'test',
+      findingId: dash.id,
+      workstream: WS,
+    });
     expect(refused.body.error?.code, refused.text).toBe('FIX_STALE');
     expect(refused.body.workstream).toBe(WS);
     // An unknown outcome, then settled by the reconciler (H10), and one still unresolved.
@@ -145,7 +161,16 @@ describe('the report', () => {
       `INSERT INTO write_reconciliations (journal_id, project_id, state, outcome, attempts, first_at, settled_at, settled_by, reason)
        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)`,
     );
-    ins.run(entries[0]!.id, PROJECT, 'settled', 'applied', Date.now(), Date.now(), 'bridge', 'read back: applied');
+    ins.run(
+      entries[0]!.id,
+      PROJECT,
+      'settled',
+      'applied',
+      Date.now(),
+      Date.now(),
+      'bridge',
+      'read back: applied',
+    );
     w.stack.db.prepare("UPDATE write_journal SET outcome = 'unknown' WHERE id = ?").run(entries[1]!.id);
     ins.run(entries[1]!.id, PROJECT, 'unresolved', null, Date.now(), null, null, 'could not be told');
 
@@ -159,7 +184,10 @@ describe('the report', () => {
     const azar = g.writtenAndVerified.find((p: any) => p.page.id === M.azar);
     expect(azar).toMatchObject({ verified: true });
     expect(azar.writes.some((x: any) => x.op === 'updateResource' && x.what === 'tags')).toBe(true);
-    expect(azar.writes[0]).toMatchObject({ by: { principal: expect.any(String) }, versionBefore: expect.anything() });
+    expect(azar.writes[0]).toMatchObject({
+      by: { principal: expect.any(String) },
+      versionBefore: expect.anything(),
+    });
     expect(g.writtenAndVerified.find((p: any) => p.page.id === M.khepri)).toBeDefined(); // the approved proposal's job
     // Awaiting the author's judgement: pending and conflicted proposals.
     const waiting = g.awaitingJudgement.map((x: any) => [x.proposalId, x.state]);
@@ -168,9 +196,11 @@ describe('the report', () => {
     // Deliberately excluded: the skipped character, the FIX_STALE refusal.
     const ex = g.deliberatelyExcluded;
     expect(ex.some((x: any) => x.kind === 'skipped' && /FACTS_STALE/.test(x.why))).toBe(true);
-    expect(ex.some((x: any) => x.kind === 'refused' && x.code === 'FIX_STALE' && x.tool === 'arkona_appraisal_fix')).toBe(
-      true,
-    );
+    expect(
+      ex.some(
+        (x: any) => x.kind === 'refused' && x.code === 'FIX_STALE' && x.tool === 'arkona_appraisal_fix',
+      ),
+    ).toBe(true);
     // Residual inconsistencies: the unknown outcomes, settled and not.
     const unk = g.residualInconsistencies.unknownOutcomes;
     expect(unk.find((u: any) => u.journalId === entries[0]!.id).reconciliation).toMatchObject({

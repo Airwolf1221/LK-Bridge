@@ -30,7 +30,8 @@ const MENKHETI_SPLIT = [
   { character: 'Khepri Nadu', facts: { Status: 'Working' } },
 ];
 
-const byChar = (items: any[]) => new Map<string, any>(items.map((i) => [`${i.character}|${i.item ?? ''}`, i]));
+const byChar = (items: any[]) =>
+  new Map<string, any>(items.map((i) => [`${i.character}|${i.item ?? ''}`, i]));
 const find = (items: any[], name: string, n = 0) => items.filter((i) => i.character === name)[n];
 
 describe('the Menkheti split', () => {
@@ -47,7 +48,11 @@ describe('the Menkheti split', () => {
     expect(r.isError, r.text).toBe(false);
     preview = r.body;
     expect(w.requests().writes).toBe(before.writes);
-    expect(r.body).toMatchObject({ status: 'dry_run', workstream: 'Menkheti culture split', reconcileTags: true });
+    expect(r.body).toMatchObject({
+      status: 'dry_run',
+      workstream: 'Menkheti culture split',
+      reconcileTags: true,
+    });
     const items = r.body.items as any[];
     void byChar;
     expect(find(items, 'Al-Mansur XII')).toMatchObject({
@@ -81,7 +86,10 @@ describe('the Menkheti split', () => {
       status: 'refused',
       refusal: { code: 'USE_ARKONA_RENAME' },
     });
-    expect(find(items, 'Khepri Nadu', 1)).toMatchObject({ status: 'refused', refusal: { code: 'PROTECTED_FACT' } });
+    expect(find(items, 'Khepri Nadu', 1)).toMatchObject({
+      status: 'refused',
+      refusal: { code: 'PROTECTED_FACT' },
+    });
     expect(r.body.counts).toMatchObject({ items: 8, planned: 5, refused: 3, tagsWritten: 4, tagsHeld: 1 });
   });
 
@@ -144,7 +152,10 @@ describe('the Menkheti split', () => {
 
 describe('the approval boundaries and isolation', () => {
   const bulk = (n: number, from = 0, culture = 'Orzheni') =>
-    Array.from({ length: n }, (_, i) => ({ character: bulkName(from + i), facts: { 'Naming Culture': culture } }));
+    Array.from({ length: n }, (_, i) => ({
+      character: bulkName(from + i),
+      facts: { 'Naming Culture': culture },
+    }));
 
   it('at scope write with the default rails: 10 pages run directly, 11 become ONE proposal with an item each', async () => {
     const t = w.stack.newToken('identity-agent', 'write');
@@ -173,7 +184,9 @@ describe('the approval boundaries and isolation', () => {
     await w.stack.runtime.policy.commands.approve('owner', eleven.body.proposalId, { items: keep });
     const done = await approveWait(eleven.body.proposalId);
     expect(done.state).toBe('executed');
-    expect(BULK.slice(0, 11).filter((id) => pageNow(w, id).rows['Naming Culture'] === 'Khayali')).toHaveLength(3);
+    expect(
+      BULK.slice(0, 11).filter((id) => pageNow(w, id).rows['Naming Culture'] === 'Khayali'),
+    ).toHaveLength(3);
     const report = await w.stack.call(agent, 'arkona_identity_reconcile', {
       project: 'test',
       report: eleven.body.reconcileId,

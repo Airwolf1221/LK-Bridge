@@ -45,7 +45,9 @@ export interface IdentityDeps {
     skippedItems(projectId: string, jobId: string): SkippedItem[];
   };
   readonly proposals: {
-    addHooks(h: { afterSubmit?(ctx: { readonly proposal: ProposalView; readonly jobId: string }): void }): () => void;
+    addHooks(h: {
+      afterSubmit?(ctx: { readonly proposal: ProposalView; readonly jobId: string }): void;
+    }): () => void;
   };
   /** The consistency findings of one character (its identity page), free; null when the check cannot run. */
   readonly consistency?: (projectId: string, identityPageId: string) => Promise<readonly Obj[] | null>;
@@ -54,7 +56,9 @@ export interface IdentityDeps {
 }
 
 /** The kind of an item's step, for its outcome. */
-function roleOf(s: IdentityStepRecord): 'check' | 'rowsCheck' | 'factWrite' | 'factsVerify' | 'tagWrite' | 'tagsVerify' | 'other' {
+function roleOf(
+  s: IdentityStepRecord,
+): 'check' | 'rowsCheck' | 'factWrite' | 'factsVerify' | 'tagWrite' | 'tagsVerify' | 'other' {
   const body = isObj(s.params?.body) ? s.params.body : {};
   if (s.opId === EXPECT_STEP) {
     const c = Array.isArray(body.checks) ? (body.checks as Obj[])[0] : undefined;
@@ -62,7 +66,11 @@ function roleOf(s: IdentityStepRecord): 'check' | 'rowsCheck' | 'factWrite' | 'f
   }
   if (s.opId === VERIFY_STEP) {
     const t = Array.isArray(body.targets) ? (body.targets as Obj[])[0] : undefined;
-    return t?.checker === IDENTITY_CHECKS.tagsVerify ? 'tagsVerify' : t?.kind === 'sidebar' ? 'factsVerify' : 'other';
+    return t?.checker === IDENTITY_CHECKS.tagsVerify
+      ? 'tagsVerify'
+      : t?.kind === 'sidebar'
+        ? 'factsVerify'
+        : 'other';
   }
   if (ROW_OPS.has(s.opId)) return 'factWrite';
   if (s.opId === 'updateResource') return 'tagWrite';
@@ -76,7 +84,7 @@ const verificationOf = (result: unknown): string | null => {
 };
 const skippedHere = (result: unknown, item: string): SkippedItem | null => {
   if (!isObj(result) || !Array.isArray(result.skippedItems)) return null;
-  return ((result.skippedItems as SkippedItem[]).find((x) => x.item === item) ?? null) as SkippedItem | null;
+  return (result.skippedItems as SkippedItem[]).find((x) => x.item === item) ?? null;
 };
 /** A step the engine did not send because its items were skipped earlier (its result names them as `items`). */
 const wasSkipStub = (result: unknown) =>
@@ -90,9 +98,17 @@ export function outcomesOf(
   jobStatus: string,
 ): ItemOutcome[] {
   return plan.map((p): ItemOutcome => {
-    const base = { item: p.item, character: p.character, page: p.page ? { id: p.page.id, name: p.page.name } : null };
+    const base = {
+      item: p.item,
+      character: p.character,
+      page: p.page ? { id: p.page.id, name: p.page.name } : null,
+    };
     if (p.status === 'refused')
-      return { ...base, status: 'refused', reason: `${p.refusal?.code ?? 'REFUSED'}: ${p.refusal?.message ?? ''}` };
+      return {
+        ...base,
+        status: 'refused',
+        reason: `${p.refusal?.code ?? 'REFUSED'}: ${p.refusal?.message ?? ''}`,
+      };
     if (p.status === 'no_change')
       return {
         ...base,
@@ -118,12 +134,20 @@ export function outcomesOf(
       }
     }
     const factWrites = by('factWrite');
-    const written = factWrites.filter((s) => s.status === 'succeeded' && !wasSkipStub(s.result) && !skippedHere(s.result, p.item));
+    const written = factWrites.filter(
+      (s) => s.status === 'succeeded' && !wasSkipStub(s.result) && !skippedHere(s.result, p.item),
+    );
     const fv = by('factsVerify')[0];
-    const factsVerified = fv && fv.status === 'succeeded' && !wasSkipStub(fv.result) ? verificationOf(fv.result) === 'verified' : null;
+    const factsVerified =
+      fv && fv.status === 'succeeded' && !wasSkipStub(fv.result)
+        ? verificationOf(fv.result) === 'verified'
+        : null;
     const tw = by('tagWrite')[0];
     const tv = by('tagsVerify')[0];
-    const tagsVerified = tv && tv.status === 'succeeded' && !wasSkipStub(tv.result) ? verificationOf(tv.result) === 'verified' : null;
+    const tagsVerified =
+      tv && tv.status === 'succeeded' && !wasSkipStub(tv.result)
+        ? verificationOf(tv.result) === 'verified'
+        : null;
     const facts = {
       written: written.length > 0,
       verified: factWrites.length === 0 ? null : factsVerified,
@@ -153,7 +177,12 @@ export function outcomesOf(
     if (skip) {
       const role = roleOf(skip.s);
       if (role === 'check' || (role === 'factWrite' && written.length === 0))
-        return { ...base, status: 'skipped', reason: skip.x.reason, facts: { written: false, verified: null } };
+        return {
+          ...base,
+          status: 'skipped',
+          reason: skip.x.reason,
+          facts: { written: false, verified: null },
+        };
       if (role === 'factWrite')
         return {
           ...base,
@@ -166,13 +195,21 @@ export function outcomesOf(
       return {
         ...base,
         status: facts.verified === false ? 'failed' : 'partly_done',
-        reason: facts.verified === false ? 'the facts were written but their read-back differs' : `facts written; tags not written: ${skip.x.reason}`,
+        reason:
+          facts.verified === false
+            ? 'the facts were written but their read-back differs'
+            : `facts written; tags not written: ${skip.x.reason}`,
         facts,
         tags: { status: skip.x.reason.startsWith('held') ? 'held' : 'skipped', reason: skip.x.reason },
       };
     }
     if (facts.verified === false)
-      return { ...base, status: 'failed', reason: 'the facts were written but their read-back differs', facts };
+      return {
+        ...base,
+        status: 'failed',
+        reason: 'the facts were written but their read-back differs',
+        facts,
+      };
     if (tw) {
       const unchanged = isObj(tw.result) && tw.result.unchanged === true;
       if (tagsVerified === false)
@@ -291,7 +328,9 @@ export class IdentityService {
     const job = this.d.engine.queries.getJob(projectId, jobId);
     if (!job || !TERMINAL_JOB_STATUSES.has(job.status)) return rec;
     const steps = this.d.engine.stepRecords(projectId, jobId) ?? [];
-    const errors = new Map((this.d.engine.stepResults(projectId, jobId) ?? []).map((s) => [s.stepNo, s.error]));
+    const errors = new Map(
+      (this.d.engine.stepResults(projectId, jobId) ?? []).map((s) => [s.stepNo, s.error]),
+    );
     const items = outcomesOf(rec.plan.items, steps, errors, job.status);
     // The consistency follow-ups: each character written (free; the job's change snapshot is already taken).
     const withFollowUps: ItemOutcome[] = [];
@@ -306,7 +345,9 @@ export class IdentityService {
       } catch (err) {
         withFollowUps.push({
           ...it,
-          followUps: [{ code: 'CONSISTENCY_UNAVAILABLE', message: err instanceof Error ? err.message : String(err) }],
+          followUps: [
+            { code: 'CONSISTENCY_UNAVAILABLE', message: err instanceof Error ? err.message : String(err) },
+          ],
         });
       }
     }

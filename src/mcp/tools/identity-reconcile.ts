@@ -37,12 +37,7 @@ import { IDENTITY_CHECKS, IDENTITY_REBASERS } from '../../packs/identity/checks.
 import { IDENTITY_TOOL, outcomesOf, summaryOf } from '../../packs/identity/service.js';
 import type { IdentityRecord, PlannedItem } from '../../packs/identity/store.js';
 import { nameCheck, NEVER_INFER } from '../../packs/naming/check.js';
-import {
-  characterTypeOf,
-  currentCharacters,
-  nameKeyOf,
-  treeLabeller,
-} from '../../packs/naming/namesakes.js';
+import { characterTypeOf, currentCharacters, nameKeyOf, treeLabeller } from '../../packs/naming/namesakes.js';
 import { RETAG_CHECKS } from '../../packs/retag/checks.js';
 import { RetagError } from '../../packs/retag/service.js';
 import type { PackRules, TypeRules } from '../../packs/types.js';
@@ -85,7 +80,8 @@ const SETTABLE = ['race', 'namingCulture', 'lifeState', 'givenName', 'surname', 
 const RENAME_KEYS = ['Canonical Display Name', 'Subject', 'Name', 'Page Name', 'Display Name'];
 /** Protected and lifecycle facts, with the tool that changes each. */
 const PROTECTED: Readonly<Record<string, string>> = {
-  status: 'promote_page, archive_page or move_to_working (the lifecycle tools; always the owner’s canonical approval)',
+  status:
+    'promote_page, archive_page or move_to_working (the lifecycle tools; always the owner’s canonical approval)',
   'continuity type': 'set_facts (always a proposal the owner accepts as canon)',
   continuity: 'set_facts (always a proposal the owner accepts as canon)',
   'last major revision': 'the bridge’s rule (pass lastMajorRevision: "set" or "skip" to override it)',
@@ -97,10 +93,16 @@ const PROTECTED: Readonly<Record<string, string>> = {
 
 const itemSchema = z
   .object({
-    character: z.string().min(1).max(500).describe('The character: a name, alias, path or id (its index resolves to its Core).'),
+    character: z
+      .string()
+      .min(1)
+      .max(500)
+      .describe('The character: a name, alias, path or id (its index resolves to its Core).'),
     facts: z
       .record(z.string().min(1).max(256), z.string().min(1).max(2000))
-      .describe('Identity fact → value: Race / Species, Naming Culture, Life State, Personal / Given Name, Family / Surname, Temporal Scope.'),
+      .describe(
+        'Identity fact → value: Race / Species, Naming Culture, Life State, Personal / Given Name, Family / Surname, Temporal Scope.',
+      ),
   })
   .strict();
 
@@ -120,8 +122,11 @@ function resolveCharacter(
   q: string,
 ): { ok: true; r: Resolved } | { ok: false; code: string; message: string; extra?: Obj } {
   const roleOf = (n: TreeNode) =>
-    type.roles.find((r) => r.referenceType && n.referenceType && textKey(r.referenceType) === textKey(n.referenceType))
-      ?.referenceType ?? n.referenceType ?? 'identity page';
+    type.roles.find(
+      (r) => r.referenceType && n.referenceType && textKey(r.referenceType) === textKey(n.referenceType),
+    )?.referenceType ??
+    n.referenceType ??
+    'identity page';
   const isIdentity = (n: TreeNode) =>
     n.kind !== 'index' && n.referenceType !== null && idTypes.has(textKey(n.referenceType));
   const identityOf = (n: TreeNode): TreeNode | null => {
@@ -134,7 +139,9 @@ function resolveCharacter(
     if (n.kind === 'index') {
       const kids = ctx.tree.children(ctx.projectId, n.id).data.filter(isIdentity);
       const order = [...idTypes];
-      kids.sort((a, b) => order.indexOf(textKey(a.referenceType!)) - order.indexOf(textKey(b.referenceType!)));
+      kids.sort(
+        (a, b) => order.indexOf(textKey(a.referenceType!)) - order.indexOf(textKey(b.referenceType!)),
+      );
       return kids[0] ?? null;
     }
     return null;
@@ -273,9 +280,7 @@ function recordBody(rec: IdentityRecord): Obj {
       })
     : rec.plan.items.map(itemView);
   const followUps = rec.outcome
-    ? rec.outcome.items.flatMap((o) =>
-        (o.followUps ?? []).map((f) => ({ character: o.character, ...f })),
-      )
+    ? rec.outcome.items.flatMap((o) => (o.followUps ?? []).map((f) => ({ character: o.character, ...f })))
     : [];
   return {
     reconcileId: rec.id,
@@ -293,7 +298,10 @@ export function identityReconcileTool(deps: ToolDeps): McpToolProvider {
   const packs = () => deps.services?.packs;
   const listed = () =>
     (packs()?.toolListed(PACK) ?? false) &&
-    (packs()?.peek(PACK)?.rules.types.some((t) => t.hook === 'character') ?? false);
+    (packs()
+      ?.peek(PACK)
+      ?.rules.types.some((t) => t.hook === 'character') ??
+      false);
   return defineTool({
     name: IDENTITY_TOOL,
     title: 'Set many characters’ identity facts and their tags (Arkona pack)',
@@ -305,7 +313,10 @@ export function identityReconcileTool(deps: ToolDeps): McpToolProvider {
       'At scope write it runs directly for 10 pages or fewer; more becomes ONE proposal with one item per character (the owner approves some or all); at scope propose it is a proposal. Never retry a proposal or a queued job: follow it with { report: reconcileId }. It never infers a culture, race or nationality, and never renames or moves anything. Example: { "items": [{ "character": "Al-Mansur XII", "facts": { "Naming Culture": "Ancient Menkheti" } }], "workstream": "Menkheti culture split", "dryRun": true, "project": "arkona" }. Cost: 1 read per character to plan; then per character about 3 reads, 1 write per fact changed, 1 tag write and 2 read-backs.',
     inputSchema: z.object({
       items: z.array(itemSchema).min(1).max(MAX_ITEMS).optional(),
-      reconcileTags: z.boolean().optional().describe('Recompute and write the tags from the new facts (default true).'),
+      reconcileTags: z
+        .boolean()
+        .optional()
+        .describe('Recompute and write the tags from the new facts (default true).'),
       dryRun: z.boolean().optional().describe('The full itemised preview; nothing written.'),
       lastMajorRevision: lastMajorRevisionArg,
       report: z
@@ -321,12 +332,18 @@ export function identityReconcileTool(deps: ToolDeps): McpToolProvider {
       withProject(deps, args.project, 'write', async (pd) => {
         const service = pd.services?.identity;
         if (!service)
-          return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'This tool is not available on this bridge.' }, pd);
+          return errorResult(
+            { code: 'TOOL_UNAVAILABLE', message: 'This tool is not available on this bridge.' },
+            pd,
+          );
         if (args.report !== undefined) {
           let rec =
             service.records.get(args.report) ?? service.records.byJob(pd.project.id, args.report) ?? null;
           if (!rec || rec.projectId !== pd.project.id)
-            return errorResult({ code: 'NOT_FOUND', message: `No reconcile ${args.report} in this project.` }, pd);
+            return errorResult(
+              { code: 'NOT_FOUND', message: `No reconcile ${args.report} in this project.` },
+              pd,
+            );
           rec = await service.current(rec);
           return finish(pd, mctx, IDENTITY_TOOL, { ...recordBody(rec), cost: 'none' }, () => ({
             reconcileId: rec.id,
@@ -365,13 +382,19 @@ async function plan(
   const pack = packs.get(PACK);
   if (!pack || !packs.attachment(PACK, pd.project.id))
     return errorResult(
-      { code: 'PACK_NOT_ATTACHED', message: `The Arkona pack is not attached to the project ${pd.project.name}.` },
+      {
+        code: 'PACK_NOT_ATTACHED',
+        message: `The Arkona pack is not attached to the project ${pd.project.name}.`,
+      },
       pd,
     );
   const rules: PackRules | null = packs.approvedRules(PACK);
   if (!pack.approved || !rules)
     return errorResult(
-      { code: 'PACK_NOT_CURRENT', message: 'No version of the Arkona pack is approved yet: the owner approves it on the Packs page.' },
+      {
+        code: 'PACK_NOT_CURRENT',
+        message: 'No version of the Arkona pack is approved yet: the owner approves it on the Packs page.',
+      },
       pd,
     );
   const reconcileTags = args.reconcileTags !== false;
@@ -379,7 +402,10 @@ async function plan(
   const policy = reconcileTags ? retag.policyFor(pd.project.id).policy : null;
   const type = characterTypeOf(rules);
   if (!type)
-    return errorResult({ code: 'NO_CHARACTER_TYPE', message: 'The approved Arkona pack version has no character type.' }, pd);
+    return errorResult(
+      { code: 'NO_CHARACTER_TYPE', message: 'The approved Arkona pack version has no character type.' },
+      pd,
+    );
   const rc = repoContext(pd);
   if (!rc.ok) return rc.result;
   const ctx = rc.ctx;
@@ -439,7 +465,9 @@ async function plan(
       }
       const prot = PROTECTED[norm(rawKey)];
       if (prot) {
-        refuse('PROTECTED_FACT', `${rawKey} is not an identity fact this tool sets: use ${prot}.`, { key: rawKey });
+        refuse('PROTECTED_FACT', `${rawKey} is not an identity fact this tool sets: use ${prot}.`, {
+          key: rawKey,
+        });
         continue;
       }
       const s = settable.get(k);
@@ -452,11 +480,18 @@ async function plan(
         continue;
       }
       if (value === '' || placeholders.has(value.toLowerCase())) {
-        refuse('PLACEHOLDER_VALUE', `${s.key}: “${rawValue}” is a placeholder, not a value. Ask the owner (“${type.unestablished}” only with their reason).`, { key: s.key });
+        refuse(
+          'PLACEHOLDER_VALUE',
+          `${s.key}: “${rawValue}” is a placeholder, not a value. Ask the owner (“${type.unestablished}” only with their reason).`,
+          { key: s.key },
+        );
         continue;
       }
       if (s.key === raceKey && !never.has(textKey(value))) {
-        const token = tokenFor(rules.tags.race, value) ?? rules.tags.exceptional.find((x) => textKey(x) === textKey(value)) ?? null;
+        const token =
+          tokenFor(rules.tags.race, value) ??
+          rules.tags.exceptional.find((x) => textKey(x) === textKey(value)) ??
+          null;
         if (token === null) {
           refuse(
             'UNMAPPED_VALUE',
@@ -466,7 +501,11 @@ async function plan(
           continue;
         }
       }
-      if (s.key === cultureKey && !never.has(textKey(value)) && tokenFor(rules.tags.culture, value) === null) {
+      if (
+        s.key === cultureKey &&
+        !never.has(textKey(value)) &&
+        tokenFor(rules.tags.culture, value) === null
+      ) {
         refuse(
           'UNMAPPED_VALUE',
           `${s.key}: “${value}” has no approved culture token in the pack’s culture map. Ask the owner; they add it on the Packs page. Never choose one from the name.`,
@@ -503,10 +542,13 @@ async function plan(
       priority: 'P1',
       title: `${IDENTITY_TOOL}: read ${toRead.length} identity page${toRead.length === 1 ? '' : 's'}`,
     });
-    if (!('jobId' in sub)) return errorResult({ code: 'BRIDGE_ERROR', message: 'The reads were not accepted.' }, pd);
+    if (!('jobId' in sub))
+      return errorResult({ code: 'BRIDGE_ERROR', message: 'The reads were not accepted.' }, pd);
     const job = await pd.engine.wait(pd.project.id, sub.jobId, WAIT_MS);
     const results =
-      job.status === 'succeeded' || job.status === 'failed' ? pd.engine.stepResults(pd.project.id, sub.jobId) : undefined;
+      job.status === 'succeeded' || job.status === 'failed'
+        ? pd.engine.stepResults(pd.project.id, sub.jobId)
+        : undefined;
     if (!results)
       return render(
         {
@@ -524,7 +566,10 @@ async function plan(
   // 3. Each item's plan: the facts (set_facts' planner), the tags (the retag engine on the new facts), the name check.
   const converter = pageConverterContext(services, ctx.projectId, {});
   const planned: PlannedItem[] = [];
-  const factsPlans = new Map<string, { plan: FactsPlan; sidebar: ReturnType<typeof sidebarFrom>; res: Obj }>();
+  const factsPlans = new Map<
+    string,
+    { plan: FactsPlan; sidebar: ReturnType<typeof sidebarFrom>; res: Obj }
+  >();
   for (const d of drafts) {
     const base = { item: d.item, asked: d.asked, character: d.character };
     const pageView = d.page ? { id: d.page.node.id, name: d.page.node.rawName, role: d.page.role } : null;
@@ -539,7 +584,10 @@ async function plan(
         ...base,
         page: pageView,
         status: 'refused',
-        refusal: { code: 'PAGE_UNREADABLE', message: 'Its identity page could not be read now; nothing was planned for it.' },
+        refusal: {
+          code: 'PAGE_UNREADABLE',
+          message: 'Its identity page could not be read now; nothing was planned for it.',
+        },
       });
       continue;
     }
@@ -700,7 +748,9 @@ async function plan(
   const toRun = planned.filter((p) => p.status === 'planned');
   const head = {
     reconcileTags,
-    ...(policy ? { policy: { version: policy.version, digest: policy.digest.slice(0, 16), label: policy.label } } : {}),
+    ...(policy
+      ? { policy: { version: policy.version, digest: policy.digest.slice(0, 16), label: policy.label } }
+      : {}),
     counts: {
       items: planned.length,
       planned: toRun.length,
@@ -713,10 +763,21 @@ async function plan(
   };
   const principalId = mctx.principal?.principalId ?? 'unknown';
   const workstream = currentWorkstream();
-  const recordPlan = { items: planned, reconcileTags, ...(policy ? { policy: { version: policy.version, digest: policy.digest } } : {}) };
+  const recordPlan = {
+    items: planned,
+    reconcileTags,
+    ...(policy ? { policy: { version: policy.version, digest: policy.digest } } : {}),
+  };
   if (args.dryRun !== true && toRun.length === 0) {
     // Nothing to submit: the refusals are still recorded (the workstream report lists them).
-    const rec = service.records.save({ projectId: pd.project.id, principalId, workstream, jobId: null, proposalId: null, plan: recordPlan });
+    const rec = service.records.save({
+      projectId: pd.project.id,
+      principalId,
+      workstream,
+      jobId: null,
+      proposalId: null,
+      plan: recordPlan,
+    });
     const items = outcomesOf(planned, [], new Map(), 'succeeded');
     service.records.finish(rec.id, { items, summary: summaryOf(items) });
   }
@@ -786,7 +847,10 @@ async function plan(
       items: [item],
     });
     if (!fp.plan.empty) {
-      const job = expandFacts(fp.plan, page, fp.sidebar, { facts: Object.fromEntries((p.facts ?? []).map((f) => [f.key, f.after])), links: {} });
+      const job = expandFacts(fp.plan, page, fp.sidebar, {
+        facts: Object.fromEntries((p.facts ?? []).map((f) => [f.key, f.after])),
+        links: {},
+      });
       const base = steps.length;
       for (const s of job.steps) {
         const m = mapStepRefs(s, (n) => n + base);
@@ -795,7 +859,14 @@ async function plan(
           ...m,
           items: [item],
           ...(m.journalOperation
-            ? { journalOperation: { ...m.journalOperation, tool: IDENTITY_TOOL, via: 'set_facts', character: p.character } }
+            ? {
+                journalOperation: {
+                  ...m.journalOperation,
+                  tool: IDENTITY_TOOL,
+                  via: 'set_facts',
+                  character: p.character,
+                },
+              }
             : {}),
           // Judged by the item's own checks inside the job (its fresh read, the rows check, the in-lock state), so a
           // proposal captures no version of it: one character changed before approval skips that character alone.
@@ -812,7 +883,11 @@ async function plan(
       steps.push({
         op: 'updateResource',
         params: { path: { resourceId: node.id }, body: { tags: [...p.tags.proposed] } },
-        expectCurrent: { state: 'resource', hash: stateHash({ name: node.name, tags: p.tags.current }), label: node.name },
+        expectCurrent: {
+          state: 'resource',
+          hash: stateHash({ name: node.name, tags: p.tags.current }),
+          label: node.name,
+        },
         judgedInLock: true,
         deferTreeReread: true,
         items: [item],
@@ -848,7 +923,12 @@ async function plan(
                 label: `${node.name}: tags read back`,
                 checker: IDENTITY_CHECKS.tagsVerify,
                 resourceId: node.id,
-                input: { pageId: node.id, name: node.name, proposed: p.tags.proposed, beforeLabel: checkLabel },
+                input: {
+                  pageId: node.id,
+                  name: node.name,
+                  proposed: p.tags.proposed,
+                  beforeLabel: checkLabel,
+                },
                 inputFrom: [{ step: checkAt, as: 'before' }],
               },
             ],
@@ -907,7 +987,11 @@ async function plan(
       internal: true,
       ...(mode === 'propose' ? { forceProposal: true } : {}),
       ...(args.lastMajorRevision ? { lastMajorRevision: args.lastMajorRevision } : {}),
-      resumable: { kind: 'identity', ...(tagsAnywhere && policy ? { recheck: [1] } : {}), isolateItems: true },
+      resumable: {
+        kind: 'identity',
+        ...(tagsAnywhere && policy ? { recheck: [1] } : {}),
+        isolateItems: true,
+      },
       proposal: {
         summary: title,
         items,
@@ -967,7 +1051,8 @@ async function plan(
   });
   const view =
     r.eta === null
-      ? (pd.engine.queries.getJob(pd.project.id, r.jobId) ?? (await pd.engine.wait(pd.project.id, r.jobId, 0)))
+      ? (pd.engine.queries.getJob(pd.project.id, r.jobId) ??
+        (await pd.engine.wait(pd.project.id, r.jobId, 0)))
       : await pd.engine.wait(pd.project.id, r.jobId, WAIT_MS);
   if (view.status === 'succeeded' || view.status === 'failed' || view.status === 'cancelled') {
     const done = (await service.conclude(pd.project.id, r.jobId)) ?? rec;

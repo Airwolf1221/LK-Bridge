@@ -101,7 +101,10 @@ async function readResource(
     const status = (e as { lk?: { status?: number } } | null)?.lk?.status;
     const code = (e as { code?: unknown } | null)?.code;
     if (status === 403 || status === 404 || code === 'FORBIDDEN' || code === 'NOT_FOUND')
-      return { ok: false, why: `the page cannot be read (${typeof code === 'string' ? code : String(status)})` };
+      return {
+        ok: false,
+        why: `the page cannot be read (${typeof code === 'string' ? code : String(status)})`,
+      };
     throw e; // a budget or restart wait: the check is parked and runs again
   }
 }
@@ -170,7 +173,11 @@ function rebaseTags(d: IdentityCheckDeps, ctx: RebaseContext): RebaseResult {
   if (!ctx.current.exists) return skip(`${IDENTITY_SKIP.inaccessible}the page is gone`);
   const page = (ctx.current.entity ?? ctx.current.body ?? {}) as Obj;
   if (typeof page.name === 'string' && page.name !== input.name)
-    return skip(`${IDENTITY_SKIP.conflicted}renamed meanwhile; the tags were not written`, input.name, page.name);
+    return skip(
+      `${IDENTITY_SKIP.conflicted}renamed meanwhile; the tags were not written`,
+      input.name,
+      page.name,
+    );
   const policy = d.policy(input.packId, ctx.projectId);
   if (!policy || policy.digest !== input.digest)
     return skip(
@@ -191,9 +198,10 @@ function rebaseTags(d: IdentityCheckDeps, ctx: RebaseContext): RebaseResult {
 async function tagsVerify(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
   const input = ctx.input as TagsVerifyInput;
   const src = ctx.from.before;
-  const before = isObj(src) && isObj(src.observed) && isObj(src.observed[input.beforeLabel])
-    ? (src.observed[input.beforeLabel] as Obj)
-    : null;
+  const before =
+    isObj(src) && isObj(src.observed) && isObj(src.observed[input.beforeLabel])
+      ? (src.observed[input.beforeLabel] as Obj)
+      : null;
   const r = await readResource(ctx, input.pageId);
   if (!r.ok) return { differences: [{ path: `${input.name}: page`, expected: 'readable', actual: r.why }] };
   const diffs: StateDifference[] = [];
@@ -204,9 +212,17 @@ async function tagsVerify(ctx: RegisteredCheckContext): Promise<RegisteredCheckR
     const after = fingerprint(r.res);
     for (const k of ['name', 'aliases', 'parentId', 'rank', 'isHidden', 'isLocked', 'documents'] as const)
       if (stableJson(after[k] ?? null) !== stableJson(before[k] ?? null))
-        diffs.push({ path: `${input.name}: ${k} unchanged`, expected: before[k] ?? null, actual: after[k] ?? null });
+        diffs.push({
+          path: `${input.name}: ${k} unchanged`,
+          expected: before[k] ?? null,
+          actual: after[k] ?? null,
+        });
   } else
-    diffs.push({ path: `${input.name}: before`, expected: 'the page as read before the write', actual: '(not recorded)' });
+    diffs.push({
+      path: `${input.name}: before`,
+      expected: 'the page as read before the write',
+      actual: '(not recorded)',
+    });
   return { differences: diffs, observed: { tags } };
 }
 
