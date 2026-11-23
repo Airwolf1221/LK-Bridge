@@ -40,7 +40,11 @@ export interface JournalEntryInput {
   readonly operation?: Readonly<Record<string, unknown>>;
 }
 
-export type JournalOutcome = 'pending' | 'applied' | 'not_applied' | 'unknown';
+/**
+ * v3 F5a (ADR 0067, H10): `superseded`: the outcome was unknown, and later writes to the same target were applied, so
+ * whether it applied can no longer be told (and no longer matters). Set only by the reconciler (src/jobs/reconcile.ts).
+ */
+export type JournalOutcome = 'pending' | 'applied' | 'not_applied' | 'unknown' | 'superseded';
 
 export interface JournalEntry {
   readonly id: number;
@@ -170,10 +174,46 @@ function capOperation(op: Readonly<Record<string, unknown>>): string {
 }
 
 export class WriteJournal {
+  /** v3 F5a (H10): told the id of every entry whose outcome becomes `unknown` (the reconciler). */
+  private readonly unknownListeners = new Set<(entry: { id: number; projectId: string }) => void>();
+
   constructor(
     private readonly db: Db,
     private readonly now: () => number,
   ) {}
+
+  /** v3 F5a (ADR 0067, H10): subscribes to entries whose outcome becomes `unknown`. Returns an unsubscribe. */
+  onUnknown(fn: (entry: { id: number; projectId: string }) => void): () => void {
+    this.unknownListeners.add(fn);
+    return () => this.unknownListeners.delete(fn);
+  }
+
+  private tellUnknown(id: number): void {
+    if (this.unknownListeners.size === 0) return;
+    const row = this.db.prepare('SELECT project_id FROM write_journal WHERE id = ?').get(id) as
+      | { project_id: string }
+      | undefined;
+    if (!row) return;
+    for (const fn of this.unknownListeners) {
+      try {
+        fn({ id, projectId: row.project_id });
+      } catch {
+        // a listener never breaks a write
+      }
+    }
+  }
+
+  /**
+   * v3 F5a (H10): the reconciler's answer for an entry still `unknown` (never overwrites an outcome the job's own
+   * recovery found meanwhile). Returns whether it changed.
+   */
+  settleUnknown(id: number, outcome: 'applied' | 'not_applied' | 'superseded'): boolean {
+    return (
+      this.db
+        .prepare("UPDATE write_journal SET outcome = ? WHERE id = ? AND outcome = 'unknown'")
+        .run(outcome, id).changes > 0
+    );
+  }
 
   /** Records an entry before the write is sent. Returns its id (for `setOutcome`). */
   record(e: JournalEntryInput): number {
@@ -237,6 +277,7 @@ export class WriteJournal {
 
   setOutcome(id: number, outcome: JournalOutcome): void {
     this.db.prepare('UPDATE write_journal SET outcome = ? WHERE id = ?').run(outcome, id);
+    if (outcome === 'unknown') this.tellUnknown(id);
   }
 
   /** Records the id LegendKeeper gave a created entity (inserts and creates without a client-chosen id). */
@@ -254,6 +295,10 @@ export class WriteJournal {
            SELECT id FROM write_journal WHERE job_id = ? AND step_no = ? ORDER BY id DESC LIMIT 1)`,
       )
       .run(outcome, jobId, stepNo);
+    if (outcome === 'unknown') {
+      const id = this.entryIdForStep(jobId, stepNo);
+      if (id !== undefined) this.tellUnknown(id);
+    }
   }
 
   /** The latest journal entry id of a step, or undefined (v2 C1: the reference a verify result gives for recovery). */

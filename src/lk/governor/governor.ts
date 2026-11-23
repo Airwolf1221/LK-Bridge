@@ -12,11 +12,18 @@ import {
   BridgeLkError,
   BudgetWaitError,
   RestartWaitError,
+  callerAbortError,
   fromLkResponse,
+  sentStateOf,
   toBridgeLkError,
   type LkErrorBody,
+  type SentState,
   type WireFacts,
 } from '../errors.js';
+
+/** v3 F5a (H10): across attempts, the surest "sent" wins (one attempt that reached LegendKeeper is enough). */
+const mergeSent = (a: SentState, b: SentState): SentState =>
+  a === 'yes' || b === 'yes' ? 'yes' : a === 'maybe' || b === 'maybe' ? 'maybe' : 'no';
 import { getOperation } from '../registry.js';
 import { TIER_IDS, type TierId } from '../registry-types.js';
 import { sleep, systemClock, type Clock, type TimerHandle } from './clock.js';
@@ -340,8 +347,16 @@ export class Governor {
     this.validate(req);
     let state: RetryState = INITIAL_RETRY_STATE;
     let attempts = 0;
+    let sent: SentState = 'no';
     for (;;) {
-      const ticket = await this.admit(req, attempts > 0);
+      let ticket: Ticket;
+      try {
+        ticket = await this.admit(req, attempts > 0);
+      } catch (e) {
+        // v3 F5a (H10): a caller abort while a retry waited in the queue: an earlier attempt may have been sent.
+        if (e instanceof BridgeLkError && e.code === 'ABORTED') throw e.with({ sent, attempts });
+        throw e;
+      }
       attempts++;
       const controller = new AbortController();
       const ctx: AttemptContext = {
@@ -367,7 +382,12 @@ export class Governor {
         return value;
       } catch (e) {
         this.release(ctx);
-        error = toBridgeLkError(e, req.opId, this.wireFacts(ctx)).with({ attempts });
+        const wire = this.wireFacts(ctx);
+        const raw = toBridgeLkError(e, req.opId, wire);
+        // v3 F5a (ADR 0067, H10): whether this attempt's request left the bridge (an earlier attempt's counts too).
+        const sentNow = sentStateOf(e, wire);
+        sent = mergeSent(sent, sentNow);
+        error = raw.with({ attempts, sent });
       }
 
       const now = this.clock.now();
@@ -407,7 +427,10 @@ export class Governor {
           } catch (cause) {
             if (this.waitsStopped && !req.signal?.aborted)
               throw new RestartWaitError(req.opId, this.clock.now());
-            throw this.abortedError(req.opId, cause);
+            // v3 F5a (H11): the caller cancelled during the back-off (an earlier attempt may have been sent).
+            throw req.signal?.aborted
+              ? callerAbortError(req.opId, cause).with({ attempts, sent })
+              : this.abortedError(req.opId, cause);
           }
           continue;
         case 'budget-wait': {
@@ -654,7 +677,7 @@ export class Governor {
 
   private admit(req: ExecuteRequest<unknown>, front: boolean): Promise<Ticket> {
     if (this.closed) return Promise.reject(this.abortedError(req.opId, new Error('governor closed')));
-    if (req.signal?.aborted) return Promise.reject(this.abortedError(req.opId, req.signal.reason));
+    if (req.signal?.aborted) return Promise.reject(callerAbortError(req.opId, req.signal.reason));
     return new Promise<Ticket>((resolve, reject) => {
       const laneKey = req.jobId ?? '';
       const pending: Pending = { req, lane: laneKey, resolve, reject, cleanup: () => {} };
@@ -666,7 +689,7 @@ export class Governor {
       if (req.signal) {
         const onAbort = () => {
           this.removePending(pending);
-          reject(this.abortedError(req.opId, req.signal?.reason));
+          reject(callerAbortError(req.opId, req.signal?.reason));
           this.pump();
         };
         req.signal.addEventListener('abort', onAbort, { once: true });
@@ -932,6 +955,8 @@ export class Governor {
       timedOut: ctx.timedOut,
       aborted: ctx.callerAborted,
       transportError: ctx.transportError,
+      fetched: ctx.fetchCount > 0,
+      responded: ctx.captured !== undefined,
     };
   }
 

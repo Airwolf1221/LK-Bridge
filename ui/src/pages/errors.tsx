@@ -26,7 +26,25 @@ const CLASS_TONE: Record<string, 'bad' | 'warn' | 'neutral' | 'info'> = {
   upstream: 'bad',
   bridge: 'bad',
   policy: 'neutral',
+  client: 'neutral',
 };
+
+/** v3 F5a (ADR 0067, H11): a classification in words (`client`: the caller cancelled the call). */
+export function classificationText(c: string): string {
+  return c === 'client' ? 'cancelled by the caller' : c.replace('_', ' ');
+}
+
+/**
+ * v3 F5a (ADR 0067, H10): why an occurrence has no LegendKeeper request id, from whether its request left the bridge.
+ * "Refused before it was sent" only when it truly never left; an older record that does not say is "none recorded".
+ */
+export function noRequestIdText(detail: Record<string, unknown> | null): string {
+  const sent = detail?.sent;
+  if (sent === 'no') return 'none (refused before it was sent)';
+  if (sent === 'yes') return 'none (the request was sent; its reply never arrived)';
+  if (sent === 'maybe') return 'none (the request may have been sent; no reply arrived)';
+  return 'none recorded';
+}
 
 export function ErrorsPage() {
   const { query, navigate } = useRoute();
@@ -97,7 +115,7 @@ function ErrorList({ open }: { open: (fingerprint: string) => void }) {
                   <td className="mono">{g.code ?? '–'}</td>
                   <td>
                     <Badge tone={CLASS_TONE[g.classification] ?? 'neutral'}>
-                      {g.classification.replace('_', ' ')}
+                      {classificationText(g.classification)}
                     </Badge>
                   </td>
                   <td className="num">{fmtInt(g.count)}</td>
@@ -191,9 +209,12 @@ function ErrorDetail({ fingerprint, back }: { fingerprint: string; back: () => v
                   <span className="row">
                     {e.status !== null && <Badge>HTTP {e.status}</Badge>}
                     <Badge tone={CLASS_TONE[e.classification] ?? 'neutral'}>
-                      {e.classification.replace('_', ' ')}
+                      {classificationText(e.classification)}
                     </Badge>
                     {e.retryable && <Badge tone="info">retryable</Badge>}
+                    {e.detail?.ambiguous === true && (
+                      <Badge tone="warn">outcome unknown: it may have applied</Badge>
+                    )}
                     {e.resolvedAt && <Badge tone="ok">resolved</Badge>}
                   </span>
                 </div>
@@ -208,7 +229,7 @@ function ErrorDetail({ fingerprint, back }: { fingerprint: string; back: () => v
                           <CopyButton text={e.requestId} what="request id" />
                         </span>
                       ) : (
-                        <span className="muted">none (refused before it was sent)</span>
+                        <span className="muted">{noRequestIdText(e.detail)}</span>
                       )}
                     </dd>
                   </div>

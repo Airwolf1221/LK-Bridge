@@ -52,7 +52,12 @@ export const registerOverview: Register = (api, ctx) => {
     const id = project.id;
     const controls = engine.queries.controls(id ?? undefined);
     const active = id ? engine.queries.listJobs(id, { status: ACTIVE, limit: 500 }) : [];
-    const errors = id ? engine.queries.listErrors(id, { since: now() - 3_600_000, limit: 1000 }) : [];
+    // v3 F5a (ADR 0067, H11): a call the caller cancelled (`client`) is not counted.
+    const errors = id
+      ? engine.queries
+          .listErrors(id, { since: now() - 3_600_000, limit: 1000 })
+          .filter((e) => e.classification !== 'client')
+      : [];
     const pending = id
       ? policy.commands.listProposals('owner', { project: id, state: 'pending', limit: 500 })
       : [];
@@ -82,6 +87,13 @@ export const registerOverview: Register = (api, ctx) => {
       },
       errorsLastHour: { count: errors.length, capped: errors.length >= 1000 },
       pendingProposals: pending.length,
+      // v3 F5a (ADR 0067, H10): writes whose outcome is unknown: being read back, or left for the owner.
+      unknownWrites: id
+        ? {
+            pending: deps.runtime.outcomes?.list(id, { state: 'pending', limit: 1000 }).length ?? 0,
+            unresolved: deps.runtime.outcomes?.list(id, { state: 'unresolved', limit: 1000 }).length ?? 0,
+          }
+        : { pending: 0, unresolved: 0 },
       // v3 F3.4 (ADR 0055): agents' direct writes at scope `write` the owner has not reviewed yet.
       unreviewedDirectWrites:
         id && deps.runtime.review ? deps.runtime.review.store.count(id, { state: 'unreviewed' }) : 0,

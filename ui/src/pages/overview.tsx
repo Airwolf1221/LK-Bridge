@@ -223,6 +223,18 @@ export function OverviewPage() {
                 <Link to="/errors">errors in the last hour</Link>
               </span>
             </div>
+            {/* v3 F5a (ADR 0067, H10): shown only when there is one (an unknown outcome is rare). */}
+            {d.unknownWrites && d.unknownWrites.pending + d.unknownWrites.unresolved > 0 && (
+              <div className="stat">
+                <span className="stat-value">{d.unknownWrites.pending + d.unknownWrites.unresolved}</span>
+                <span className="stat-label">
+                  <Link to="/journal?outcome=unknown">
+                    writes with an unknown outcome
+                    {d.unknownWrites.unresolved > 0 ? ` (${d.unknownWrites.unresolved} for you to check)` : ''}
+                  </Link>
+                </span>
+              </div>
+            )}
             <div className="stat">
               <span className="stat-value">{d.pendingProposals}</span>
               <span className="stat-label">

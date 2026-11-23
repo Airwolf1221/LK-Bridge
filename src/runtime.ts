@@ -66,6 +66,7 @@ import { registerSplitChecks } from './packs/split/checks.js';
 import { ROUTE_BACK_REBASER, routeBackRebaser } from './jobs/route-back.js';
 import { SplitService } from './packs/split/service.js';
 import { RetagService } from './packs/retag/service.js';
+import { OutcomeReconciler } from './jobs/reconcile.js';
 import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
 import { RenameService } from './packs/rename/service.js';
@@ -197,6 +198,8 @@ export interface Runtime {
   readonly splits: SplitService;
   /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
   readonly retag: RetagService;
+  /** v3 F5a (ADR 0067, H10): the reconciliation of writes whose outcome is unknown. */
+  readonly outcomes: OutcomeReconciler;
   readonly tools: readonly McpToolProvider[];
   /** Tells connected MCP sessions when what is listed changes (`notifications/tools/list_changed`). */
   readonly toolList: ToolListWatch;
@@ -392,6 +395,20 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     autoStart: false,
   });
   engine.start(); // restart-resume: jobs left running by a crash are verified and continued
+  // v3 F5a (ADR 0067, H10): every write whose outcome is unknown is read back and settled (applied, not applied,
+  // superseded), with back-off for about five minutes; one left from before is swept at start-up. One that cannot be
+  // settled becomes the audits' `write_outcome_unknown` finding.
+  const outcomes = new OutcomeReconciler({
+    db: o.db,
+    journal: engine.journal,
+    read: (projectId, opId, params) =>
+      engine.internalRead(projectId, opId, params, { priority: 'P2', notFoundIsAnswer: true }),
+    stepParams: (projectId, jobId, stepNo) =>
+      engine.stepRecords(projectId, jobId)?.find((s) => s.stepNo === stepNo)?.params ?? null,
+    clock: o.clock ?? systemClock,
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachOutcomes = outcomes.start();
   // OPS2: keys imported from the env file, audited by name and last four characters only.
   auditImport = (i) =>
     policy.store.audit('system', 'project.key_import', i.project, undefined, {
@@ -851,6 +868,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         projectName: projectStore.byId(projectId)?.name ?? null,
         known: () => knownNamesOf(toolsRef.current),
       }),
+    // v3 F5a (ADR 0067, H10): the writes whose outcome the reconciler could not settle.
+    unknownWrites: (projectId) => outcomes.unresolved(projectId),
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
     consistency: async (projectId) =>
       consistencyRef.current ? consistencyRef.current.auditItems(projectId) : null,
@@ -1480,6 +1499,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     renames,
     splits,
     retag,
+    outcomes,
     tools,
     toolList,
     resources: guideResources(),
@@ -1582,6 +1602,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     unregisterRouteBack();
     for (const f of unmarkRelock) f();
     detachRetag();
+    detachOutcomes();
     unregisterRetagChecks();
     detachReview();
     detachRestores();
