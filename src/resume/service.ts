@@ -233,7 +233,8 @@ export class ResumeService {
         r.kind === 'rename' ||
         r.kind === 'recreate' ||
         r.kind === 'split' ||
-        r.kind === 'retag')
+        r.kind === 'retag' ||
+        r.kind === 'identity')
       ? r
       : null;
   }

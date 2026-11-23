@@ -296,6 +296,7 @@ function toView(r: Row, opCount: number): ProposalView {
     tool: toolOfRow(r),
     reproposedAs: (r.reproposed_as as string | null | undefined) ?? null,
     reproposalOf: (r.reproposal_of as string | null | undefined) ?? null,
+    workstream: (r.workstream as string | null | undefined) ?? null,
   };
 }
 
@@ -764,8 +765,8 @@ export class ProposalService implements ProposalSink {
         .prepare(
           `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
              priority, on_error, summary, state, created_at, updated_at, expires_at, operation, operations,
-             page_summary, requires_canonical, canonical_changes, job_options, proposed_because, items)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             page_summary, requires_canonical, canonical_changes, job_options, proposed_because, items, workstream)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -790,6 +791,7 @@ export class ProposalService implements ProposalSink {
           jobOptions ? JSON.stringify(jobOptions) : null,
           meta.rail ? meta.rail.reason.slice(0, REASON_MAX) : null,
           items ? JSON.stringify(items) : null,
+          origin.workstream ?? null,
         );
       const insert = this.store.db.prepare(
         `INSERT INTO proposal_ops (proposal_id, project_id, idx, op_id, op_kind, params, params_hash, options,
@@ -1405,6 +1407,8 @@ export class ProposalService implements ProposalSink {
           principal,
           approvedBy: 'owner',
           approval: token,
+          // v3 F5c (ADR 0069, H8): the approved work stays in the proposal's workstream.
+          ...(p.workstream ? { workstream: p.workstream } : {}),
           ...(canonical ? { canonicalApprovedBy: 'owner' } : {}),
         },
         ...(jobOptions?.holdLock ? { holdLock: jobOptions.holdLock } : {}),
@@ -2439,6 +2443,10 @@ function sanitiseOrigin(o: JobOrigin): JobOrigin {
     ...(o.tool !== undefined ? { tool: String(o.tool).slice(0, 100) } : {}),
     ...(o.detail !== undefined ? { detail: String(o.detail).slice(0, 500) } : {}),
     ...(o.principal ? { principal: o.principal } : {}),
+    // v3 F5c (ADR 0069, H8): the workstream the proposal belongs to (its approved job keeps it).
+    ...(typeof o.workstream === 'string' && o.workstream !== ''
+      ? { workstream: String(o.workstream).slice(0, 80) }
+      : {}),
   };
 }
 

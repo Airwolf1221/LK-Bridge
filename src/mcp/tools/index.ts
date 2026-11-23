@@ -30,6 +30,10 @@ import { arkonaReadTools } from './arkona-reads.js';
 import { consistencyTools } from './consistency.js';
 import { narrativeTools } from './narrative.js';
 import { narrativeReadTools } from './narrative-read.js';
+import { withWorkstreamArg } from './workstream-arg.js';
+import { workstreamTools } from './workstreams.js';
+import { queryFactsTool } from './query-facts.js';
+import { identityReconcileTool } from './identity-reconcile.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -52,7 +56,12 @@ export const BRIDGE_INSTRUCTIONS =
 
 export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: boolean }): McpToolProvider[] {
   const all: McpToolProvider[] = [];
-  all.push(...createTools(deps, opts, (name) => all.find((t) => t.name === name)));
+  // v3 F5c (ADR 0069, H8): every write tool takes `workstream` and echoes the label in force.
+  all.push(
+    ...createTools(deps, opts, (name) => all.find((t) => t.name === name)).map((t) =>
+      withWorkstreamArg(t, () => deps.services?.workstreams),
+    ),
+  );
   return all;
 }
 
@@ -64,6 +73,10 @@ function createTools(
 ): McpToolProvider[] {
   return [
     ...bridgeTools(deps),
+    // v3 F5c (ADR 0069, H8): workstream labels and their report (read-only, free).
+    ...workstreamTools(deps),
+    // v3 F5c (ADR 0069, H7): field-selective batch reading (free; live opt-in).
+    queryFactsTool(deps),
     ...discoverTools(deps),
     readDocumentTool(deps),
     writePageTool(deps),
@@ -76,6 +89,8 @@ function createTools(
     ...appraisalTools(deps),
     // v3 F3f (ADR 0060): the Arkona pack's retag audit (read-only) and apply (a proposal).
     ...retagTools(deps),
+    // v3 F5c (ADR 0069, H6): bulk identity facts with their tags, one item per character.
+    identityReconcileTool(deps),
     // v3 F4a (ADR 0063): the Arkona pack's name check and topic brief (read-only, free).
     ...arkonaReadTools(deps),
     ...consistencyTools(deps),

@@ -117,6 +117,10 @@ import { ToolCallLog } from './toolcalls/index.js';
 import { Evaluation } from './evaluation/index.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
+import { WorkstreamDefaults } from './workstreams/defaults.js';
+import { registerIdentityChecks } from './packs/identity/checks.js';
+import { IdentityService } from './packs/identity/service.js';
+import { WorkstreamReports } from './workstreams/report.js';
 import {
   InstanceGuard,
   ProjectSelector,
@@ -203,6 +207,10 @@ export interface Runtime {
   readonly outcomes: OutcomeReconciler;
   /** v3 F5b (ADR 0068, H5): automatic actions for audits, one finding code at a time (the owner's settings). */
   readonly automation: AutomationService;
+  /** v3 F5c (ADR 0069, H8): the workstreams and their reports (the dashboard's Workstreams list). */
+  readonly workstreamReports: WorkstreamReports;
+  /** v3 F5c (ADR 0069, H6): arkona_identity_reconcile's records and outcomes. */
+  readonly identity: IdentityService;
   readonly tools: readonly McpToolProvider[];
   /** Tells connected MCP sessions when what is listed changes (`notifications/tools/list_changed`). */
   readonly toolList: ToolListWatch;
@@ -1285,6 +1293,32 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const detachRetag = retag.start();
   retagRef.current = retag;
 
+  // v3 F5c (ADR 0069, H6): arkona_identity_reconcile's in-job checks, its records and the outcome of each item.
+  const unregisterIdentityChecks = registerIdentityChecks(engine, {
+    policy: (packId, projectId) => retag.currentPolicy(packId, projectId),
+  });
+  const identity = new IdentityService({
+    db: o.db,
+    engine,
+    proposals: policy.proposals,
+    consistency: async (projectId, identityPageId) => {
+      try {
+        const report = await consistency.run({ projectId, subject: identityPageId, actor: 'system' });
+        return report.findings.map((f) => ({
+          code: f.check,
+          group: f.group,
+          findingId: f.id,
+          message: f.message,
+        }));
+      } catch {
+        return null;
+      }
+    },
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachIdentity = identity.start();
+
   // v3 F5b (ADR 0068, H5): automatic actions for audits, switched on one finding code at a time by the owner; each
   // switch recorded in Repository Automation's "Approved Narrow Automations".
   const automation = new AutomationService({
@@ -1368,6 +1402,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
   });
 
+  // v3 F5c (ADR 0069, H8): each connection's default workstream label, and the workstream report (free).
+  const workstreamDefaults = new WorkstreamDefaults(o.db, () => (o.clock ?? systemClock).now());
+  const workstreamReports = new WorkstreamReports({
+    db: o.db,
+    now: () => (o.clock ?? systemClock).now(),
+    pageName: (projectId, pageId) => tree.queries.node(projectId, pageId).data?.displayName ?? null,
+    principalName: (id) => policy.store.describePrincipals([id]).get(id)?.name ?? null,
+  });
   const toolDeps: ToolDeps = {
     engine,
     projects,
@@ -1422,6 +1464,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       retag,
       // v3 F5b (ADR 0068): which codes the automation runs (bridge_info tells agents; they cannot change it).
       automation,
+      // v3 F5c (ADR 0069, H8): workstream labels and their report.
+      workstreams: workstreamDefaults,
+      workstreamReports,
+      // v3 F5c (ADR 0069, H6): arkona_identity_reconcile's records and outcomes.
+      identity,
     },
   };
   // v3 F3e (ADR 0059, D2): phase 2 is archive_page's own plan, proposed by the bridge (it needs the tool layer's deps).
@@ -1549,6 +1596,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     retag,
     outcomes,
     automation,
+    workstreamReports,
+    identity,
     tools,
     toolList,
     resources: guideResources(),
@@ -1658,6 +1707,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     detachAutomation();
     detachOutcomes();
     unregisterRetagChecks();
+    unregisterIdentityChecks();
+    detachIdentity();
     detachReview();
     detachRestores();
     unregisterPackEngine();

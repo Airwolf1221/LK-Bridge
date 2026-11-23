@@ -224,8 +224,9 @@ export class WriteJournal {
     const info = this.db
       .prepare(
         `INSERT INTO write_journal (project_id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk,
-           target_kind, target_id, resource_id, document_id, version, params, pre_image, bytes, operation)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           target_kind, target_id, resource_id, document_id, version, params, pre_image, bytes, operation, workstream)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+           (SELECT j.workstream FROM jobs j WHERE j.id = ?))`,
       )
       .run(
         e.projectId,
@@ -246,6 +247,7 @@ export class WriteJournal {
         pre,
         bytes,
         operation,
+        e.jobId ?? null,
       );
     const id = Number(info.lastInsertRowid);
     const targets = [...new Set(e.targets ?? [])].filter((t) => t !== '' && t !== e.targetId).slice(0, 1000);

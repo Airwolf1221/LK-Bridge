@@ -56,6 +56,9 @@ import type { RetagService } from '../../packs/retag/service.js';
 import type { SplitService } from '../../packs/split/service.js';
 import type { ResumeService } from '../../resume/service.js';
 import type { GuardOptions } from './upload-http.js';
+import type { WorkstreamDefaults } from '../../workstreams/defaults.js';
+import type { WorkstreamReports } from '../../workstreams/report.js';
+import type { IdentityService } from '../../packs/identity/service.js';
 
 /** The projects as the tools see them (v2 A1): `ProjectRegistry` and `StaticProjects` both provide this. */
 export type ToolProjects = ProjectsRuntime & SelectableProjects & { list(): ProjectView[] };
@@ -112,6 +115,12 @@ export interface DiscoverServices {
   readonly retag?: RetagService;
   /** v3 F5b (ADR 0068): which finding codes the automation runs (bridge_info only; agents cannot change a setting). */
   readonly automation?: Pick<AutomationService, 'automated'> & { store: { global(): { paused: boolean } } };
+  /** v3 F5c (ADR 0069, H8): each connection's default workstream label (`bridge_workstream`). */
+  readonly workstreams?: WorkstreamDefaults;
+  /** v3 F5c (ADR 0069, H8): the workstream report (`bridge_workstream_report`, read-only and free). */
+  readonly workstreamReports?: WorkstreamReports;
+  /** v3 F5c (ADR 0069, H6): `arkona_identity_reconcile`'s records. */
+  readonly identity?: IdentityService;
 }
 
 /** What every tool handler needs. */
