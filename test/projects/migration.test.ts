@@ -425,8 +425,10 @@ describe('migration 0600 on a v1.0.2 database', () => {
         expect(without(now, 'project_id'), t).toEqual(without(rows, 'key'));
       } else if (t === 'write_journal') {
         // v2 C1 (migration 1200) adds `operation`, NULL on every row written before it.
+        // v3 F5c (4300) adds `workstream`, NULL likewise.
         for (const r of now) expect(r.operation, t).toBeNull();
-        expect(without(without(now, 'project_id'), 'operation'), t).toEqual(rows);
+        for (const r of now) expect(r.workstream, t).toBeNull();
+        expect(without(without(without(now, 'project_id'), 'operation'), 'workstream'), t).toEqual(rows);
       } else if (t === 'proposals') {
         // v2 C1 (1200) adds `operation`; v2 C2a (1300) the operations list, page summary, canonical approval, job
         // options and verification; v3 F3.4 (3200) the safety rail that sent it; v3 F3d (renames) (3400) the items, what
@@ -446,6 +448,8 @@ describe('migration 0600 on a v1.0.2 database', () => {
           'omitted_items',
           'reproposed_as',
           'reproposal_of',
+          // v3 F5c (4300): the workstream label.
+          'workstream',
         ];
         for (const r of now) {
           for (const c of added) expect(r[c], `${t}.${c}`).toBeNull();
@@ -456,8 +460,10 @@ describe('migration 0600 on a v1.0.2 database', () => {
         expect(stripped, t).toEqual(rows);
       } else if (t === 'jobs') {
         // CR-2026-11-R3 (3810, ADR 0061 part B decision 3) adds `cancelled_by`, NULL on every row written before it.
+        // v3 F5c (4300) adds `workstream`, NULL likewise.
         for (const r of now) expect(r.cancelled_by, t).toBeNull();
-        expect(without(without(now, 'project_id'), 'cancelled_by'), t).toEqual(rows);
+        for (const r of now) expect(r.workstream, t).toBeNull();
+        expect(without(without(without(now, 'project_id'), 'cancelled_by'), 'workstream'), t).toEqual(rows);
       } else {
         expect(without(now, 'project_id'), t).toEqual(rows);
       }
