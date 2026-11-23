@@ -531,6 +531,14 @@ unchanged) or **Allow this tag everywhere** (the bridge edits the section's list
 the step-up, one revertible job; the pack then offers its new version). Agents suggest either ruling with
 `arkona_retag_audit { suggestRuling }`, never take it.
 
+## `arkona_identity_reconcile`'s switch (v3 F5c)
+
+`arkona-2026-11-23-f5c` ([ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md)): the
+per-tool switch `arkona_identity_reconcile: scope` (it follows the agent's scope: direct at `write` for 10 pages or fewer,
+the bulk rail's proposal beyond, a proposal at `propose`). The switch is read as the stricter of the approved and the
+waiting version, so until the owner approves this version the tool is always a proposal. The tool reads the character
+type's identity fields, the race and culture maps and the retag rules from the approved version; it adds no other data.
+
 ## Automation's caps and Repository Automation (v3 F5b)
 
 `arkona-2026-11-23-f5b` ([ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md)): `automation = { perCode: 25,

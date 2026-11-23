@@ -13,6 +13,7 @@ import { renamedTool } from '../mcp/tools/define.js';
 import type { LivePolicyGate } from './gate.js';
 import type { ProposalService } from './proposals.js';
 import { PROPOSAL_STATES } from './types.js';
+import { currentWorkstream } from '../workstreams/context.js';
 
 /** Resolves a caller to its principal and live scope through the gate's (≤ 1 s) cache. */
 export function createMcpAccessControl(gate: LivePolicyGate): McpAccessControl {
@@ -40,11 +41,14 @@ export function mcpOrigin(ctx: McpToolContext, tool: string): JobOrigin {
       'unknown',
     );
   }
+  const ws = currentWorkstream();
   return {
     kind: 'mcp',
     ...(ctx.caller?.clientId ? { client: ctx.caller.clientId } : {}),
     tool,
     principal: ctx.principal,
+    // v3 F5c (ADR 0069, H8): the call's workstream label (its argument, else the connection's default).
+    ...(ws !== null ? { workstream: ws } : {}),
   };
 }
 

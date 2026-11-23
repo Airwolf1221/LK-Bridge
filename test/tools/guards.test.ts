@@ -201,8 +201,9 @@ describe('the tool list', () => {
     // arkona_split_owner, and v3 F3f's arkona_retag_audit and arkona_retag_apply, and v3 F4a's arkona_name_check and
     // arkona_brief, and v3 F4b's arkona_consistency, arkona_as_of, arkona_as_of_coverage and arkona_consistency_suggest,
     // and v3 F4c's five narrative writing tools, arkona_chapter_context, arkona_chapter_check and
-    // arkona_promote_from_chapter.
-    expect(tools).toHaveLength(94);
+    // arkona_promote_from_chapter, and v3 F5c's arkona_identity_reconcile, query_facts, bridge_workstream and
+    // bridge_workstream_report.
+    expect(tools).toHaveLength(98);
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');
@@ -221,7 +222,8 @@ describe('the tool list', () => {
       const c = await on.connect();
       const { tools } = await c.listTools();
       // CR-2026-11-R4 (LD-01): the 12 consistency and narrative tools are not listed while the pack is not approved.
-      expect(tools).toHaveLength(86 - 12 + 3 + 2 + 89);
+      // v3 F5c: query_facts, bridge_workstream, bridge_workstream_report and arkona_identity_reconcile.
+      expect(tools).toHaveLength(86 - 12 + 3 + 2 + 4 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));

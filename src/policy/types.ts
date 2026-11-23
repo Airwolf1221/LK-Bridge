@@ -149,6 +149,8 @@ export interface ProposalView {
   readonly reproposedAs: string | null;
   /** v3 F3d: the proposal whose left-out items this one proposes again. */
   readonly reproposalOf: string | null;
+  /** v3 F5c (ADR 0069, H8): the workstream label it was proposed under (null: none). */
+  readonly workstream?: string | null;
 }
 
 export interface ProposalConflict {

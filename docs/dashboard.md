@@ -995,6 +995,21 @@ Off.
 address (`?project=`, as the dashboard sends the selected project); a body naming another project is refused
 (`400 PROJECT_MISMATCH`) and nothing is done; with no address, the body's; with neither, the default project.
 
+## Workstreams (v3 F5c)
+
+The **Workstreams** page (Monitoring group; [ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md),
+H8) lists the workstream labels agents worked under in the project in view (each write's `workstream` argument, or a
+connection's default set with `bridge_workstream`): the label, the connections that used it, its first and last activity,
+and its counts (jobs, pages written, proposals, how many await you, unknown outcomes, failed jobs). **Report** opens the
+same report `bridge_workstream_report` gives an agent: still to do; written and verified (each page and its writes);
+accepted but not yet run; deliberately excluded; awaiting your judgement (linking to Proposals and Review); residual
+inconsistencies. Read-only: nothing is read from LegendKeeper.
+
+| Route                               | What                                                           |
+| ----------------------------------- | -------------------------------------------------------------- |
+| `GET /api/admin/workstreams`        | The project's workstreams (`?project=`, `limit`).              |
+| `GET /api/admin/workstreams/report` | One report (`?project=&workstream=`, or `since`, `principal`). |
+
 ## The block-id sweep (v3 F3.5)
 
 [ADR 0056](adr/0056-block-id-sweep.md), [maintenance.md](maintenance.md#the-block-id-sweep-v3-f35). Below the Maintenance

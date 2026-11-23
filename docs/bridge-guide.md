@@ -35,6 +35,9 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 **Split an owner → `arkona_split_appraisal`, then `arkona_split_owner` (never by hand).** Only when the owner asks;
 `write_page` refuses moving a section's worth of text off a pack page (`USE_ARKONA_SPLIT`).
 
+**Many characters' identity facts → `arkona_identity_reconcile`, dry run first; one field of many pages →
+`query_facts`; label an objective's writes `workstream`, then `bridge_workstream_report`.**
+
 **Which tool?**
 
 | You want to…                                        | Use                                                         | Not                                           |
@@ -83,7 +86,7 @@ or rejects on the dashboard; nothing is written. `write` writes directly, except
 - `Create a page or a character (Working first)`
 - `Setting packs (Arkona)`, and under it `Arkona briefs and names`, `Arkona characters`, `Arkona owners`,
   `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`, `Arkona retagging`,
-  `Arkona fiction`
+  `Arkona identity facts in bulk`, `Arkona fiction`; `Many pages at once: query_facts and workstreams`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -1034,6 +1037,50 @@ each board, map and timeline document by its content). Last Major Revision is ne
 starts a named record (a first audit, free); `arkona_retag_apply { "reconciliation": "First pass" }` audits what remains
 afresh and proposes its next batch. A page whose facts, Reference Type or template changed since its verdict is marked
 stale and audited again: an earlier audit is never current truth.
+
+### Arkona identity facts in bulk
+
+`arkona_identity_reconcile` does a whole maintenance objective (a culture split's Naming Culture changes, a race
+correction) as ONE job with one item per character: for each `{ character, facts }` it finds the identity page (the
+Character Core, else the Compact Character Reference, else the identity-owning Character Reference; an [INDEX] goes to
+its Core), reads it fresh, sets only the facts you give, recomputes the page's tags from the new facts under the approved
+tagging policy (grammar order; Approved Supplementary Tags kept; the old value's own token replaced by the new one's),
+and reads both back. Run it with `dryRun: true` first and show the person the preview.
+
+- **Only the identity facts**: Race / Species, Naming Culture, Life State, Personal / Given Name, Family / Surname,
+  Temporal Scope. A Canonical Display Name or name change is a rename (`USE_ARKONA_RENAME`: `arkona_rename`); Status,
+  Continuity Type, Continuity and the other protected facts are refused with the tool that changes them.
+- **Race and Naming Culture values must be in the pack's token maps.** An unmapped value refuses that item only
+  (`UNMAPPED_VALUE`): ask the owner, who adds the token on the Packs page. Never choose a culture, race or nationality
+  from a name. Each Naming Culture comes with `arkona_name_check`'s culture report.
+- **Tags that would be a hold or an exception are not written**; the item is `partly_done` and says why (the facts are
+  written). The owner settles it on the Tagging page.
+- **Isolated**: a character changed since it was read (`FACTS_STALE`) is skipped, one whose write fails is `failed`, and
+  the others carry on. Do not repeat the call: redo only the skipped ones after reading them again, or resume a failed
+  job (`bridge_job_resume`).
+- **The usual boundaries**: at scope `write`, 10 pages or fewer run directly; more becomes ONE proposal with one item
+  per character (the owner approves some or all); at `propose` it is a proposal. Follow it with `{ "report":
+"<reconcileId>" }`, free.
+
+The result lists each item: `done` (facts and tags read back), `partly_done`, `skipped`, `failed`, `refused` or
+`excluded`, with consistency follow-ups (another page restating the old value): bring those to the person.
+
+## Many pages at once: query_facts and workstreams
+
+**`query_facts`** returns the same fields of many pages as ONE compact table (`columns` once, then `rows` as arrays;
+`format: "csv"` too), free, from the bridge's stored sidebars. Select by `type` (Reference Type), `tag`, `under`, `kind`,
+`lifecycle` or `name`; `characters: true` takes every current identity page of Main CANON (or of an AU with
+`continuity`). Each row's `coverage` says whether its stored facts are `ok`, `stale` or `missing`: when it matters, re-read
+those with `live: true` (one read a row; more than 10 shows an estimate first). Example: `{ "characters": true, "type":
+"Character Core", "fields": ["canonicalDisplayName", "Race / Species", "Naming Culture", "Life State", "Temporal
+Scope", "tags", "parent"] }`. Page with `nextCursor`.
+
+**Workstreams.** Give every write of one objective the same `workstream` label (any write tool takes it), or set a
+default for your connection once with `bridge_workstream { "set": "Menkheti culture split" }` (it lapses after 12 hours
+unused). Every result echoes the label in force. `bridge_workstream_report { "workstream": "…" }` then reports, free:
+what was written and verified (each page, its versions and who wrote it), what is accepted but not yet run, what was
+deliberately left out (and why), what waits for the owner's judgement, and what still looks inconsistent, with a short
+"still to do". Use it to tell the person where an objective stands; never invent what it does not list.
 
 ## Rename, move, delete and restore
 
