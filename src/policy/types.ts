@@ -143,6 +143,8 @@ export interface ProposalView {
     readonly approved: number | null;
     readonly omitted: number | null;
   } | null;
+  /** v3 F5a (ADR 0067, H4): the tool that proposed it (the high-level operation's, else the origin's), or null. */
+  readonly tool?: string | null;
   /** v3 F3d: the proposal made of this one's left-out items ("propose these again"), when there is one. */
   readonly reproposedAs: string | null;
   /** v3 F3d: the proposal whose left-out items this one proposes again. */
@@ -164,5 +166,7 @@ export interface ProposalFilter {
   readonly principalId?: string;
   readonly profile?: string;
   readonly before?: number;
+  /** v3 F5a (ADR 0067, H4): only proposals of this tool (the high-level operation's, else the origin's). */
+  readonly tool?: string;
   readonly limit?: number;
 }

@@ -124,7 +124,11 @@ const toView = (r: RecRow): Reconciliation => ({
 
 /** One read-back's answer: settled, or not yet (read again later). */
 export type Judgement =
-  | { readonly outcome: 'applied' | 'not_applied' | 'superseded'; readonly reason: string; readonly evidence?: Obj }
+  | {
+      readonly outcome: 'applied' | 'not_applied' | 'superseded';
+      readonly reason: string;
+      readonly evidence?: Obj;
+    }
   | { readonly outcome: null; readonly reason: string; readonly evidence?: Obj };
 
 /** An unresolved write, as the audits' `writes` category shows it (with the pre-image and the intended change). */
@@ -230,8 +234,7 @@ export class OutcomeReconciler {
 
   get(journalId: number): Reconciliation | null {
     const r = this.d.db.prepare('SELECT * FROM write_reconciliations WHERE journal_id = ?').get(journalId) as
-      | RecRow
-      | undefined;
+      RecRow | undefined;
     return r ? toView(r) : null;
   }
 
@@ -282,8 +285,7 @@ export class OutcomeReconciler {
     this.running.add(journalId);
     try {
       const entry = this.d.db.prepare('SELECT * FROM write_journal WHERE id = ?').get(journalId) as
-        | EntryRow
-        | undefined;
+        EntryRow | undefined;
       const rec = this.get(journalId);
       if (!entry || !rec || rec.state === 'settled') return rec;
       const now = this.d.clock.now();
@@ -309,12 +311,13 @@ export class OutcomeReconciler {
       const attempts = rec.attempts + 1;
       if (j.outcome !== null) {
         const changed = this.d.journal.settleUnknown(journalId, j.outcome);
-        this.d.db.prepare('UPDATE write_reconciliations SET attempts = ? WHERE journal_id = ?').run(attempts, journalId);
+        this.d.db
+          .prepare('UPDATE write_reconciliations SET attempts = ? WHERE journal_id = ?')
+          .run(attempts, journalId);
         if (!changed) {
           // The job settled it between the read and now: its answer stands.
           const now2 = this.d.db.prepare('SELECT outcome FROM write_journal WHERE id = ?').get(journalId) as
-            | { outcome: string }
-            | undefined;
+            { outcome: string } | undefined;
           const o = now2?.outcome;
           return this.finish(
             journalId,
@@ -328,7 +331,9 @@ export class OutcomeReconciler {
       }
       const next = this.delays[attempts];
       if (next === undefined) {
-        this.d.db.prepare('UPDATE write_reconciliations SET attempts = ? WHERE journal_id = ?').run(attempts, journalId);
+        this.d.db
+          .prepare('UPDATE write_reconciliations SET attempts = ? WHERE journal_id = ?')
+          .run(attempts, journalId);
         return this.finish(journalId, 'unresolved', 'unknown', 'bridge', j);
       }
       this.d.db
@@ -423,9 +428,9 @@ export class OutcomeReconciler {
       };
     const meta = OP_META[e.op_id];
     const params = this.sentParams(e);
-    if (!meta || !meta.reader)
-      return { outcome: null, reason: `${e.op_id} has no way to be read back` };
-    if (!params) return { outcome: null, reason: 'what the write sent is no longer stored (its job is gone)' };
+    if (!meta || !meta.reader) return { outcome: null, reason: `${e.op_id} has no way to be read back` };
+    if (!params)
+      return { outcome: null, reason: 'what the write sent is no longer stored (its job is gone)' };
     const reader = READERS[meta.reader];
     const path: Record<string, string> = {};
     const id = e.target_id ?? undefined;
@@ -466,8 +471,17 @@ export class OutcomeReconciler {
     if (meta.verify === 'client-id')
       return exists
         ? { outcome: 'applied', reason: `the entity it created (${id ?? 'its id'}) is there`, evidence }
-        : { outcome: 'not_applied', reason: `no entity under the id it would have created (${id ?? '?'})`, evidence };
-    if (!exists) return { outcome: null, reason: 'the target is gone: whether the write applied first cannot be told', evidence };
+        : {
+            outcome: 'not_applied',
+            reason: `no entity under the id it would have created (${id ?? '?'})`,
+            evidence,
+          };
+    if (!exists)
+      return {
+        outcome: null,
+        reason: 'the target is gone: whether the write applied first cannot be told',
+        evidence,
+      };
     const intent = meta.intent ? meta.intent(params) : params.body;
     const actual = meta.actual ? meta.actual(body, entity) : (entity ?? body);
     if (intent !== undefined && matchesIntent(intent, actual, meta.compare ?? 'patch'))

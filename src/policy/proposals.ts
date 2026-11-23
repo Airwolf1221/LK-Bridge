@@ -293,10 +293,22 @@ function toView(r: Row, opCount: number): ProposalView {
     pages: parseJson<PageSummaryEntry[]>(r.page_summary, []).map((e) => e.label),
     proposedBecause: (r.proposed_because as string | null | undefined) ?? null,
     items: itemCounts(r),
+    tool: toolOfRow(r),
     reproposedAs: (r.reproposed_as as string | null | undefined) ?? null,
     reproposalOf: (r.reproposal_of as string | null | undefined) ?? null,
   };
 }
+
+/** v3 F5a (ADR 0067, H4): the tool that proposed it: the high-level operation's, else the origin's. */
+function toolOfRow(r: Row): string | null {
+  const op = parseJson<Record<string, unknown> | null>(r.operation, null);
+  if (op && typeof op.tool === 'string') return op.tool;
+  const origin = parseJson<Record<string, unknown> | null>(r.origin, null);
+  return origin && typeof origin.tool === 'string' ? origin.tool : null;
+}
+
+/** The SQL of a proposal's tool, as `toolOfRow` reads it. */
+const TOOL_SQL = "COALESCE(json_extract(p.operation, '$.tool'), json_extract(p.origin, '$.tool'))";
 
 /** v3 F3d (ADR 0058): a proposal's items, counted (the detail has them whole). */
 function itemCounts(r: Row): ProposalView['items'] {
@@ -1879,7 +1891,12 @@ export class ProposalService implements ProposalSink {
       where.push('created_at < ?');
       vals.push(filter.before);
     }
-    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 500);
+    if (filter.tool !== undefined) {
+      where.push(`${TOOL_SQL} = ?`);
+      vals.push(filter.tool);
+    }
+    // v3 F5a (H4): a bulk decision over everything a filter matches reads up to 5,000 (the dashboard pages by 100).
+    const limit = Math.min(Math.max(filter.limit ?? 50, 1), 5000);
     const rows = this.store.db
       .prepare(
         `SELECT p.*, (SELECT COUNT(*) FROM proposal_ops o WHERE o.proposal_id = p.id) AS op_count

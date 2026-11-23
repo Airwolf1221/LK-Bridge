@@ -279,7 +279,12 @@ export const registerTagging: Register = (api, ctx) => {
   api.post('/tagging/unkeep', async (req) => {
     const b = parseInput(
       z
-        .object({ project: projectParam, pageId: pageIdSchema, tag: z.string().min(1).max(100), confirm: z.literal(true) })
+        .object({
+          project: projectParam,
+          pageId: pageIdSchema,
+          tag: z.string().min(1).max(100),
+          confirm: z.literal(true),
+        })
         .strict(),
       req.body,
     );
@@ -307,7 +312,11 @@ export const registerTagging: Register = (api, ctx) => {
     );
     if (b.dryRun !== true) {
       if (b.confirm !== true)
-        throw new AdminHttpError(400, 'CONFIRM_REQUIRED', 'Confirm the edit (confirm: true), or ask for a dry run.');
+        throw new AdminHttpError(
+          400,
+          'CONFIRM_REQUIRED',
+          'Confirm the edit (confirm: true), or ask for a dry run.',
+        );
       requireReauth(ctx.deps.services, req);
     }
     const p = ctx.project(b.project);
@@ -345,6 +354,64 @@ export const registerTagging: Register = (api, ctx) => {
       });
       return { batch: sub.batch, proposalId: sub.proposalId, jobId: sub.jobId };
     });
+  });
+
+  /**
+   * v3 F5a (ADR 0067, H4): "Apply all corrections" of a run: every deterministic correction not in an open batch, in
+   * the usual bounded batches (the pack's batch size, each page an item), each ONE proposal. More than 10 pages in all
+   * is the owner's own bulk change, so the step-up first (ADR 0062).
+   */
+  api.post('/tagging/apply-all', async (req) => {
+    const b = parseInput(
+      z.object({ project: projectParam, runId: runIdSchema, confirm: z.literal(true) }).strict(),
+      req.body,
+    );
+    const p = ctx.project(b.project);
+    return wrap(async () => {
+      const r = retag();
+      const chunks = r.correctionBatches(p.id, b.runId);
+      const pages = chunks.reduce((n, c) => n + c.length, 0);
+      if (pages > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
+      const batches: { batchId: string; proposalId: string | null; jobId: string | null; pages: number }[] = [];
+      for (const ids of chunks) {
+        const plan = r.planApply({ projectId: p.id, runId: b.runId, pageIds: ids });
+        const sub = await r.submitApply(plan, {
+          projectId: p.id,
+          origin: ORIGIN('tagging.apply_all'),
+          actor: 'owner',
+        });
+        batches.push({ batchId: sub.batch.id, proposalId: sub.proposalId, jobId: sub.jobId, pages: ids.length });
+      }
+      return { pages, batches };
+    });
+  });
+
+  /**
+   * v3 F5a (ADR 0067, H4): "Approve all these batches": the retag batches' proposals approved together, each whole, one
+   * at a time; a bulk approval, so the step-up first. Only retag batch proposals of this project are taken.
+   */
+  api.post('/tagging/approve-batches', async (req) => {
+    const b = parseInput(
+      z
+        .object({
+          project: projectParam,
+          proposalIds: z.array(z.string().min(1).max(100)).min(1).max(200),
+          confirm: z.literal(true),
+        })
+        .strict(),
+      req.body,
+    );
+    requireReauth(ctx.deps.services, req);
+    const p = ctx.project(b.project);
+    const r = retag();
+    const notBatches = b.proposalIds.filter((id) => !r.isBatchProposal(p.id, id));
+    if (notBatches.length > 0)
+      throw new AdminHttpError(
+        400,
+        'NOT_A_RETAG_BATCH',
+        `Not retag batches of this project: ${notBatches.join(', ')}. Approve other proposals on the Proposals page.`,
+      );
+    return { results: await ctx.actions.bulkApprove(p.id, b.proposalIds) };
   });
 
   api.post('/tagging/reconciliations', async (req) => {

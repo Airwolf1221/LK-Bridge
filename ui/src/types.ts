@@ -485,6 +485,8 @@ export type ProposalState =
   'pending' | 'approved' | 'rejected' | 'conflicted' | 'expired' | 'executing' | 'executed' | 'failed';
 
 export interface Proposal {
+  /** v3 F5a (ADR 0067, H4): the tool that proposed it, or null. */
+  tool?: string | null;
   id: string;
   principalId: string;
   principalLabel: string;

@@ -3,9 +3,33 @@ import * as z from 'zod';
 import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES, type Scope } from '../../policy/index.js';
 import { redactDeep } from '../redact.js';
 import { hasStepUp, requireReauth } from '../guard.js';
+import { AdminHttpError } from '../http.js';
 import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const scope = z.enum(SCOPES);
+
+/** v3 F5a (ADR 0067, H4): the most proposals one decision over a filter takes. */
+const MATCH_MAX = 2000;
+
+/** v3 F5a (H4): the Proposals page's filters: state (or group), tool, principal and age. */
+const filterQuery = {
+  state: csv.optional(),
+  group: z.enum(['pending', 'conflicted', 'history']).optional(),
+  tool: z.string().min(1).max(100).optional(),
+  principalId: idSchema.optional(),
+  /** Only proposals at least this many hours old. */
+  olderThanHours: z.coerce
+    .number()
+    .min(0)
+    .max(24 * 365)
+    .optional(),
+};
+
+const GROUPS: Record<string, readonly (typeof PROPOSAL_STATES)[number][]> = {
+  pending: ['pending'],
+  conflicted: ['conflicted'],
+  history: ['approved', 'executing', 'executed', 'rejected', 'expired', 'failed'],
+};
 
 /**
  * The order of the scopes, for telling a raise from a lowering. ADR 0062 (the owner's rule, 19 November 2026): tightening
@@ -15,6 +39,32 @@ const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write
 
 export const registerPolicy: Register = (api, ctx) => {
   const { policy } = ctx.deps.runtime;
+  /** v3 F5a (H4): a filter (state or group, tool, principal, age) as the proposal list reads it. */
+  const matchingFilter = (
+    projectId: string,
+    q: {
+      state?: string[] | undefined;
+      group?: string | undefined;
+      tool?: string | undefined;
+      principalId?: string | undefined;
+      olderThanHours?: number | undefined;
+    },
+  ) => {
+    const states = q.state?.length
+      ? q.state.filter((s): s is (typeof PROPOSAL_STATES)[number] =>
+          (PROPOSAL_STATES as readonly string[]).includes(s),
+        )
+      : q.group
+        ? GROUPS[q.group]
+        : undefined;
+    return {
+      project: projectId,
+      ...(states ? { state: states } : {}),
+      ...(q.principalId ? { principalId: q.principalId } : {}),
+      ...(q.tool ? { tool: q.tool } : {}),
+      ...(q.olderThanHours !== undefined ? { before: ctx.now() - q.olderThanHours * 3_600_000 } : {}),
+    };
+  };
   const { actions } = ctx;
   const cmd = policy.commands;
   const profileScope = (id: string): Scope | undefined =>
@@ -54,43 +104,87 @@ export const registerPolicy: Register = (api, ctx) => {
   api.get('/proposals', (req) => {
     const q = parseInput(
       z.object({
-        state: csv.optional(),
-        group: z.enum(['pending', 'conflicted', 'history']).optional(),
-        principalId: idSchema.optional(),
         profile: idSchema.optional(),
         before: z.coerce.number().int().optional(),
+        ...filterQuery,
         limit: limitSchema(50, 200),
         project: projectParam,
       }),
       req.query,
     );
     const project = ctx.project(q.project);
-    const groups: Record<string, readonly (typeof PROPOSAL_STATES)[number][]> = {
-      pending: ['pending'],
-      conflicted: ['conflicted'],
-      history: ['approved', 'executing', 'executed', 'rejected', 'expired', 'failed'],
-    };
-    const states = q.state?.length
-      ? q.state.filter((s): s is (typeof PROPOSAL_STATES)[number] =>
-          (PROPOSAL_STATES as readonly string[]).includes(s),
-        )
-      : q.group
-        ? groups[q.group]
-        : undefined;
+    const filter = matchingFilter(project.id, q);
     const proposals = cmd.listProposals('owner', {
-      project: project.id,
-      ...(states ? { state: states } : {}),
-      ...(q.principalId ? { principalId: q.principalId } : {}),
+      ...filter,
       ...(q.profile ? { profile: q.profile } : {}),
-      ...(q.before !== undefined ? { before: q.before } : {}),
+      ...(q.before !== undefined
+        ? { before: filter.before !== undefined ? Math.min(filter.before, q.before) : q.before }
+        : {}),
       limit: q.limit,
     });
+    // v3 F5a (ADR 0067, H4): how many the filter matches in all (for "select all matching", across pages).
+    const total = cmd.listProposals('owner', {
+      ...filter,
+      ...(q.profile ? { profile: q.profile } : {}),
+      limit: MATCH_MAX + 1,
+    }).length;
     return {
       project,
       proposals: redactDeep(proposals),
       hasMore: proposals.length === q.limit,
+      total: Math.min(total, MATCH_MAX),
+      totalCapped: total > MATCH_MAX,
       principals: ctx.principals(proposals.map((p) => p.principalId)),
     };
+  });
+
+  /**
+   * v3 F5a (ADR 0067, H4): one decision over EVERY proposal the filter matches, across pages: "Reject all conflicted",
+   * or a select-all of a filtered list. `expect` is the count the owner confirmed: the request is refused with
+   * `PROPOSALS_CHANGED` (409) when the set changed in the meantime. Rejecting is a brake (one confirmation, no
+   * step-up); approving asks for the step-up when any of them triggers a rail. Each is decided on its own, in order, and
+   * a proposal whose job is running is never touched; the results list each one.
+   */
+  api.post('/proposals/bulk-matching', async (req) => {
+    const b = parseInput(
+      z
+        .object({
+          action: z.enum(['approve', 'reject']),
+          filter: z.object(filterQuery).strict(),
+          expect: z.number().int().min(1).max(MATCH_MAX),
+          reason: z.string().max(1000).optional(),
+          confirm: z.literal(true),
+        })
+        .strict(),
+      req.body,
+    );
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    const filter = matchingFilter(project.id, b.filter);
+    const states = Array.isArray(filter.state) ? filter.state : filter.state ? [filter.state] : [];
+    if (states.length === 0 || states.some((s) => s !== 'pending' && s !== 'conflicted'))
+      throw new AdminHttpError(
+        400,
+        'INVALID_INPUT',
+        'A decision over a filter takes pending or conflicted proposals only (filter.group or filter.state).',
+      );
+    if (b.action === 'approve' && states.some((s) => s !== 'pending'))
+      throw new AdminHttpError(400, 'INVALID_INPUT', 'Only pending proposals can be approved.');
+    const ids = cmd.listProposals('owner', { ...filter, limit: MATCH_MAX + 1 }).map((p) => p.id);
+    if (ids.length > MATCH_MAX)
+      throw new AdminHttpError(400, 'TOO_MANY', `More than ${MATCH_MAX} proposals match: narrow the filter.`);
+    if (ids.length !== b.expect)
+      throw new AdminHttpError(
+        409,
+        'PROPOSALS_CHANGED',
+        `The filter now matches ${ids.length} proposal${ids.length === 1 ? '' : 's'}, not the ${b.expect} you confirmed: look again.`,
+        { details: { now: ids.length } },
+      );
+    if (b.action === 'approve') await stepUpIfGuarded(req, ids);
+    const results =
+      b.action === 'approve'
+        ? await actions.bulkApprove(project.id, ids)
+        : actions.bulkReject(project.id, ids, b.reason);
+    return { results };
   });
 
   const projectQuery = z.object({ project: projectParam });
@@ -183,7 +277,8 @@ export const registerPolicy: Register = (api, ctx) => {
    * one at a time, in order.
    */
   api.post('/proposals/bulk', async (req) => {
-    const ids = z.array(idSchema).min(1).max(100);
+    // v3 F5a (H4): a selection may span pages (select all on every page): at most 1,000 at once.
+    const ids = z.array(idSchema).min(1).max(1000);
     const b = parseInput(
       z.discriminatedUnion('action', [
         z.object({ action: z.literal('approve'), ids }),

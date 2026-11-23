@@ -23,7 +23,13 @@ import type { Appraisal } from '../../appraisal/service.js';
 import type { LiveRead } from '../../appraisal/reader.js';
 import { EXPECT_STEP, VERIFY_STEP } from '../../jobs/internal-steps.js';
 import { stateHash } from '../../jobs/sidebar-state.js';
-import { SYSTEM_PRINCIPAL, type JobEngine, type JobOrigin, type JobView, type StepSpec } from '../../jobs/index.js';
+import {
+  SYSTEM_PRINCIPAL,
+  type JobEngine,
+  type JobOrigin,
+  type JobView,
+  type StepSpec,
+} from '../../jobs/index.js';
 import type { PlanItem } from '../../jobs/items.js';
 import { lifecycleFrom } from '../../lifecycle/settings.js';
 import type { ProjectSettings } from '../../projects/settings.js';
@@ -205,7 +211,10 @@ export class RetagService {
         try {
           this.afterSupplementaryEdit(e.job);
         } catch (err) {
-          this.d.log?.warn({ err, jobId: e.job.id }, 'an Approved Supplementary Tags edit could not be followed');
+          this.d.log?.warn(
+            { err, jobId: e.job.id },
+            'an Approved Supplementary Tags edit could not be followed',
+          );
         }
       }),
     );
@@ -704,6 +713,37 @@ export class RetagService {
     };
   }
 
+  /**
+   * v3 F5a (ADR 0067, H4): "Apply all corrections": every deterministic correction of a stored run that is not in an
+   * open batch, in the usual bounded batches (the pack's `retag.batchSize`, each page an item), in the run's order.
+   * Returns the page ids of each batch; the caller plans and submits each one (`planApply`, `submitApply`).
+   */
+  correctionBatches(projectId: string, runId: string): string[][] {
+    const { rules } = this.policyFor(projectId);
+    const run = this.store.run(runId);
+    if (!run || run.projectId !== projectId)
+      throw new RetagError('RUN_NOT_FOUND', `No retag audit run ${runId} in this project: run the audit first.`);
+    const busy = new Set<string>();
+    for (const b of this.store.openBatches(projectId)) {
+      const state = this.syncBatch(b);
+      if (state === 'proposed' || state === 'running') for (const p of b.pages) busy.add(p.pageId);
+    }
+    const ids = this.store
+      .verdicts(runId, { disposition: 'correction' })
+      .map((v) => v.pageId)
+      .filter((id) => !busy.has(id));
+    const size = rules.retag!.batchSize;
+    const out: string[][] = [];
+    for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+    return out;
+  }
+
+  /** Whether a proposal is a retag batch's (of this project). */
+  isBatchProposal(projectId: string, proposalId: string): boolean {
+    const b = this.store.batchByProposal(proposalId);
+    return b !== null && b.projectId === projectId;
+  }
+
   /** Submits a planned batch (a proposal by the pack's switch) and records it. */
   async submitApply(
     plan: ApplyPlan,
@@ -997,9 +1037,13 @@ export class RetagService {
     o: { readonly pageId: string; readonly tag: string; readonly reason: string },
   ): Promise<TagRulingRecord> {
     if (actor !== 'owner')
-      throw new RetagError('NOT_OWNER', 'Only the owner rules on an exception; an agent may suggest a ruling.');
+      throw new RetagError(
+        'NOT_OWNER',
+        'Only the owner rules on an exception; an agent may suggest a ruling.',
+      );
     const reason = o.reason.trim();
-    if (reason === '') throw new RetagError('REASON_REQUIRED', 'A ruling needs a reason (what the owner checked).');
+    if (reason === '')
+      throw new RetagError('REASON_REQUIRED', 'A ruling needs a reason (what the owner checked).');
     const { pack, rules } = this.policyFor(projectId);
     const { reader } = await this.d.appraisal.reader(projectId);
     const lp = await reader.load(o.pageId);
@@ -1008,7 +1052,10 @@ export class RetagService {
     const tags = extractResource(lp.resource).tags;
     const tag = tags.find((t) => textKey(t) === textKey(o.tag));
     if (tag === undefined)
-      throw new RetagError('TAG_NOT_ON_PAGE', `“${o.tag}” is not among ${lp.page.rawName}’s tags (${tags.join(', ') || 'none'}).`);
+      throw new RetagError(
+        'TAG_NOT_ON_PAGE',
+        `“${o.tag}” is not among ${lp.page.rawName}’s tags (${tags.join(', ') || 'none'}).`,
+      );
     const v = retagPage(
       {
         id: o.pageId,
@@ -1027,7 +1074,9 @@ export class RetagService {
     );
     // Not an exception: a tag the grammar places (status, category, specialist, identity), an Approved Supplementary
     // Tag, or one a rule removes. (A held page's other tags are not judged yet, so they may be kept.)
-    const placed = v.slots.some((x) => x.slot !== 'other' && x.tag !== null && textKey(x.tag) === textKey(tag));
+    const placed = v.slots.some(
+      (x) => x.slot !== 'other' && x.tag !== null && textKey(x.tag) === textKey(tag),
+    );
     const removed = v.removals.some((x) => textKey(x.tag) === textKey(tag));
     if (v.scope !== 'grammar' || placed || removed)
       throw new RetagError(
@@ -1081,7 +1130,8 @@ export class RetagService {
     const reason = o.reason.trim();
     if (reason === '') throw new RetagError('REASON_REQUIRED', 'A suggestion needs its reason.');
     const tag = o.tag.trim();
-    if (tag === '' || tag.length > 100) throw new RetagError('INVALID_PARAMS', 'Name the tag (at most 100 characters).');
+    if (tag === '' || tag.length > 100)
+      throw new RetagError('INVALID_PARAMS', 'Name the tag (at most 100 characters).');
     return this.store.suggestRuling(projectId, {
       pageId: o.pageId,
       tag,
@@ -1124,12 +1174,19 @@ export class RetagService {
       );
     const src = pack.governance.find((g) => g.key === sup.source);
     const here = this.d.projectName?.(projectId) ?? null;
-    if (!src || src.resourceId === '' || src.documentId === '' || here === null || here.toLowerCase() !== src.project.toLowerCase())
+    if (
+      !src ||
+      src.resourceId === '' ||
+      src.documentId === '' ||
+      here === null ||
+      here.toLowerCase() !== src.project.toLowerCase()
+    )
       throw new RetagError(
         'SOURCE_ELSEWHERE',
         `The Tagging Standard (${src?.name ?? sup.source}) is not a page of this project, so it cannot be edited from here.`,
       );
-    if (!this.d.engine.internalRead) throw new RetagError('RETAG_UNAVAILABLE', 'The bridge cannot read the Tagging Standard here.');
+    if (!this.d.engine.internalRead)
+      throw new RetagError('RETAG_UNAVAILABLE', 'The bridge cannot read the Tagging Standard here.');
     const read = (await this.d.engine.internalRead(
       projectId,
       'getDocumentBlocks',
@@ -1174,7 +1231,13 @@ export class RetagService {
       ],
       onError: 'stop',
       priority: 'P1',
-      origin: { kind: 'ui', client: 'owner', tool: ALLOW_TOOL, detail: `tag:${tag}`, principal: SYSTEM_PRINCIPAL },
+      origin: {
+        kind: 'ui',
+        client: 'owner',
+        tool: ALLOW_TOOL,
+        detail: `tag:${tag}`,
+        principal: SYSTEM_PRINCIPAL,
+      },
       title: `Allow “${tag}” everywhere: the Tagging Standard’s ${sup.section}`.slice(0, 300),
       internal: true,
       lastMajorRevision: 'skip',
@@ -1191,13 +1254,19 @@ export class RetagService {
       by: actor,
       at: this.d.now(),
     });
-    this.d.audit(actor, 'retag.allow_everywhere', src.resourceId, { text: edit.beforeText }, {
-      project: projectId,
-      tag,
-      text: edit.afterText,
-      jobId,
-      ...(o.pageId ? { fromPage: o.pageId } : {}),
-    });
+    this.d.audit(
+      actor,
+      'retag.allow_everywhere',
+      src.resourceId,
+      { text: edit.beforeText },
+      {
+        project: projectId,
+        tag,
+        text: edit.afterText,
+        jobId,
+        ...(o.pageId ? { fromPage: o.pageId } : {}),
+      },
+    );
     if (jobId) {
       const job = this.d.engine.queries.getJob(projectId, jobId);
       if (job) this.afterSupplementaryEdit(job);
@@ -1214,10 +1283,14 @@ export class RetagService {
 
   /** Once an edit's job has succeeded, the governance check: it offers the pack's new version for approval. */
   private afterSupplementaryEdit(job: JobView): void {
-    if (job.status !== 'succeeded' || job.origin.tool !== ALLOW_TOOL || this.followedEdits.has(job.id)) return;
+    if (job.status !== 'succeeded' || job.origin.tool !== ALLOW_TOOL || this.followedEdits.has(job.id))
+      return;
     this.followedEdits.add(job.id);
     void this.d.packs.governance(RETAG_PACK).catch((err: unknown) => {
-      this.d.log?.warn({ err, jobId: job.id }, 'the governance check after an Approved Supplementary Tags edit failed');
+      this.d.log?.warn(
+        { err, jobId: job.id },
+        'the governance check after an Approved Supplementary Tags edit failed',
+      );
     });
   }
 

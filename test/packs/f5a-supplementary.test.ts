@@ -136,6 +136,48 @@ describe('H1 and H3: the seven pages, and a page only out of order', () => {
   });
 });
 
+describe('H4: Apply all corrections, then approve all the batches together', () => {
+  it('makes the usual bounded batches (each page an item), and approving them together applies every page', async () => {
+    // Four pages put back out of order by an outside edit; a batch size of 3 for the test.
+    const ids = [ID(0), ID(1), ID(2), ID(3)];
+    for (const id of ids) {
+      const t = w.repo.res.get(id)!.tags;
+      w.repo.outside.setTags(id, [...t].reverse());
+    }
+    w.approveRetag({ routine: [], batchSize: 3 });
+    await w.snapshot();
+    const { runId } = await audit();
+    const chunks = rt().retag.correctionBatches(PROJECT, runId);
+    expect(chunks.map((c) => c.length)).toEqual([3, 1]);
+    expect(chunks.flat().sort()).toEqual([...ids].sort());
+    const proposals: string[] = [];
+    for (const c of chunks) {
+      const plan = rt().retag.planApply({ projectId: PROJECT, runId, pageIds: c });
+      expect(plan.items).toHaveLength(c.length);
+      const sub = await rt().retag.submitApply(plan, {
+        projectId: PROJECT,
+        origin: { kind: 'ui', client: 'owner', tool: 'tagging.apply_all' },
+        actor: 'owner',
+      });
+      expect(sub.proposalId).toBeTruthy();
+      expect(rt().retag.isBatchProposal(PROJECT, sub.proposalId!)).toBe(true);
+      proposals.push(sub.proposalId!);
+    }
+    // Pages in an open batch are not batched again.
+    expect(rt().retag.correctionBatches(PROJECT, runId)).toEqual([]);
+    const results = await rt().policy.commands.bulkApprove('owner', proposals);
+    expect(results.every((r) => r.ok)).toBe(true);
+    for (const id of proposals) {
+      for (let i = 0; i < 200; i++) {
+        if (rt().policy.proposals.get(id)!.state === 'executed') break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(rt().policy.proposals.get(id)!.state).toBe('executed');
+    }
+    SEVEN.slice(0, 4).forEach((s, i) => expect(w.repo.res.get(ID(i))!.tags, s.name).toEqual(s.proposed));
+  });
+});
+
 describe('H2: "Keep this tag here"', () => {
   it('clears the exception on that page while its array is unchanged; lapses when the array changes', async () => {
     await expect(rt().retag.keepHere('pat_agent', PROJECT, { pageId: KEEP, tag: 'Lore', reason: 'x' })).rejects.toMatchObject({ code: 'NOT_OWNER' });

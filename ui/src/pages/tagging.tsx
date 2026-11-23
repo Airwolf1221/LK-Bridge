@@ -105,7 +105,7 @@ interface Overview {
   batches: Batch[];
 }
 
-const TABS = ['Audit', 'Holds', 'Batches', 'Reconciliation'] as const;
+const TABS = ['Audit', 'Holds', 'Exceptions', 'Batches', 'Reconciliation'] as const;
 type Tab = (typeof TABS)[number];
 
 const TONE: Record<string, 'ok' | 'warn' | 'bad' | 'info' | 'neutral'> = {
@@ -168,6 +168,7 @@ export function TaggingPage() {
       </div>
       {tab === 'Audit' && <AuditTab overview={d} onChanged={r.reload} />}
       {tab === 'Holds' && <HoldsTab overview={d} onChanged={r.reload} />}
+      {tab === 'Exceptions' && <ExceptionsTab onChanged={r.reload} />}
       {tab === 'Batches' && <BatchesTab batches={d.batches} />}
       {tab === 'Reconciliation' && <ReconciliationTab overview={d} onChanged={r.reload} />}
     </>
@@ -372,7 +373,321 @@ function AuditTab({ overview, onChanged }: { overview: Overview; onChanged: () =
           </Button>
         </>
       )}
+      {runId && (
+        <ApplyAll runId={runId} corrections={runCorrections(overview, runId)} onChanged={onChanged} />
+      )}
     </section>
+  );
+}
+
+/** How many deterministic corrections a run found (its counts). */
+const runCorrections = (o: Overview, runId: string): number =>
+  o.runs.find((x) => x.id === runId)?.counts.correction ?? 0;
+
+/**
+ * v3 F5a (ADR 0067, H4): "Apply all corrections" of the run shown: the usual bounded batches (the pack's batch size,
+ * each page an item), then "Approve all these batches" (a bulk approval: the step-up).
+ */
+function ApplyAll({
+  runId,
+  corrections,
+  onChanged,
+}: {
+  runId: string;
+  corrections: number;
+  onChanged: () => void;
+}) {
+  const api = useProjectApi();
+  const confirm = useConfirm();
+  const withReauth = useReauth();
+  const { run, busy } = useAction();
+  const [made, setMade] = useState<{ proposalId: string | null; pages: number }[] | null>(null);
+  const [approved, setApproved] = useState<{ id: string; ok: boolean; error?: { message: string } }[] | null>(
+    null,
+  );
+  const applyAll = () =>
+    void confirm({
+      title: `Propose all ${corrections} correction${corrections === 1 ? '' : 's'} of this run?`,
+      message: (
+        <p>
+          They are proposed in the usual bounded batches (each page an item); pages already in an open batch
+          are left out. Nothing is written until the batches are approved.
+        </p>
+      ),
+      confirmLabel: 'Make the batches',
+    }).then((ok) => {
+      if (!ok) return;
+      void run(
+        () =>
+          withReauth(() =>
+            api.post<{ pages: number; batches: { proposalId: string | null; pages: number }[] }>(
+              '/tagging/apply-all',
+              { runId, confirm: true },
+            ),
+          ),
+        'Batches made.',
+      ).then((x) => {
+        if (!x) return;
+        setMade(x.batches);
+        setApproved(null);
+        onChanged();
+      });
+    });
+  const ids = (made ?? []).map((b) => b.proposalId).filter((x): x is string => x !== null);
+  const approveAll = () =>
+    void confirm({
+      title: `Approve all ${ids.length} batch${ids.length === 1 ? '' : 'es'}?`,
+      message: (
+        <p>
+          Each batch is approved whole and runs on its own: its job checks the policy, reads each page fresh
+          (a page changed since the audit is skipped as conflicted) and reads it back. A bulk approval asks
+          for your authenticator code.
+        </p>
+      ),
+      confirmLabel: 'Approve all these batches',
+    }).then((ok) => {
+      if (!ok) return;
+      void run(
+        () =>
+          withReauth(() =>
+            api.post<{ results: { id: string; ok: boolean; error?: { message: string } }[] }>(
+              '/tagging/approve-batches',
+              { proposalIds: ids, confirm: true },
+            ),
+          ),
+        'Batches approved.',
+      ).then((x) => {
+        if (!x) return;
+        setApproved(x.results);
+        onChanged();
+      });
+    });
+  return (
+    <div className="mt" role="group" aria-label="Apply all corrections">
+      <Button busy={busy} disabled={corrections === 0} onClick={applyAll}>
+        Apply all corrections ({corrections})
+      </Button>
+      {made && (
+        <>
+          <p className="small-text">
+            {made.length === 0
+              ? 'No correction is left to propose (each is in an open batch already).'
+              : `${made.length} batch${made.length === 1 ? '' : 'es'} made: ${made.map((b) => b.pages).join(', ')} pages.`}
+          </p>
+          {ids.length > 0 && !approved && (
+            <Button variant="primary" busy={busy} onClick={approveAll}>
+              Approve all these batches ({ids.length})
+            </Button>
+          )}
+        </>
+      )}
+      {approved && (
+        <ul className="plain small-text" aria-label="Batch approvals">
+          {approved.map((a) => (
+            <li key={a.id}>
+              <Badge tone={a.ok ? 'ok' : 'bad'}>{a.ok ? 'approved' : 'refused'}</Badge>{' '}
+              <Link to={`/proposals?id=${encodeURIComponent(a.id)}`}>{a.id}</Link>
+              {a.ok ? '' : `: ${a.error?.message ?? 'refused'}`}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+interface RulingRecord {
+  pageId: string;
+  tag: string;
+  tags: string[];
+  reason: string;
+  by: string;
+  at: number;
+}
+interface RulingSuggestion {
+  id: number;
+  tag: string;
+  action: 'keep_here' | 'allow_everywhere';
+  reason: string;
+  by: string;
+  at: number;
+}
+
+/**
+ * v3 F5a (ADR 0067, H2): the latest audit's exceptions, each with the owner's two actions: "Keep this tag here" (a ruling
+ * for this page, while its tags are unchanged) and "Allow this tag everywhere" (the Tagging Standard's Approved
+ * Supplementary Tags edited: a dry run first, then the step-up). Agents' suggestions are shown beside them.
+ */
+function ExceptionsTab({ onChanged }: { onChanged: () => void }) {
+  const r = useScopedApi<{
+    run: Run | null;
+    supplementary: string[];
+    exceptions: (PageView & { rulings: RulingRecord[]; suggestions: RulingSuggestion[] })[];
+  }>('/tagging/exceptions');
+  if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
+  return (
+    <section className="card" aria-labelledby="tagging-exceptions-h">
+      <h2 id="tagging-exceptions-h">Exceptions ({r.data.exceptions.length})</h2>
+      <p className="muted small-text">
+        From the latest audit: a tag outside the grammar that no rule settles is yours to judge. The Approved
+        Supplementary Tags ({r.data.supplementary.length ? r.data.supplementary.join(', ') : 'none'}) are kept
+        wherever they appear. Agents may suggest a ruling with a reason; only you take one.
+      </p>
+      {r.data.exceptions.length === 0 ? (
+        <Empty>No exceptions in the latest audit.</Empty>
+      ) : (
+        r.data.exceptions.map((x) => (
+          <ExceptionCard
+            key={x.pageId}
+            page={x}
+            onChanged={() => {
+              r.reload();
+              onChanged();
+            }}
+          />
+        ))
+      )}
+    </section>
+  );
+}
+
+function ExceptionCard({
+  page,
+  onChanged,
+}: {
+  page: PageView & { rulings: RulingRecord[]; suggestions: RulingSuggestion[] };
+  onChanged: () => void;
+}) {
+  const api = useProjectApi();
+  const confirm = useConfirm();
+  const withReauth = useReauth();
+  const { run, busy } = useAction();
+  const [reason, setReason] = useState('');
+  const keep = (tag: string) =>
+    void confirm({
+      title: `Keep “${tag}” on ${page.name}?`,
+      message: (
+        <p>
+          A ruling for this page alone, tied to its tags as they are now ({tags(page.current)}). If they
+          change, the ruling lapses and the audit asks again. Audited.
+        </p>
+      ),
+      confirmLabel: 'Keep this tag here',
+    }).then((ok) => {
+      if (!ok) return;
+      void run(
+        () =>
+          withReauth(() =>
+            api.post('/tagging/keep-here', { pageId: page.pageId, tag, reason, confirm: true }),
+          ),
+        'Kept: the next audit treats it as allowed on this page.',
+      ).then((x) => {
+        if (x) onChanged();
+      });
+    });
+  const allow = (tag: string) =>
+    void run(
+      () =>
+        api.post<{ before: string; after: string; tags: string[] }>('/tagging/allow-everywhere', {
+          tag,
+          pageId: page.pageId,
+          dryRun: true,
+        }),
+      'The edit, as a dry run (nothing written).',
+    ).then((dry) => {
+      if (!dry) return;
+      void confirm({
+        title: `Allow “${tag}” everywhere?`,
+        message: (
+          <>
+            <p>
+              The bridge edits the Tagging Standard’s Approved Supplementary Tags as your action (journalled;
+              it can be Reverted). Then approve the pack’s new version on the Packs page.
+            </p>
+            <p className="small-text">
+              <strong>Before:</strong> {dry.before}
+            </p>
+            <p className="small-text">
+              <strong>After:</strong> {dry.after}
+            </p>
+          </>
+        ),
+        confirmLabel: 'Allow this tag everywhere',
+      }).then((ok) => {
+        if (!ok) return;
+        void run(
+          () =>
+            withReauth(() =>
+              api.post('/tagging/allow-everywhere', { tag, pageId: page.pageId, confirm: true }),
+            ),
+          'The Tagging Standard is edited: approve the pack’s new version on the Packs page.',
+        ).then((x) => {
+          if (x) onChanged();
+        });
+      });
+    });
+  const withdraw = (tag: string) =>
+    void run(
+      () => api.post('/tagging/unkeep', { pageId: page.pageId, tag, confirm: true }),
+      'Ruling withdrawn.',
+    ).then((x) => {
+      if (x) onChanged();
+    });
+  return (
+    <article className="card" data-exception={page.pageId}>
+      <h3>
+        <span className="mono small-text">{page.pageId}</span> {page.name}
+      </h3>
+      <p className="small-text">Tags: {tags(page.current)}</p>
+      <input
+        aria-label={`Reason for ${page.name}`}
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="What you checked (for Keep this tag here)"
+      />
+      <ul className="small-text">
+        {(page.exceptions ?? []).map((e) => {
+          const ruling = page.rulings.find((x) => x.tag === e.tag);
+          const suggested = page.suggestions.filter((s) => s.tag === e.tag);
+          return (
+            <li key={e.tag}>
+              <strong>{e.tag}</strong>: {e.reason}{' '}
+              <Button
+                className="small"
+                busy={busy}
+                disabled={reason.trim() === ''}
+                onClick={() => keep(e.tag)}
+              >
+                Keep this tag here
+              </Button>{' '}
+              <Button className="small" busy={busy} onClick={() => allow(e.tag)}>
+                Allow this tag everywhere
+              </Button>
+              {ruling && (
+                <div>
+                  Your ruling of {new Date(ruling.at).toISOString().slice(0, 10)} (on {tags(ruling.tags)}):{' '}
+                  {ruling.reason}{' '}
+                  <Button className="small" busy={busy} onClick={() => withdraw(e.tag)}>
+                    Withdraw
+                  </Button>
+                </div>
+              )}
+              {suggested.length > 0 && (
+                <div>
+                  Suggested:{' '}
+                  {suggested
+                    .map(
+                      (s) =>
+                        `${s.action === 'keep_here' ? 'keep it here' : 'allow it everywhere'} (${s.by}: ${s.reason})`,
+                    )
+                    .join('; ')}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </article>
   );
 }
 

@@ -150,6 +150,22 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
     return c;
   };
 
+  /**
+   * v3 F5a (ADR 0067, H4): a bulk decision never touches a proposal whose job is running (approved, executing): it is
+   * passed over, and listed with why, before anything is tried.
+   */
+  const runningRefusal = (id: string): BulkResult | null => {
+    const st = proposals.state(id);
+    return st === 'approved' || st === 'executing'
+      ? {
+          id,
+          ok: false,
+          skipped: true,
+          state: st,
+          error: { code: 'PROPOSAL_RUNNING', message: 'its job is running: it was decided already and is left alone' },
+        }
+      : null;
+  };
   const commands: OwnerCommands = {
     listProfiles(actor) {
       assertOwner(actor);
@@ -333,6 +349,11 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
       const out: BulkResult[] = [];
       // One at a time, in order: each approval re-reads its targets, and an earlier one may change a later one's.
       for (const id of new Set(ids)) {
+        const running = runningRefusal(id);
+        if (running) {
+          out.push(running);
+          continue;
+        }
         try {
           const p = await proposals.approve(actor, id);
           out.push({ id, ok: p.state === 'executing' || p.state === 'executed', state: p.state });
@@ -356,6 +377,11 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
       // One at a time, in order, exactly like bulkApprove: each approval re-reads its targets, and an earlier one may
       // change a later one's. The two kinds of approval stay distinct: an ordinary proposal is refused here.
       for (const id of new Set(ids)) {
+        const running = runningRefusal(id);
+        if (running) {
+          out.push(running);
+          continue;
+        }
         try {
           const p = await proposals.approveAsCanon(actor, id, { bulk: true });
           out.push({ id, ok: p.state === 'executing' || p.state === 'executed', state: p.state });
@@ -378,6 +404,11 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
       assertOwner(actor);
       const out: BulkResult[] = [];
       for (const id of new Set(ids)) {
+        const running = runningRefusal(id);
+        if (running) {
+          out.push(running);
+          continue;
+        }
         try {
           out.push({ id, ok: true, state: proposals.reject(actor, id, reason).state });
         } catch (e) {

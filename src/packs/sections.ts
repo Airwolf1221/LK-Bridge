@@ -202,7 +202,10 @@ export function parseSupplementaryTags(section: readonly Obj[] | null): Suppleme
         'no sentence of the section states the list as “… permitted supplementary tags …: A, B and C.”; the bridge reads nothing it cannot read exactly',
     };
   if (hits.length > 1)
-    return { ok: false, reason: 'more than one sentence of the section states a list; which one governs cannot be told' };
+    return {
+      ok: false,
+      reason: 'more than one sentence of the section states a list; which one governs cannot be told',
+    };
   const tags = splitTagList(hits[0]!.list);
   const bad = tags.find((t) => t.length > 100 || /[\n\r]/.test(t));
   if (tags.length === 0 || bad !== undefined)

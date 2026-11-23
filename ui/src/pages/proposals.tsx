@@ -37,9 +37,20 @@ export function ProposalsPage() {
     (['pending', 'conflicted', 'history'] as const).find((t) => t === query.get('tab')) ?? 'pending';
   const openId = query.get('id');
   const { selected } = useProject();
-  const list = useScopedApi<{ proposals: Proposal[]; principals?: PrincipalNames }>(
-    `/proposals${qs({ group: tab, limit: 100 })}`,
-  );
+  // v3 F5a (ADR 0067, H4): the filters (tool, principal, age) beside the state tabs.
+  const [filter, setFilter] = useState<Filter>({ tool: '', principalId: '', olderThanHours: '' });
+  const filterQuery = {
+    group: tab,
+    ...(filter.tool ? { tool: filter.tool } : {}),
+    ...(filter.principalId ? { principalId: filter.principalId } : {}),
+    ...(filter.olderThanHours ? { olderThanHours: filter.olderThanHours } : {}),
+  };
+  const list = useScopedApi<{
+    proposals: Proposal[];
+    principals?: PrincipalNames;
+    total?: number;
+    totalCapped?: boolean;
+  }>(`/proposals${qs({ ...filterQuery, limit: 100 })}`);
   const counts = useScopedApi<ProposalCounts>('/proposals/counts');
   const reloadAll = () => {
     list.reload();
@@ -48,11 +59,31 @@ export function ProposalsPage() {
   useProjectReloadOn(['proposal'], reloadAll, 300);
   const now = useNow();
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  // v3 F5a (H4): every proposal the filter matches, across pages (not only the ones listed here).
+  const [allMatching, setAllMatching] = useState(false);
   const [report, setReport] = useState<BulkReport | null>(null);
+  const filterKey = `${filter.tool}|${filter.principalId}|${filter.olderThanHours}`;
   useEffect(() => {
     setPicked(new Set());
+    setAllMatching(false);
     setReport(null);
-  }, [tab]);
+  }, [tab, filterKey]);
+  const selectable = tab === 'pending' || tab === 'conflicted';
+  const total = list.data?.total ?? list.data?.proposals.length ?? 0;
+  const shown = list.data?.proposals.length ?? 0;
+  const matching = allMatching
+    ? {
+        count: total,
+        filter: {
+          group: tab,
+          ...(filter.tool ? { tool: filter.tool } : {}),
+          ...(filter.principalId ? { principalId: filter.principalId } : {}),
+          ...(filter.olderThanHours ? { olderThanHours: Number(filter.olderThanHours) } : {}),
+        },
+      }
+    : null;
+  const tools = [...new Set((list.data?.proposals ?? []).map((p) => p.tool).filter((t): t is string => !!t))];
+  const principals = [...new Map((list.data?.proposals ?? []).map((p) => [p.principalId, p])).values()];
   // The selected proposals, in list order, split by kind: the two kinds of approval stay distinct.
   const chosen = (list.data?.proposals ?? []).filter((p) => picked.has(p.id));
   const go = (patch: { tab?: Tab; id?: string | null }) =>
@@ -83,13 +114,106 @@ export function ProposalsPage() {
           </button>
         ))}
       </div>
+      <form
+        className="inline-form"
+        role="search"
+        aria-label="Filter proposals"
+        onSubmit={(e) => e.preventDefault()}
+      >
+        <label>
+          Tool{' '}
+          <select
+            aria-label="Tool"
+            value={filter.tool}
+            onChange={(e) => setFilter({ ...filter, tool: e.target.value })}
+          >
+            <option value="">Any tool</option>
+            {[...new Set([...tools, ...(filter.tool ? [filter.tool] : [])])].map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>{' '}
+        <label>
+          Proposed by{' '}
+          <select
+            aria-label="Proposed by"
+            value={filter.principalId}
+            onChange={(e) => setFilter({ ...filter, principalId: e.target.value })}
+          >
+            <option value="">Anyone</option>
+            {principals.map((p) => (
+              <option key={p.principalId} value={p.principalId}>
+                {p.profile}: {principalText(p.principalId, list.data?.principals, p.principalLabel, true)}
+              </option>
+            ))}
+            {filter.principalId && !principals.some((p) => p.principalId === filter.principalId) && (
+              <option value={filter.principalId}>{filter.principalId}</option>
+            )}
+          </select>
+        </label>{' '}
+        <label>
+          Age{' '}
+          <select
+            aria-label="Age"
+            value={filter.olderThanHours}
+            onChange={(e) => setFilter({ ...filter, olderThanHours: e.target.value })}
+          >
+            <option value="">Any age</option>
+            <option value="1">Older than an hour</option>
+            <option value="24">Older than a day</option>
+            <option value="168">Older than a week</option>
+          </select>
+        </label>
+      </form>
       <ErrorNote error={list.error} onRetry={list.reload} />
-      {tab === 'pending' && picked.size > 0 && (
-        <BulkBar
-          chosen={chosen}
+      {tab === 'conflicted' && total > 0 && (
+        <RejectAllConflicted
+          count={total}
+          filter={{
+            group: 'conflicted',
+            ...(filter.tool ? { tool: filter.tool } : {}),
+            ...(filter.principalId ? { principalId: filter.principalId } : {}),
+            ...(filter.olderThanHours ? { olderThanHours: Number(filter.olderThanHours) } : {}),
+          }}
           onReport={setReport}
           onDone={() => {
             setPicked(new Set());
+            setAllMatching(false);
+            reloadAll();
+          }}
+        />
+      )}
+      {selectable && picked.size > 0 && picked.size === shown && total > shown && (
+        <div className="note" role="status">
+          {allMatching ? (
+            <>
+              All {total} proposals matching the filter are selected
+              {list.data?.totalCapped ? ' (the first 2,000)' : ''}.{' '}
+              <button type="button" className="small" onClick={() => setAllMatching(false)}>
+                Select only the {shown} shown
+              </button>
+            </>
+          ) : (
+            <>
+              The {shown} shown are selected.{' '}
+              <button type="button" className="small" onClick={() => setAllMatching(true)}>
+                Select all {total} matching the filter
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {selectable && picked.size > 0 && (
+        <BulkBar
+          chosen={chosen}
+          matching={matching}
+          rejectOnly={tab === 'conflicted'}
+          onReport={setReport}
+          onDone={() => {
+            setPicked(new Set());
+            setAllMatching(false);
             reloadAll();
           }}
         />
@@ -110,17 +234,18 @@ export function ProposalsPage() {
           <table>
             <thead>
               <tr>
-                {tab === 'pending' && (
+                {selectable && (
                   <th>
                     <input
                       type="checkbox"
-                      aria-label="Select all pending proposals"
+                      aria-label={`Select all ${tab} proposals`}
                       checked={picked.size === list.data.proposals.length}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        setAllMatching(false);
                         setPicked(
                           e.target.checked ? new Set(list.data!.proposals.map((p) => p.id)) : new Set(),
-                        )
-                      }
+                        );
+                      }}
                     />
                   </th>
                 )}
@@ -135,13 +260,14 @@ export function ProposalsPage() {
             <tbody>
               {list.data.proposals.map((p) => (
                 <tr key={p.id} className={openId === p.id ? 'selected' : ''} data-proposal={p.id}>
-                  {tab === 'pending' && (
+                  {selectable && (
                     <td>
                       <input
                         type="checkbox"
                         aria-label={`Select ${p.title || p.id}`}
                         checked={picked.has(p.id)}
                         onChange={(e) => {
+                          setAllMatching(false);
                           const next = new Set(picked);
                           if (e.target.checked) next.add(p.id);
                           else next.delete(p.id);
@@ -197,6 +323,19 @@ export function ProposalsPage() {
   );
 }
 
+/** v3 F5a (ADR 0067, H4): the filters beside the state tabs (empty: any). */
+interface Filter {
+  tool: string;
+  principalId: string;
+  olderThanHours: string;
+}
+
+/** v3 F5a (H4): a decision over every proposal a filter matches (with the count the owner confirmed). */
+interface Matching {
+  count: number;
+  filter: Record<string, string | number>;
+}
+
 type BulkAction = 'approve' | 'approve-as-canon' | 'reject';
 type BulkResult = {
   id: string;
@@ -227,6 +366,8 @@ function reportOf(
   return results.map((r) => {
     const title = titles.get(r.id) ?? r.id;
     if (r.ok) return { id: r.id, title, outcome: 'done', text: DONE_TEXT[action] };
+    if (r.skipped && r.error?.code === 'PROPOSAL_RUNNING')
+      return { id: r.id, title, outcome: 'skipped', text: 'Left alone: its job is running' };
     if (r.skipped)
       return {
         id: r.id,
@@ -338,10 +479,16 @@ const summaryLines = (p: Pick<Proposal, 'pages' | 'summary'>) =>
  */
 function BulkBar({
   chosen,
+  matching,
+  rejectOnly,
   onReport,
   onDone,
 }: {
   chosen: Proposal[];
+  /** v3 F5a (H4): set when every proposal the filter matches is selected, across pages. */
+  matching?: Matching | null;
+  /** v3 F5a (H4): the Conflicted tab: rejecting only (a conflicted proposal cannot be approved). */
+  rejectOnly?: boolean;
   onReport: (r: BulkReport) => void;
   onDone: () => void;
 }) {
@@ -356,12 +503,20 @@ function BulkBar({
 
   const act = (action: BulkAction, ids: string[], skipped: Proposal[] = []) =>
     run(() =>
-      api.post<{ results: BulkResult[] }>(withProject('/proposals/bulk'), {
-        action,
-        ids,
-        ...(action === 'reject' && reason ? { reason } : {}),
-        ...(action === 'approve-as-canon' ? { confirm: true } : {}),
-      }),
+      matching && action !== 'approve-as-canon'
+        ? api.post<{ results: BulkResult[] }>(withProject('/proposals/bulk-matching'), {
+            action,
+            filter: matching.filter,
+            expect: matching.count,
+            ...(action === 'reject' && reason ? { reason } : {}),
+            confirm: true,
+          })
+        : api.post<{ results: BulkResult[] }>(withProject('/proposals/bulk'), {
+            action,
+            ids,
+            ...(action === 'reject' && reason ? { reason } : {}),
+            ...(action === 'approve-as-canon' ? { confirm: true } : {}),
+          }),
     ).then((r) => {
       if (r) {
         const bad = r.results.filter((x) => !x.ok && !x.skipped);
@@ -461,46 +616,53 @@ function BulkBar({
       );
   };
 
+  const n = matching ? matching.count : chosen.length;
+  const nOrdinary = matching ? matching.count : ordinary.length;
   return (
     <div className="card" role="group" aria-label="Bulk actions">
       <div className="row">
-        <strong>{chosen.length} selected</strong>
-        <Button
-          variant="primary"
-          busy={busy}
-          disabled={ordinary.length === 0}
-          onClick={() => {
-            void confirm({
-              title: `Approve ${ordinary.length} proposal${ordinary.length === 1 ? '' : 's'}?`,
-              message: (
-                <>
-                  <p>
-                    Each one is checked against LegendKeeper again, then run one at a time. A proposal whose
-                    targets have changed becomes conflicted and runs nothing.
-                  </p>
-                  {canon.length > 0 && (
-                    <p className="note note-warn small-text">
-                      {canon.length} selected proposal{canon.length === 1 ? ' touches' : 's touch'} protected
-                      canon and {canon.length === 1 ? 'is' : 'are'} skipped here: use “Accept selected as
-                      canon”.
+        <strong>
+          {n} selected{matching ? ' (every proposal matching the filter)' : ''}
+        </strong>
+        {!rejectOnly && (
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={nOrdinary === 0}
+            onClick={() => {
+              void confirm({
+                title: `Approve ${nOrdinary} proposal${nOrdinary === 1 ? '' : 's'}?`,
+                message: (
+                  <>
+                    <p>
+                      Each one is checked against LegendKeeper again, then run one at a time. A proposal whose
+                      targets have changed becomes conflicted and runs nothing. If any of them triggers a
+                      safety rail, you are asked for your authenticator code first.
                     </p>
-                  )}
-                </>
-              ),
-              confirmLabel: 'Approve all',
-            }).then((ok) => {
-              if (ok)
-                void act(
-                  'approve',
-                  ordinary.map((p) => p.id),
-                  canon,
-                );
-            });
-          }}
-        >
-          Approve selected ({ordinary.length})
-        </Button>
-        {canon.length > 0 && (
+                    {canon.length > 0 && (
+                      <p className="note note-warn small-text">
+                        {canon.length} selected proposal{canon.length === 1 ? ' touches' : 's touch'}{' '}
+                        protected canon and {canon.length === 1 ? 'is' : 'are'} skipped here: use “Accept
+                        selected as canon”.
+                      </p>
+                    )}
+                  </>
+                ),
+                confirmLabel: 'Approve all',
+              }).then((ok) => {
+                if (ok)
+                  void act(
+                    'approve',
+                    ordinary.map((p) => p.id),
+                    canon,
+                  );
+              });
+            }}
+          >
+            Approve selected ({nOrdinary})
+          </Button>
+        )}
+        {!rejectOnly && !matching && canon.length > 0 && (
           <Button variant="primary" busy={busy} onClick={() => void acceptAsCanon()}>
             Accept selected as canon ({canon.length})
           </Button>
@@ -519,7 +681,7 @@ function BulkBar({
           busy={busy}
           onClick={() => {
             void confirm({
-              title: `Reject ${chosen.length} proposal${chosen.length === 1 ? '' : 's'}?`,
+              title: `Reject ${n} proposal${n === 1 ? '' : 's'}?`,
               message: <p>Nothing is sent to LegendKeeper. The agents can read your reason.</p>,
               confirmLabel: 'Reject all',
               danger: true,
@@ -535,6 +697,73 @@ function BulkBar({
           Reject selected
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * v3 F5a (ADR 0067, H4): "Reject all conflicted": every conflicted proposal the filter matches, across pages. A brake:
+ * one confirmation, no step-up. The server refuses if the set changed since the count shown.
+ */
+function RejectAllConflicted({
+  count,
+  filter,
+  onReport,
+  onDone,
+}: {
+  count: number;
+  filter: Record<string, string | number>;
+  onReport: (r: BulkReport) => void;
+  onDone: () => void;
+}) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const toast = useToast();
+  const { withProject } = useProject();
+  return (
+    <div className="row">
+      <Button
+        variant="danger"
+        busy={busy}
+        onClick={() => {
+          void confirm({
+            title: `Reject all ${count} conflicted proposal${count === 1 ? '' : 's'}?`,
+            message: (
+              <p>
+                Every conflicted proposal matching the filter, on every page. Nothing is sent to LegendKeeper;
+                the agents can read that you rejected them.
+              </p>
+            ),
+            confirmLabel: 'Reject all conflicted',
+            danger: true,
+          }).then((ok) => {
+            if (!ok) return;
+            void run(() =>
+              api.post<{ results: BulkResult[] }>(withProject('/proposals/bulk-matching'), {
+                action: 'reject',
+                filter,
+                expect: count,
+                reason: 'conflicted: rejected in bulk',
+                confirm: true,
+              }),
+            ).then((r) => {
+              if (r) {
+                onReport({ action: 'reject', rows: reportOf('reject', r.results, new Map()) });
+                const bad = r.results.filter((x) => !x.ok);
+                toast(
+                  bad.length ? 'error' : 'ok',
+                  bad.length
+                    ? `${bad.length} of ${r.results.length} could not be rejected.`
+                    : `${r.results.length} rejected.`,
+                );
+              }
+              onDone();
+            });
+          });
+        }}
+      >
+        Reject all conflicted ({count})
+      </Button>
     </div>
   );
 }

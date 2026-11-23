@@ -10,7 +10,7 @@
  *
  * The approved pack version lists `Imported` as an Excluded Routine Tag and makes the lifecycle tag lead on this project.
  */
-import { ROOT } from '../discover/world.js';
+import { ROOT, type DiscoverWorld } from '../discover/world.js';
 import { appraisalWorld, type AppraisalWorld } from '../appraisal/world.js';
 import { PROJECT } from '../tools/helpers.js';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
@@ -71,7 +71,7 @@ export interface RetagWorld extends AppraisalWorld {
 
 export async function retagWorld(o: {
   /** v3 F5a: more fixture pages, seeded with the world's own (so the tree and the first snapshot hold them). */
-  readonly seed?: (world: Parameters<NonNullable<Parameters<typeof appraisalWorld>[0]>['seed']>[0]) => void;
+  readonly seed?: (world: DiscoverWorld) => void;
 } = {}): Promise<RetagWorld> {
   const w = await appraisalWorld({
     retag: true,
