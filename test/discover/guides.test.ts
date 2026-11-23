@@ -57,7 +57,8 @@ describe('docs/bridge-guide.md', () => {
     for (const phrase of ['Five rules', 'Which tool?', 'baseFactsVersion', 'proposal_captured', 'lk_api_']) {
       expect(decide.markdown, phrase).toContain(phrase);
     }
-    expect(decide.markdown.length).toBeLessThan(9000);
+    // v3 F5c (ADR 0069): one line more, for the orchestration tools (it was 8,999 before them).
+    expect(decide.markdown.length).toBeLessThan(9400);
   });
   it('names only tools that exist', () => {
     const names = new Set(tools.map((t) => t.name));

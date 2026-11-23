@@ -35,10 +35,8 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 **Split an owner → `arkona_split_appraisal`, then `arkona_split_owner` (never by hand).** Only when the owner asks;
 `write_page` refuses moving a section's worth of text off a pack page (`USE_ARKONA_SPLIT`).
 
-**Many characters' identity facts (a culture split) → `arkona_identity_reconcile`, dry run first** (one job, an item per
-character, the tags recomputed with the facts). **The same few fields of many pages → `query_facts`** (one free table).
-**One maintenance objective → a `workstream` label on every write** (or `bridge_workstream { set }` once), then
-`bridge_workstream_report` to say what was done and what is left.
+**Many characters' identity facts → `arkona_identity_reconcile`, dry run first; one field of many pages →
+`query_facts`; label an objective's writes `workstream`, then `bridge_workstream_report`.**
 
 **Which tool?**
 
@@ -57,9 +55,6 @@ character, the tags recomputed with the facts). **The same few fields of many pa
 | Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`    | separate creates; a placed `upload_image`     |
 | Brief on any Arkona subject (or a character)        | `arkona_brief` (free; a character: delegated)               | many `get_resource` and `read_document` calls |
 | Check a character's name before an intake or rename | `arkona_name_check` (free; never infers)                    | guessing a culture from the name              |
-| Change many characters' identity facts and tags     | `arkona_identity_reconcile` (dry run first; one job)        | `set_facts` then `update_resource`, each      |
-| Read the same fields from many pages                | `query_facts` (a free table; `live` to re-read)             | many `get_resource` calls                     |
-| Report a maintenance objective's work               | `bridge_workstream_report` (label writes with `workstream`) | reconstructing it from the journal            |
 | Rename an Arkona character or owner everywhere      | `arkona_rename` (one proposal, item by item)                | `update_resource`, `write_page` page by page  |
 | Split an Arkona owner into several owners           | `arkona_split_appraisal`, `arkona_split_owner`              | `write_page` and the create tools by hand     |
 | Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact`             | reading every page yourself                   |
@@ -91,8 +86,7 @@ or rejects on the dashboard; nothing is written. `write` writes directly, except
 - `Create a page or a character (Working first)`
 - `Setting packs (Arkona)`, and under it `Arkona briefs and names`, `Arkona characters`, `Arkona owners`,
   `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`, `Arkona retagging`,
-  `Arkona identity facts in bulk`, `Arkona fiction`
-- `Many pages at once: query_facts and workstreams`
+  `Arkona identity facts in bulk`, `Arkona fiction`; `Many pages at once: query_facts and workstreams`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
