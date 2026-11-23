@@ -109,6 +109,12 @@ describe('the six exact headings', () => {
     // The bridge starts with the new seed: a new version with the exact headings, approved first time.
     const v = p.get('arkona')!.version;
     p.ensureSeeded();
+    // v3 F5b (ADR 0068): the new seed's Repository Automation joins at Arkona's own ids, a project this world does not
+    // serve; the world keeps to its own documents, as it does for the other sources.
+    p.store.setGovernance(
+      'arkona',
+      p.get('arkona')!.governance.filter((g) => g.key !== 'repository-automation'),
+    );
     const after = p.get('arkona')!;
     expect(after.version).toBe(v + 1);
     expect(after.seed).toBe(ARKONA_PACK.seed);

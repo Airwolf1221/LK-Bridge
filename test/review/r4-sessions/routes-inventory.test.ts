@@ -234,6 +234,20 @@ const ROUTES: Record<string, Route> = {
   'POST /api/admin/tagging/unkeep': { kind: 'one-click' }, // a tightening: the ruling withdrawn
   'POST /api/admin/tagging/allow-everywhere': { kind: 'conditional' }, // a dry run is one click; the edit asks
   'POST /api/admin/tagging/apply-all': { kind: 'conditional' }, // more than 10 pages in all asks
+  // v3 F5b (ADR 0068, H5): every automation setting change asks; the brake is one click, its release asks.
+  'POST /api/admin/automation/codes/:code': {
+    kind: 'asks',
+    params: { code: 'blank_paragraphs' },
+    body: { mode: 'apply', confirm: true },
+  },
+  'POST /api/admin/automation/codes/:code/resume': {
+    kind: 'asks',
+    params: { code: 'blank_paragraphs' },
+    body: { confirm: true },
+  },
+  'POST /api/admin/automation/pause': { kind: 'one-click' }, // a brake
+  'POST /api/admin/automation/resume': { kind: 'asks', body: { confirm: true } },
+  'POST /api/admin/automation/run': { kind: 'asks', body: { confirm: true } },
   'POST /api/admin/tagging/approve-batches': {
     kind: 'asks',
     body: { proposalIds: ['prop_r4x'], confirm: true },

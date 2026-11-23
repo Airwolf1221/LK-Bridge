@@ -221,6 +221,9 @@ describe('the new seed is offered to a pack stored from F3a’s seed', () => {
     );
     // v3 F4c: the fiction Design References join, found by their page names in this world's project.
     expect(after.governance.slice(before.governance.length).map((g) => [g.key, g.project, g.page])).toEqual([
+      // v3 F5b (ADR 0068): Repository Automation joins at the seed's ids, in the seed's project (only a source found by
+      // its page's name goes in the project the stored sources share).
+      ['repository-automation', 'arkona', undefined],
       ['narrative-workflow', 'test', 'Arkona - Narrative Story Planning & Drafting Workflow'],
       ['fiction-writing', 'test', 'Arkona - Fiction Writing Reference'],
     ]);
@@ -238,6 +241,12 @@ describe('the new seed is offered to a pack stored from F3a’s seed', () => {
     // Starting again offers nothing more.
     p.ensureSeeded();
     expect(p.get('arkona')!.version).toBe(v + 1);
+    // v3 F5b (ADR 0068): Repository Automation sits on Arkona, which this world does not serve; the world keeps to its own
+    // documents (as it does for the other sources) before the owner approves.
+    p.store.setGovernance(
+      'arkona',
+      p.get('arkona')!.governance.filter((g) => g.key !== 'repository-automation'),
+    );
     await p.commands.approve('owner', 'arkona');
     const ok = await w.call('arkona_create_owner', compactPolity({ dryRun: true }));
     expect(ok.isError, ok.text).toBe(false);

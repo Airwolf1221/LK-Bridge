@@ -379,7 +379,7 @@ test('v3 F5b: "Pause all automation" is one click; resuming asks for the step-up
   await page.getByRole('alertdialog').getByRole('button', { name: 'Resume' }).click();
   await stepUp(page);
   await expect(brake.getByText('Running')).toBeVisible();
-  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/resume/);
+  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/resume\?project=test/);
   expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
   expect(problems.filter((p) => !expected(p))).toEqual([]);
 });
@@ -402,16 +402,16 @@ test('v3 F5b: a code’s setting is changed with the step-up and recorded in Rep
   await confirmDialog.getByRole('button', { name: 'Change the setting' }).click();
   await stepUp(page);
   await expect(row.locator('.badge').first()).toHaveText('Propose automatically', { timeout: 15_000 });
-  // Keyboard: the select and the button are reachable and labelled.
+  // Back Off, by keyboard: the labelled select, then Tab to Change and Enter (the step-up holds for ten minutes on this
+  // session, so it is not asked again).
+  await row.getByLabel('Setting for Decorative blank paragraphs').selectOption('off');
   await row.getByLabel('Setting for Decorative blank paragraphs').focus();
   await page.keyboard.press('Tab');
   await expect(row.getByRole('button', { name: 'Change' })).toBeFocused();
-  // Back Off (the step-up holds for ten minutes on this session, so it is not asked again).
-  await row.getByLabel('Setting for Decorative blank paragraphs').selectOption('off');
-  await row.getByRole('button', { name: 'Change' }).click();
+  await page.keyboard.press('Enter');
   await page.getByRole('alertdialog').getByRole('button', { name: 'Change the setting' }).click();
   await expect(row.locator('.badge').first()).toHaveText('Off', { timeout: 15_000 });
-  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/codes\/blank_paragraphs/);
+  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/codes\/blank_paragraphs\?project=test/);
   expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
   expect(problems.filter((p) => !expected(p))).toEqual([]);
 });

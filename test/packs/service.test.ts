@@ -30,11 +30,13 @@ describe('the Arkona pack, as data', () => {
       'cn8v87hh/p5rcvxze',
       'cn8v87hh/l41y28c8',
       'cn8v87hh/bfrv43jr',
+      // v3 F5b (ADR 0068): Repository Automation, the governance root's tab xd9gzkel.
+      'cn8v87hh/xd9gzkel',
       // v3 F4c (ADR 0065, design E9): the fiction Design References, found by their page names (any dash).
       '/',
       '/',
     ]);
-    expect(ARKONA_PACK.governance.slice(3).map((g) => [g.page, g.sections])).toEqual([
+    expect(ARKONA_PACK.governance.slice(4).map((g) => [g.page, g.sections])).toEqual([
       [
         'Arkona - Narrative Story Planning & Drafting Workflow',
         ['LegendKeeper Planning and Manuscript Structure'],
