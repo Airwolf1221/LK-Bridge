@@ -24,6 +24,10 @@
   step-up), and the Overview's "Automation overnight" tile.
 - **Agents**: `bridge_info` names the automated codes; no tool changes a setting.
 - **The sandbox check** `automation-f5b` (written, not run; passing on the mock in the ordinary suite).
+- **Before merge (ADR 0068 amendment 1)**: the approval is carried over the bridge's own write only for sources whose
+  content is exactly as approved, plus the planned paragraph (another tab edited meanwhile is still drift); and every
+  dashboard action that names a project takes it from the address and refuses a body naming another
+  (`400 PROJECT_MISMATCH`): the Tagging page's actions acted on the default project on a bridge serving several.
 
 ## Unreleased: v3 F5a, supplementary tags, rulings, bulk actions and unknown outcomes (23 November 2026)
 

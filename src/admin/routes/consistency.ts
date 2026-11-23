@@ -19,7 +19,7 @@ import { ConsistencyError } from '../../consistency/service.js';
 import { PickError } from '../../consistency/fix.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { parseInput, projectParam, type Register } from './util.js';
+import { parseInput, projectParam, type Register, projectFor } from './util.js';
 
 const STATUS: Readonly<Record<string, number>> = {
   NOT_FOUND: 404,
@@ -112,7 +112,7 @@ export const registerConsistency: Register = (api, ctx) => {
     );
     // ADR 0062: a pack-level decision (the owner's pick of canon), so the step-up is required.
     requireReauth(ctx.deps.services, req);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     const f = finding(p.id, id);
     if (f.state !== 'open')
       throw new AdminHttpError(409, 'FINDING_GONE', 'This finding is no longer present.');

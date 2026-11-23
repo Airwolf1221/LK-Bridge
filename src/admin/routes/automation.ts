@@ -20,7 +20,7 @@ import { AutomationError, type AutomationService } from '../../automation/servic
 import { CATALOGUE, ELIGIBLE, NEVER_TRAITS } from '../../automation/registry.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { parseInput, projectParam, type Register } from './util.js';
+import { parseInput, projectParam, type Register, projectFor } from './util.js';
 
 const STATUS: Readonly<Record<string, number>> = {
   NOT_OWNER: 403,
@@ -37,10 +37,6 @@ const STATUS: Readonly<Record<string, number>> = {
   GOVERNANCE_NOT_WRITTEN: 409,
   GOVERNANCE_WRITE_FAILED: 409,
 };
-
-/** The dashboard sends the selected project in the query string (`useProjectApi`); a body may name it too. */
-const queryProject = (q: unknown): string | undefined =>
-  parseInput(z.object({ project: projectParam }).passthrough(), q).project;
 
 const codeSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 const DAY = 24 * 3_600_000;
@@ -102,7 +98,7 @@ export const registerAutomation: Register = (api, ctx) => {
     );
     // ADR 0068 (the design: "changing a setting is an owner action with the step-up"): every change asks.
     requireReauth(ctx.deps.services, req);
-    const p = ctx.project(b.project ?? queryProject(req.query));
+    const p = projectFor(ctx, req, b.project);
     return wrap(() => automation().setMode('owner', p.id, params.code, b.mode));
   });
 
@@ -110,7 +106,7 @@ export const registerAutomation: Register = (api, ctx) => {
     const params = parseInput(z.object({ code: codeSchema }), req.params);
     const b = parseInput(z.object({ project: projectParam, confirm: z.literal(true) }).strict(), req.body);
     requireReauth(ctx.deps.services, req);
-    const p = ctx.project(b.project ?? queryProject(req.query));
+    const p = projectFor(ctx, req, b.project);
     return wrap(() => {
       automation().resume('owner', p.id, params.code);
       return { resumed: true };
@@ -141,7 +137,7 @@ export const registerAutomation: Register = (api, ctx) => {
       req.body,
     );
     requireReauth(ctx.deps.services, req);
-    const p = ctx.project(b.project ?? queryProject(req.query));
+    const p = projectFor(ctx, req, b.project);
     const a = automation();
     ctx.deps.runtime.policy.store.audit('owner', 'automation.run_now', p.id, null, { project: p.id });
     const running = a.run(p.id, 'manual');

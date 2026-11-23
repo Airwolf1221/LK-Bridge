@@ -16,7 +16,7 @@ import { AuditError, CATEGORIES, CODES, SEVERITIES, type Audits } from '../../au
 import { ChronologyError } from '../../chronology/index.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { csv, limitSchema, parseInput, projectParam, type Register } from './util.js';
+import { csv, limitSchema, parseInput, projectParam, type Register, projectFor } from './util.js';
 
 const STATUS: Readonly<Record<string, number>> = {
   NOT_FOUND: 404,
@@ -154,7 +154,7 @@ export const registerAudits: Register = (api, ctx) => {
   /** Runs an audit now, in the background (GET /audits follows it). Reads the snapshot store only. */
   api.post('/audits/run', (req) => {
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     const a = audits();
     if (a.store.runningRun(p.id))
       throw new AdminHttpError(409, 'AUDIT_RUNNING', 'An audit of this project is already running.');
@@ -172,14 +172,14 @@ export const registerAudits: Register = (api, ctx) => {
       }),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return { finding: await wrap(() => audits().acknowledge('owner', p.id, id, b.reason)) };
   });
 
   api.post('/audits/findings/:id/unacknowledge', async (req) => {
     const { id } = parseInput(idParam, req.params);
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return { finding: await wrap(() => audits().unacknowledge('owner', p.id, id)) };
   });
 
@@ -192,7 +192,7 @@ export const registerAudits: Register = (api, ctx) => {
   api.post('/audits/findings/:id/allow-name', async (req) => {
     const { id } = parseInput(idParam, req.params);
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(() => audits().allowName('owner', p.id, id));
   });
 
@@ -212,7 +212,7 @@ export const registerAudits: Register = (api, ctx) => {
       }),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     if (b.createNew === true && b.eventId !== undefined)
       throw new AdminHttpError(400, 'INVALID_INPUT', 'createNew and eventId cannot be given together.');
     return wrap(() =>
@@ -229,7 +229,7 @@ export const registerAudits: Register = (api, ctx) => {
   api.post('/audits/findings/:id/recheck', async (req) => {
     const { id } = parseInput(idParam, req.params);
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(() => audits().recheck('owner', p.id, id));
   });
 
@@ -286,7 +286,7 @@ export const registerAudits: Register = (api, ctx) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     parseInput(z.object({ confirm: z.literal(true) }).loose(), body);
     const { confirm: _c, project, ...rest } = body;
-    const p = ctx.project(typeof project === 'string' ? project : undefined);
+    const p = projectFor(ctx, req, typeof project === 'string' ? project : undefined);
     await wrap(() => audits().setConfig('owner', p.id, rest));
     return configView(p);
   });

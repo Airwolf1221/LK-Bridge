@@ -60,3 +60,26 @@ export const csv = z
   .transform((v) => (Array.isArray(v) ? v : v.split(',')).map((s) => s.trim()).filter(Boolean));
 
 export const confirmBody = z.object({ confirm: z.literal(true) });
+
+/**
+ * v3 F5b follow-up: the project a mutating dashboard request acts on. The dashboard sends the selected project in the
+ * address (`?project=`, `useProjectApi`); some pages also name it in the body. The address decides; a body that names
+ * another project is refused (`400 PROJECT_MISMATCH`), so an action can only ever touch the project in view. With
+ * neither, the default project (as every route).
+ */
+export function projectFor(
+  ctx: RouteContext,
+  req: { readonly query: unknown },
+  bodyProject: string | undefined,
+): RouteProject {
+  const address = parseInput(z.object({ project: projectParam }).loose(), req.query ?? {}).project;
+  if (address === undefined) return ctx.project(bodyProject);
+  const p = ctx.project(address);
+  if (bodyProject !== undefined && ctx.project(bodyProject).id !== p.id)
+    throw new AdminHttpError(
+      400,
+      'PROJECT_MISMATCH',
+      `The request names two projects: “${address.slice(0, 64)}” in the address and “${bodyProject.slice(0, 64)}” in the body. Nothing was done.`,
+    );
+  return p;
+}

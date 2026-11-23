@@ -991,6 +991,10 @@ Off.
 | `GET /api/admin/automation/runs/:id`            | A run and its items.                                                                              |
 | `GET /api/admin/automation/overnight`           | The last 24 hours, per code (the Overview's tile; also in `GET /api/admin/overview`).             |
 
+**The project an action acts on** (ADR 0068 amendment 1): every mutating route that names a project takes it from the
+address (`?project=`, as the dashboard sends the selected project); a body naming another project is refused
+(`400 PROJECT_MISMATCH`) and nothing is done; with no address, the body's; with neither, the default project.
+
 ## The block-id sweep (v3 F3.5)
 
 [ADR 0056](adr/0056-block-id-sweep.md), [maintenance.md](maintenance.md#the-block-id-sweep-v3-f35). Below the Maintenance

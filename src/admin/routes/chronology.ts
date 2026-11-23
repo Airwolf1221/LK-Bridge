@@ -16,7 +16,7 @@ import * as z from 'zod';
 import { ChronologyError, chronologySchema } from '../../chronology/index.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { limitSchema, parseInput, projectParam, type Register } from './util.js';
+import { limitSchema, parseInput, projectParam, type Register, projectFor } from './util.js';
 
 const nameParam = z.object({ name: z.string().min(1).max(64) });
 
@@ -133,7 +133,7 @@ export const registerChronology: Register = (api, ctx) => {
   api.post('/chronology/records/:id/resolve', (req) => {
     const id = parseInput(z.object({ id: z.coerce.number().int().min(1) }), req.params).id;
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     wrap(() => chronology().resolve('owner', p.id, id));
     return { ok: true, record: chronology().store.get(p.id, id) };
   });
@@ -149,7 +149,7 @@ export const registerChronology: Register = (api, ctx) => {
   /** Runs the chronology check now (in the background; GET /chronology/check follows it). Reads only. */
   api.post('/chronology/check', (req) => {
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     const c = chronology();
     if (c.store.runningCheck(p.id))
       throw new AdminHttpError(409, 'CHECK_RUNNING', 'A chronology check is already running.');
@@ -198,7 +198,7 @@ export const registerChronology: Register = (api, ctx) => {
         }),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     try {
       return await chronology().proposeFix(
         'owner',
@@ -247,7 +247,7 @@ export const registerChronology: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     try {
       if (!b.tableOnly) {
         chronology().unmarkTableOnly('owner', p.id, { age: b.age, rowId: b.rowId });

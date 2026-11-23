@@ -19,7 +19,7 @@ import { SYSTEM_PRINCIPAL } from '../../jobs/index.js';
 import { RegistryError } from '../../registry/index.js';
 import { nameKey } from '../../tree/classify.js';
 import { AdminHttpError } from '../http.js';
-import { parseInput, projectParam, type Register, type RouteProject } from './util.js';
+import { parseInput, projectParam, type Register, type RouteProject, projectFor } from './util.js';
 
 const STATUS: Readonly<Record<string, number>> = {
   PACK_NOT_ATTACHED: 409,
@@ -129,7 +129,7 @@ export const registerAppraisal: Register = (api, ctx) => {
   /** Runs one appraisal tool (free: the snapshots, the audits, the bridge's own database) and stores its report. */
   api.post('/appraisal/run', async (req) => {
     const b = parseInput(runBody, req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     const a = appraisal();
     return wrap(async () => {
       const page = b.page ? pageId(p, b.page) : undefined;
@@ -212,7 +212,7 @@ export const registerAppraisal: Register = (api, ctx) => {
   api.post('/appraisal/findings/:id/propose-fix', async (req) => {
     const { id } = parseInput(z.object({ id: z.string().regex(/^af_[0-9a-f]{20}$/) }), req.params);
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     const engine = ctx.deps.runtime.engine;
     return wrap(() =>
       appraisal().proposeFix({
@@ -228,7 +228,7 @@ export const registerAppraisal: Register = (api, ctx) => {
   /** The index built again from the snapshot store (free). */
   api.post('/appraisal/index/rebuild', async (req) => {
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     const a = appraisal();
     const out = await a.ensureIndex(p.id, { rebuild: true });
     return {

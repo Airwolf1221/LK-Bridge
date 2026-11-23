@@ -220,6 +220,8 @@ export class AutomationService {
   private stopping = false;
   private readonly running = new Map<string, Promise<RunRow>>();
   private offs: (() => void)[] = [];
+  /** Whether each recent governance write had the pack's approval carried over it (false: the pack now drifts). */
+  private readonly carried = new Map<string, boolean>();
 
   constructor(private readonly d: AutomationDeps) {
     this.store = new AutomationStore(d.db, d.now);
@@ -561,13 +563,15 @@ export class AutomationService {
       text,
       jobId,
     });
-    await this.carry(
+    const carried = await this.carry(
       projectId,
       src,
-      doc.version,
+      { version: doc.version, blocks: doc.blocks },
       plan.planned,
       `the bridge-managed paragraph of ${e.code} (job ${jobId})`,
     );
+    this.carried.set(jobId, carried);
+    if (this.carried.size > 100) this.carried.delete(this.carried.keys().next().value!);
     return jobId;
   }
 
@@ -578,7 +582,7 @@ export class AutomationService {
   private async carry(
     projectId: string,
     src: GovSource,
-    beforeVersion: string,
+    before: { readonly version: string; readonly blocks: readonly unknown[] },
     planned: readonly unknown[],
     reason: string,
   ): Promise<boolean> {
@@ -592,7 +596,8 @@ export class AutomationService {
       return false;
     }
     const ok = this.d.packs.carryApproval(PACK_ID, src.key, {
-      beforeVersion,
+      before,
+      section: src.section,
       after: { version: now.version, blocks: now.blocks },
       actor: 'system',
       reason,
@@ -658,8 +663,11 @@ export class AutomationService {
         // The approval was carried to the version the reverted write made; carry it over the revert in turn.
         const approved = this.d.packs.get(PACK_ID)?.approved?.sources.find((s) => s.key === src.key)?.version;
         if (approved)
+          // Before the revert the page read as the reverted write left it (Revert writes only then): the content the
+          // approval was carried to.
           this.d.packs.carryApproval(PACK_ID, src.key, {
-            beforeVersion: approved,
+            before: { version: approved, blocks: g.plannedBlocks },
+            section: src.section,
             after: { version: after.version, blocks: after.blocks },
             actor: 'system',
             reason: `the revert (job ${revertJob.id}) of the bridge-managed paragraph of ${g.code}`,
@@ -710,7 +718,17 @@ export class AutomationService {
     projectId: string,
     code: string,
     mode: Mode,
-  ): Promise<{ mode: Mode; changed: boolean; governanceJobId: string | null; governance: string }> {
+  ): Promise<{
+    mode: Mode;
+    changed: boolean;
+    governanceJobId: string | null;
+    governance: string;
+    /**
+     * Whether the pack's approval was carried over the governance write: false when anything else on Repository
+     * Automation changed meanwhile (the pack then drifts and no automation runs until the owner approves it again).
+     */
+    approvalCarried?: boolean;
+  }> {
     if (actor !== 'owner')
       throw new AutomationError('NOT_OWNER', 'Only the owner changes an automation setting; agents cannot.');
     const e = entryOf(code);
@@ -768,7 +786,13 @@ export class AutomationService {
         });
         this.store.setChangeGovernance(changeId, jobId, 'written');
         this.store.setGovernancePending(projectId, code, null);
-        return { mode, changed: true, governanceJobId: jobId, governance: 'written' };
+        return {
+          mode,
+          changed: true,
+          governanceJobId: jobId,
+          governance: 'written',
+          approvalCarried: this.carried.get(jobId) ?? false,
+        };
       } catch (err) {
         this.store.setChangeGovernance(changeId, null, 'failed');
         this.store.setGovernancePending(projectId, code, `record “off”: ${errMessage(err)}`);
@@ -806,7 +830,13 @@ export class AutomationService {
       { mode: was },
       { mode, change: changeId, governanceJob: jobId },
     );
-    return { mode, changed: true, governanceJobId: jobId, governance: 'written' };
+    return {
+      mode,
+      changed: true,
+      governanceJobId: jobId,
+      governance: 'written',
+      approvalCarried: this.carried.get(jobId) ?? false,
+    };
   }
 
   /** The owner resumes a paused code (the route asks for the step-up: it releases a brake). */

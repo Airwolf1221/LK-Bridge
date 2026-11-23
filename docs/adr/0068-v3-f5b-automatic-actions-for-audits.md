@@ -1,6 +1,6 @@
 # ADR 0068: v3 F5b: automatic actions for audits, switched on one finding code at a time
 
-- Status: **Proposed** (v3 F5b, 23 November 2026). It builds H5 of the owner-approved design
+- Status: **Proposed** (v3 F5b, 23 November 2026; amendment 1 before merge, the same day). It builds H5 of the owner-approved design
   [design/F5-orchestration.md](../design/F5-orchestration.md) (APPROVED as written, 23 November 2026, H1 to H12; the
   copy in the repository is the owner's, unchanged). H1 to H4, H10 and H11 were F5a ([ADR 0067](0067-v3-f5a-supplementary-tags-rulings-bulk-actions-and-unknown-outcomes.md)).
   Every decision is implemented and tested against the mock LegendKeeper and fixtures; nothing in this session touched a
@@ -131,11 +131,20 @@ blocks (`unsupported_blocks`), and, **chosen**, any code that makes a page (`nar
    section stays pinned, so any edit made in the app (outside the bridge's paragraphs or inside them) is still drift
    and fails closed. The bridge's own write is a block-by-block job (the document checked inside the lock, If-Match
    from it, its read-back the whole document as planned). Once it has succeeded the bridge reads the document again; if
-   it reads EXACTLY as planned and the approval recorded the version it was written over, the approval is carried to
-   the new version (`packs.carryApproval`: each source kept on that document, its version and its pinned sections'
-   digests worked out again; audited `pack.carry_approval`). Anything else (an edit made meanwhile, an approval already
-   behind) carries nothing: the pack drifts and no automation runs until the owner approves it again. Unpinning was not
-   chosen because it would let an edit of the approvals themselves go unseen.
+   it reads EXACTLY as planned (the content read before the write plus the planned paragraph), the approval is carried
+   to the new version (`packs.carryApproval`, audited `pack.carry_approval`), and only within these limits (amended
+   before merge, see the amendment below):
+   - only the document written is touched: another tab of the same page (the Tagging Standard, Source Formatting,
+     Character Architecture are other documents of the governance root) is never re-baselined, so an edit there,
+     however close in time, is still drift;
+   - every source kept on that document must, before the write, be exactly what the owner approved: the approved
+     version AND each pinned section's content, by its digest;
+   - after the write, every pinned section but the one the bridge wrote into ("Approved Narrow Automations") must be
+     unchanged;
+   - all or nothing: if any source on the document does not hold, nothing is carried.
+     Anything else (an edit made meanwhile, an approval already behind) carries nothing: the pack drifts and no automation
+     runs until the owner approves it again; the setting's answer says so (`approvalCarried: false`). Unpinning was not
+     chosen because it would let an edit of the approvals themselves go unseen.
 5. **The bridge-managed paragraphs** are recorded with their exact text (`automation_paragraphs`). A paragraph that no
    longer reads so (edited in the app), is gone, or carries the marker without a record is reported
    (`GOVERNANCE_EDITED`, with each problem) even after the owner has approved the pack again; no automation runs until
@@ -234,7 +243,8 @@ tagged `Law, CANON`, only they snapshotted; both codes set to Apply (each paragr
 still current); the run limited to the two pages (`onlyPages`); both fixes read back live; both codes switched Off
 (each paragraph amended); clean-up in its `finally` and the test file's `afterAll`. **Found by its mock run:** with
 every source on one page, carrying the approval for Repository Automation alone left the other sources drifted; the
-approval is now carried for every source kept on the document written.
+approval is now carried for every source kept on the document written, each only where its content is exactly as
+approved (amendment 1).
 
 ## Costs
 
@@ -263,3 +273,34 @@ only by the transformation), `routes.test.ts` (the brake, Run now, runs, the ove
 `shutdown-memory.test.ts` (SIGTERM at a step boundary and the next run; the task log; memory back to baseline);
 `test/sandbox-mock/automation-f5b.test.ts`; the browser tests in `test/e2e/dashboard.spec.ts` ("v3 F5b": pause and
 resume with the step-up, a code's setting with the step-up, the overnight tile).
+
+## Amendment 1 (before merge, 23 November 2026): the carry-over narrowed, and the project in the address
+
+The owner's two requests on the pull request.
+
+1. **The approval carry-over, by content** (decision 3.4 as amended above). Before, a source kept on the document
+   written was carried on a version match alone. Now each such source's pinned sections must read, before the write,
+   exactly as approved (by digest), and every pinned section but "Approved Narrow Automations" must be unchanged after
+   it; all or nothing. Tests (`test/automation/carry.test.ts`): a clean write carries Repository Automation alone (every
+   other source's approval unchanged); the Tagging Standard edited in the app WHILE the bridge writes is drift and blocks
+   automation; Repository Automation edited between the bridge's write and its read-back carries nothing; and
+   `carryApproval` refuses content that differs from the approved content at the approved version, a write that
+   changed another pinned section, an approval at another version, and a co-located source that does not hold.
+2. **A dashboard action acts only on the project in view.** The Tagging page sends the selected project in the address
+   (`?project=`), but its POST routes read it from the body only, so on a bridge serving several projects every Tagging
+   action (the audit, classifications, rulings, "Allow this tag everywhere", batches, "Apply all corrections", "Approve
+   all these batches", reconciliations) acted on the DEFAULT project (before this session; it mostly failed with "not
+   found", but a ruling or a classification could be stored against the wrong project). Every mutating route that names
+   a project now takes it through one rule (`projectFor`, src/admin/routes/util.ts): the address decides; a body naming
+   another project is refused (`400 PROJECT_MISMATCH`) before anything is done; with no address, the body's (the pages
+   that send it there: Audits, Appraisal, Chronology, Consistency, Maintenance); with neither, the default project, as
+   every route. Applied to the Tagging, Audits, Appraisal, Chronology, Consistency, Maintenance and Automation routes.
+   The other mutating routes were checked: they read `?project=` already (Review, Jobs, Snapshots, Staging, Tree,
+   Registry, Mappings, Assets, Settings' project form), act bridge-wide (writes, settings, packs, security, off-site,
+   evaluation, projects), name the project in the path (lifecycle), or address an id unique across projects
+   (proposals). Tests (`test/admin/project-address.test.ts`, a two-project bridge, `arkona` the default and `test`):
+   each of the eleven Tagging POST routes reaches the retag service with the project in the address and never the
+   other; a mismatching body is refused before the service is reached; "Allow this tag everywhere" from `test`'s page is
+   refused (`SOURCE_ELSEWHERE`) with Arkona's Tagging Standard untouched, and from Arkona's page edits Arkona's and
+   writes nothing to `test`; the other routes refuse a mismatch; and an automation setting from `test`'s page is refused
+   while from Arkona's it is written into Arkona's Repository Automation only.
