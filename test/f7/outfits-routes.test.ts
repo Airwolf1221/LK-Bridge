@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any -- parsed JSON replies */
 /**
  * v3 F7 (ADR 0070, G3): the outfit record on the dashboard: seeding reads the character's folders LIVE and waits for
  * the owner's review (nothing recorded until Save, with the step-up); ambiguous names are listed, never recorded; the
