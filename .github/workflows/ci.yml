@@ -13,8 +13,11 @@ concurrency:
   cancel-in-progress: true
 permissions:
   contents: read
+# 23 November 2026 (v3 F5b): one job had grown past its 30-minute timeout (GitHub cancelled the run), so the work runs as
+# parallel jobs: the static checks and the build; the test suite in four shards; the canon browser test. `check`, the
+# job a required status names, waits for all three and fails unless every one succeeded.
 jobs:
-  check:
+  static:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -37,8 +40,40 @@ jobs:
         run: npm run gen:registry -- --check && npm run check:drift
       - name: Phase 0 spike dry run (mock LegendKeeper, including check 1's clean-up after a forced failure)
         run: npx vitest run test/tools/spike-v2-dryrun.test.ts test/tools/spike-wrapper.test.ts
-      - name: Unit and contract tests (sandbox tests are opt-in and never run here)
-        run: npm test
+      - run: npm run build
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: test (shard ${{ matrix.shard }}/4)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Node is 24 (the server's version)
+        run: node -e "const m=+process.versions.node.split('.')[0]; console.log('node', process.versions.node); if (m !== 24) { console.error('expected Node 24'); process.exit(1); }"
+      - run: npm ci
+      - name: Unit and contract tests, shard ${{ matrix.shard }} of 4 (sandbox tests are opt-in and never run here)
+        run: npx vitest run --shard=${{ matrix.shard }}/4
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Node is 24 (the server's version)
+        run: node -e "const m=+process.versions.node.split('.')[0]; console.log('node', process.versions.node); if (m !== 24) { console.error('expected Node 24'); process.exit(1); }"
+      - run: npm ci
       # Playwright's browsers are cached, keyed on the installed Playwright version (a new version brings its own
       # Chromium, so a new key): a cache hit downloads no browser and installs only the system libraries Chromium needs.
       - name: Playwright version (the browser cache's key)
@@ -57,7 +92,22 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
       # v3 F3c (ADR 0051 decision 4): the one browser test made stable (5 of 5 fresh runs): a canon proposal, made by
-      # promote_page, approved only with "Approve and accept as canon". The rest of the browser suite stays manual.
+      # promote_page, approved only with "Approve and accept as canon". The rest of the browser suite stays manual. The
+      # test's web server builds the dashboard itself (`npm run build:ui`).
       - name: Browser test of canon approval (mock LegendKeeper)
         run: npm run test:e2e -- -g "v2 C2a" --trace off
-      - run: npm run build
+
+  # The status a branch rule requires: green only when every job above succeeded (a failed, cancelled or skipped one
+  # fails it).
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [static, test, e2e]
+    if: always()
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          node -e "const n = JSON.parse(process.env.RESULTS); const bad = Object.entries(n).filter(([, v]) => v.result !== 'success'); for (const [k, v] of Object.entries(n)) console.log(k + ': ' + v.result); if (bad.length) { console.error('not every job succeeded: ' + bad.map(([k, v]) => k + ' ' + v.result).join(', ')); process.exit(1); }"
