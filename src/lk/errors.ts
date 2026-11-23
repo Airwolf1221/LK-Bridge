@@ -11,13 +11,7 @@ import type { BudgetTierId } from './governor/groups.js';
  * "cancelled by the caller" and left out of the error totals.
  */
 export type ErrorClassification =
-  | 'user_fixable'
-  | 'conflict'
-  | 'auth'
-  | 'budget'
-  | 'upstream'
-  | 'bridge'
-  | 'client';
+  'user_fixable' | 'conflict' | 'auth' | 'budget' | 'upstream' | 'bridge' | 'client';
 
 /**
  * v3 F5a (ADR 0067, H10): whether the request left the bridge. `no`: refused before anything was sent (validation, the

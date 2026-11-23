@@ -64,7 +64,13 @@ describe('H4: the Proposals page', () => {
         results: Array.from({ length: (c.body as { expect: number }).expect }, (_, i) => ({
           id: `prop_${i}`,
           ok: i !== 1,
-          ...(i === 1 ? { skipped: true, state: 'executing', error: { code: 'PROPOSAL_RUNNING', message: 'its job is running' } } : { state: 'rejected' }),
+          ...(i === 1
+            ? {
+                skipped: true,
+                state: 'executing',
+                error: { code: 'PROPOSAL_RUNNING', message: 'its job is running' },
+              }
+            : { state: 'rejected' }),
         })),
       }),
     });

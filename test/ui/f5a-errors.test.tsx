@@ -35,7 +35,8 @@ const occurrence = (o: { classification: string; code: string; detail: Record<st
   profile: 'chatgpt',
   status: null,
   code: o.code,
-  message: 'The connection to LegendKeeper broke after the request was sent, while its reply was being read: terminated',
+  message:
+    'The connection to LegendKeeper broke after the request was sent, while its reply was being read: terminated',
   issues: [],
   requestId: null,
   retryable: false,
@@ -66,7 +67,11 @@ describe('H10: the error card', () => {
   });
 
   it('never sent: "refused before it was sent", and no unknown outcome', async () => {
-    const a = await card({ classification: 'bridge', code: 'IF_MATCH_REQUIRED', detail: { sent: 'no', ambiguous: false } });
+    const a = await card({
+      classification: 'bridge',
+      code: 'IF_MATCH_REQUIRED',
+      detail: { sent: 'no', ambiguous: false },
+    });
     expect(within(a).getByText('none (refused before it was sent)')).toBeInTheDocument();
     expect(within(a).queryByText(/outcome unknown/)).toBeNull();
   });

@@ -1958,7 +1958,17 @@ Read-only and free (the snapshot overlay; `live: true` re-reads each page, one `
 of `page`, `under` or `all: true`; or `runId` (a stored run, read again with `filter`, `offset`, `limit`); or
 `reconciliation: "<name>"` (starts a named reconciliation with this scope, default everything, or audits an open one
 again); `detail: "full"` adds each page's inputs; `suggest: { page, primary, specialist?, reason }` records a suggested
-classification for a hold (for the owner; never used by itself).
+classification for a hold (for the owner; never used by itself); v3 F5a: `suggestRuling: { page, tag, action: keep_here
+| allow_everywhere, reason }` records a suggested ruling on an exception (only the owner keeps a tag on a page or allows
+it everywhere, on the Tagging page).
+
+**v3 F5a** ([ADR 0067](adr/0067-v3-f5a-supplementary-tags-rulings-bulk-actions-and-unknown-outcomes.md), pack version
+`arkona-2026-11-23-f5a`): the Tagging Standard's **Approved Supplementary Tags** (Cosmology, Chronology, Setting
+Framework, as the approved version lists them) are kept wherever they appear, after the grammar's slots in their
+existing order (the rationale slot `supplementary`), never added and never proposed for removal; a page whose only
+exception was one is a correction or compliant. A tag the owner kept on a page ("Keep this tag here") is kept the same
+way while the page's tags are unchanged. Every correction is in full grammar order (status, primary, specialist, race,
+culture, then the supplementary tags), so a page only out of order is a correction like any other.
 
 Each page: `pageId`, `name`, `disposition` (`compliant`, `correction`, `hold`, `exception`; null outside the grammar),
 `scope` (`grammar`, `lifecycle`, `excluded`), `current`, `proposed`, `policy` (pack version and digest), `rationale` (each

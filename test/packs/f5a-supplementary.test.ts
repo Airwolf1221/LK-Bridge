@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
 /**
  * v3 F5a (ADR 0067; the owner-approved design docs/design/F5-orchestration.md, H1, H2 and H3) end to end, against the
  * mock LegendKeeper (the retag world, never fetched):
@@ -58,7 +58,12 @@ beforeAll(async () => {
         r.seed({ id: ID(i), name: s.name, parentId: DESK, tags: [...s.current] });
         for (const [k, v] of CANON_ROWS) r.outside.setRow(ID(i), k, v);
       });
-      r.seed({ id: KEEP, name: '[BSRC] Saltglass Accord - Law Reference', parentId: DESK, tags: ['CANON', 'Law', 'Lore'] });
+      r.seed({
+        id: KEEP,
+        name: '[BSRC] Saltglass Accord - Law Reference',
+        parentId: DESK,
+        tags: ['CANON', 'Law', 'Lore'],
+      });
       for (const [k, v] of CANON_ROWS) r.outside.setRow(KEEP, k, v);
       r.seed({
         id: ORDER,
@@ -78,7 +83,9 @@ beforeAll(async () => {
   expect(src.sections).toEqual(PINNED);
   taggingDoc = src.documentId;
   const doc = w.repo.blocks.get(taggingDoc)!;
-  const at = doc.blocks.findIndex((b: any) => b.kind === 'heading' && textOf(b) === 'Approved Supplementary Tags');
+  const at = doc.blocks.findIndex(
+    (b: any) => b.kind === 'heading' && textOf(b) === 'Approved Supplementary Tags',
+  );
   expect(textOf(doc.blocks[at - 1])).toBe('The rules of Excluded Routine Tags.');
   doc.blocks[at + 1] = { id: 'f5asupp1', kind: 'paragraph', content: [{ text: SUPPLEMENTARY_TEXT }] };
   await packs.commands.approve('owner', 'arkona');
@@ -92,7 +99,13 @@ beforeAll(async () => {
       reason: 'classified on 22 November 2026',
     }),
   );
-  rt().retag.classify('owner', PROJECT, { pageId: KEEP, pageName: 'Saltglass Accord', primary: 'Law', specialist: null, reason: 'a law' });
+  rt().retag.classify('owner', PROJECT, {
+    pageId: KEEP,
+    pageName: 'Saltglass Accord',
+    primary: 'Law',
+    specialist: null,
+    reason: 'a law',
+  });
   await w.snapshot();
 });
 afterAll(async () => w?.close());
@@ -100,16 +113,25 @@ afterAll(async () => w?.close());
 const audit = async () => {
   const r = await w.callRead('arkona_retag_audit', { project: 'test', under: DESK, limit: 200 });
   expect(r.isError, r.text).toBe(false);
-  return { runId: r.body.runId as string, pages: new Map<string, any>((r.body.pages as any[]).map((p) => [p.pageId, p])) };
+  return {
+    runId: r.body.runId as string,
+    pages: new Map<string, any>((r.body.pages as any[]).map((p) => [p.pageId, p])),
+  };
 };
 
 describe('H1: the pinned section and its list', () => {
   it('the governance check reads the list as the approved version lists it', async () => {
     const g = await rt().packs.governance('arkona');
     expect(g.state).toBe('current');
-    expect(g.supplementary).toEqual({ state: 'same', tags: ['Cosmology', 'Chronology', 'Setting Framework'] });
+    expect(g.supplementary).toEqual({
+      state: 'same',
+      tags: ['Cosmology', 'Chronology', 'Setting Framework'],
+    });
     const tagging = g.sources.find((s) => s.key === 'tagging-standard')!;
-    expect(tagging.sections?.map((s) => [s.heading, s.state])).toContainEqual(['Approved Supplementary Tags', 'same']);
+    expect(tagging.sections?.map((s) => [s.heading, s.state])).toContainEqual([
+      'Approved Supplementary Tags',
+      'same',
+    ]);
   });
 });
 
@@ -132,7 +154,8 @@ describe('H1 and H3: the seven pages, and a page only out of order', () => {
     SEVEN.forEach((s, i) => expect(w.repo.res.get(ID(i))!.tags, s.name).toEqual(s.proposed));
     expect(w.repo.res.get(ORDER)!.tags).toEqual(['CANON', 'Polity']);
     const b = rt().retag.store.batchByProposal(r.body.proposalId)!;
-    for (const id of ids) expect(b.dispositions![id], id).toMatchObject({ outcome: 'applied', verified: true });
+    for (const id of ids)
+      expect(b.dispositions![id], id).toMatchObject({ outcome: 'applied', verified: true });
   });
 });
 
@@ -180,8 +203,14 @@ describe('H4: Apply all corrections, then approve all the batches together', () 
 
 describe('H2: "Keep this tag here"', () => {
   it('clears the exception on that page while its array is unchanged; lapses when the array changes', async () => {
-    await expect(rt().retag.keepHere('pat_agent', PROJECT, { pageId: KEEP, tag: 'Lore', reason: 'x' })).rejects.toMatchObject({ code: 'NOT_OWNER' });
-    const ruling = await rt().retag.keepHere('owner', PROJECT, { pageId: KEEP, tag: 'Lore', reason: 'Lore is right here' });
+    await expect(
+      rt().retag.keepHere('pat_agent', PROJECT, { pageId: KEEP, tag: 'Lore', reason: 'x' }),
+    ).rejects.toMatchObject({ code: 'NOT_OWNER' });
+    const ruling = await rt().retag.keepHere('owner', PROJECT, {
+      pageId: KEEP,
+      tag: 'Lore',
+      reason: 'Lore is right here',
+    });
     expect(ruling).toMatchObject({ tag: 'Lore', tags: ['CANON', 'Law', 'Lore'], by: 'owner' });
     expect(ruling.at).toBeGreaterThan(0);
     expect((await audit()).pages.get(KEEP)).toMatchObject({ disposition: 'compliant' });
@@ -196,13 +225,20 @@ describe('H2: "Keep this tag here"', () => {
   it('agents can suggest either ruling, never take it', async () => {
     const r = await w.callRead('arkona_retag_audit', {
       project: 'test',
-      suggestRuling: { page: KEEP, tag: 'Lore', action: 'allow_everywhere', reason: 'used on many law pages' },
+      suggestRuling: {
+        page: KEEP,
+        tag: 'Lore',
+        action: 'allow_everywhere',
+        reason: 'used on many law pages',
+      },
     });
     expect(r.isError, r.text).toBe(false);
     expect(r.body.suggestedRuling).toMatchObject({ tag: 'Lore', action: 'allow_everywhere' });
     expect(rt().retag.store.rulingSuggestions(PROJECT, KEEP)).toHaveLength(1);
     expect(rt().retag.store.rulings(PROJECT, KEEP)[0]!.tags).toEqual(['CANON', 'Law', 'Lore']); // unchanged by it
-    await expect(rt().retag.allowEverywhere('pat_agent', PROJECT, { tag: 'Lore' })).rejects.toMatchObject({ code: 'NOT_OWNER' });
+    await expect(rt().retag.allowEverywhere('pat_agent', PROJECT, { tag: 'Lore' })).rejects.toMatchObject({
+      code: 'NOT_OWNER',
+    });
   });
 });
 
@@ -212,7 +248,12 @@ describe('H2: "Allow this tag everywhere"', () => {
     const dry = await rt().retag.allowEverywhere('owner', PROJECT, { tag: 'Lore', dryRun: true });
     expect(dry.dryRun).toBe(true);
     expect(dry.before).toBe(SUPPLEMENTARY_TEXT);
-    expect(dry.after).toBe(SUPPLEMENTARY_TEXT.replace('Cosmology, Chronology and Setting Framework.', 'Cosmology, Chronology, Setting Framework and Lore.'));
+    expect(dry.after).toBe(
+      SUPPLEMENTARY_TEXT.replace(
+        'Cosmology, Chronology and Setting Framework.',
+        'Cosmology, Chronology, Setting Framework and Lore.',
+      ),
+    );
     expect(dry.tags).toEqual(['Cosmology', 'Chronology', 'Setting Framework', 'Lore']);
     expect(w.requests().writes).toBe(before.writes);
     expect(textOf(supplementaryParagraph())).toBe(SUPPLEMENTARY_TEXT);
@@ -235,8 +276,15 @@ describe('H2: "Allow this tag everywhere"', () => {
     const pack = rt().packs.get('arkona')!;
     expect(pack.version).toBeGreaterThan(pack.approved!.version);
     expect(g.state).toBe('rules_changed');
-    expect(pack.rules.retag!.supplementary!.tags).toEqual(['Cosmology', 'Chronology', 'Setting Framework', 'Lore']);
-    await expect(rt().retag.audit({ projectId: PROJECT, actor: 'owner', scope: { pageId: KEEP } })).rejects.toMatchObject({ code: 'PACK_NOT_CURRENT' });
+    expect(pack.rules.retag!.supplementary!.tags).toEqual([
+      'Cosmology',
+      'Chronology',
+      'Setting Framework',
+      'Lore',
+    ]);
+    await expect(
+      rt().retag.audit({ projectId: PROJECT, actor: 'owner', scope: { pageId: KEEP } }),
+    ).rejects.toMatchObject({ code: 'PACK_NOT_CURRENT' });
     await rt().packs.commands.approve('owner', 'arkona');
     const v = (await audit()).pages.get(KEEP);
     expect(v.disposition).toBe('correction'); // now only out of order (Lore is supplementary, kept last)
@@ -267,13 +315,17 @@ describe('H1: the pinned section drifting fails closed', () => {
     expect(g.state).toBe('changed');
     const tagging = g.sources.find((s) => s.key === 'tagging-standard')!;
     expect(tagging.sections?.find((s) => s.heading === 'Approved Supplementary Tags')?.state).toBe('changed');
-    await expect(rt().retag.audit({ projectId: PROJECT, actor: 'owner', scope: { pageId: KEEP } })).rejects.toMatchObject({ code: 'PACK_NOT_CURRENT' });
+    await expect(
+      rt().retag.audit({ projectId: PROJECT, actor: 'owner', scope: { pageId: KEEP } }),
+    ).rejects.toMatchObject({ code: 'PACK_NOT_CURRENT' });
   });
 
   it('a section whose sentence can no longer be read refuses the approval', async () => {
     const doc = w.repo.blocks.get(taggingDoc)!;
     doc.version++;
     supplementaryParagraph().content = [{ text: 'The author has approved some tags.' }];
-    await expect(rt().packs.commands.approve('owner', 'arkona')).rejects.toMatchObject({ code: 'GOVERNANCE_SECTION_UNPARSABLE' });
+    await expect(rt().packs.commands.approve('owner', 'arkona')).rejects.toMatchObject({
+      code: 'GOVERNANCE_SECTION_UNPARSABLE',
+    });
   });
 });

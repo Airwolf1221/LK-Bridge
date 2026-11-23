@@ -230,7 +230,9 @@ export function OverviewPage() {
                 <span className="stat-label">
                   <Link to="/journal?outcome=unknown">
                     writes with an unknown outcome
-                    {d.unknownWrites.unresolved > 0 ? ` (${d.unknownWrites.unresolved} for you to check)` : ''}
+                    {d.unknownWrites.unresolved > 0
+                      ? ` (${d.unknownWrites.unresolved} for you to check)`
+                      : ''}
                   </Link>
                 </span>
               </div>

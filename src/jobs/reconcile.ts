@@ -415,7 +415,7 @@ export class OutcomeReconciler {
     }
     const j = parse(e.params);
     if (!isObj(j) || j.bodyOmitted === true) return null;
-    return j as OpParams;
+    return j;
   }
 
   async judge(e: EntryRow): Promise<Judgement> {

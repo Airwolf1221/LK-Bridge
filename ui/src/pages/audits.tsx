@@ -762,10 +762,10 @@ function FindingRow({
               f.category !== 'governance' &&
               f.category !== 'consistency' &&
               f.category !== 'writes' && (
-              <Button className="small" busy={busy} disabled={!project} onClick={recheck}>
-                Re-check now
-              </Button>
-            )}
+                <Button className="small" busy={busy} disabled={!project} onClick={recheck}>
+                  Re-check now
+                </Button>
+              )}
             {f.state === 'open' && skill && (
               <Button className="small" busy={busy} disabled={!project} onClick={() => void allowName()}>
                 Allow this name

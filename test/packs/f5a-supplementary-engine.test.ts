@@ -137,7 +137,10 @@ describe('H1: a supplementary tag is never added and never proposed for removal'
   });
 
   it('never removed: not as incidental, not as a held slot’s token, not when duplicated (kept once)', () => {
-    const dup = retagPage(page({ tags: ['CANON', 'Cosmology', 'Law', 'cosmology'], owner: owner('Law') }), CTX);
+    const dup = retagPage(
+      page({ tags: ['CANON', 'Cosmology', 'Law', 'cosmology'], owner: owner('Law') }),
+      CTX,
+    );
     expect(dup.proposed).toEqual(['CANON', 'Law', 'Cosmology']);
     expect(dup.removals).toEqual([{ tag: 'cosmology', why: 'a duplicate (the same tag twice)' }]);
     // A held page keeps its supplementary tag in the array it shows.
@@ -155,12 +158,23 @@ describe('H1: a supplementary tag is never added and never proposed for removal'
 
 describe('H1: the Excluded Routine Tags behave as before', () => {
   it('a listed routine tag is still a deterministic removal; another tag still an exception', () => {
-    const rules = packRulesSchema.parse({ ...RULES, retag: { ...RULES.retag!, excludedRoutineTags: ['Lore'] } });
-    const v = retagPage(page({ tags: ['CANON', 'Law', 'Lore', 'Cosmology'], owner: owner('Law') }), { ...CTX, rules });
+    const rules = packRulesSchema.parse({
+      ...RULES,
+      retag: { ...RULES.retag!, excludedRoutineTags: ['Lore'] },
+    });
+    const v = retagPage(page({ tags: ['CANON', 'Law', 'Lore', 'Cosmology'], owner: owner('Law') }), {
+      ...CTX,
+      rules,
+    });
     expect(v.disposition).toBe('correction');
     expect(v.proposed).toEqual(['CANON', 'Law', 'Cosmology']);
-    expect(v.removals).toEqual([{ tag: 'Lore', why: 'listed in the Tagging Standard’s Excluded Routine Tags' }]);
-    const ex = retagPage(page({ tags: ['CANON', 'Law', 'Imported'], owner: owner('Law') }), { ...CTX, rules });
+    expect(v.removals).toEqual([
+      { tag: 'Lore', why: 'listed in the Tagging Standard’s Excluded Routine Tags' },
+    ]);
+    const ex = retagPage(page({ tags: ['CANON', 'Law', 'Imported'], owner: owner('Law') }), {
+      ...CTX,
+      rules,
+    });
     expect(ex.disposition).toBe('exception');
   });
 
@@ -169,10 +183,15 @@ describe('H1: the Excluded Routine Tags behave as before', () => {
       ...RULES,
       retag: { ...RULES.retag!, excludedRoutineTags: ['Cosmology'] },
     });
-    const v = retagPage(page({ tags: ['CANON', 'Law', 'Cosmology'], owner: owner('Law') }), { ...CTX, rules });
+    const v = retagPage(page({ tags: ['CANON', 'Law', 'Cosmology'], owner: owner('Law') }), {
+      ...CTX,
+      rules,
+    });
     expect(v.disposition).toBe('exception');
     expect(v.proposed).toContain('Cosmology');
-    expect(v.exceptions[0]!.reason).toMatch(/both in the Tagging Standard’s Approved Supplementary Tags and in its Excluded Routine Tags/);
+    expect(v.exceptions[0]!.reason).toMatch(
+      /both in the Tagging Standard’s Approved Supplementary Tags and in its Excluded Routine Tags/,
+    );
   });
 });
 
@@ -182,7 +201,9 @@ describe('H2 (engine): "Keep this tag here"', () => {
     const ruling = { tag: 'Imported', tagsHash: tagsHashOf(tags), detail: 'owner, 2026-11-23: kept' };
     const kept = retagPage({ ...page({ tags, owner: owner('Law') }), rulings: [ruling] }, CTX);
     expect(kept.disposition).toBe('compliant');
-    expect(kept.slots.find((s) => s.slot === 'supplementary')!.source).toMatch(/kept on this page by the owner’s ruling/);
+    expect(kept.slots.find((s) => s.slot === 'supplementary')!.source).toMatch(
+      /kept on this page by the owner’s ruling/,
+    );
     // Another page with the same tag: still an exception (the ruling is for one page).
     expect(retagPage(page({ id: 'other', tags, owner: owner('Law') }), CTX).disposition).toBe('exception');
     // The array changed: lapsed, the exception is back and says why.
@@ -198,7 +219,11 @@ describe('H2 (engine): "Keep this tag here"', () => {
 describe('H3: ordering in apply', () => {
   const genie = packRulesSchema.parse({
     ...RULES,
-    tags: { ...RULES.tags, race: { ...RULES.tags.race, Genie: 'Genie' }, culture: { ...RULES.tags.culture, Khayali: 'Khayali' } },
+    tags: {
+      ...RULES.tags,
+      race: { ...RULES.tags.race, Genie: 'Genie' },
+      culture: { ...RULES.tags.culture, Khayali: 'Khayali' },
+    },
   });
   const zahira = (tags: string[]) =>
     page({
@@ -213,9 +238,9 @@ describe('H3: ordering in apply', () => {
     expect(v.proposed).toEqual(['CANON', 'Character', 'Genie', 'Khayali']);
     expect(v.removals).toEqual([]);
     // Already in order: compliant (no separate reordering proposal is ever needed).
-    expect(retagPage(zahira(['CANON', 'Character', 'Genie', 'Khayali']), { ...CTX, rules: genie }).disposition).toBe(
-      'compliant',
-    );
+    expect(
+      retagPage(zahira(['CANON', 'Character', 'Genie', 'Khayali']), { ...CTX, rules: genie }).disposition,
+    ).toBe('compliant');
   });
 
   it('mixed corrections come out in grammar order, the supplementary tags last in their existing order', () => {
@@ -227,7 +252,10 @@ describe('H3: ordering in apply', () => {
     expect(v.proposed).toEqual(['CANON', 'Character', 'Genie', 'Khayali', 'Setting Framework', 'Chronology']);
     const law = retagPage(page({ tags: ['Cosmology', 'Law', 'CANON'], owner: owner('Law') }), CTX);
     expect(law.proposed).toEqual(['CANON', 'Law', 'Cosmology']);
-    const place = retagPage(page({ tags: ['Setting Framework', 'Continent', 'CANON'], owner: owner('Place', 'Continent') }), CTX);
+    const place = retagPage(
+      page({ tags: ['Setting Framework', 'Continent', 'CANON'], owner: owner('Place', 'Continent') }),
+      CTX,
+    );
     expect(place.proposed).toEqual(['CANON', 'Place', 'Continent', 'Setting Framework']);
   });
 });

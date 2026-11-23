@@ -722,7 +722,10 @@ export class RetagService {
     const { rules } = this.policyFor(projectId);
     const run = this.store.run(runId);
     if (!run || run.projectId !== projectId)
-      throw new RetagError('RUN_NOT_FOUND', `No retag audit run ${runId} in this project: run the audit first.`);
+      throw new RetagError(
+        'RUN_NOT_FOUND',
+        `No retag audit run ${runId} in this project: run the audit first.`,
+      );
     const busy = new Set<string>();
     for (const b of this.store.openBatches(projectId)) {
       const state = this.syncBatch(b);

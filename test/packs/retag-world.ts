@@ -69,10 +69,12 @@ export interface RetagWorld extends AppraisalWorld {
   approveRetag(o?: { readonly routine?: readonly string[]; readonly batchSize?: number }): void;
 }
 
-export async function retagWorld(o: {
-  /** v3 F5a: more fixture pages, seeded with the world's own (so the tree and the first snapshot hold them). */
-  readonly seed?: (world: DiscoverWorld) => void;
-} = {}): Promise<RetagWorld> {
+export async function retagWorld(
+  o: {
+    /** v3 F5a: more fixture pages, seeded with the world's own (so the tree and the first snapshot hold them). */
+    readonly seed?: (world: DiscoverWorld) => void;
+  } = {},
+): Promise<RetagWorld> {
   const w = await appraisalWorld({
     retag: true,
     seed: (world) => {

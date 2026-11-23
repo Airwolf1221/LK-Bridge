@@ -23,8 +23,24 @@ describe('the Overview', () => {
        VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
     );
     const now = Date.now();
-    add.run(PROJECT, now, 'listEvents', 'Cancelled by the caller', 'client', 'listEvents|ABORTED|', 'ABORTED');
-    add.run(PROJECT, now, 'getResource', 'boom', 'upstream', 'getResource|CONNECTION_ERROR|', 'CONNECTION_ERROR');
+    add.run(
+      PROJECT,
+      now,
+      'listEvents',
+      'Cancelled by the caller',
+      'client',
+      'listEvents|ABORTED|',
+      'ABORTED',
+    );
+    add.run(
+      PROJECT,
+      now,
+      'getResource',
+      'boom',
+      'upstream',
+      'getResource|CONNECTION_ERROR|',
+      'CONNECTION_ERROR',
+    );
     const r = await stack.get('/api/admin/overview?refresh=true');
     expect(r.json.errorsLastHour).toEqual({ count: 1, capped: false });
   });

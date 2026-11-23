@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased: v3 F5a, supplementary tags, rulings, bulk actions and unknown outcomes (23 November 2026)
+
+[ADR 0067](adr/0067-v3-f5a-supplementary-tags-rulings-bulk-actions-and-unknown-outcomes.md), building H1, H2, H3, H4,
+H10 and H11 of the owner-approved design [design/F5-orchestration.md](design/F5-orchestration.md). Migrations
+`4000_write_outcomes.sql` and `4100_tag_rulings.sql`; pack version `arkona-2026-11-23-f5a` (for the owner's approval).
+Nothing was run against a live system: the mock only.
+
+- **H1, the Approved Supplementary Tags**: the Tagging Standard's new section pinned and parsed as pack data; a listed
+  tag is kept wherever it appears, after the grammar, never added and never proposed for removal; the seven pages of the
+  23 November audit become corrections with the owner's arrays. A different list on the page is offered as a new pack
+  version; drift is recorded even while a newer version waits.
+- **H2, exception rulings** (the Tagging page's Exceptions tab, owner only): "Keep this tag here" (one page, tied to its
+  tag array; lapses when it changes) and "Allow this tag everywhere" (the section's list edited as the owner's action:
+  a dry run, the step-up, one revertible job). Agents suggest either with `arkona_retag_audit { suggestRuling }`.
+- **H3**: every correction in full grammar order; a page only out of order is a correction in the same batch.
+- **H4, bulk actions**: Proposals filters (tool, principal, age), select all matching across pages, "Reject all
+  conflicted" and "Reject selected" (one confirmation), "Approve selected" (the step-up when a rail is inside), a running
+  proposal never touched; Tagging's "Apply all corrections" and "Approve all these batches".
+- **H10, unknown write outcomes reconciled**: read back with back-off for about five minutes and settled as applied,
+  not applied or superseded (a new journal outcome); one that cannot be settled is the audits' `write_outcome_unknown`.
+  Entry 3897 settles as superseded. The error card says "refused before it was sent" only when the request never left;
+  a write whose connection broke after sending is `ambiguous: true` ("terminated" is `RESPONSE_INTERRUPTED`, upstream).
+- **H11**: a caller's cancellation is "cancelled by the caller", classification `client`, not counted; a read that
+  times out is `TIMEOUT`, retryable, retried once.
+- **The sandbox check** `tagging-f5a` (written, not run; passing on the mock in the ordinary suite).
+
 ## Unreleased: R4.1, after the owner's sandbox runs (21 November 2026)
 
 Fixes from the owner's live sandbox runs after R4 ([ADR 0066 amendment 1](adr/0066-cr-2026-11-r4-decisions.md)). No

@@ -72,7 +72,7 @@ projects it is **attached** to with the template ids it uses in each, every **ve
 
 ### The pinned sections
 
-Arkona's seed pins six sections, by the headings exactly as the pages have them (read on 16 November 2026; ADR 0052,
+Arkona's seed pins eight sections (six until v3 F3f added Excluded Routine Tags and v3 F5a Approved Supplementary Tags), by the headings exactly as the pages have them (read on 16 November 2026; ADR 0052,
 amendment):
 
 | Page                                                     | Pinned heading                                     |
@@ -83,6 +83,8 @@ amendment):
 | Source Formatting                                        | Active Template Suite and Sidebar Collections      |
 | Controlled Native Tagging Standard (`cn8v87hh/bfrv43jr`) | Exact Tag Grammar                                  |
 | Controlled Native Tagging Standard                       | Closed Primary Categories and Specialist Functions |
+| Controlled Native Tagging Standard                       | Excluded Routine Tags (v3 F3f)                     |
+| Controlled Native Tagging Standard                       | Approved Supplementary Tags (v3 F5a)               |
 
 A pinned heading matches a page heading **as a whole**: case, spacing, punctuation, a leading number ("3.", "B)") and
 "&" for "and" are ignored, but there is no prefix or nearest match, so "Approved Hierarchy" does not find "Approved
@@ -504,6 +506,22 @@ changed in the snapshots since its verdict is marked stale and audited again: a 
 
 **Routing lines** (part D): the pack's routing-line writers (F3a's drafted index text and appended lines, F3b's
 repointed line, F3e's index lines) emit plain mentions, which always show the page's current name.
+
+## Approved Supplementary Tags and the owner's rulings (v3 F5a)
+
+[ADR 0067](adr/0067-v3-f5a-supplementary-tags-rulings-bulk-actions-and-unknown-outcomes.md); the seed
+`arkona-2026-11-23-f5a`. The Tagging Standard's section "Approved Supplementary Tags" (the author's ruling of 23
+November 2026) is pinned, and its list is pack data, `retag.supplementary` (Cosmology, Chronology, Setting Framework in
+the seed). At each governance check the section's sentence ("… permitted supplementary tags …: A, B and C.") is parsed;
+a different list is offered as a NEW version for the owner's approval (audited `pack.derive_supplementary`), and a
+sentence that cannot be read exactly refuses the approval (`GOVERNANCE_SECTION_UNPARSABLE`). The Excluded Routine Tags
+are the opposite list and are never merged with it. A governance source changed since the approval is drift even while a
+newer version waits (the approved version computes nothing until the owner approves again).
+
+On the Tagging page's Exceptions tab the owner rules on an exception: **Keep this tag here** (one page, while its tags are
+unchanged) or **Allow this tag everywhere** (the bridge edits the section's list as the owner's action, a dry run first,
+the step-up, one revertible job; the pack then offers its new version). Agents suggest either ruling with
+`arkona_retag_audit { suggestRuling }`, never take it.
 
 ## Governance drift, names and briefs (v3 F4a)
 

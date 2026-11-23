@@ -162,7 +162,10 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
           ok: false,
           skipped: true,
           state: st,
-          error: { code: 'PROPOSAL_RUNNING', message: 'its job is running: it was decided already and is left alone' },
+          error: {
+            code: 'PROPOSAL_RUNNING',
+            message: 'its job is running: it was decided already and is left alone',
+          },
         }
       : null;
   };

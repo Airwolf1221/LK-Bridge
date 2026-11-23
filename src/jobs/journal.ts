@@ -191,8 +191,7 @@ export class WriteJournal {
   private tellUnknown(id: number): void {
     if (this.unknownListeners.size === 0) return;
     const row = this.db.prepare('SELECT project_id FROM write_journal WHERE id = ?').get(id) as
-      | { project_id: string }
-      | undefined;
+      { project_id: string } | undefined;
     if (!row) return;
     for (const fn of this.unknownListeners) {
       try {

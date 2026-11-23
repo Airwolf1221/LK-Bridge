@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { defaultGovernorSettings } from '../../src/config/lk.js';
-import { BridgeLkError, sentStateOf, toBridgeLkError } from '../../src/lk/errors.js';
+import { sentStateOf, toBridgeLkError, type BridgeLkError } from '../../src/lk/errors.js';
 import { decideRetry, INITIAL_RETRY_STATE } from '../../src/lk/governor/retry.js';
 import { json, READ, setup, track, WRITE } from './governor-helpers.js';
 
@@ -84,7 +84,11 @@ describe('H11: a call the caller cancelled', () => {
 
 describe('H11: a read that times out', () => {
   it('the SDK timer firing while the body is read is TIMEOUT, retryable (was UNEXPECTED, not retryable)', () => {
-    const e = toBridgeLkError(sdkTimeout(), 'listProperties', { fetched: true, responded: true, status: 200 });
+    const e = toBridgeLkError(sdkTimeout(), 'listProperties', {
+      fetched: true,
+      responded: true,
+      status: 200,
+    });
     expect(e).toMatchObject({ code: 'TIMEOUT', retryable: true, classification: 'upstream' });
   });
 
@@ -119,7 +123,9 @@ describe('H11: a read that times out', () => {
 
   it('a write whose reply timed out is not retried by the timeout rule (it may have applied)', async () => {
     const env = setup({}, () => json(200, { ok: true }));
-    const p = track(callReadingBody(env, { method: 'PUT', opId: 'replaceDocumentBlocks', bodyError: terminated }));
+    const p = track(
+      callReadingBody(env, { method: 'PUT', opId: 'replaceDocumentBlocks', bodyError: terminated }),
+    );
     await env.clock.advance(60_000);
     expect(env.seen).toHaveLength(1);
     expect(p.error).toMatchObject({ code: 'RESPONSE_INTERRUPTED', ambiguous: true, retryable: false });
@@ -129,7 +135,9 @@ describe('H11: a read that times out', () => {
 describe('H10: sent, and ambiguous', () => {
   it('"terminated" after the reply began, on a write: sent, ambiguous, never UNEXPECTED or bridge', async () => {
     const env = setup({}, () => json(200, { ok: true }));
-    const p = track(callReadingBody(env, { method: 'PUT', opId: 'replaceDocumentBlocks', bodyError: terminated }));
+    const p = track(
+      callReadingBody(env, { method: 'PUT', opId: 'replaceDocumentBlocks', bodyError: terminated }),
+    );
     await env.clock.advance(1000);
     const e = p.error as BridgeLkError;
     expect(e.code).toBe('RESPONSE_INTERRUPTED');

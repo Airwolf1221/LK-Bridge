@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- parsed JSON replies in tests */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- parsed JSON replies in tests */
 /**
  * v3 F5a (ADR 0067; the owner-approved design docs/design/F5-orchestration.md, H4): bulk actions on the Proposals page,
  * through the admin API.
@@ -15,7 +15,10 @@ import { PROJECT, startAdminStack, type AdminStack } from './helpers.js';
 import { systemClock } from '../../src/lk/index.js';
 
 const model = new LkModel(() => systemClock.now());
-model.seedResource('res1', { name: 'Kingdom', blocks: [{ kind: 'paragraph', content: [{ text: 'Hello' }] }] });
+model.seedResource('res1', {
+  name: 'Kingdom',
+  blocks: [{ kind: 'paragraph', content: [{ text: 'Hello' }] }],
+});
 model.seedResource('res2', { name: 'Province', blocks: [{ kind: 'paragraph', content: [{ text: 'Hi' }] }] });
 
 let stack: AdminStack;
@@ -27,7 +30,10 @@ afterAll(() => stack.close());
 const engine = () => stack.runtime.engine;
 const notSteppedUp = () => stack.services.store.setReauth(stack.services.sessionHash(stack.sessionToken), 0);
 const steppedUp = () =>
-  stack.services.store.setReauth(stack.services.sessionHash(stack.sessionToken), Math.floor(Date.now() / 1000));
+  stack.services.store.setReauth(
+    stack.services.sessionHash(stack.sessionToken),
+    Math.floor(Date.now() / 1000),
+  );
 
 async function propose(label: string, op: 'write' | 'delete' = 'write', text = 'x'): Promise<string> {
   const profile =
@@ -104,7 +110,11 @@ describe('H4: the filters', () => {
     const old = await stack.get('/api/admin/proposals?group=pending&olderThanHours=24');
     expect(old.json.total).toBe(0);
     stack.db.prepare('UPDATE proposals SET created_at = ? WHERE id = ?').run(Date.now() - 48 * 3_600_000, a);
-    expect((await stack.get('/api/admin/proposals?group=pending&olderThanHours=24')).json.proposals.map((p: any) => p.id)).toEqual([a]);
+    expect(
+      (await stack.get('/api/admin/proposals?group=pending&olderThanHours=24')).json.proposals.map(
+        (p: any) => p.id,
+      ),
+    ).toEqual([a]);
   });
 });
 

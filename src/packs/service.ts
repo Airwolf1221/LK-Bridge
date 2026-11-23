@@ -137,8 +137,7 @@ function deriveSupplementary(
   if (!(src?.sections ?? []).some((h) => headingKey(h) === headingKey(sup.section))) return null;
   const parsed = parseSupplementaryTags(sectionBlocksOf(blocks.get(sup.source), sup.section));
   if (!parsed.ok) return { state: 'unreadable', tags: [...sup.tags], reason: parsed.reason };
-  const same =
-    parsed.tags.length === sup.tags.length && parsed.tags.every((t, i) => t === sup.tags[i]);
+  const same = parsed.tags.length === sup.tags.length && parsed.tags.every((t, i) => t === sup.tags[i]);
   return { state: same ? 'same' : 'differs', tags: parsed.tags };
 }
 
@@ -699,7 +698,10 @@ export function createPacks(d: PacksDeps): Packs {
     // A drift seen is recorded (the Packs page shows it); an approved, current pack clears an old one. v3 F5a (ADR 0067):
     // also while a newer version waits for approval (`rules_changed`): a governance source changed since the approval
     // is drift either way, so the approved version computes nothing until the owner approves again.
-    if (out.state === 'changed' || (out.state === 'rules_changed' && sources.some((s) => s.state === 'changed'))) {
+    if (
+      out.state === 'changed' ||
+      (out.state === 'rules_changed' && sources.some((s) => s.state === 'changed'))
+    ) {
       const drift: PackDrift = {
         at: now(),
         changed: sources

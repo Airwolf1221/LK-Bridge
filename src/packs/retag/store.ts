@@ -17,7 +17,8 @@ const json = <T>(s: string | null | undefined, d: T): T => {
   }
 };
 
-export const newId = (prefix: 'rtg' | 'rtb' | 'rtr' | 'rts'): string => `${prefix}_${randomBytes(8).toString('hex')}`;
+export const newId = (prefix: 'rtg' | 'rtb' | 'rtr' | 'rts'): string =>
+  `${prefix}_${randomBytes(8).toString('hex')}`;
 
 /** What became of one page of an apply batch. */
 export type Outcome = 'applied' | 'already_compliant' | 'held' | 'conflicted' | 'inaccessible';
@@ -460,7 +461,13 @@ export class RetagStore {
   }
 
   /** Carries a page's rulings made on `fromHash` to `to` (the retag apply's own verified write). Returns how many. */
-  carryRulings(projectId: string, pageId: string, fromHash: string, to: readonly string[], toHash: string): number {
+  carryRulings(
+    projectId: string,
+    pageId: string,
+    fromHash: string,
+    to: readonly string[],
+    toHash: string,
+  ): number {
     return this.db
       .prepare(
         'UPDATE retag_tag_rulings SET tags_hash = ?, tags = ? WHERE project_id = ? AND page_id = ? AND tags_hash = ?',
@@ -471,7 +478,9 @@ export class RetagStore {
   suggestRuling(projectId: string, s: Omit<RulingSuggestion, 'id'>): RulingSuggestion {
     const r = this.db.transaction(() => {
       this.db
-        .prepare('DELETE FROM retag_ruling_suggestions WHERE project_id = ? AND page_id = ? AND tag = ? AND by = ?')
+        .prepare(
+          'DELETE FROM retag_ruling_suggestions WHERE project_id = ? AND page_id = ? AND tag = ? AND by = ?',
+        )
         .run(projectId, s.pageId, s.tag, s.by);
       return this.db
         .prepare(

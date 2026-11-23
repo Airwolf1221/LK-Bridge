@@ -129,7 +129,9 @@ export interface TagRuling {
 
 /** v3 F5a (ADR 0067, H2): the hash a "Keep this tag here" ruling is tied to: the page's exact tag array, in order. */
 export const tagsHashOf = (tags: readonly string[]): string =>
-  createHash('sha256').update(JSON.stringify([...tags])).digest('hex');
+  createHash('sha256')
+    .update(JSON.stringify([...tags]))
+    .digest('hex');
 
 export interface RetagContext {
   /** The approved pack version's rules. */

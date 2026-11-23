@@ -235,7 +235,7 @@ export const registerTagging: Register = (api, ctx) => {
     const q = parseInput(z.object({ project: projectParam, run: runIdSchema.optional() }), req.query);
     const p = ctx.project(q.project);
     const r = retag();
-    let supplementary: readonly string[] = [];
+    let supplementary: readonly string[];
     try {
       supplementary = r.policyFor(p.id).rules.retag?.supplementary?.tags ?? [];
     } catch {
@@ -372,7 +372,8 @@ export const registerTagging: Register = (api, ctx) => {
       const chunks = r.correctionBatches(p.id, b.runId);
       const pages = chunks.reduce((n, c) => n + c.length, 0);
       if (pages > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
-      const batches: { batchId: string; proposalId: string | null; jobId: string | null; pages: number }[] = [];
+      const batches: { batchId: string; proposalId: string | null; jobId: string | null; pages: number }[] =
+        [];
       for (const ids of chunks) {
         const plan = r.planApply({ projectId: p.id, runId: b.runId, pageIds: ids });
         const sub = await r.submitApply(plan, {
@@ -380,7 +381,12 @@ export const registerTagging: Register = (api, ctx) => {
           origin: ORIGIN('tagging.apply_all'),
           actor: 'owner',
         });
-        batches.push({ batchId: sub.batch.id, proposalId: sub.proposalId, jobId: sub.jobId, pages: ids.length });
+        batches.push({
+          batchId: sub.batch.id,
+          proposalId: sub.proposalId,
+          jobId: sub.jobId,
+          pages: ids.length,
+        });
       }
       return { pages, batches };
     });
