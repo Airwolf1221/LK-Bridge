@@ -1484,8 +1484,9 @@ name is refused (`OUTFIT_NEAR_MATCH`, with the candidates) unless `newOutfit: tr
 pieces and folder) in the bridge's outfit record. On the Art page (AI Character Art, made when missing): design pieces
 under "Reference Images"; an outfit's under a heading naming it anywhere on the page, else a new heading under the page's
 first heading holding "Wardrobe", else a new "Wardrobe" section, placed by a filler on the page as it is inside the job's
-lock (nothing else changes; `unsupported` blocks stay); a line naming a moved piece and its old folder's path is updated
-in the same write (one naming it otherwise is listed for the owner in the step's note). Sources: `staged_id`, `upload_id`
+lock (nothing else changes; `unsupported` blocks stay). When a loose piece is moved, every page under the character's
+index is read live when planned, and each line naming the moved piece by asset id or name is listed for the owner
+(`linesForOwner`), never edited; the art layout audit handles stale folder paths. Sources: `staged_id`, `upload_id`
 (`prepare_image_upload`) or ChatGPT's attached `file` (`_meta["openai/fileParams"]: ["file"]`, for ONE image: several
 images from ChatGPT are staged one by one with `upload_image { stage: true }`, then named in one call); an upload or file
 is staged on the bridge's server first, even on a dry run, and its `staged_id` returned. **Refusals**: `IMAGES_REQUIRED`,

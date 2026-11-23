@@ -307,20 +307,10 @@ export type ExistingChange =
        * else a new one under the page's first heading holding "Wardrobe", else in a new "Wardrobe" section.
        */
       readonly outfit?: { readonly name: string; readonly aliases: readonly string[] };
-      /** v3 F7 (G5): a move the job makes, for the page's lines that name the moved piece's old folder. */
-      readonly pathLines?: ArtPathMove;
     };
 
 /** v3 F7 (ADR 0070, G5): the section an Art page's outfits go under when it has no heading holding "Wardrobe". */
 export const WARDROBE_SECTION = 'Wardrobe';
-
-/** v3 F7 (ADR 0070, G5): a move of loose pieces into a new outfit folder, as page lines are matched against it. */
-export interface ArtPathMove {
-  readonly fromPath: string;
-  readonly fromId: string;
-  readonly toPath: string;
-  readonly pieces: readonly { readonly id: string; readonly name: string; readonly url?: string }[];
-}
 
 /** v3 F7 (ADR 0070, G2, G3): what an art job does besides the images: the moves and the outfit record. */
 export interface ArtPlan {
@@ -341,7 +331,21 @@ export interface ArtPlan {
       readonly url?: string;
     }[];
     readonly toPath: string;
+    /**
+     * v3 F7 (G5): the lines on the character's pages (every page under its index, read live when planned) naming a
+     * moved piece by id or name: they may state its location, so they are listed for the owner, never edited.
+     */
+    readonly linesForOwner?: readonly ArtLine[];
   } | null;
+}
+
+/** v3 F7 (G5): a line on one of a character's pages, for the owner. */
+export interface ArtLine {
+  readonly pageId: string;
+  readonly page: string;
+  readonly documentId: string;
+  readonly blockId: string;
+  readonly text: string;
 }
 
 export interface PackPlan {

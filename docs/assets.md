@@ -90,8 +90,10 @@ or **Run now** on the Maintenance Jobs page runs even while it is switched off.
   depth) live, at the caller's priority: every item listed is applied, and an item the tree held under a listed folder
   that the listing no longer shows is confirmed with `getAsset` (a 404 removes it). The art tool reads a character's
   folders this way before it places anything, the owner's seeding before it lists outfits, and `browse_asset_tree
-{ refresh: true }` on request. `checkUrls` answers whether image URLs are this project's assets, with one live look-up
-  (the asset the URL names) for those the tree lacks; Markdown writers use it before refusing an image (G11).
+{ refresh: true }` on request. `checkUrls` answers whether image URLs are this project's assets. An asset's id cannot be
+  derived from its URL, so for URLs the tree lacks the project's whole listing is read live once (every folder, every
+  page), at most once every five minutes per project; within that window a miss is refused at once, saying when the
+  listing was read and when to retry. Markdown writers use it before refusing an image (G11).
 
 ## Cost
 

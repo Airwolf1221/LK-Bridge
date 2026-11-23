@@ -8,6 +8,7 @@
  * `outside*` methods change the model as an edit in the LegendKeeper app would: the bridge does not see them until it
  * reads. `testWorld()` seeds the shape the phase 0 spike found: 18 folders and 559 images.
  */
+import { randomUUID } from 'node:crypto';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
 
 export interface ModelAsset {
@@ -94,7 +95,8 @@ export class AssetModel {
       createdAt: new Date(this.now()).toISOString(),
       ...(a.type !== 'FOLDER'
         ? {
-            url: a.url ?? `https://assets.legendkeeper.com/${id}.webp`,
+            // v3 F7 (ADR 0070): as LegendKeeper's, the file name's uuid is NOT the asset's id (live evidence, 23 November 2026).
+            url: a.url ?? `https://assets.legendkeeper.com/${randomUUID()}.webp`,
             width: a.width ?? 512,
             height: a.height ?? 768,
           }

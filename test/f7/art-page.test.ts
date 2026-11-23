@@ -4,8 +4,8 @@
  * the first heading holding "Wardrobe", else a new "Wardrobe" section; and the lines naming a moved piece's old folder.
  */
 import { describe, expect, it } from 'vitest';
-import { appendImages, updatePathLines } from '../../src/packs/engine/checks.js';
-import type { LkBlock } from '../../src/markdown/index.js';
+import { appendImages } from '../../src/packs/engine/checks.js';
+import { linesNaming } from '../../src/art/lines.js';
 
 const h = (id: string, level: number, text: string) => ({ id, kind: 'heading', level, content: [{ text }] });
 const p = (id: string, text: string) => ({ id, kind: 'paragraph', content: [{ text }] });
@@ -114,30 +114,20 @@ describe('G5: where outfit pieces go on the Art page', () => {
   });
 });
 
-describe('G5: lines naming a moved piece’s old folder', () => {
+describe('G5: lines naming a moved piece are found, to be listed (never edited)', () => {
   const base = 'Characters / Humans / Rangawan / Soraya bint al-Noor';
-  const move = {
-    fromPath: `${base} / Wardrobe`,
-    fromId: 'wardrobe01',
-    toPath: `${base} / Wardrobe / Silk Robe`,
-    pieces: [{ id: 'asset0001', name: 'Soraya bint al-Noor - Silk Robe - Outfit Reference - Front' }],
-  };
-  it('a line naming the piece and its old folder’s path is updated; prose about the outfit is not touched', () => {
+  const piece = { id: 'asset0001', name: 'Soraya bint al-Noor - Silk Robe - Outfit Reference - Front' };
+  it('by asset name or id, at any depth; prose about the outfit and a line naming only Wardrobe are not', () => {
     const blocks = [
-      p('a', `Soraya bint al-Noor - Silk Robe - Outfit Reference - Front: ${base} / Wardrobe.`),
+      p('a', `${piece.name}: ${base} / Wardrobe.`),
       p('b', 'The Silk Robe is worn at court.'),
       p('c', `Everything else lives in ${base} / Wardrobe.`),
-      p('d', `Soraya bint al-Noor - Silk Robe - Outfit Reference - Front sits in folder wardrobe01.`),
-    ] as unknown as LkBlock[];
-    const r = updatePathLines(blocks, move);
-    const text = (i: number) => (r.blocks[i] as unknown as { content: { text: string }[] }).content[0]!.text;
-    expect(text(0)).toBe(
-      `Soraya bint al-Noor - Silk Robe - Outfit Reference - Front: ${base} / Wardrobe / Silk Robe.`,
-    );
-    expect(text(1)).toBe('The Silk Robe is worn at court.');
-    expect(text(2)).toBe(`Everything else lives in ${base} / Wardrobe.`);
-    expect(r.note.updated).toHaveLength(1);
-    // By id: it cannot be matched exactly (the new folder's id is made by the job): listed for the owner.
-    expect(r.note.forOwner).toEqual([text(3)]);
+      {
+        id: 'l',
+        kind: 'list',
+        children: [{ id: 'd', kind: 'listItem', content: [{ text: 'Asset asset0001, loose.' }] }],
+      },
+    ];
+    expect(linesNaming(blocks, [piece]).map((l) => l.blockId)).toEqual(['a', 'd']);
   });
 });

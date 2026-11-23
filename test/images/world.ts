@@ -4,6 +4,7 @@
  * (`assets.test`, GET), and mock answers for createImageUpload and createImageAsset that tie the two together: the asset
  * a createImageAsset makes serves exactly the bytes PUT under its upload key (unless a test tampers with them).
  */
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:https';
@@ -89,6 +90,8 @@ export async function imagesWorld(
 ): Promise<ImagesWorld> {
   const { key, cert } = certificate();
   const puts = new Map<string, Buffer>();
+  /** v3 F7: the asset an image URL's file name stands for (the name is a uuid unrelated to the id). */
+  const fileIds = new Map<string, string>();
   const served = new Map<string, Buffer>();
   const failDownload = new Map<string, number>();
   const gets: string[] = [];
@@ -143,7 +146,8 @@ export async function imagesWorld(
       }
       if (req.method === 'GET' && url.startsWith('/a/')) {
         gets.push(url);
-        const id = url.slice(3).replace(/\.webp$/, '');
+        const name = url.slice(3).replace(/\.webp$/, '');
+        const id = fileIds.get(name) ?? name;
         const fail = failDownload.get(id);
         if (fail) return void res.writeHead(fail).end();
         const b = served.get(id);
@@ -204,7 +208,10 @@ export async function imagesWorld(
     if (!r || r.status !== 201) return r;
     const id = (r.body as { id: string }).id;
     const a = w.assets.assets.get(id)!;
-    a.url = `https://assets.test:${port}/a/${id}.webp`;
+    // v3 F7 (ADR 0070): the file name's uuid is not the asset's id, as LegendKeeper's (live evidence, 23 November 2026).
+    const file = randomUUID();
+    fileIds.set(file, id);
+    a.url = `https://assets.test:${port}/a/${file}.webp`;
     const uploadKey = (req.body as { uploadKey: string }).uploadKey;
     keyOfUpload.set(id, uploadKey);
     const d = dims.get(uploadKey);

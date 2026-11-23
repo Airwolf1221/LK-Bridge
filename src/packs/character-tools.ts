@@ -33,7 +33,9 @@ import { textKey } from './engine/text.js';
 import type { LmrMode } from '../jobs/lmr-hook.js';
 import { characterEnv, finishPackage, packBasis } from './run.js';
 import { placeArt, type ArtPlace } from './art-place.js';
-import type { ArtPathMove, ArtPlan, ImagePlacement } from './engine/plan.js';
+import type { ArtLine, ArtPlan, ImagePlacement } from './engine/plan.js';
+import { linesNaming } from '../art/lines.js';
+import { liveRead } from '../mcp/tools/repo.js';
 
 type Obj = Record<string, unknown>;
 
@@ -334,7 +336,21 @@ export async function runArt(
   if (!placed.ok) return placed.result;
   const place = placed.value;
   const placement = imagePlacementOf(place);
-  const artPlan = artPlanOf(place, subject);
+  const moved = place.placement.kind === 'outfit' ? place.placement.moves : [];
+  const named = await piecesNamedOnPages(env, index, moved);
+  const artPlan = artPlanOf(place, subject, named.lines);
+  const lineNotes = [
+    ...(named.lines.length > 0
+      ? [
+          `${named.lines.length} line(s) on ${subject}'s pages name a piece this moves (they may state where it is): listed for you, never edited (linesForOwner).`,
+        ]
+      : []),
+    ...(named.unread.length > 0
+      ? [
+          `Could not be read now, so not checked for lines naming the moved piece: ${named.unread.join(', ')}.`,
+        ]
+      : []),
+  ];
   if (!art) {
     const plan = await planPackage(env, {
       name: subject,
@@ -360,11 +376,12 @@ export async function runArt(
     return finishPackage(pd, mctx, o, env, {
       ...plan,
       art: artPlan,
-      notes: [...plan.notes, ...artNotes(place)],
+      notes: [...plan.notes, ...artNotes(place), ...lineNotes],
       extra: {
         ...(plan.extra ?? {}),
         artPage: { create: plan.pages.find((p) => p.role === type.assets.role)?.rawName ?? null },
         placement: placementSummary(place),
+        ...(named.lines.length ? { linesForOwner: named.lines } : {}),
         ...stagedNote,
       },
     });
@@ -373,27 +390,49 @@ export async function runArt(
   return finishPackage(pd, mctx, o, env, {
     ...plan,
     art: artPlan,
-    notes: [...plan.notes, ...artNotes(place)],
-    extra: { ...(plan.extra ?? {}), placement: placementSummary(place), ...stagedNote },
+    notes: [...plan.notes, ...artNotes(place), ...lineNotes],
+    extra: {
+      ...(plan.extra ?? {}),
+      placement: placementSummary(place),
+      ...(named.lines.length ? { linesForOwner: named.lines } : {}),
+      ...stagedNote,
+    },
   });
 }
 
 /**
- * v3 F7 (G5): the moves a job makes, as the Art page's lines that name a moved piece's old folder are matched: the old
- * folder's full path and id, the new folder's path, and each moved piece's name, id and address.
+ * v3 F7 (ADR 0070, G5): when the job moves loose pieces, every page under the character's index (the index too) is read
+ * live, and each line naming a moved piece by asset id or name is listed for the owner (it may state where the piece is):
+ * never edited. One read per page document; none when nothing moves.
  */
-function artPathLines(place: ArtPlace): ArtPathMove | null {
-  const p = place.placement;
-  if (p.kind !== 'outfit' || p.moves.length === 0) return null;
-  const base = (place.layout?.character.path ?? []).join(' / ');
-  const wardrobe = place.layout?.wardrobe;
-  if (!wardrobe) return null;
-  return {
-    fromPath: `${base} / ${wardrobe.name}`,
-    fromId: wardrobe.id,
-    toPath: [base, ...p.subfolders].join(' / '),
-    pieces: p.moves.map((m) => ({ id: m.id, name: m.name, ...(m.url ? { url: m.url } : {}) })),
-  };
+async function piecesNamedOnPages(
+  env: PlanEnv,
+  index: TreeNode | null,
+  pieces: readonly { readonly id: string; readonly name: string }[],
+): Promise<{ lines: ArtLine[]; unread: string[] }> {
+  const lines: ArtLine[] = [];
+  const unread: string[] = [];
+  if (!index || pieces.length === 0) return { lines, unread };
+  const nodes = [index, ...env.ctx.tree.subtree(env.ctx.projectId, index.id).data.entries.map((e) => e.node)];
+  const seen = new Set<string>();
+  for (const n of nodes) {
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    // A page document, or one the tree last saw blank (it may hold text written since).
+    for (const d of n.documents.filter((x) => x.type === 'page' || x.type === 'blank')) {
+      const read = await liveRead(env.pd, env.mctx, env.tool, 'getDocumentBlocks', {
+        path: { resourceId: n.id, documentId: d.id },
+      });
+      if (!read.ok) {
+        unread.push(n.rawName);
+        continue;
+      }
+      const blocks = ((read.value ?? {}) as { blocks?: unknown[] }).blocks ?? [];
+      for (const l of linesNaming(blocks, pieces))
+        lines.push({ pageId: n.id, page: n.rawName, documentId: d.id, blockId: l.blockId, text: l.text });
+    }
+  }
+  return { lines, unread };
 }
 
 /** v3 F7: the images' placement as planImages takes it. */
@@ -408,7 +447,7 @@ function imagePlacementOf(place: ArtPlace): ImagePlacement {
 }
 
 /** v3 F7: what the job needs besides the images (the moves, the outfit record, the Art page's place for them). */
-function artPlanOf(place: ArtPlace, subject: string): ArtPlan {
+function artPlanOf(place: ArtPlace, subject: string, lines: readonly ArtLine[]): ArtPlan {
   const p = place.placement;
   const base = (place.layout?.character.path ?? []).join(' / ');
   const wardrobe = place.layout?.wardrobe ?? null;
@@ -430,6 +469,7 @@ function artPlanOf(place: ArtPlace, subject: string): ArtPlan {
               ...(m.url ? { url: m.url } : {}),
             })),
             toPath: [base, ...p.subfolders].filter(Boolean).join(' / '),
+            ...(lines.length ? { linesForOwner: lines } : {}),
           }
         : null,
   };
@@ -540,7 +580,6 @@ function planArtExtension(
               boundaries,
               images: planned,
               ...(outfit ? { outfit: { name: outfit.name, aliases: [...outfit.aliases] } } : {}),
-              ...(artPathLines(place) ? { pathLines: artPathLines(place)! } : {}),
             },
           ]
         : [],

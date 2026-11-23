@@ -11,9 +11,11 @@
  * - `art_asset_name`: a name that breaks G4. Fix: the rename, where the bridge can say it without guessing (a file
  *   extension dropped; an outfit folder's piece given its outfit); else listed. A loose `<Character> - <Outfit>` piece
  *   with no label is valid.
- * - `art_stale_folder_ref`: a line on a character's Art page naming a folder path under the character's folder that
- *   no longer exists, or a deleted folder's id. Fix: the line updated, when the folder's new place is certain (one
- *   folder of the path's last name under the character's folder now); else listed.
+ * - `art_stale_folder_ref`: a line on ANY of the character's pages (every page under its repository index, the index
+ *   too) naming a folder path under the character's folder that no longer exists, or the id of a folder that is no
+ *   longer the character's (deleted, or now elsewhere: its current name and place suggested). Fix: a path's line updated
+ *   where it matches exactly and the folder's new place is certain (one folder of the path's last name under the
+ *   character's folder now); otherwise listed for the owner with the suggestion.
  *
  * Read from the bridge's asset tree and the snapshots (no LegendKeeper read). Every fix re-reads its targets LIVE
  * (G9) when it is proposed, and is ONE proposal the owner approves (G7: every move, rename or delete the bridge makes on
@@ -90,6 +92,8 @@ export function artLayoutFindings(
     readonly pages?: readonly ArtPageText[];
     readonly view?: LibraryView;
     readonly goneFolder?: (id: string) => boolean;
+    /** An asset folder's path now (null: not a folder the asset tree holds). */
+    readonly folderPath?: (id: string) => readonly string[] | null;
   } = {},
 ): FindingDraft[] {
   const out: FindingDraft[] = [];
@@ -249,15 +253,12 @@ export function artLayoutFindings(
     );
   for (const f of layout.outfitFolders) names(f.id, f.items, () => f.name, `${wardrobePath} / ${f.name}`);
 
-  // 6. Stale folder paths or ids on the character's Art pages.
-  if (o.view) out.push(...staleRefs(layout, o.pages ?? [], o.view, o.goneFolder));
+  // 6. Stale folder paths or ids on any of the character's pages.
+  if (o.view) out.push(...staleRefs(layout, o.pages ?? [], o.view, o.goneFolder, o.folderPath));
   return out;
 }
 
-/** A character's Art page, by its name (“<Name> - Character Art”, or a name ending in “Art”). */
-export const isArtPageName = (name: string): boolean => /\s-\s(?:character\s+)?art$/i.test(name.trim());
-
-/** An Art page's text blocks, as the snapshots hold them. */
+/** A page of a character's set: its text blocks, as the snapshots hold them. */
 export interface ArtPageText {
   readonly pageId: string;
   readonly documentId: string;
@@ -295,6 +296,7 @@ function staleRefs(
   pages: readonly ArtPageText[],
   view: LibraryView,
   gone?: (id: string) => boolean,
+  folderPath?: (id: string) => readonly string[] | null,
 ): FindingDraft[] {
   const out: FindingDraft[] = [];
   const character = layout.character.name;
@@ -352,19 +354,38 @@ function staleRefs(
             : null,
         });
       }
-      if (gone)
-        for (const id of new Set(text.match(/\b[a-z0-9][a-z0-9_-]{7,63}\b/gi) ?? []))
-          if (gone(id))
-            out.push({
-              code: 'art_stale_folder_ref',
-              key: `${layout.character.id}:${p.pageId}:${String(b.id)}:${id}`,
-              pageId: p.pageId,
-              documentId: p.documentId,
-              blockId: String(b.id),
-              message: `A line names the asset folder ${id}, which has been deleted. Where it went is the owner’s call.`,
-              evidence: { character, line: text.slice(0, 500), staleId: id },
-              fix: null,
-            });
+      // A folder id in the text that is no longer this character's folder: deleted, or now elsewhere (its current
+      // name and place suggested).
+      const mine = layout.character.path;
+      for (const id of new Set(text.match(/\b[A-Za-z0-9][A-Za-z0-9_-]{7,63}\b/g) ?? [])) {
+        const now = folderPath?.(id) ?? null;
+        const isGone = now === null && gone?.(id) === true;
+        if (!isGone && now === null) continue;
+        if (
+          now !== null &&
+          now.length >= mine.length &&
+          mine.every((n, k) => outfitKey(n) === outfitKey(now[k]!))
+        )
+          continue; // still the character's folder (or one inside it)
+        const suggested = now ? now.join(' / ') : null;
+        out.push({
+          code: 'art_stale_folder_ref',
+          key: `${layout.character.id}:${p.pageId}:${String(b.id)}:${id}`,
+          pageId: p.pageId,
+          documentId: p.documentId,
+          blockId: String(b.id),
+          message: suggested
+            ? `A line names the asset folder ${id}, which is no longer ${character}’s: it is now “${suggested}”. Name the folder meant (suggested: its current name, “${now![now!.length - 1]!}”), or drop the reference.`
+            : `A line names the asset folder ${id}, which has been deleted. Where it went is the owner’s call.`,
+          evidence: {
+            character,
+            line: text.slice(0, 500),
+            staleId: id,
+            ...(suggested ? { suggested, currentName: now![now!.length - 1] } : {}),
+          },
+          fix: null,
+        });
+      }
     }
   }
   return out;
@@ -376,6 +397,7 @@ export function artLayoutCheck(ctx: AuditContext): FindingDraft[] {
   if (!lib) return [];
   const view = auditLibraryView(lib);
   const gone = lib.goneIds ? new Set(lib.goneIds) : null;
+  const folderPaths = new Map(lib.folders.map((f) => [f.id, f.path]));
   const out: FindingDraft[] = [];
   for (const id of characterFolders(lib, view)) {
     const layout = readLayout(view, id);
@@ -383,8 +405,9 @@ export function artLayoutCheck(ctx: AuditContext): FindingDraft[] {
     out.push(
       ...artLayoutFindings(layout, {
         records: ctx.outfitsOf?.(id) ?? [],
-        pages: ctx.artPages?.(layout.character.name) ?? [],
+        pages: ctx.characterPages?.(layout.character.name) ?? [],
         view,
+        folderPath: (x: string) => folderPaths.get(x) ?? null,
         ...(gone ? { goneFolder: (x: string) => gone.has(x) } : {}),
       }),
     );

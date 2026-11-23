@@ -1357,8 +1357,9 @@ proposal for the owner: do not retry it. The same image sent again returns the e
 (`deduplicated: true`); never upload a copy to "move" an image.
 
 **Using it.** Put an image on a page with `write_page`: `![alt text](asset url)`, with the asset's exact `url` (only
-this project's image assets: any other is refused with `IMAGE_URL_REFUSED`, after the bridge has looked the address up
-live once, so an image uploaded in LegendKeeper a moment ago is accepted). It can also go in an image block (an
+this project's image assets: any other is refused with `IMAGE_URL_REFUSED`, after the bridge has read the project's asset
+listing live, so an image uploaded in LegendKeeper a moment ago is accepted; it reads the listing at most once every five
+minutes, and a refusal in between says when to try again). It can also go in an image block (an
 `lk-block`), as a map pin's image, or as a map's image (`update_document`'s settings). `list_assets` and
 `browse_asset_tree` show what the bridge knows of images it uploaded (`bridgeUpload`); they answer from the bridge's
 asset tree, whose age they state: `browse_asset_tree` with `refresh: true` and a `folder` reads that folder live first. Deleting an

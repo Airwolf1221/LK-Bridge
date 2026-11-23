@@ -31,7 +31,6 @@ import type { Packs } from '../service.js';
 import { PACK_ART_FILLER, PACK_CHECKS, PACK_FILLER, PACK_RECORD_STORE } from './job.js';
 import { blockText, sectionsOf, textKey } from './text.js';
 import { mintClientId } from '../../jobs/ids.js';
-import type { ArtPathMove } from './plan.js';
 import type { OutfitStore } from '../../art/store.js';
 import type { JobView } from '../../jobs/index.js';
 
@@ -561,19 +560,9 @@ export function appendImages(ctx: FillContext): FillResult {
     section?: string;
     boundaries?: string[];
     outfit?: { name: string; aliases?: string[] };
-    pathLines?: ArtPathMove;
   };
-  // v3 F7 (ADR 0070, G5): the lines that name a moved piece's old folder, updated before the images are placed.
-  const moved = input.pathLines ? updatePathLines(ctx.current.blocks as LkBlock[], input.pathLines) : null;
-  if (input.outfit) {
-    const r = placeOutfitImages(
-      { ...ctx, current: { ...ctx.current, blocks: moved?.blocks ?? ctx.current.blocks } },
-      input.outfit,
-      input.boundaries ?? [],
-    );
-    return moved ? { blocks: r.blocks, note: { ...r.note, pathLines: moved.note } } : r;
-  }
-  if (moved) ctx = { ...ctx, current: { ...ctx.current, blocks: moved.blocks } };
+  // v3 F7 (ADR 0070, G5): outfit pieces under the outfit's heading.
+  if (input.outfit) return placeOutfitImages(ctx, input.outfit, input.boundaries ?? []);
   const section = input.section ?? 'Reference Images';
   const boundaries = (input.boundaries ?? []).map(textKey);
   const current = [...(ctx.current.blocks as LkBlock[])];
@@ -687,64 +676,6 @@ export function placeOutfitImages(
   return { blocks: current, note: { outfit: outfit.name, madeSection: 'Wardrobe', blocks: add.length } };
 }
 
-/** The text runs of every block, at any depth, that holds text (paragraphs, list items, headings, cells). */
-function textBlocks(blocks: readonly unknown[], out: Obj[] = []): Obj[] {
-  for (const b of blocks) {
-    if (!isObj(b)) continue;
-    if (
-      Array.isArray(b.content) &&
-      (b.content as unknown[]).every((r) => isObj(r) && typeof r.kind !== 'string')
-    )
-      out.push(b);
-    for (const v of Object.values(b)) if (Array.isArray(v)) textBlocks(v as unknown[], out);
-  }
-  return out;
-}
-
-/**
- * v3 F7 (ADR 0070, G5): when a job moves loose pieces into a new outfit folder, each line on the Art page that names a
- * moved piece (its name, id or address) and its old folder's full path has that path replaced by the new folder's, in
- * the run that holds it, inside the lock. A line that names a moved piece and its old folder in any other way (its id,
- * or a path split across runs) is not touched: it is listed in the step's note for the owner. Prose that only mentions
- * the outfit is never touched.
- */
-export function updatePathLines(
-  blocks: readonly LkBlock[],
-  m: ArtPathMove,
-): { blocks: LkBlock[]; note: { updated: string[]; forOwner: string[] } } {
-  const copy = JSON.parse(JSON.stringify(blocks)) as LkBlock[];
-  const updated: string[] = [];
-  const forOwner: string[] = [];
-  const names = m.pieces.flatMap((p) => [p.name, p.id, ...(p.url ? [p.url] : [])]);
-  const pathRe = (path: string) =>
-    new RegExp(
-      path
-        .split(' / ')
-        .map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-        .join('\\s*/\\s*') + '(?!\\s*/)',
-      'g',
-    );
-  const from = pathRe(m.fromPath);
-  for (const b of textBlocks(copy)) {
-    const text = blockText(b);
-    if (!names.some((n) => text.includes(n))) continue;
-    const runs = b.content as Obj[];
-    let changed = false;
-    for (const r of runs) {
-      if (typeof r.text !== 'string') continue;
-      from.lastIndex = 0;
-      if (from.test(r.text)) {
-        from.lastIndex = 0;
-        r.text = r.text.replace(from, m.toPath);
-        changed = true;
-      }
-    }
-    if (changed) updated.push(blockText(b));
-    else if (text.includes(m.fromId) || /wardrobe/i.test(text)) forOwner.push(text);
-  }
-  return { blocks: copy, note: { updated, forOwner } };
-}
-
 /**
  * v3 F7 (ADR 0070, G2, G9): before an art job writes, each loose piece it moves is read live: still there, still in
  * the folder the plan read it in. Else the job stops (ART_LAYOUT_CHANGED) before any write: plan it again.
@@ -799,5 +730,7 @@ function recordOutfit(d: PackEngineDeps, job: JobView, r: Obj): Record<string, u
     outfit: rec.name,
     folderId: rec.folderId,
     pieces: rec.pieces.length,
+    // G5: lines on the character's pages naming a moved piece: for the owner, never edited.
+    ...(Array.isArray(r.linesForOwner) && r.linesForOwner.length ? { linesForOwner: r.linesForOwner } : {}),
   };
 }

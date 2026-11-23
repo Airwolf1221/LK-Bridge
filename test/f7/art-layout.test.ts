@@ -66,11 +66,22 @@ describe('G7: the findings', () => {
           content: [{ text: `Current: Characters / ${S} / Wardrobe / Jade Moon Kimono` }],
         },
         { id: 'b4', kind: 'paragraph', content: [{ text: 'Was folder deletedfold01 before.' }] },
+        {
+          id: 'b5',
+          kind: 'paragraph',
+          content: [{ text: 'Robes kept in folder movedaway01; sashes in insideok01.' }],
+        },
       ],
     };
     const f = findings(messy(), `Characters / ${S}`, {
       pages: [page],
       goneFolder: (id) => id === 'deletedfold01',
+      folderPath: (id) =>
+        id === 'movedaway01'
+          ? ['Characters', 'Mehrana al-Khalid', 'Wardrobe', 'Court Robes']
+          : id === 'insideok01'
+            ? ['Characters', S, 'Wardrobe', 'Sashes']
+            : null,
     });
     const by = (code: string) => f.filter((x) => x.code === code);
     expect(by('art_outfit_folder_single')).toHaveLength(1);
@@ -108,7 +119,14 @@ describe('G7: the findings', () => {
       ],
       ['b2', `Characters / ${S} / Forms / Primary Appearance / Gone`, null],
       ['b4', 'deletedfold01', null],
+      ['b5', 'movedaway01', null],
     ]);
+    // An id now elsewhere: its current name suggested (a folder still the character's is not a finding).
+    expect(stale[3]!.evidence).toMatchObject({
+      suggested: 'Characters / Mehrana al-Khalid / Wardrobe / Court Robes',
+      currentName: 'Court Robes',
+    });
+    expect(stale[3]!.message).toMatch(/no longer Soraya bint al-Noor’s/);
     // Every finding with a fix proposes; none is ever applied directly.
     for (const x of f) if (x.fix) expect(x.fix.kind).toBe('art_layout');
   });
@@ -131,6 +149,23 @@ describe('G7: audit → automation → proposals (mock LegendKeeper)', () => {
   let char = '';
   beforeAll(async () => {
     w = await automationWorld({ artCodes: true });
+    // G7: a line on Nadira's Core page (not her Art page) names a folder path that will not exist, and a folder id that
+    // is not hers (Qishen's). The page is in the snapshot the audit reads.
+    const core = w.repo.liveDocs(w.repo.res.get('nadircor')!).find((d) => d.name === 'Main')!;
+    (core as { type: string }).type = 'page';
+    w.repo.blocks.set(core.id, {
+      version: 1,
+      blocks: [
+        {
+          id: 'f7stale1',
+          kind: 'paragraph',
+          content: [
+            { text: 'Robe art: Characters / Beastkin / Qishen / Nadira al-Khalid / Outfits / Single Robe.' },
+          ],
+        },
+        { id: 'f7stale2', kind: 'paragraph', content: [{ text: 'Older art sat in folder afqishe1.' }] },
+      ],
+    } as never);
     // A complete snapshot first (the audit's pages); the art below is added after it (the mock serves no bytes for
     // it), and the audit reads the asset library from the asset tree, not the snapshot.
     await w.stack.runtime.snapshots.full(PROJECT, 'manual');
@@ -158,6 +193,16 @@ describe('G7: audit → automation → proposals (mock LegendKeeper)', () => {
   const a = () => w.stack.runtime.automation;
   const open = (code: string) =>
     w.stack.runtime.audits.store.list(PROJECT, { code: [code], state: 'open', limit: 100 }).findings;
+
+  it('a stale path and a foreign folder id on another of the character’s pages (her Core)', () => {
+    const f = open('art_stale_folder_ref').filter((x) => x.pageId === 'nadircor');
+    expect(f.map((x) => [x.blockId, x.fix?.args.to ?? x.evidence.suggested ?? null])).toEqual(
+      expect.arrayContaining([
+        ['f7stale1', 'Characters / Beastkin / Qishen / Nadira al-Khalid / Wardrobe / Single Robe'],
+        ['f7stale2', 'Characters / Beastkin / Qishen'],
+      ]),
+    );
+  });
 
   it('the audit finds each problem', () => {
     expect(open('art_outfit_folder_single')).toHaveLength(1);

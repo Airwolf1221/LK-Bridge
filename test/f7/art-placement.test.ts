@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fixture } from '../images/world.js';
 import { approve } from '../packs/world.js';
 import { ownersWorld, PROJECT, type OwnersWorld } from '../packs/owners-world.js';
+import { C } from '../packs/world.js';
 
 let w: OwnersWorld;
 beforeAll(async () => {
@@ -105,6 +106,16 @@ describe('G1/G2: one call, one target, the bridge decides the folder', () => {
 
   it('a second piece makes Wardrobe/<Outfit> and moves the loose piece into it, in the same job', async () => {
     const id = await stage();
+    // G5: a line on another of Nadira's pages (her Core, under her index) names the loose piece's location.
+    const loose = 'Nadira al-Khalid - Silk Robe - Outfit Reference - Front';
+    const coreDoc = w.repo.liveDocs(w.repo.res.get(C.nadira)!).find((d) => d.name === 'Main')!;
+    if (!w.repo.blocks.get(coreDoc.id)) w.repo.blocks.set(coreDoc.id, { version: 1, blocks: [] } as never);
+    const coreBlocks = w.repo.blocks.get(coreDoc.id)!.blocks as unknown[];
+    coreBlocks.push({
+      id: 'f7line01',
+      kind: 'paragraph',
+      content: [{ text: `${loose} is loose in Wardrobe.` }],
+    });
     const dry = await art({
       outfit: 'silk  robe',
       images: [img(id, 'Outfit Reference - Back')],
@@ -112,6 +123,7 @@ describe('G1/G2: one call, one target, the bridge decides the folder', () => {
     });
     expect(dry.isError, dry.text).toBe(false);
     expect(JSON.stringify(dry.body)).toContain('moved into the new folder');
+    expect(JSON.stringify(dry.body)).toMatch(/linesForOwner.*f7line01/);
     await run({ outfit: 'silk  robe', images: [img(id, 'Outfit Reference - Back')] });
     const folder = w.assets.byName('Silk Robe', wardrobe()!.id)[0]!;
     expect(folder.type).toBe('FOLDER');
@@ -128,6 +140,11 @@ describe('G1/G2: one call, one target, the bridge decides the folder', () => {
     // G5: the existing outfit heading takes the new piece.
     expect(headings().filter((h) => h === '3:Silk Robe')).toHaveLength(1);
     expect(headings()).toContain('4:Outfit Reference - Back');
+    // G5: that line is listed for the owner, never edited.
+    const kept = (
+      w.repo.blocks.get(coreDoc.id)!.blocks as { id: string; content?: { text: string }[] }[]
+    ).find((b) => b.id === 'f7line01');
+    expect(kept?.content?.[0]?.text).toBe(`${loose} is loose in Wardrobe.`);
     // G9: the cache followed the bridge's own move.
     expect(w.stack.runtime.assets.queries.asset(PROJECT, first.id).data?.folderId).toBe(folder.id);
   });

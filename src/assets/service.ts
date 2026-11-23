@@ -1145,7 +1145,7 @@ export class AssetService {
    */
   async refreshFolder(
     projectId: string,
-    folderId: string,
+    folderId: string | null,
     o: { depth?: number; priority?: PriorityClass; jobId?: string } = {},
   ): Promise<{ ok: boolean; requests: number; error?: string }> {
     const ro: ReadOptions = {
@@ -1156,7 +1156,7 @@ export class AssetService {
     };
     const ctx = this.ctx(projectId, 'refresh');
     let requests = 0;
-    const queue: { id: string; depth: number }[] = [{ id: folderId, depth: 0 }];
+    const queue: { id: string | null; depth: number }[] = [{ id: folderId, depth: 0 }];
     const maxDepth = o.depth ?? 3;
     try {
       while (queue.length > 0) {
@@ -1168,7 +1168,13 @@ export class AssetService {
           const r = await this.read(
             projectId,
             'listAssets',
-            { query: { limit: this.pageSize, folderId: id, ...(cursor ? { cursor } : {}) } },
+            {
+              query: {
+                limit: this.pageSize,
+                ...(id !== null ? { folderId: id } : {}),
+                ...(cursor ? { cursor } : {}),
+              },
+            },
             ro,
           );
           requests++;
@@ -1192,7 +1198,9 @@ export class AssetService {
         const listed = new Set(seen.map((x) => x.id));
         const held = this.store.children(projectId, id);
         const missing = gone
-          ? [id]
+          ? id === null
+            ? []
+            : [id]
           : [...held.folders.map((f) => f.id), ...held.items.map((i) => i.id)].filter((x) => !listed.has(x));
         for (const m of missing) {
           const r = await this.read(projectId, 'getAsset', { path: { assetId: m } }, ro);
@@ -1217,57 +1225,49 @@ export class AssetService {
     }
   }
 
+  /** v3 F7 (G11): when each project's asset listing was last read live in full for a URL check. */
+  private readonly urlListedAt = new Map<string, number>();
+
   /**
-   * v3 F7 (ADR 0070, G11): image URLs checked against the model, with ONE live refresh for those it does not hold: the
-   * re-reads owed after the bridge's own writes are made now, then each missing URL's asset is read by the id its file
-   * name gives (`<projectId>_<uuid>.webp` or the older `<uuid>.webp`: the uuid, and the whole name) and kept only when
-   * LegendKeeper answers with exactly that `url`. Returns the URLs that are assets of this project.
+   * v3 F7 (ADR 0070, G11): image URLs checked against the model. An asset's id cannot be derived from its URL (the
+   * file name's uuid is another value: live evidence, 23 November 2026), so for URLs the model does not hold, the
+   * project's whole asset listing is read LIVE once (`listAssets`, every folder, every page: the re-reads owed after
+   * the bridge's own writes first), at most once every five minutes per project (`URL_REFRESH_MS`). Within that window
+   * nothing is read: the answer says when the listing was read and when a retry can read it again.
    */
   async checkUrls(
     projectId: string,
     urls: readonly string[],
     o: { priority?: PriorityClass } = {},
-  ): Promise<{ known: Set<string>; refreshed: boolean; requests: number }> {
+  ): Promise<UrlCheck> {
     const known = new Set<string>();
     const misses: string[] = [];
     for (const u of new Set(urls)) {
       if (this.queries.assetByUrl(projectId, u).data) known.add(u);
       else misses.push(u);
     }
-    if (misses.length === 0) return { known, refreshed: false, requests: 0 };
-    const ro: ReadOptions = { priority: o.priority ?? 'P1', waitForBudget: false, waitForProject: false };
-    const ctx = this.ctx(projectId, 'refresh');
-    let requests = 0;
+    if (misses.length === 0)
+      return { known, refreshed: false, refreshedAt: null, retryAfter: null, requests: 0 };
+    const now = this.o.clock.now();
+    const last = this.urlListedAt.get(projectId);
+    if (last !== undefined && now - last < URL_REFRESH_MS)
+      return { known, refreshed: false, refreshedAt: last, retryAfter: last + URL_REFRESH_MS, requests: 0 };
+    this.urlListedAt.set(projectId, now); // set first: calls arriving meanwhile do not list again
     try {
       await this.processPending();
     } catch {
-      // owed re-reads are retried by their own loop; the reads below still run
+      // owed re-reads are retried by their own loop; the listing below still runs
     }
-    for (const u of misses) {
-      if (this.queries.assetByUrl(projectId, u).data) {
-        known.add(u);
-        continue;
-      }
-      for (const id of assetIdsFromUrl(u)) {
-        let r: ReadResult;
-        try {
-          r = await this.read(projectId, 'getAsset', { path: { assetId: id } }, ro);
-        } catch {
-          break;
-        }
-        requests++;
-        if (r.gone) continue;
-        const obs = observationFromAsset(r.value);
-        if (!obs || obs.url !== u) continue;
-        await this.serial(projectId, () => {
-          if (obs.folderId === null || this.store.folder(projectId, obs.folderId))
-            this.store.applyObservation(ctx, obs, r.t);
-        });
-        known.add(u);
-        break;
-      }
-    }
-    return { known, refreshed: true, requests };
+    const r = await this.refreshFolder(projectId, null, { depth: 64, priority: o.priority ?? 'P1' });
+    for (const u of misses) if (this.queries.assetByUrl(projectId, u).data) known.add(u);
+    return {
+      known,
+      refreshed: true,
+      refreshedAt: now,
+      retryAfter: now + URL_REFRESH_MS,
+      requests: r.requests,
+      ...(r.ok ? {} : { error: r.error ?? 'a read failed' }),
+    };
   }
 
   // ============================================================================================ retries
@@ -1441,26 +1441,21 @@ export class AssetService {
   }
 }
 
-/**
- * v3 F7 (G11): the asset ids an image URL may name: its file name without the extension, and the part after the project
- * prefix (`<projectId>_<uuid>.webp`); none for a URL off LegendKeeper's asset hosts' pattern.
- */
-export function assetIdsFromUrl(url: string): string[] {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return [];
-  }
-  if (u.protocol !== 'https:') return [];
-  const file = decodeURIComponent(u.pathname.split('/').pop() ?? '');
-  const stem = file.replace(/\.[A-Za-z0-9]{2,5}$/, '');
-  if (!stem || !/^[A-Za-z0-9_-]{1,200}$/.test(stem)) return [];
-  const out = new Set<string>();
-  const us = stem.lastIndexOf('_');
-  if (us > 0 && us < stem.length - 1) out.add(stem.slice(us + 1));
-  out.add(stem);
-  return [...out];
+/** v3 F7 (ADR 0070, G11): the least time between two full live listings for image URL checks, per project. */
+export const URL_REFRESH_MS = 5 * 60_000;
+
+/** v3 F7 (G11): what an image URL check found. */
+export interface UrlCheck {
+  /** The URLs that are image assets of the project. */
+  readonly known: Set<string>;
+  /** Whether this check read the whole listing live. */
+  readonly refreshed: boolean;
+  /** When the listing was last read live for a URL check (null: never needed). */
+  readonly refreshedAt: number | null;
+  /** When a check may read it live again. */
+  readonly retryAfter: number | null;
+  readonly requests: number;
+  readonly error?: string;
 }
 
 function newPassId(kind: AssetPassKind): string {

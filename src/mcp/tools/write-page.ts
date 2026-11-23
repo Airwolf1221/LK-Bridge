@@ -297,11 +297,13 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
         }
         const current = { version: body.version, blocks: body.blocks as never[] };
         // v3 F7 (ADR 0070, G11): each new image's URL checked against the project's assets (live once for a miss).
-        const knownImages = await prepareImageUrls(pd.services?.assets, ctx.projectId, args.markdown, {
+        const images = await prepareImageUrls(pd.services?.assets, ctx.projectId, args.markdown, {
           skip: blockImageUrls(current.blocks),
         });
-        const isProjectAsset = projectAssetCheck(pd.services?.assets, ctx.projectId, knownImages);
-        const checked: FromMarkdownContext = isProjectAsset ? { ...converter, isProjectAsset } : converter;
+        const isProjectAsset = projectAssetCheck(pd.services?.assets, ctx.projectId, images.known);
+        const checked: FromMarkdownContext = isProjectAsset
+          ? { ...converter, isProjectAsset, ...(images.note ? { imageUrlNote: images.note } : {}) }
+          : converter;
         const rendered = toMarkdown({ blocks: current.blocks });
         const versions = pd.services?.versions;
         versions?.remember(ctx.projectId, doc.id, current.version, rendered.markdown);

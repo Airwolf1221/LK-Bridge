@@ -19,17 +19,20 @@ only.
   ADR) unless `newOutfit: true`.
 - **G4**: `<Character> - <Label>` and `<Character> - <Outfit> - <Label>`, numbered when taken, never an extension.
 - **G5, the Art page**: outfit pieces under a heading naming the outfit (anywhere), else under the first "Wardrobe"
-  heading, else a new "Wardrobe" section; a line naming a moved piece's old folder path updated in the same write.
+  heading, else a new "Wardrobe" section. When a piece is moved, every page under the character's index is read and each
+  line naming it (by asset id or name) is listed for the owner, never edited.
 - **G6**: no Forms, Outfits or Details folder is ever made (`LEGACY_ART_FOLDER`: the planner, `upload_image`,
   `lk_api_write` and `lk_api_batch`).
 - **G7, the art layout audit**: six codes in category Asset library (one-piece outfit folders, loose pieces of one outfit,
-  empty and non-empty legacy folders, names, stale folder paths on Art pages); every fix a proposal, read live first; in
+  empty and non-empty legacy folders, names, stale folder paths and ids on any of the character's pages); every fix a proposal, read live first; in
   the automation the five fixable codes are proposal-only (Off or Propose, never Apply) and Propose by default.
 - **G10, the verifier**: a titled block's `title` and `isTitleHidden` that the plan did not send are not a difference when
   they equal the kind's confirmed default (image: "Image", hidden); the warning says "something else may have edited the
   page" only on evidence of another writer, else what differs and that LegendKeeper may have changed it on save.
 - **G11, the image URL check**: `write_page`, the narrative tools and the pack tools check a new image's URL against the
-  project's assets (both URL forms), with one live look-up before `IMAGE_URL_REFUSED`.
+  project's assets (both URL forms). An asset's id is not derivable from its URL: on a miss the project's whole asset
+  listing is read live once, at most every five minutes per project; then `IMAGE_URL_REFUSED` (within the window, at
+  once, saying when the listing was read and when to retry).
 - **`browse_asset_tree { refresh: true }`** reads a folder live first.
 - **The sandbox check** `f7-art` (written, not run; passing on the mock in the ordinary suite): the outfit folder made and
   the loose piece moved on the real API, and the titled-block probe whose values go into `TITLED_BLOCK_DEFAULTS`.

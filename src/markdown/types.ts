@@ -76,6 +76,11 @@ export interface FromMarkdownContext {
    * a foreign URL with a 400, before writing anything).
    */
   readonly isProjectAsset?: (url: string) => boolean;
+  /**
+   * v3 F7 (ADR 0070, G11): added to an IMAGE_URL_REFUSED message: when the project's asset listing was last read live,
+   * and when a retry may read it again.
+   */
+  readonly imageUrlNote?: string;
   /** Mints ids for new blocks (a cuid2, as `src/jobs/ids.ts` mints). Without it, new blocks have no id and LegendKeeper mints one. */
   readonly mintBlockId?: () => string;
 }

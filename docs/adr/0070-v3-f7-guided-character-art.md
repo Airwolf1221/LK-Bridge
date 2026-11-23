@@ -128,29 +128,31 @@ outfit at the end of the page's first heading holding "Wardrobe"; else a new "Wa
 boundary sections, the outfit's heading at 3 and the labels at 4. A new Art page made for outfit pieces gets the same
 "Wardrobe" section.
 
-**Lines naming a moved piece's old folder** (chosen reading of "names its old folder"): on the Art page, a line naming a
-moved piece (its name, id or address) AND its old folder's full path has that path replaced by the new folder's, inside
-the lock, in the same write; the old Wardrobe still exists, so a line naming only Wardrobe is left alone. A line naming
-the moved piece with its old folder by id (the new folder's id is made by the job) or a path split across runs is
-listed in the step's note (`filled.pathLines.forOwner`) for the owner. Prose naming the outfit is never touched.
-**Left for later:** the character's other pages (only the Art page is written by the art job); the art layout audit
-(decision 7) finds a stale path on any of the character's Art pages.
+**Lines naming a moved piece** (amended after review, 23 November 2026). When the job moves loose pieces, **every page
+under the character's repository index** (the index too; page documents and documents the tree last saw blank) is read
+live when the call is planned, and each line naming a moved piece **by asset id or asset name** is listed for the owner
+(`linesForOwner`: in the preview, the proposal's notes and the job's record step result): **never edited**, because it
+may state the piece's location. The art job removes no folder, so no line it could find names a folder path that has
+stopped existing; such lines (left by earlier changes, such as the retired Forms, Outfits and Details) are the art layout
+audit's (decision 7), which updates one only where it matches exactly. Prose naming the outfit is never touched.
 
 ## Decision 7 (G7): the art layout audit (category `assets`, read-only)
 
 `src/audits/checks/art-layout.ts`, per character folder (a folder under the library's top-level Characters folder
 holding a Wardrobe, Forms, Outfits or Details folder, or an asset named after it):
 
-| Code                             | Finding                                                                                                                            | Fix (one proposal; targets read live first)                                                                            |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `art_outfit_folder_single`       | an outfit folder with one piece                                                                                                    | move the piece into Wardrobe; delete the folder (only if empty then)                                                   |
-| `art_loose_outfit_pieces`        | two or more loose pieces of one outfit (record, else names)                                                                        | make (or find) Wardrobe/<Outfit>; move them in                                                                         |
-| `art_legacy_folder_empty`        | an empty Forms, Outfits or Details folder                                                                                          | delete it, its empty folders first (each only if empty then)                                                           |
-| `art_legacy_folder_holds_assets` | such a folder that still holds assets                                                                                              | none: listed for the owner                                                                                             |
-| `art_asset_name`                 | a name breaking G4                                                                                                                 | the rename, when certain (extension dropped; an outfit folder's piece given its outfit); else listed                   |
-| `art_stale_folder_ref`           | a line on a character's Art page naming a folder path under the character's folder that no longer exists, or a deleted folder's id | update the line, when the folder's new place is certain (one folder of that name under the character now); else listed |
+| Code                             | Finding                                                                                                                                                                                                                                     | Fix (one proposal; targets read live first)                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `art_outfit_folder_single`       | an outfit folder with one piece                                                                                                                                                                                                             | move the piece into Wardrobe; delete the folder (only if empty then)                                                                                                                                         |
+| `art_loose_outfit_pieces`        | two or more loose pieces of one outfit (record, else names)                                                                                                                                                                                 | make (or find) Wardrobe/<Outfit>; move them in                                                                                                                                                               |
+| `art_legacy_folder_empty`        | an empty Forms, Outfits or Details folder                                                                                                                                                                                                   | delete it, its empty folders first (each only if empty then)                                                                                                                                                 |
+| `art_legacy_folder_holds_assets` | such a folder that still holds assets                                                                                                                                                                                                       | none: listed for the owner                                                                                                                                                                                   |
+| `art_asset_name`                 | a name breaking G4                                                                                                                                                                                                                          | the rename, when certain (extension dropped; an outfit folder's piece given its outfit); else listed                                                                                                         |
+| `art_stale_folder_ref`           | a line on ANY of the character's pages (every page under its repository index) naming a folder path under the character's folder that no longer exists, or the id of a folder that is no longer the character's (deleted, or now elsewhere) | a path: the line updated where it matches exactly and the folder's new place is certain (one folder of that name under the character now); an id: listed, with the folder's current name and place suggested |
 
-The audit reads the asset tree and the snapshots (the Art pages' blocks are kept for it, by name), never LegendKeeper;
+The audit reads the asset tree and the snapshots, never LegendKeeper: the blocks of every page under each character's
+repository index (an index named as a character folder of the asset library) are kept for it, so a stale reference on any
+of the character's pages is found (the motivating case: Mehrana's Wardrobe page, "Asset Location and Provenance");
 each fix re-reads its targets live (G9) and refuses as `FIX_STALE` when they changed. A line's update is a `replaceBlock`
 at the document version read live (a later edit makes the job stop, never overwrite). Every move, rename and delete the
 bridge makes on its own initiative is a proposal.
@@ -190,14 +192,20 @@ sent and stored) and "LegendKeeper may have changed it on save". Both keep the "
 `FromMarkdownContext.isProjectAsset` is now passed by `write_page`, the narrative tools (`arkona_chapter_save`, the
 chapter tools' appends) and the pack planners (`arkona_create_character`, `arkona_create_owner` and the others through
 `planPackage` and `planOwner`): a new image's URL must be exactly the `url` of an image asset of the project in the asset
-tree (`AssetQueries.assetByUrl`; both forms, `https://assets.legendkeeper.com/<projectId>_<uuid>.webp` and the older
-`…/<uuid>.webp`). URLs the page already holds are not checked. **On a miss, ONE live refresh** first
-(`AssetService.checkUrls`): the re-reads owed after the bridge's own writes are made, then the asset each missing URL may
-name (its file name's uuid, then the whole name) is read with `getAsset` and kept only when LegendKeeper answers with
-exactly that URL; then `IMAGE_URL_REFUSED`. While the asset tree has never been built there is no check (the old
-`IMAGE_URL_UNCHECKED` warning stays). **Chosen:** the refresh reads by the id the URL names; if LegendKeeper's asset ids
-are not the URL's uuid, a fresh upload made outside the bridge is refused until the next refresh, and the sandbox check
-(B1, the uploaded asset's id and url) shows which it is.
+tree (`AssetQueries.assetByUrl`; both forms, `https://assets.legendkeeper.com/<uuid>.webp` and
+`…/<projectId-like prefix>_<uuid>.webp`). URLs the page already holds are not checked.
+
+**An asset's id cannot be derived from its URL** (amended after review; live evidence, 23 November 2026: asset
+`pr796386prg9780dhbcvhyyd` has url `…/64b8054d-5986-4027-bfb2-8acc55c23035.webp`, asset `rzgwr8y9yan0dxmmzbnjttv6` has
+`…/cmretrj150aph43prgyxsdbsn_5aa52e7d-b052-48b2-a5f6-566a113b391f.webp`). So on a miss
+(`AssetService.checkUrls`) the re-reads owed after the bridge's own writes are made, then **the project's whole asset
+listing is read live once** (`listAssets` on every folder, every page, at P1; an item gone since confirmed with
+`getAsset`), **at most once every five minutes per project** (`URL_REFRESH_MS`, in memory). Still missing:
+`IMAGE_URL_REFUSED`, saying the listing was read just now. Within the five minutes a miss is refused at once, nothing
+read, the message saying when the listing was read and to retry after it (the five minutes from then). While the asset
+tree has never been built there is no check (the old `IMAGE_URL_UNCHECKED` warning stays). The mock's asset URLs now
+carry a uuid unrelated to the asset's id, so no test can pass by the old guess. **Cost:** one listing request per folder
+of the library (a few hundred on a large project), at most every five minutes, and only when an image URL is not known.
 
 ## Decision 10: the asset tree after the bridge's own writes, and `browse_asset_tree { refresh: true }` (G9)
 

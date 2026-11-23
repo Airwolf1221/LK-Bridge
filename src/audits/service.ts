@@ -19,7 +19,7 @@ import type { ProjectSettings } from '../projects/settings.js';
 import { auditConfigInputSchema, effectiveRules, type AuditConfig, type AuditRule } from './config.js';
 import { chronologyCheck, keepRegionsCheck, lifecycleCheck } from './checks/lifecycle.js';
 import { duplicateFoldersCheck, type AssetLibrary } from './checks/assets.js';
-import { artLayoutCheck, isArtPageName, type ArtPageText } from './checks/art-layout.js';
+import { artLayoutCheck, auditLibraryView, characterFolders, type ArtPageText } from './checks/art-layout.js';
 import type { OutfitRecord } from '../art/store.js';
 import {
   governanceCheck,
@@ -115,6 +115,12 @@ export interface AuditDeps {
   readonly tree: {
     readonly queries: {
       tombstone(projectId: string, id: string): { observedAt: number; reason: string } | null;
+      /** v3 F7 (G7): a character's repository index by its name, and the pages under it (their blocks are kept). */
+      findByDisplayName?(
+        projectId: string,
+        name: string,
+      ): { data: readonly { node: { id: string; kind: string } }[] };
+      subtree?(projectId: string, id: string): { data: { entries: readonly { node: { id: string } }[] } };
     };
   };
   readonly engine: Pick<JobEngine, 'internalRead' | 'submit' | 'queries' | 'wait'>;
@@ -305,6 +311,33 @@ export class Audits {
     this.background.add(p);
   }
 
+  /**
+   * v3 F7 (ADR 0070, G7): the pages whose blocks the art layout check reads: every page under each character's
+   * repository index (an index named as a character folder of the asset library), the index included.
+   */
+  private characterPageIds(projectId: string): Set<string> {
+    const out = new Set<string>();
+    const q = this.d.tree.queries;
+    let lib: AssetLibrary | null = null;
+    try {
+      lib = this.d.assetLibrary?.(projectId) ?? null;
+    } catch {
+      lib = null;
+    }
+    if (!lib || !q.findByDisplayName || !q.subtree) return out;
+    const view = auditLibraryView(lib);
+    for (const id of characterFolders(lib, view)) {
+      const name = view.folder(id)?.name;
+      if (!name) continue;
+      for (const m of q.findByDisplayName(projectId, name).data) {
+        if (m.node.kind !== 'index') continue;
+        out.add(m.node.id);
+        for (const e of q.subtree(projectId, m.node.id).data.entries) out.add(e.node.id);
+      }
+    }
+    return out;
+  }
+
   /** Waits for the audits started after full snapshots (tests, shutdown). */
   async settled(): Promise<void> {
     while (this.background.size > 0) await Promise.allSettled([...this.background]);
@@ -332,12 +365,13 @@ export class Audits {
       const source = this.d.source ? this.d.source(projectId) : sourceOf(this.d.snapshots);
       // v3 F4a (ADR 0063): the governance root's tabs are kept whole for the governance check (only those pages).
       const governance = this.governanceHook(projectId);
+      const characterPages = this.characterPageIds(projectId);
       const built = await buildModel(source, projectId, {
         propertiesName: treeSettings.propertiesName,
         tagSource: cfg.tagSource,
         ...(governance ? { keepBlocksOf: new Set(governance.roots) } : {}),
-        // v3 F7 (G7): the characters' Art pages, whose lines may name asset folders.
-        keepBlocksWhere: (p) => isArtPageName(p.name),
+        // v3 F7 (G7): every page under each character's repository index, whose lines may name asset folders.
+        keepBlocksWhere: (p) => characterPages.has(p.id),
       });
       if (!built.ok) {
         const summary =
@@ -839,15 +873,25 @@ export class Audits {
         }
       })(),
       ...(this.d.outfits ? { outfitsOf: (id: string) => this.d.outfits!.forCharacter(projectId, id) } : {}),
-      artPages: (character: string): ArtPageText[] => {
+      characterPages: (character: string): ArtPageText[] => {
+        // v3 F7 (G7): every page under the character's repository index (the index too), from the snapshots.
         const out: ArtPageText[] = [];
         if (!model.blocks) return out;
+        const key = character.normalize('NFC').toLowerCase();
+        const indexes = [...model.pages.values()].filter(
+          (p) => p.kind === 'index' && p.displayName.normalize('NFC').toLowerCase() === key,
+        );
+        const under = new Set(indexes.map((p) => p.id));
+        for (let grew = true; grew;) {
+          grew = false;
+          for (const p of model.pages.values())
+            if (p.parentId && under.has(p.parentId) && !under.has(p.id)) {
+              under.add(p.id);
+              grew = true;
+            }
+        }
         for (const p of model.pages.values()) {
-          if (
-            !isArtPageName(p.rawName) ||
-            !p.displayName.toLowerCase().startsWith(`${character.toLowerCase()} - `)
-          )
-            continue;
+          if (!under.has(p.id)) continue;
           for (const doc of p.documents) {
             const blocks = model.blocks.get(doc.id);
             if (blocks) out.push({ pageId: p.id, documentId: doc.id, blocks });

@@ -538,6 +538,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         .filter((im) => assetSteps.has(im.stagedId))
         .map((im) => ({ assetStep: assetSteps.get(im.stagedId)!, name: im.name })),
       moved: art.outfit.moves.map((m) => ({ assetId: m.assetId, name: m.name })),
+      // G5: lines naming a moved piece, listed for the owner in the job's result (never edited).
+      ...(art.outfit.linesForOwner?.length ? { linesForOwner: art.outfit.linesForOwner } : {}),
     };
     steps.push({
       op: 'bridge.record',
@@ -573,7 +575,6 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
           section: c.section,
           boundaries: c.boundaries,
           ...(c.outfit ? { outfit: c.outfit } : {}),
-          ...(c.pathLines ? { pathLines: c.pathLines } : {}),
         },
       },
       judgedInLock: true,

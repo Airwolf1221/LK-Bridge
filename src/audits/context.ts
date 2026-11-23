@@ -79,8 +79,8 @@ export interface AuditContext {
   readonly assetLibrary?: AssetLibrary | null;
   /** v3 F7 (ADR 0070, G7): a character folder's outfit record (the art layout check). */
   readonly outfitsOf?: (characterFolderId: string) => readonly OutfitRecord[];
-  /** v3 F7 (G7): the Art pages of a character (by its name), with their blocks from the snapshots. */
-  readonly artPages?: (character: string) => readonly ArtPageText[];
+  /** v3 F7 (G7): every page under a character's repository index (by its name), with its blocks from the snapshots. */
+  readonly characterPages?: (character: string) => readonly ArtPageText[];
   /**
    * v3 F3f (ADR 0060): the retag engine, when the project's approved pack has retag rules: the tag findings then come
    * from it (the same verdicts as `arkona_retag_audit`), never from the tag-definition document.
