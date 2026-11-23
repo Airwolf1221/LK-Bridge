@@ -531,6 +531,16 @@ unchanged) or **Allow this tag everywhere** (the bridge edits the section's list
 the step-up, one revertible job; the pack then offers its new version). Agents suggest either ruling with
 `arkona_retag_audit { suggestRuling }`, never take it.
 
+## Where `arkona_get_art` reads an image's authority (v3 F7b)
+
+`arkona-2026-11-23-f7b` ([ADR 0071](adr/0071-v3-f7b-seeing-character-art.md)): `artView = { ownerPages: {
+referenceTypes: ['Character Art', 'Character Physical & Visual Reference', 'Character Wardrobe & Personal Presentation
+Reference'], tags: ['Character Art', 'Visual Reference', 'Wardrobe'] }, textChars: 1200 }`. A page with one of these
+Reference Types or tags (or the character's Art page by name) is an owner page: listed first within its lifecycle in an
+image's authority. `textChars` is how much of the text under an image is returned. The tool reads it from the pack's
+current version, else the same values from the code, so it answers while the version waits for approval. The seed adds
+no switch: `arkona_get_art` is read-only.
+
 ## `arkona_identity_reconcile`'s switch (v3 F5c)
 
 `arkona-2026-11-23-f5c` ([ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md)): the

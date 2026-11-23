@@ -69,6 +69,7 @@ describe('the MCP surface with the official client', () => {
         'arkona_identity_reconcile', // v3 F5c (ADR 0069, H6)
         'arkona_add_character_art',
         'arkona_character_brief',
+        'arkona_get_art', // v3 F7b (ADR 0071)
         // v3 F3c: the Arkona pack's appraisal tools
         'arkona_appraise_owner',
         'arkona_change_impact',

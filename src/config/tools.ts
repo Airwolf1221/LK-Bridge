@@ -65,6 +65,11 @@ const toolsEnvSchema = z.object({
    * download's redirect is followed only to one of them. Default (v2 E5.2): assets and assets2.legendkeeper.com.
    */
   LK_ASSET_HOSTS: z.string().default(DEFAULT_LK_ASSET_HOSTS.join(',')),
+  // ---- v3 F7b (ADR 0071, D6): the derivatives arkona_get_art delivers inline
+  /** The art cache's directory. Default: `art-cache/` next to the database (DB_PATH's directory). */
+  ART_CACHE_DIR: z.string().min(1).optional(),
+  /** The most the art cache holds, in MB; the least recently used entries go first. */
+  ART_CACHE_MAX_MB: intFrom(500, 1, 1_000_000),
   // ---- v2 E1a (ADR 0042): the snapshot store
   /** The snapshot store's directory (objects, manifests). Default: `snapshots/` next to the database. */
   SNAPSHOT_DIR: z.string().min(1).optional(),
@@ -102,7 +107,19 @@ export interface ToolsSettings {
   readonly images: ImageSettings;
   /** v2 E1a (ADR 0042): the snapshot store. Optional for callers built before E1a (the defaults apply). */
   readonly snapshots?: SnapshotStoreSettings;
+  /** v3 F7b (ADR 0071, D6): the art cache (ART_CACHE_DIR, ART_CACHE_MAX_MB). Optional: the defaults apply. */
+  readonly artCache?: ArtCacheSettings;
 }
+
+/** v3 F7b (ADR 0071, D6): the art cache's settings. */
+export interface ArtCacheSettings {
+  /** ART_CACHE_DIR, or null for `art-cache/` next to the database. */
+  readonly dir: string | null;
+  /** ART_CACHE_MAX_MB in bytes. */
+  readonly maxBytes: number;
+}
+
+export const DEFAULT_ART_CACHE_SETTINGS: ArtCacheSettings = { dir: null, maxBytes: 500 * 1024 * 1024 };
 
 /** v2 E1a (ADR 0042): the snapshot store's settings (env). */
 export interface SnapshotStoreSettings {
@@ -174,6 +191,7 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   outboundExtraPorts: new Set<string>(),
   images: DEFAULT_IMAGE_SETTINGS,
   snapshots: DEFAULT_SNAPSHOT_SETTINGS,
+  artCache: DEFAULT_ART_CACHE_SETTINGS,
 };
 
 /** Parses and validates the tool-layer environment variables. Never echoes values, only names. */
@@ -222,6 +240,7 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       keepDays: e.SNAPSHOT_KEEP_DAYS,
       softDeleteDays: e.SNAPSHOT_SOFT_DELETE_DAYS,
     },
+    artCache: { dir: e.ART_CACHE_DIR ?? null, maxBytes: e.ART_CACHE_MAX_MB * 1024 * 1024 },
   };
 }
 

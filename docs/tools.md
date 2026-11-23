@@ -219,7 +219,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (185 tools in all with the Arkona pack's thirty tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, v3 F4b's `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency_suggest`, v3 F4c's `arkona_story_create`, `arkona_chapter_plan`, `arkona_chapter_save`, `arkona_chapter_insert`, `arkona_chapter_move`, `arkona_chapter_context`, `arkona_chapter_check` and `arkona_promote_from_chapter`, v3 F5c's `arkona_identity_reconcile`, and v3 F3d's `bridge_job_resume` and v3 F5c's `bridge_workstream`, `bridge_workstream_report` and `query_facts`; 187 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (186 tools in all with the Arkona pack's thirty-one tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, v3 F4b's `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency_suggest`, v3 F4c's `arkona_story_create`, `arkona_chapter_plan`, `arkona_chapter_save`, `arkona_chapter_insert`, `arkona_chapter_move`, `arkona_chapter_context`, `arkona_chapter_check` and `arkona_promote_from_chapter`, v3 F5c's `arkona_identity_reconcile`, v3 F7b's `arkona_get_art`, and v3 F3d's `bridge_job_resume` and v3 F5c's `bridge_workstream`, `bridge_workstream_report` and `query_facts`; 188 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -1503,6 +1503,43 @@ last read it), every page of the set with its Reference Type and Scope, the rela
 counts (from each page's newest snapshot), the Unresolved Material headings, the open audit findings, and how fresh each
 part is. `live: true` re-reads the identity page's sidebar (one read). It does not read the pack's governance, so it
 answers while the pack waits for approval.
+
+**`arkona_get_art`** `{ asset? | character? (outfit? | design?) | page? (document?), delivery?, limit?, cursor?, project }`
+(read; v3 F7b, [ADR 0071](adr/0071-v3-f7b-seeing-character-art.md)): lets an agent SEE a character's art. Exactly one
+selector: `asset` (1 to 6 asset ids or file URLs, both forms `https://assets.legendkeeper.com/<projectId>_<uuid>.webp` and
+the older `…/<uuid>.webp`; a URL the asset tree lacks is checked as `write_page`'s images are, one live listing at most
+every five minutes); `character` (its folders read live first, F7's G9: design pieces, then Wardrobe's loose pieces, its
+outfit folders and any legacy folder), with `outfit` (its name or an alias through F7's outfit record and matcher; a near
+miss is `OUTFIT_NEAR_MATCH` with the candidates, an unknown one `OUTFIT_NOT_FOUND` listing the outfits) or `design: true`
+(the pieces in its own folder only); `page` (every image block on the page, in document order, each page document read
+live; `document` for one). At most 6 images a call; more come with `nextCursor` (refused as `CURSOR_INVALID` for another
+selection).
+
+Each image: `assetId`, `name`, `folder` (its path), `width`, `height`, `format`, `bytes` (the original's, once downloaded),
+`url` (exactly as LegendKeeper gives it), and `authority`: every page whose image block embeds the asset's URL (by its path,
+so `assets` and `assets2` match), from the bridge's asset reference and full-text index (the newest snapshot; pages read
+live in the call stand in for theirs), never LegendKeeper's search. Per page: `page`, `document`, `section` (the heading
+path), `lifecycle`, `ownerPage` (a character's Art or Wardrobe page, by the pack's `artView`), `label` (the image's alt
+text) and `text` (the blocks under the image up to the next image or heading, trimmed to 1,200 characters with
+`truncated: true`). Authoritative pages first, then none, Working, Archived; owner pages first within each. Nothing
+embeds it: `status: "none"` and the warning "No owner page embeds this image; it establishes nothing about canon". No
+index yet: `status: "unavailable"` (never "none").
+
+`delivery`: `"both"` (default), `"link"` (urls only, nothing downloaded, no budget) or `"inline"`. Inline: one MCP `image`
+content block per image after the JSON, in order (`inline.content` is its position), resized with sharp: EXIF
+orientation applied, metadata dropped, long edge at most 1,568 px (never enlarged), WebP at quality 82 (JPEG when the
+source has no alpha and is smaller so), quality stepped down to 60 then the size shrunk until under 1 MB; `inline` reports
+the delivered format, size and dimensions. At most 6 MB of image data a result: the rest `inlineSkipped: "result size"`.
+A failed download or resize: `inline: { ok: false, reason }`, the link and authority kept. `howToView` on every result
+that includes links: "Open each url with your web browsing tool, not with code: code sandboxes cannot reach this host."
+
+Bytes come only through `downloadAsset` (the governor and the guarded transport), each download counted as one read;
+the resized image is kept in the art cache (`ART_CACHE_DIR`, default `art-cache/` beside the database; `ART_CACHE_MAX_MB`,
+default 500, least recently used first), so a second look is free. Cost: none for links; 1 read per image downloaded for
+inline (cached); the live selection reads (a character's folders, a page's documents, an asset id the tree lacks) on top.
+Refusals: `SELECTOR_REQUIRED`, `INVALID_INPUT`, `CURSOR_INVALID`, `CHARACTER_NOT_FOUND`, `CHARACTER_AMBIGUOUS`,
+`ART_FOLDERS_UNREADABLE`, `OUTFIT_NEAR_MATCH`, `OUTFIT_NOT_FOUND`, `OUTFIT_NAME_INVALID`; per asset in `notFound`:
+`NOT_ASSET_URL`, `ASSET_NOT_FOUND`, `NOT_AN_IMAGE`.
 
 **The staged-image takeover (all the pack's image tools).** At scope `propose`, `upload_image` with a destination stages
 the image AND proposes its placement. A package that names that staged image now takes the placement over instead of

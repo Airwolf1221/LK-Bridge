@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { LkClient } from '../lk/client.js';
-import type { PriorityClass } from '../lk/governor/index.js';
+import type { CostSpec, PriorityClass } from '../lk/governor/index.js';
 
 export class AssetDownloadError extends Error {
   constructor(
@@ -74,6 +74,12 @@ export async function downloadAsset(
     readonly jobId?: string;
     readonly signal?: AbortSignal;
     readonly timeoutMs?: number;
+    /**
+     * v3 F7b (ADR 0071, D6): what the download draws on the project's budget, on its first hop only (a redirect's
+     * further hops are the same download). Default none (the file host is not an API tier). `arkona_get_art` counts
+     * each download as one read, so it shows in the footer and keeps to the reserve floors.
+     */
+    readonly costs?: CostSpec;
   },
 ): Promise<DownloadedAsset> {
   if (typeof url !== 'string' || url === '')
@@ -92,8 +98,9 @@ export async function downloadAsset(
       hop = await lk.governor.execute<Hop>({
         opId: o.opId,
         kind: 'read',
-        // Not a LegendKeeper API request: the file host's downloads draw on no API tier.
-        costs: { tiers: [] },
+        // Not a LegendKeeper API request: the file host's downloads draw on no API tier, unless the caller counts them
+        // (v3 F7b: once a download, on its first hop; a redirect's further hops are the same download).
+        costs: hops === 0 && o.costs ? o.costs : { tiers: [] },
         priority: o.priority,
         ...(o.jobId ? { jobId: o.jobId } : {}),
         ...(o.signal ? { signal: o.signal } : {}),

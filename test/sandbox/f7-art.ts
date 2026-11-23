@@ -57,7 +57,9 @@ export function probeBlock(kind: string, o: { imageUrl: string; pageId: string }
     case 'keyValue':
       return { kind, rows: [{ key: 'Probe', content: [{ text: 'value' }] }] };
     case 'meter':
-      return { kind, mode: 'bar', items: [{ name: 'Probe', current: 1, max: 2 }] };
+      // v3 F7b: the spec's MeterBlock requires `mode` and each item's `name`, `icon`, `current` and `max`. The first live
+      // run (23 November 2026) sent no `icon` and was refused (Validation error), so meter's default is not confirmed.
+      return { kind, mode: 'bar', items: [{ name: 'Probe', icon: 'heart', current: 1, max: 2 }] };
     case 'resourceCollection':
       return { kind };
     case 'resourceLink':

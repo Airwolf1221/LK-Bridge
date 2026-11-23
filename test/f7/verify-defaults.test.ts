@@ -58,10 +58,15 @@ describe('G10: titled block defaults', () => {
     expect(shown.ok).toBe(false);
   });
 
-  it('a kind not yet confirmed (embed) still reports the difference', () => {
-    expect(TITLED_BLOCK_DEFAULTS.embed).toBeUndefined();
-    const embed = { id: 'e1', kind: 'embed', url: 'https://example.org/x' };
-    const r = compareStoredBlocks([embed], [{ ...embed, title: 'Embed', isTitleHidden: true }]);
+  it('a kind not yet confirmed (meter) still reports the difference', () => {
+    expect(TITLED_BLOCK_DEFAULTS.meter).toBeUndefined();
+    const meter = {
+      id: 'm1',
+      kind: 'meter',
+      mode: 'bar',
+      items: [{ name: 'Probe', icon: 'heart', current: 1, max: 2 }],
+    };
+    const r = compareStoredBlocks([meter], [{ ...meter, title: 'Meter', isTitleHidden: false }]);
     expect(r.ok).toBe(false);
     expect(r.count).toBe(2);
   });

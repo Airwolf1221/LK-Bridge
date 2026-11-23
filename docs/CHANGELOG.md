@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased: v3 F7b, seeing character art (23 November 2026)
+
+[ADR 0071](adr/0071-v3-f7b-seeing-character-art.md), building D1 to D4, D6 and D7 of the owner-approved design
+`LK-Bridge-F7b-art-download-design.md`. Pack seed `arkona-2026-11-23-f7b`. No migration. Nothing was run against a live
+system: the mock only.
+
+- **D1, `arkona_get_art`** (read-only pack tool): exactly one of `asset` (1 to 6 ids or file URLs, both URL forms),
+  `character` (its folders read live; `outfit` by name or alias through F7's record and matcher, a near miss refused;
+  `design: true`) or `page` (every image block, in document order, read live; `document` for one). At most 6 images a
+  call, `nextCursor` for more.
+- **D2, the written authority**: every page whose image block embeds the asset (the asset reference index, the newest
+  snapshot; pages read live in the call stand in), each with its section, lifecycle, the image's alt text as `label`
+  and the text under it (1,200 characters, `truncated: true`); Authoritative first, the character's Art and Wardrobe
+  pages first within a lifecycle; `none` with the warning "No owner page embeds this image; it establishes nothing about
+  canon".
+- **D3, links**: the asset's own URL, exactly as LegendKeeper gives it, and `howToView` (web browsing, never code).
+- **D4, inline**: one MCP image block per image after the JSON, resized with sharp (orientation applied, metadata
+  dropped, long edge 1,568 px, WebP 82 or JPEG when smaller without alpha, under 1 MB); at most 6 MB a result (the rest
+  `inlineSkipped: "result size"`); a failed download keeps the link (`inline: { ok: false, reason }`).
+- **D6, the art cache and cost**: `ART_CACHE_DIR` (default `art-cache/` beside the database) and `ART_CACHE_MAX_MB`
+  (default 500), least recently used first; a download is one read through `downloadAsset` (its first hop only); a hit
+  and a link cost nothing. Memory stays flat over repeated calls (tested).
+- **D7, guidance**: the bridge guide's "Seeing character art", one row in "How to decide" (its length bound moved from
+  9,400 to 9,450 for that row) and one in the Setting packs table.
+- **F7's G10 completed**: `TITLED_BLOCK_DEFAULTS` holds the probe's values for embed, keyValue, resourceCollection,
+  resourceLink, map and textField (meter left out: its probe block was refused); the probe sends a valid meter now.
+- **The sandbox check** `f7b-art` (written, not run; passing on the mock in the ordinary suite): the URL, the inline
+  block's size, the authority found and the cache hit on the real API and asset host.
+
 ## Unreleased: v3 F7, guided character art (23 November 2026)
 
 [ADR 0070](adr/0070-v3-f7-guided-character-art.md), building G1 to G11 of the owner-approved design

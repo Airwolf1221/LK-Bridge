@@ -470,9 +470,35 @@ bridge's placement for a second piece is "a new folder, the loose piece moved"; 
 read back live: both in the folder, nothing loose, and the bridge's asset tree followed the move; B3 the titled-block
 probe for the verifier (G10): one block of each titled kind written without `title` and `isTitleHidden` on a throwaway
 page, and what LegendKeeper stored printed as NOTED, one line a kind: `F7 PROBE <kind>: title=… isTitleHidden=…`. Paste
-the values into `TITLED_BLOCK_DEFAULTS` (src/jobs/verify-blocks.ts); a kind refused in its minimal form says so.
+the values into `TITLED_BLOCK_DEFAULTS` (src/jobs/verify-blocks.ts); a kind refused in its minimal form says so. The
+first live run (23 November 2026) confirmed every kind except `meter`, whose minimal block was refused (Validation
+error: its item had no `icon`). Since v3 F7b the probe sends the spec's `MeterBlock` minimal shape, `{ kind: "meter",
+mode: "bar", items: [{ name: "Probe", icon: "heart", current: 1, max: 2 }] }` (`mode`, and each item's `name`, `icon`,
+`current` and `max`, all required), so the next run prints `F7 PROBE meter: …`; paste that line's values in too.
 Clean-up: the throwaway asset folder (with everything in it) and the probe page, in the check's `finally` and the test
 file's `afterAll`. On the mock: `test/sandbox-mock/f7-art.test.ts`.
+
+## Seeing character art (v3 F7b)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7b-art` (`f7b-art.ts`; ADR 0071). WRITES,
+then cleans up (about 6 writes, 12 reads and one download from the asset host). It runs on a temporary database copied
+read-only from the bridge's (`copyBridgeState`, as `identity-f5c`), so deploy F7b first: A0 fails, naming the packs
+attached, when the Arkona pack (seed `arkona-2026-11-23-f7b`) is not attached to the project. A0 the asset tree built;
+A1 one small image (`alpha.png`) uploaded into `lk-bridge f7b check <time>`, and a throwaway page
+`lk-bridge f7b probe <time>` under the AI REPOSITORY showing it under a heading with its alt text and a paragraph (the
+authority text); then `arkona_get_art` as the MCP server calls it, for a temporary read-scope principal, with each
+delivery. **What to look for:**
+
+- **A2** (`delivery: "link"`): `URL https://assets.legendkeeper.com/…webp`, exactly the URL `getAsset` gives (checked).
+  Open it in a browser: it is the route ChatGPT's web browsing takes. `authority unavailable` here is expected: the
+  temporary database has no snapshot index (the bridge's own has one).
+- **A3** (`delivery: "inline"`, by the probe page): `inline block <n> bytes (image/webp, <w> × <h>, cached false)`, the
+  original's size, and `authority found on “lk-bridge f7b probe …”: label “Primary Reference - F7b Probe”, text “…”`:
+  the page read live stands in for its snapshot.
+- **A4** (`delivery: "both"`, by the asset, again): `cache hit: cached true, downloads 0, cacheHits 1`.
+
+Clean-up: the throwaway asset folder and page, in the check's `finally` and the test file's `afterAll`. On the mock:
+`test/sandbox-mock/f7b-art.test.ts`.
 
 ## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
 

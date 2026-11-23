@@ -83,6 +83,7 @@ describe('the Packs page API', () => {
       'arkona_create_relationship',
       'arkona_add_character_art',
       'arkona_character_brief',
+      'arkona_get_art', // v3 F7b (ADR 0071)
       'arkona_create_owner',
     ]);
     expect(p.rules.tags.culture['Draconic (True Dragons)']).toBe('Draconic');

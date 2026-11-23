@@ -79,6 +79,7 @@ import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 import { createAssets, type AssetService } from './assets/index.js';
 import { createImages, imageDataDir, type ImageService } from './images/service.js';
+import { ArtCache, artCacheDir } from './art/view/cache.js';
 import { Audits, SPLIT_CHECK, SPLIT_VERIFY, splitChecker, splitVerifier } from './audits/index.js';
 import { Appraisal } from './appraisal/index.js';
 import { Consistency } from './consistency/service.js';
@@ -88,7 +89,7 @@ import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
 import { snapshotMapCheckers } from './snapshots/restore.js';
 import { Rehearsals } from './snapshots/rehearsal.js';
-import { DEFAULT_SNAPSHOT_SETTINGS } from './config/tools.js';
+import { DEFAULT_ART_CACHE_SETTINGS, DEFAULT_SNAPSHOT_SETTINGS } from './config/tools.js';
 import { createTree, type TreeService } from './tree/index.js';
 import { SecretStore } from './secrets/store.js';
 import { createRegistry, type Registry } from './registry/index.js';
@@ -172,6 +173,8 @@ export interface Runtime {
   readonly assets: AssetService;
   /** v3 F7 (ADR 0070, G3): each character's outfits. */
   readonly outfits: OutfitStore;
+  /** v3 F7b (ADR 0071, D6): arkona_get_art's inline derivatives on disk. */
+  readonly artCache: ArtCache;
   /** v2 C2c (ADR 0035): the page lifecycle (settings, records, the link index). */
   readonly lifecycle: Lifecycle;
   /** v2 D1 (ADR 0038): chronology sync (settings, the calendar cache, records, links, the check). */
@@ -824,6 +827,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
+  // v3 F7b (ADR 0071, D6): the derivatives arkona_get_art delivers inline, bounded, on the bridge's disk.
+  const artCacheSettings = o.toolsSettings.artCache ?? DEFAULT_ART_CACHE_SETTINGS;
+  const artCache = new ArtCache(
+    artCacheDir(artCacheSettings.dir, runtimeDbPath),
+    artCacheSettings.maxBytes,
+    () => (o.clock ?? systemClock).now(),
+  );
   const snapshots = new SnapshotService({
     db: o.db,
     engine,
@@ -1435,6 +1445,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       registry,
       assets,
       outfits,
+      artCache,
       versions,
       projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
       templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
@@ -1589,6 +1600,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     registry,
     assets,
     outfits,
+    artCache,
     lifecycle,
     chronology,
     images,

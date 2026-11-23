@@ -162,7 +162,7 @@ export interface PackView extends Pack {
 const ACTOR_OWNER = 'owner';
 
 /** v3 F3.4: pack tools that never write (their switch would mean nothing), by the name after the prefix. */
-const READ_ONLY_PACK_TOOLS: ReadonlySet<string> = new Set(['character_brief']);
+const READ_ONLY_PACK_TOOLS: ReadonlySet<string> = new Set(['character_brief', 'get_art']);
 
 export interface Packs {
   readonly store: PackStore;

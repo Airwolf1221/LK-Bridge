@@ -58,7 +58,8 @@ describe('docs/bridge-guide.md', () => {
       expect(decide.markdown, phrase).toContain(phrase);
     }
     // v3 F5c (ADR 0069): one line more, for the orchestration tools (it was 8,999 before them).
-    expect(decide.markdown.length).toBeLessThan(9400);
+    // v3 F7b (ADR 0071, D7): one table row more, `arkona_get_art` (166 characters: 9,282 before it), and nothing else.
+    expect(decide.markdown.length).toBeLessThan(9450);
   });
   it('names only tools that exist', () => {
     const names = new Set(tools.map((t) => t.name));

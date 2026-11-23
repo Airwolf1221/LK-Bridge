@@ -61,7 +61,7 @@ describe('the seed (on top of F4b.1’s)', () => {
   // CR-2026-11-R4: the seed is now arkona-2026-11-21-r4, which supersedes -f41 and, through it, -f4c and -f4b1.
   it('arkona-2026-11-21-r4 (superseding -f41 and -f4c) supersedes arkona-2026-11-20-f4b1 and keeps its consistency rules', () => {
     // v3 F5a (ADR 0067): now arkona-2026-11-23-f5a, which supersedes -r4 (and, through it, -f41).
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-23-f5c'); // v3 F5c (ADR 0069): -f5c supersedes -f5b
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-23-f7b'); // v3 F7b (ADR 0071): -f7b supersedes -f5c
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-21-r4');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f41');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b1');
