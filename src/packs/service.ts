@@ -213,6 +213,28 @@ export interface Packs {
   peek(packId: string): Pack | null;
   /** Reads every governance source's current version (one read each) and records any drift. */
   governance(packId: string, o?: { signal?: AbortSignal }): Promise<GovernanceStatus>;
+  /**
+   * v3 F5b (ADR 0068): carries the owner's approval of one governance source over a write the bridge itself made to it
+   * (a bridge-managed paragraph of Repository Automation, written as the owner's action). Only the document written is
+   * touched (another tab of the same page never is), and only when every source kept on it was, before the write,
+   * exactly what the owner approved (the approved version, and each pinned section's content by its digest) and, after
+   * it, every pinned section but `section` (the one the bridge wrote into) is unchanged. The caller has checked that the
+   * document now reads exactly as the write planned (the approved content plus the planned paragraph). All or nothing:
+   * one source that does not hold carries nothing (drift, as for any edit). Audited `pack.carry_approval`.
+   */
+  carryApproval(
+    packId: string,
+    sourceKey: string,
+    o: {
+      /** The document as read just before the write (the content approved). */
+      readonly before: { readonly version: string; readonly blocks: unknown };
+      /** The pinned section the bridge wrote into (Repository Automation's "Approved Narrow Automations"). */
+      readonly section: string;
+      readonly after: { readonly version: string; readonly blocks: unknown };
+      readonly actor: string;
+      readonly reason: string;
+    },
+  ): boolean;
   readonly commands: {
     /** The owner approves the CURRENT version: governance versions recorded, templates worked out again. Audited. */
     approve(actor: string, packId: string): Promise<{ pack: Pack; governance: GovernanceStatus }>;
@@ -802,6 +824,57 @@ export function createPacks(d: PacksDeps): Packs {
       return () => listeners.delete(fn);
     },
     ensureSeeded,
+    carryApproval(packId, sourceKey, o) {
+      const pack = store.get(packId);
+      const approved = pack?.approved;
+      if (!pack || !approved) return false;
+      const src = pack.governance.find((g) => g.key === sourceKey);
+      if (!src || src.resourceId === '' || src.documentId === '') return false;
+      // Only the document written: another tab of the same page (another document) is never touched, so an edit
+      // there stays drift. Every source kept on this document (a sandbox puts several on one page) must be, before the
+      // write, exactly what the owner approved (its version and every pinned section's content), and after it every
+      // pinned section but the one the bridge wrote into must be unchanged. Anything else carries nothing.
+      const same = pack.governance.filter(
+        (g) => g.resourceId === src.resourceId && g.documentId === src.documentId,
+      );
+      const next = new Map<string, PackApproval['sources'][number]>();
+      for (const g of same) {
+        const had = approved.sources.find((x) => x.key === g.key);
+        if (!had || had.version !== o.before.version) return false;
+        const headings = g.sections ?? [];
+        const was = pinnedSections(o.before.blocks, headings);
+        const now = pinnedSections(o.after.blocks, headings);
+        for (const h of headings) {
+          const approvedDigest = had.sections?.find((x) => x.heading === h)?.digest ?? null;
+          const before = was.find((x) => x.heading === h)?.digest ?? null;
+          const after = now.find((x) => x.heading === h)?.digest ?? null;
+          if (approvedDigest === null || before !== approvedDigest || after === null) return false;
+          if (headingKey(h) !== headingKey(o.section) && after !== approvedDigest) return false;
+        }
+        next.set(g.key, {
+          key: g.key,
+          version: o.after.version,
+          ...(headings.length > 0
+            ? {
+                sections: now.map((x) => ({ heading: x.heading, digest: x.digest! })),
+              }
+            : {}),
+        });
+      }
+      const before = approved.sources.filter((x) => next.has(x.key));
+      store.replaceApproval(pack.id, {
+        ...approved,
+        sources: approved.sources.map((x) => next.get(x.key) ?? x),
+      });
+      d.audit(o.actor, 'pack.carry_approval', pack.id, before, {
+        sources: [...next.keys()],
+        version: o.after.version,
+        section: o.section,
+        reason: o.reason.slice(0, 500),
+      });
+      changed();
+      return true;
+    },
     list: () => store.list().map(viewOf),
     get: (id) => store.get(id),
     view: (id) => {

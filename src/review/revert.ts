@@ -178,6 +178,14 @@ export interface RevertDeps {
    * page only while it is as the job left it).
    */
   readonly approvedRevertible?: (projectId: string, jobId: string) => boolean;
+  /**
+   * v3 F5b (ADR 0068): a job Revert refuses although it is on the Review page, with its code and message (a governance
+   * amendment recording that an automation was switched off: switching the code on again is the way back).
+   */
+  readonly refuse?: (
+    projectId: string,
+    jobId: string,
+  ) => { readonly code: string; readonly message: string } | null;
   readonly log?: { warn(o: unknown, m: string): void };
 }
 
@@ -249,6 +257,8 @@ export class RevertService {
         code: 'IS_A_REVERT',
         message: `Job ${jobId} is a revert, and a revert is never itself reverted. The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold every target as it was before it.`,
       };
+    const refused = this.d.refuse?.(projectId, jobId) ?? null;
+    if (refused) return { ok: false, code: refused.code, message: refused.message };
     const split = this.d.splits?.isPhase1(projectId, jobId) === true;
     const approvedRevertible = this.d.approvedRevertible?.(projectId, jobId) === true;
     if (!this.d.review.store.get(projectId, jobId) && !split && !approvedRevertible) {

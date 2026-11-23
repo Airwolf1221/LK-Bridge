@@ -256,6 +256,8 @@ export interface Overview {
   pendingProposals: number;
   /** v3 F3.4 (ADR 0055): agents' direct writes at scope `write` not reviewed yet (absent from an older bridge). */
   unreviewedDirectWrites?: number;
+  /** v3 F5b (ADR 0068): what automation did in the last 24 hours (null: no project data). */
+  automation?: AutomationOvernight | null;
   writes: { state: 'running' | 'paused' | 'draining'; perMinute: number };
   /** Null when the project has no governor now (its key is not in use). */
   budget: { queues: Record<PriorityClass, number>; gauges: TierSnapshot[] } | null;
@@ -2635,4 +2637,87 @@ export interface SkippedItem {
   before?: string | null;
   after?: string | null;
   where?: string;
+}
+
+// ============================================================================================ v3 F5b: automation
+
+export type AutomationMode = 'off' | 'propose' | 'apply';
+export type AutomationOutcome = 'applied' | 'proposed' | 'skipped' | 'guarded' | 'failed' | 'stopped';
+
+export interface AutomationItem {
+  id: number;
+  runId: string;
+  code: string;
+  pageId: string | null;
+  pageName: string | null;
+  outcome: AutomationOutcome;
+  reasonCode: string | null;
+  reason: string | null;
+  jobId: string | null;
+  proposalId: string | null;
+  at: number;
+}
+
+export interface AutomationRun {
+  id: string;
+  projectId: string;
+  trigger: string;
+  startedAt: number;
+  finishedAt: number | null;
+  state: 'running' | 'succeeded' | 'stopped' | 'skipped' | 'failed';
+  summary: string | null;
+  stopReason: string | null;
+}
+
+export interface AutomationCode {
+  code: string;
+  name: string;
+  example: string;
+  transformation: string;
+  source: 'audit' | 'appraisal' | 'retag';
+  mode: AutomationMode;
+  paused: { at: number; reason: string } | null;
+  stopped: { at: number; reason: string } | null;
+  governancePending: string | null;
+  lastRun: { runId: string; at: number } | null;
+  recent: AutomationItem[];
+  changes: {
+    from: AutomationMode;
+    to: AutomationMode;
+    principal: string;
+    at: number;
+    reason: string | null;
+    governanceJobId: string | null;
+    governanceState: string;
+  }[];
+}
+
+export interface AutomationPayload {
+  project: { id: string; name: string };
+  global: { paused: boolean; pausedAt: number | null; pausedBy: string | null };
+  caps: { perCode: number; perRun: number };
+  codes: AutomationCode[];
+  runs: AutomationRun[];
+  never: { code: string; name: string; why: string[]; transformation: string }[];
+  eligible: number;
+}
+
+export interface AutomationGovernance {
+  ok: boolean;
+  code: string | null;
+  message: string;
+  problems: { code: string; state: string; expected: string | null; found: string | null }[];
+}
+
+export interface AutomationOvernight {
+  since: number;
+  runs: { id: string; state: string; startedAt: number; summary: string | null }[];
+  codes: {
+    code: string;
+    name: string;
+    counts: Record<AutomationOutcome, number>;
+    jobs: string[];
+    proposals: string[];
+  }[];
+  paused: boolean;
 }

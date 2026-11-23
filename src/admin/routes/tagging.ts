@@ -23,7 +23,7 @@ import { DEFAULT_WRITE_RAILS } from '../../policy/rails.js';
 import { verdictView } from '../../mcp/tools/retag.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { parseInput, projectParam, type Register, type RouteProject } from './util.js';
+import { parseInput, projectParam, type Register, type RouteProject, projectFor } from './util.js';
 
 const STATUS: Readonly<Record<string, number>> = {
   PACK_NOT_ATTACHED: 409,
@@ -139,7 +139,7 @@ export const registerTagging: Register = (api, ctx) => {
 
   api.post('/tagging/audit', async (req) => {
     const b = parseInput(z.object({ project: projectParam, ...scopeBody }).strict(), req.body);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(async () => {
       const out = await retag().audit({ projectId: p.id, actor: 'owner', scope: scopeOf(p, b) });
       return { run: out.run };
@@ -205,7 +205,7 @@ export const registerTagging: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(() => {
       retag().classify('owner', p.id, {
         pageId: b.pageId,
@@ -224,7 +224,7 @@ export const registerTagging: Register = (api, ctx) => {
       z.object({ project: projectParam, pageId: pageIdSchema, confirm: z.literal(true) }).strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(() => ({ removed: retag().unclassify('owner', p.id, b.pageId) }));
   });
 
@@ -269,7 +269,7 @@ export const registerTagging: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(async () => ({
       ruling: await retag().keepHere('owner', p.id, { pageId: b.pageId, tag: b.tag, reason: b.reason }),
     }));
@@ -288,7 +288,7 @@ export const registerTagging: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(() => ({ removed: retag().unkeep('owner', p.id, b.pageId, b.tag) }));
   });
 
@@ -319,7 +319,7 @@ export const registerTagging: Register = (api, ctx) => {
         );
       requireReauth(ctx.deps.services, req);
     }
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(async () =>
       retag().allowEverywhere('owner', p.id, {
         tag: b.tag,
@@ -341,7 +341,7 @@ export const registerTagging: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     // ADR 0062: the owner's own change of more than 10 pages at once (the bulk rail's size) needs the step-up.
     if (b.pageIds.length > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
     return wrap(async () => {
@@ -366,7 +366,7 @@ export const registerTagging: Register = (api, ctx) => {
       z.object({ project: projectParam, runId: runIdSchema, confirm: z.literal(true) }).strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(async () => {
       const r = retag();
       const chunks = r.correctionBatches(p.id, b.runId);
@@ -408,7 +408,7 @@ export const registerTagging: Register = (api, ctx) => {
       req.body,
     );
     requireReauth(ctx.deps.services, req);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     const r = retag();
     const notBatches = b.proposalIds.filter((id) => !r.isBatchProposal(p.id, id));
     if (notBatches.length > 0)
@@ -432,7 +432,7 @@ export const registerTagging: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(async () => {
       const scope = b.page || b.under || b.all ? scopeOf(p, b) : { all: true };
       const out = await retag().reconcile({ projectId: p.id, actor: 'owner', name: b.name, scope });
@@ -452,7 +452,7 @@ export const registerTagging: Register = (api, ctx) => {
     const b = parseInput(z.object({ project: projectParam, confirm: z.literal(true) }).strict(), req.body);
     // ADR 0062: the next batch may hold up to the pack's batch size: a bulk change, so the step-up first.
     requireReauth(ctx.deps.services, req);
-    const p = ctx.project(b.project);
+    const p = projectFor(ctx, req, b.project);
     return wrap(async () => {
       const out = await retag().resume({
         projectId: p.id,

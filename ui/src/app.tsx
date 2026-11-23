@@ -34,6 +34,7 @@ import { ChronologyPage } from './pages/chronology';
 import { WritersPage } from './pages/writers';
 import { PacksPage } from './pages/packs';
 import { TaggingPage } from './pages/tagging';
+import { AutomationPage } from './pages/automation';
 import { EvaluationPanel } from './pages/evaluation';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -84,6 +85,7 @@ export const NAV: NavItem[] = [
   { to: '/tool-calls', label: 'Tool calls', group: 'Monitoring' },
   { to: '/appraisal', label: 'Appraisal', group: 'Quality' },
   { to: '/audits', label: 'Audits', group: 'Quality' },
+  { to: '/automation', label: 'Automation', group: 'Quality' },
   { to: '/evaluation', label: 'Evaluation', group: 'Quality' },
   { to: '/lifecycle', label: 'Archive and lifecycle', group: 'Repository' },
   { to: '/chronology', label: 'Chronology', group: 'Repository' },
@@ -134,6 +136,7 @@ export const ROUTES: { path: string; prefix?: boolean; render: (session: Session
   { path: '/audits', render: () => <AuditsPage /> },
   { path: '/appraisal', render: () => <AppraisalPage /> },
   { path: '/tagging', render: () => <TaggingPage /> },
+  { path: '/automation', render: () => <AutomationPage /> },
   { path: '/offsite', render: () => <OffsitePage /> },
   { path: '/settings', render: () => <SettingsPage /> },
   { path: '/account', render: () => <AccountPage /> },

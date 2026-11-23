@@ -8,6 +8,7 @@
  *   below that;
  * - failures become typed `{ error: { code, message, … } }` results, never thrown exceptions.
  */
+import type { AutomationService } from '../../automation/service.js';
 import type { Packs } from '../../packs/service.js';
 import type { Consistency } from '../../consistency/service.js';
 import type { Appraisal } from '../../appraisal/service.js';
@@ -109,6 +110,8 @@ export interface DiscoverServices {
   readonly splits?: SplitService;
   /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
   readonly retag?: RetagService;
+  /** v3 F5b (ADR 0068): which finding codes the automation runs (bridge_info only; agents cannot change a setting). */
+  readonly automation?: Pick<AutomationService, 'automated'> & { store: { global(): { paused: boolean } } };
 }
 
 /** What every tool handler needs. */

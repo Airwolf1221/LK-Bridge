@@ -60,6 +60,7 @@ describe('the registry', () => {
       'tree-sweep',
       'tree-check',
       'assign-block-ids-sweep',
+      'automation-run', // v3 F5b (ADR 0068)
       'asset-refresh',
       'asset-check',
       'link-sweep', // v2 C2c
@@ -550,7 +551,7 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(17);
+    expect(m.maintenance.scheduler.list()).toHaveLength(18);
   });
 });
 

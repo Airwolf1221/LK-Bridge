@@ -236,6 +236,21 @@ export class PackStore {
     return this.get(id)!;
   }
 
+  /**
+   * v3 F5b (ADR 0068): the approval record replaced as it stands (one source's version carried over the bridge's own
+   * governance write), for the approved version whatever the current one is; the recorded drift is left to the next
+   * governance check.
+   */
+  replaceApproval(id: string, approval: PackApproval): void {
+    const text = JSON.stringify(approval);
+    this.db.transaction(() => {
+      this.db.prepare('UPDATE packs SET approved = ?, updated_at = ? WHERE id = ?').run(text, this.now(), id);
+      this.db
+        .prepare('UPDATE pack_versions SET approved = ? WHERE pack_id = ? AND version = ?')
+        .run(text, id, approval.version);
+    })();
+  }
+
   /** Replaces a pack's governance sources (a newer seed, or a test world pointing them at its own documents). */
   setGovernance(id: string, sources: readonly GovernanceSource[]): void {
     const valid = sources.map((g) => governanceSourceSchema.parse(g));

@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased: v3 F5b, automatic actions for audits (23 November 2026)
+
+[ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md), building H5 of the owner-approved design
+[design/F5-orchestration.md](design/F5-orchestration.md). Migration `4200_automation.sql`; pack version
+`arkona-2026-11-23-f5b` (for the owner's approval). Nothing was run against a live system: the mock only.
+
+- **Settings per finding code** (Off, Propose automatically, Apply automatically), per project, the owner's alone with
+  the step-up, journalled with the owner, the date and the governance write. Thirteen codes are eligible (the ADR lists
+  each with its transformation, for the owner to confirm); the never-eligible ones cannot be flagged.
+- **The governance record**: switching a code on writes its paragraph into Repository Automation's "Approved Narrow
+  Automations", after the block-id sweep's, in the sweep's form; switching it off amends it (never deleted). The pack's
+  approval is carried over the bridge's own write (no drift, no fail-closed); an edit in the app is still drift, and a
+  bridge-managed paragraph edited outside the bridge is reported. On the Review page and Revertible: reverting the
+  paragraph switches the code off.
+- **The engine** (`automation-run`, 06:30 London, and "Run automation now"): every finding re-checked live (`FIX_STALE`
+  skipped and recorded); Propose makes one proposal per code with an item per page; Apply writes as the new Automation
+  principal at P3, journalled, on the Review page and Revertible, and reads each page back. Caps per code and per run
+  (pack data, 25 and 100); the first failed verification, an unexpected error or an unknown outcome switches a code off;
+  three skips in a row pause it; a guard catching a change makes an ordinary proposal and pauses it; nothing runs while
+  automation or writes are paused, while draining or read-only, or while the governance has drifted.
+- **The dashboard**: the Automation page (Quality group), "Pause all automation" (one click; resuming asks for the
+  step-up), and the Overview's "Automation overnight" tile.
+- **Agents**: `bridge_info` names the automated codes; no tool changes a setting.
+- **The sandbox check** `automation-f5b` (written, not run; passing on the mock in the ordinary suite).
+- **Before merge (ADR 0068 amendment 1)**: the approval is carried over the bridge's own write only for sources whose
+  content is exactly as approved, plus the planned paragraph (another tab edited meanwhile is still drift); and every
+  dashboard action that names a project takes it from the address and refuses a body naming another
+  (`400 PROJECT_MISMATCH`): the Tagging page's actions acted on the default project on a bridge serving several.
+
 ## Unreleased: v3 F5a, supplementary tags, rulings, bulk actions and unknown outcomes (23 November 2026)
 
 [ADR 0067](adr/0067-v3-f5a-supplementary-tags-rulings-bulk-actions-and-unknown-outcomes.md), building H1, H2, H3, H4,

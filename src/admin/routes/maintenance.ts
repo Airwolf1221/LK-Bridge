@@ -6,7 +6,7 @@ import { requireReauth } from '../guard.js';
 import * as z from 'zod';
 import { BlockIdSweepError, SWEEP_JOB_ID, type BlockIdSweep } from '../../blockids/index.js';
 import { AdminHttpError } from '../http.js';
-import { idSchema, parseInput, projectParam, type Register } from './util.js';
+import { idSchema, parseInput, projectParam, type Register, projectFor } from './util.js';
 
 /** v3 F3.5 (ADR 0056): the block-id sweep's own routes, under its job's path. */
 const SWEEP = `/maintenance/${SWEEP_JOB_ID}`;
@@ -44,7 +44,7 @@ export const registerMaintenance: Register = (api, ctx) => {
   /** What the next run would do in one project (documents, counts, estimated cost). Writes nothing, reads nothing. */
   api.post(`${SWEEP}/dry-run`, async (req) => {
     const body = parseInput(z.object({ project: projectParam }).strict(), req.body ?? {});
-    const p = ctx.project(body.project);
+    const p = projectFor(ctx, req, body.project);
     return { dryRun: await sweepCall(maintenance.blockIds, (s) => s.dryRun(p.id)) };
   });
 
@@ -108,7 +108,9 @@ export const registerMaintenance: Register = (api, ctx) => {
   api.post('/maintenance/:id/run', (req, reply) => {
     const { id } = parseInput(params, req.params);
     const body = parseInput(z.object({ project: projectParam }).strict(), req.body ?? {});
-    const project = body.project !== undefined ? ctx.project(body.project) : undefined;
+    const address = parseInput(z.object({ project: projectParam }).loose(), req.query ?? {}).project;
+    const project =
+      body.project !== undefined || address !== undefined ? projectFor(ctx, req, body.project) : undefined;
     const { job, done } = cmd.runNow('owner', id, project);
     done.catch(() => undefined); // failures are recorded on the run; nothing is left unhandled
     return reply.code(202).send({ job });

@@ -90,7 +90,7 @@ const withoutSupplementary = (): PackRules =>
 
 describe('H1: the seed lists the Approved Supplementary Tags', () => {
   it('as the Tagging Standard states them on 23 November 2026, and pins the section', () => {
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-23-f5a');
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-23-f5b'); // v3 F5b (ADR 0068): -f5b supersedes -f5a
     expect(RULES.retag?.supplementary).toEqual({
       source: 'tagging-standard',
       section: 'Approved Supplementary Tags',

@@ -74,6 +74,44 @@ export interface BuiltinJobDeps {
   readonly audits?: AuditMaintenance;
   /** v3 F3.5 (ADR 0056): the block-id sweep. Without it the job skips, saying why. */
   readonly blockIds?: BlockIdMaintenance;
+  /** v3 F5b (ADR 0068): the automation framework. Without it the job skips, saying why. */
+  readonly automation?: AutomationMaintenance;
+}
+
+/** v3 F5b (ADR 0068, H5): what the automation job needs from src/automation. */
+export interface AutomationMaintenance {
+  run(projectId: string, trigger: 'nightly' | 'manual'): Promise<MaintenanceResult>;
+}
+
+/**
+ * v3 F5b (ADR 0068, H5): `automation-run`. After the nightly audit (which follows the night's full snapshot at 00:30,
+ * and the 06:00 fallback audit when that is on), each code the owner switched on, in a fixed order, at P3. It writes, so
+ * read-only mode, a writes pause and draining skip it (the scheduler's rule); with no code switched on it does nothing.
+ * Switched on by default: what runs is decided per code by the owner on the Automation page, where everything starts
+ * Off.
+ */
+function automationJob(a: AutomationMaintenance | undefined): MaintenanceJobDef {
+  return {
+    id: 'automation-run',
+    name: 'Automation',
+    description:
+      'Runs the finding codes the owner switched on (Automation page), in a fixed order, after the nightly audit: each ' +
+      'finding re-checked live, then one proposal per code (Propose automatically) or one verified direct write per ' +
+      'page as the Automation principal (Apply automatically), within the caps, at the lowest priority. Every code ' +
+      'starts Off; with none switched on this does nothing. Each switch is recorded in Repository Automation.',
+    defaultSchedule: { kind: 'daily', time: '06:30' },
+    defaultEnabled: true,
+    implemented: true,
+    writes: true,
+    usesLk: true,
+    record: 'on-change',
+    scope: 'project',
+    background: true,
+    run: (ctx) =>
+      a && ctx.project
+        ? a.run(ctx.project.id, ctx.trigger === 'manual' ? 'manual' : 'nightly')
+        : { skipped: true, summary: 'Skipped: automation is not running.' },
+  };
 }
 
 /** v3 F3.5 (ADR 0056): what the block-id sweep job needs from src/blockids. */
@@ -301,6 +339,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
     },
     // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation (kept where the placeholder was).
     blockIdSweepJob(d.blockIds),
+    automationJob(d.automation),
     // v2 A4: the asset tree's refresh and check (kept after the placeholders so earlier positions do not move).
     ...assetJobs(d.assets),
     // v2 C2c (ADR 0035): the link index's sweep, for the related-pages report of archive_page and move_to_working.

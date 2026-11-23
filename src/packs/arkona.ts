@@ -1167,6 +1167,15 @@ const rules: PackRules = packRulesSchema.parse({
       'Okay',
     ],
   },
+  // v3 F5b (ADR 0068, H5): the automation framework's caps (pack data, as the design asks), and where the approvals
+  // are recorded: Repository Automation's "Approved Narrow Automations", after the block-id sweep's paragraph.
+  automation: {
+    perCode: 25,
+    perRun: 100,
+    source: 'repository-automation',
+    section: 'Approved Narrow Automations',
+    sweepMarker: 'Assign Block IDs Sweep',
+  },
   rulings: [
     {
       key: 'au-status-tag',
@@ -1204,8 +1213,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // (`splits.sections`), and the consistency phrasings this review's fixes and the owner's lives (L) add. `-f5a` (ADR
   // 0067, 23 November 2026; session F5a): the Tagging Standard's "Approved Supplementary Tags" pinned, and its list as
   // pack data (`retag.supplementary`).
-  seed: 'arkona-2026-11-23-f5a',
+  // `-f5b` (ADR 0068, 23 November 2026; session F5b): the automation framework's caps (`automation`) and Repository
+  // Automation as a governance source, its "Default Boundary", "Approved Narrow Automations" and "Source Boundaries"
+  // pinned.
+  seed: 'arkona-2026-11-23-f5b',
   supersedes: [
+    'arkona-2026-11-23-f5a',
     'arkona-2026-11-21-r4',
     'arkona-2026-11-20-f41',
     'arkona-2026-11-20-f4c',
@@ -1259,6 +1272,19 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
         'Excluded Routine Tags',
         'Approved Supplementary Tags',
       ],
+    },
+    // v3 F5b (ADR 0068, H5): Repository Automation (the governance root's tab xd9gzkel, read live by the owner on 19
+    // November 2026): the automation framework records each code the owner switches on in "Approved Narrow
+    // Automations", after the block-id sweep's paragraph; its Default Boundary and Source Boundaries are the rules it
+    // keeps. A change of the page outside the bridge's own paragraphs is drift: no automation runs until the pack is
+    // approved again.
+    {
+      key: 'repository-automation',
+      project: 'arkona',
+      resourceId: 'cn8v87hh',
+      documentId: 'xd9gzkel',
+      name: 'Repository Automation',
+      sections: ['Default Boundary', 'Approved Narrow Automations', 'Source Boundaries'],
     },
     // v3 F4c (ADR 0065, design E9): the fiction Design References, found by their page names (any dash): the narrative
     // layout and tools are derived from these two sections.

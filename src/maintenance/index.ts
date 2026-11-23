@@ -23,6 +23,7 @@ import {
   type SnapshotMaintenance,
   type TreeMaintenance,
   type LinkMaintenance,
+  type AutomationMaintenance,
 } from './jobs.js';
 import { MaintenanceScheduler } from './scheduler.js';
 import { SWEEP_JOB_ID } from '../blockids/statement.js';
@@ -69,6 +70,8 @@ export interface CreateMaintenanceOptions {
   readonly audits?: AuditMaintenance;
   /** v3 F3.5 (ADR 0056): the block-id sweep, for `assign-block-ids-sweep`. */
   readonly blockIds?: BlockIdSweep;
+  /** v3 F5b (ADR 0068): the automation framework, for `automation-run`. */
+  readonly automation?: AutomationMaintenance;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -104,6 +107,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
               },
             }
           : {}),
+        ...(o.automation ? { automation: o.automation } : {}),
       }),
       ...(o.extraJobs ?? []),
     ],

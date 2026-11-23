@@ -296,6 +296,56 @@ async function proposeCanon(): Promise<string> {
   }
 }
 
+/**
+ * v3 F5b (ADR 0068): the Arkona pack's governance for the Automation page's tests, on first use: one governance page
+ * holding every pinned section (as the sandbox checks do), "Approved Narrow Automations" LAST with the block-id sweep's
+ * paragraph at its end (the model appends inserted blocks), every source pointed at it, and the pack approved.
+ */
+let automationReady: Promise<void> | null = null;
+function setUpAutomation(): Promise<void> {
+  automationReady ??= (async () => {
+    const packs = runtime.packs;
+    packs.ensureSeeded();
+    const pack = packs.get('arkona')!;
+    const sweep =
+      'Assign Block IDs Sweep (owner approval, 17 November 2026): enabling it is the activation, and this approval establishes no wider repair whitelist.';
+    const supplementary =
+      'Under the Exact Tag Grammar’s provision for a deliberately approved exception, the author has approved these existing tags as permitted supplementary tags on any eligible owner (author ruling, 23 November 2026): Cosmology, Chronology and Setting Framework.';
+    const headings = [...new Set(pack.governance.flatMap((g) => g.sections ?? []))].filter(
+      (h) => h !== 'Approved Narrow Automations',
+    );
+    let n = 0;
+    const blocks: { id: string; kind: string; level?: number; content: { text: string }[] }[] = [
+      { id: `gv${n++}`, kind: 'heading', level: 1, content: [{ text: 'e2e governance' }] },
+    ];
+    for (const h of headings)
+      blocks.push(
+        { id: `gv${n++}`, kind: 'heading', level: 2, content: [{ text: h }] },
+        {
+          id: `gv${n++}`,
+          kind: 'paragraph',
+          content: [{ text: h === 'Approved Supplementary Tags' ? supplementary : `The rules of ${h}.` }],
+        },
+      );
+    blocks.push(
+      { id: `gv${n++}`, kind: 'heading', level: 2, content: [{ text: 'Approved Narrow Automations' }] },
+      { id: `gv${n}`, kind: 'paragraph', content: [{ text: sweep }] },
+    );
+    const gov = model.seedResource('gov00001', { name: 'Repository Automation', parentId: ROOT, blocks });
+    packs.store.setGovernance(
+      'arkona',
+      pack.governance.map((g) => ({
+        ...g,
+        project: 'test',
+        resourceId: gov.resourceId,
+        documentId: gov.documentId,
+      })),
+    );
+    await packs.commands.approve('owner', 'arkona');
+  })();
+  return automationReady;
+}
+
 // Control server: the test starts work here. Loopback only.
 createServer((req, res) => {
   void (async () => {
@@ -327,6 +377,41 @@ createServer((req, res) => {
       );
     } else if (url.pathname === '/page-proposal') {
       res.end(JSON.stringify({ proposalId: await proposePageWrite() }));
+    } else if (url.pathname === '/automation-setup') {
+      await setUpAutomation();
+      res.end(JSON.stringify({ ok: (await runtime.automation.governanceState(PROJECT)).ok }));
+    } else if (url.pathname === '/automation-fixture') {
+      // v3 F5b: a night's run as the Overview's tile shows it (one page applied, two proposed).
+      const a = runtime.automation;
+      const runId = `aut_${randomBytes(8).toString('hex')}`;
+      a.store.startRun(runId, PROJECT, 'nightly');
+      a.store.addItem({
+        runId,
+        projectId: PROJECT,
+        code: 'blank_paragraphs',
+        pageId: 'res1',
+        pageName: 'Kingdom',
+        outcome: 'applied',
+        reasonCode: null,
+        reason: 'written, read back and verified',
+        jobId: 'jfixture00000001',
+        proposalId: null,
+      });
+      for (const page of ['res2', 'res3'])
+        a.store.addItem({
+          runId,
+          projectId: PROJECT,
+          code: 'out_of_order',
+          pageId: page,
+          pageName: page,
+          outcome: 'proposed',
+          reasonCode: null,
+          reason: null,
+          jobId: null,
+          proposalId: 'pfixture00000001',
+        });
+      a.store.finishRun(runId, 'succeeded', 'blank_paragraphs: 1 page; out_of_order: 2 pages', null);
+      res.end(JSON.stringify({ runId }));
     } else if (url.pathname === '/ready') {
       res.end('{"ready":true}');
     } else {

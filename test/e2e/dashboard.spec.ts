@@ -362,3 +362,76 @@ test('v3 F5a: the Proposals page filters, selects and rejects in bulk with one c
   expect(problems.filter((p) => /HTTP 403/.test(p))).toEqual([]);
   expect(problems).toEqual([]);
 });
+
+// ============================================================================================ v3 F5b (ADR 0068)
+
+test('v3 F5b: "Pause all automation" is one click; resuming asks for the step-up', async ({ page }) => {
+  const problems = watch(page);
+  await signIn(page, '/ui');
+  await goTo(page, 'Automation', true);
+  await expect(page.getByRole('heading', { name: 'Automation', level: 1 })).toBeVisible();
+  const brake = page.getByRole('region', { name: 'Pause all automation' });
+  await brake.getByRole('button', { name: 'Pause all automation' }).click();
+  // A brake: no confirmation, no step-up.
+  await expect(brake.getByRole('status')).toContainText('Paused');
+  expect(problems.filter((p) => /HTTP 403/.test(p))).toEqual([]);
+  await brake.getByRole('button', { name: 'Resume automation' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Resume' }).click();
+  await stepUp(page);
+  await expect(brake.getByText('Running')).toBeVisible();
+  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/resume\?project=test/);
+  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
+  expect(problems.filter((p) => !expected(p))).toEqual([]);
+});
+
+test('v3 F5b: a code’s setting is changed with the step-up and recorded in Repository Automation', async ({
+  page,
+  request,
+}) => {
+  const problems = watch(page);
+  expect(await (await request.get(`${CONTROL}/automation-setup`)).json()).toEqual({ ok: true });
+  await signIn(page, '/ui/automation');
+  const row = page.locator('tr[data-code="blank_paragraphs"]');
+  await expect(row).toContainText('Decorative blank paragraphs');
+  // Every code starts Off.
+  await expect(row.locator('.badge').first()).toHaveText('Off');
+  await row.getByLabel('Setting for Decorative blank paragraphs').selectOption('propose');
+  await row.getByRole('button', { name: 'Change' }).click();
+  const confirmDialog = page.getByRole('alertdialog');
+  await expect(confirmDialog).toContainText('Approved Narrow Automations');
+  await confirmDialog.getByRole('button', { name: 'Change the setting' }).click();
+  await stepUp(page);
+  await expect(row.locator('.badge').first()).toHaveText('Propose automatically', { timeout: 15_000 });
+  // Back Off, by keyboard: the labelled select, then Tab to Change and Enter (the step-up holds for ten minutes on this
+  // session, so it is not asked again).
+  await row.getByLabel('Setting for Decorative blank paragraphs').selectOption('off');
+  await row.getByLabel('Setting for Decorative blank paragraphs').focus();
+  await page.keyboard.press('Tab');
+  await expect(row.getByRole('button', { name: 'Change' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Change the setting' }).click();
+  await expect(row.locator('.badge').first()).toHaveText('Off', { timeout: 15_000 });
+  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/codes\/blank_paragraphs\?project=test/);
+  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
+  expect(problems.filter((p) => !expected(p))).toEqual([]);
+});
+
+test('v3 F5b: the Overview shows what automation did overnight, linking to Review and Proposals', async ({
+  page,
+  request,
+}) => {
+  const problems = watch(page);
+  await request.get(`${CONTROL}/automation-fixture`);
+  await signIn(page, '/ui');
+  const tile = page.getByRole('region', { name: 'Automation overnight' });
+  await expect(tile).toBeVisible();
+  const applied = tile.locator('tr[data-code="blank_paragraphs"]');
+  await expect(applied.getByRole('rowheader')).toHaveText('Decorative blank paragraphs');
+  await expect(applied.getByRole('cell').first()).toHaveText('1');
+  await expect(applied.getByRole('link', { name: '1 on the Review page' })).toBeVisible();
+  const proposed = tile.locator('tr[data-code="out_of_order"]');
+  await expect(proposed.getByRole('cell').nth(1)).toHaveText('2');
+  await proposed.getByRole('link', { name: '1 proposal' }).click();
+  await expect(page).toHaveURL(/\/ui\/proposals/);
+  expect(problems).toEqual([]);
+});

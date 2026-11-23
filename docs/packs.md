@@ -72,7 +72,7 @@ projects it is **attached** to with the template ids it uses in each, every **ve
 
 ### The pinned sections
 
-Arkona's seed pins eight sections (six until v3 F3f added Excluded Routine Tags and v3 F5a Approved Supplementary Tags), by the headings exactly as the pages have them (read on 16 November 2026; ADR 0052,
+Arkona's seed pins eleven sections (six until v3 F3f added Excluded Routine Tags, v3 F5a Approved Supplementary Tags and v3 F5b Repository Automation's three), by the headings exactly as the pages have them (read on 16 November 2026; ADR 0052,
 amendment):
 
 | Page                                                     | Pinned heading                                     |
@@ -85,6 +85,9 @@ amendment):
 | Controlled Native Tagging Standard                       | Closed Primary Categories and Specialist Functions |
 | Controlled Native Tagging Standard                       | Excluded Routine Tags (v3 F3f)                     |
 | Controlled Native Tagging Standard                       | Approved Supplementary Tags (v3 F5a)               |
+| Repository Automation (`cn8v87hh/xd9gzkel`, v3 F5b)      | Default Boundary                                   |
+| Repository Automation                                    | Approved Narrow Automations                        |
+| Repository Automation                                    | Source Boundaries                                  |
 
 A pinned heading matches a page heading **as a whole**: case, spacing, punctuation, a leading number ("3.", "B)") and
 "&" for "and" are ignored, but there is no prefix or nearest match, so "Approved Hierarchy" does not find "Approved
@@ -164,6 +167,11 @@ derived" and must "compare policy version/digest before writing". So:
   Hierarchy and Standardised Navigation”)"), or says the change is outside the pinned sections; the Packs page shows
   each section's state, and a picker for a pinned heading the page no longer has. The document's version still decides:
   a change anywhere on a governance page stops the pack, as before.
+- since v3 F5b ([ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md) decision 3) the bridge's OWN write of a
+  bridge-managed paragraph of Repository Automation (the owner switching an automation on or off) carries the approval
+  over it: once the page reads exactly as the write planned and the approval recorded the version written over, each
+  source kept on that page takes the new version and its pinned sections' digests (audited `pack.carry_approval`).
+  Anything else changed on the page meanwhile carries nothing: it is drift, as above.
 
 ## Editing a pack
 
@@ -522,6 +530,15 @@ On the Tagging page's Exceptions tab the owner rules on an exception: **Keep thi
 unchanged) or **Allow this tag everywhere** (the bridge edits the section's list as the owner's action, a dry run first,
 the step-up, one revertible job; the pack then offers its new version). Agents suggest either ruling with
 `arkona_retag_audit { suggestRuling }`, never take it.
+
+## Automation's caps and Repository Automation (v3 F5b)
+
+`arkona-2026-11-23-f5b` ([ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md)): `automation = { perCode: 25,
+perRun: 100, source: 'repository-automation', section: 'Approved Narrow Automations', sweepMarker: 'Assign Block IDs
+Sweep' }`, the caps of the automation framework, and where it records each code the owner switches on (after the
+block-id sweep's paragraph). Which codes run is never pack data: it is the owner's setting per project on the Automation
+page ([dashboard.md](dashboard.md#automation-v3-f5b)). Repository Automation is a governance source with its Default
+Boundary, Approved Narrow Automations and Source Boundaries pinned; while any source drifts, no automation runs.
 
 ## Governance drift, names and briefs (v3 F4a)
 

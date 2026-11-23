@@ -94,6 +94,9 @@ export const registerOverview: Register = (api, ctx) => {
             unresolved: deps.runtime.outcomes?.list(id, { state: 'unresolved', limit: 1000 }).length ?? 0,
           }
         : { pending: 0, unresolved: 0 },
+      // v3 F5b (ADR 0068, H5): what automation did overnight (the last 24 hours), per code, with its jobs and proposals.
+      automation:
+        id && deps.runtime.automation ? deps.runtime.automation.overnight(id, now() - 86_400_000) : null,
       // v3 F3.4 (ADR 0055): agents' direct writes at scope `write` the owner has not reviewed yet.
       unreviewedDirectWrites:
         id && deps.runtime.review ? deps.runtime.review.store.count(id, { state: 'unreviewed' }) : 0,

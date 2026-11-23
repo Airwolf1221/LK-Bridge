@@ -84,6 +84,7 @@ describe('the registry', () => {
       'tree-sweep',
       'tree-check',
       'assign-block-ids-sweep',
+      'automation-run', // v3 F5b (ADR 0068)
       'asset-refresh',
       'asset-check',
       'link-sweep', // v2 C2c

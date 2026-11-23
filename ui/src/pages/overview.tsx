@@ -3,7 +3,7 @@ import { fmtAgo, fmtInt } from '../format';
 import { useNow } from '../hooks';
 import { useLiveBudget, useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { Link } from '../router';
-import type { Overview, ProjectStatusSummary } from '../types';
+import type { AutomationOvernight, Overview, ProjectStatusSummary } from '../types';
 
 /** Every project whose status is not `active` (a refused key, a mismatched id, not checked yet, no key), with why. */
 function ProjectsAttention({ projects }: { projects: ProjectStatusSummary[] }) {
@@ -264,6 +264,8 @@ export function OverviewPage() {
         </section>
       </div>
 
+      <AutomationTile overnight={d.automation ?? null} />
+
       <section className="card mt" aria-labelledby="budget-h">
         <div className="row row-between">
           <h2 id="budget-h">Request budget</h2>
@@ -289,5 +291,69 @@ export function OverviewPage() {
         )}
       </section>
     </>
+  );
+}
+
+/**
+ * v3 F5b (ADR 0068, H5): what automation did overnight (the last 24 hours): counts per code, each linking to the
+ * Review page (direct writes) or the Proposals page (proposals). Shown once any run has happened.
+ */
+function AutomationTile({ overnight }: { overnight: AutomationOvernight | null }) {
+  if (!overnight || (overnight.runs.length === 0 && !overnight.paused)) return null;
+  return (
+    <section className="card mt" aria-labelledby="automation-h" data-testid="automation-tile">
+      <div className="row row-between">
+        <h2 id="automation-h">Automation overnight</h2>
+        <Link to="/automation">Automation</Link>
+      </div>
+      {overnight.paused && (
+        <p>
+          <Badge tone="warn">Paused</Badge> Pause all automation is on: nothing runs until you resume it.
+        </p>
+      )}
+      {overnight.codes.length === 0 ? (
+        <p className="muted">
+          {overnight.runs.length} run{overnight.runs.length === 1 ? '' : 's'} in the last 24 hours; nothing
+          was done or skipped.
+        </p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <caption className="offscreen">What each automated finding code did in the last 24 hours</caption>
+            <thead>
+              <tr>
+                <th scope="col">Code</th>
+                <th scope="col">Applied</th>
+                <th scope="col">Proposed</th>
+                <th scope="col">Skipped</th>
+                <th scope="col">Stopped or caught</th>
+                <th scope="col">Where to look</th>
+              </tr>
+            </thead>
+            <tbody>
+              {overnight.codes.map((c) => (
+                <tr key={c.code} data-code={c.code}>
+                  <th scope="row">{c.name}</th>
+                  <td>{fmtInt(c.counts.applied)}</td>
+                  <td>{fmtInt(c.counts.proposed)}</td>
+                  <td>{fmtInt(c.counts.skipped)}</td>
+                  <td>{fmtInt(c.counts.failed + c.counts.guarded + c.counts.stopped)}</td>
+                  <td>
+                    {c.jobs.length > 0 && <Link to="/review">{c.jobs.length} on the Review page</Link>}
+                    {c.jobs.length > 0 && c.proposals.length > 0 && ' · '}
+                    {c.proposals.length > 0 && (
+                      <Link to="/proposals">
+                        {c.proposals.length} proposal{c.proposals.length === 1 ? '' : 's'}
+                      </Link>
+                    )}
+                    {c.jobs.length === 0 && c.proposals.length === 0 && <span className="muted">—</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
