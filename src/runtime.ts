@@ -71,6 +71,7 @@ import { RetagService } from './packs/retag/service.js';
 import { OutcomeReconciler } from './jobs/reconcile.js';
 import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
+import { bridgeCoreUpgrader } from './packs/core-fix.js';
 import { RenameService } from './packs/rename/service.js';
 import { subjectRenameRefusal } from './packs/rename/guard.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
@@ -1495,6 +1496,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   };
   // v3 F3e (ADR 0059, D2): phase 2 is archive_page's own plan, proposed by the bridge (it needs the tool layer's deps).
   splits.setArchiver(bridgeArchiver(toolDeps));
+  // v3 F7.1 (ADR 0072): the audit's character_core_missing fix, planned by the character tool's own planner.
+  audits.setCoreUpgrader(bridgeCoreUpgrader(toolDeps));
   // v3 F4b (ADR 0064, D6): the owner's pick is one proposal, planned with the tool layer (the chronology's row tools).
   consistency.setPicker(bridgePicker(toolDeps));
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });

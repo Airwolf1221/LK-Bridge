@@ -172,6 +172,11 @@ export interface ResourceTarget extends Common {
    * name and parent are as the job left them too (`TargetDeps.placeAsLeft`), not only its tags.
    */
   readonly place?: { readonly name: unknown; readonly parentId: string | null };
+  /**
+   * v3 F7.1 (ADR 0072): the template the bridge recorded for the page with its rename (a Compact Character Reference
+   * upgraded to its Character Core): put back with the name, so the tree records the Compact template again.
+   */
+  readonly template?: { readonly before: string; readonly left: string };
 }
 
 export interface MoveTarget extends Common {
@@ -682,6 +687,8 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     }
     if (other || Object.keys(left).length === 0) continue; // permissions, banner or the hidden flag: not reverted
     for (const s of ss) handled.add(s.stepNo);
+    // v3 F7.1: a template the job recorded for this page with its rename (the Core upgrade), and the one it had.
+    const tpl = 'name' in left ? templateRecorded(rec, pid) : null;
     targets.push({
       key: `resource:${pid}`,
       kind: 'resource',
@@ -692,6 +699,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       resourceId: pid,
       before,
       left,
+      ...(tpl ? { template: tpl } : {}),
       // R3-57: its name (as the job left it) and parent (the job did not move it), for a retag batch.
       ...(d.placeAsLeft === true
         ? {
@@ -1237,4 +1245,19 @@ function laterWriteOf(t: Target, later: readonly LaterWrite[]): string | undefin
     }
   });
   return hit?.jobId;
+}
+
+/**
+ * v3 F7.1 (ADR 0072): the template a job recorded for a page (`bridge.record` `set_template`, succeeded) with the one it
+ * had (`previousTemplateId`, recorded since F7.1), or null.
+ */
+function templateRecorded(rec: JobRecord, resourceId: string): { before: string; left: string } | null {
+  for (const s of rec.steps) {
+    if (s.opId !== 'bridge.record' || s.status !== 'succeeded') continue;
+    const r = (bodyOf(s.params).record ?? null) as Obj | null;
+    if (!isObj(r) || r.kind !== 'set_template' || r.resourceId !== resourceId) continue;
+    if (typeof r.templateId === 'string' && typeof r.previousTemplateId === 'string')
+      return { before: r.previousTemplateId, left: r.templateId };
+  }
+  return null;
 }

@@ -22,6 +22,7 @@ import { lmrSummary } from './engine/lmr.js';
 import { planOwner, type OwnerInput } from './engine/owner.js';
 import { planPackage, type PackageInput, type PackPlan, type PlanEnv } from './engine/plan.js';
 import { textKey } from './engine/text.js';
+import { coreNeed, coreTextWords, isOwnerRole, ownersInIndex } from './engine/core.js';
 import { GENERIC_HOOK, hookFor } from './hooks.js';
 import type { GovernanceStatus } from './service.js';
 import { packToolMode, type Pack, type PackAttachment } from './types.js';
@@ -211,7 +212,75 @@ export async function runOwner(
     );
   const base = envOf(pd, mctx, o.tool, b.value, o.lastMajorRevision);
   const plan = await planOwner(base, o.input);
+  await withCharacterCore(pd, mctx, o.tool, b.value, plan, o.lastMajorRevision);
   return finishPackage(pd, mctx, o, { ...base, type: plan.type, hook: GENERIC_HOOK }, plan);
+}
+
+/**
+ * v3 F7.1 (ADR 0072): an owner page placed in a character's index (a home override) counts as one of that character's
+ * owner pages. When the package would leave the character with an index and several owners under a Compact Character
+ * Reference, the character planner's upgrade (planPackage with upgradeToCore) joins this package's changes: the same
+ * rule as every character package (src/packs/engine/core.ts). An upgrade that cannot be made refuses the package
+ * (CORE_REQUIRED).
+ */
+async function withCharacterCore(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  tool: string,
+  b: PackBasis,
+  plan: PackPlan,
+  lmr: LmrMode | undefined,
+): Promise<void> {
+  if (plan.refusals.length > 0) return;
+  const ctx = b.ctx;
+  const byIndex = new Map<string, number>();
+  for (const p of plan.pages)
+    if ('existing' in p.parent && isOwnerRole(p.rule))
+      byIndex.set(p.parent.existing, (byIndex.get(p.parent.existing) ?? 0) + 1);
+  for (const [indexId, added] of byIndex) {
+    const idx = ctx.tree.node(ctx.projectId, indexId).data;
+    if (!idx || idx.kind !== 'index') continue;
+    const ch = ctx.types.characterOfPage(indexId);
+    if (!ch.ok || ch.value.via !== 'index') continue;
+    const need = coreNeed({
+      role: ch.value.role,
+      from: 'compact',
+      hasIndex: true,
+      existing: ownersInIndex(ctx.tree.children(ctx.projectId, indexId).data, ch.value.core.id),
+      added,
+    });
+    if (!need.needed) continue;
+    const e = characterEnv(pd, mctx, tool, b, 'Character', lmr);
+    if (!e.ok) {
+      plan.refusals.push({
+        code: 'CORE_REQUIRED',
+        message: `${ch.value.subject} would have ${need.owners} owner pages in ${idx.rawName} and no Character Core, and the Character type is not available to upgrade ${ch.value.core.rawName}. Nothing is made.`,
+      });
+      continue;
+    }
+    const up = await planPackage(e.env, {
+      name: ch.value.subject,
+      identity: {},
+      target: ch.value.core.id,
+      pages: [],
+      upgradeToCore: true,
+    });
+    if (up.refusals.length > 0) {
+      plan.refusals.push({
+        code: 'CORE_REQUIRED',
+        message: `${ch.value.subject} would have ${need.owners} owner pages in ${idx.rawName} and no Character Core, and ${ch.value.core.rawName} cannot become its Core now (${up.refusals.map((r) => `${r.code}: ${r.message}`).join('; ')}). Nothing is made. Ask the owner to fix that first, or give another home.`,
+        cause: up.refusals.map((r) => r.code),
+        identity: { id: ch.value.core.id, name: ch.value.core.rawName },
+      });
+      continue;
+    }
+    plan.existing.push(...up.existing);
+    plan.warnings.push(...up.warnings);
+    plan.notes.push(
+      ...up.notes,
+      `${ch.value.core.displayName} becomes its Character Core in this proposal: the character now has an index and several owners (${need.owners}).`,
+    );
+  }
 }
 
 /**
@@ -517,11 +586,19 @@ export function previewOf(
                   change: `${c.section}: +${c.images.length} image(s), each with its label and interpretation`,
                   images: c.images.map((i) => i.name),
                 }
-              : {
-                  page: c.page.rawName,
-                  change: c.what ? `${c.section}: ${c.what}` : `${c.section}: +${c.lines.length} line(s)`,
-                  lines: c.lines,
-                },
+              : c.kind === 'core_text'
+                ? {
+                    page: c.page.rawName,
+                    change: coreTextWords(c),
+                    ...(c.replacements.length
+                      ? { replacements: c.replacements.map((r) => ({ before: r.before, after: r.after })) }
+                      : {}),
+                  }
+                : {
+                    page: c.page.rawName,
+                    change: c.what ? `${c.section}: ${c.what}` : `${c.section}: +${c.lines.length} line(s)`,
+                    lines: c.lines,
+                  },
     ),
     assets: plan.images.map((i) => ({
       staged_id: i.stagedId,

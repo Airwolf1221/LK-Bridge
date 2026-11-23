@@ -43,7 +43,7 @@ import {
 } from './context.js';
 import { narrativeCompare } from '../narrative/names.js';
 import { AuditError } from './errors.js';
-import { proposeFix as proposeFixVia, type FixResult } from './fixes.js';
+import { proposeFix as proposeFixVia, type CoreUpgrader, type FixResult } from './fixes.js';
 import {
   extractResource,
   extractSidebar,
@@ -70,6 +70,9 @@ import {
   type FindingSource,
   type RunCounts,
 } from './types.js';
+
+/** v3 F7.1 (ADR 0072): the pages whose blocks the `core_compact_wording` check reads (a Core and an Art page). */
+const CORE_OR_ART_PAGE = /\s-\sCharacter (Core|Art)\s*$/i;
 
 /** The checks, in the order the dashboard lists their categories. */
 export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
@@ -191,6 +194,12 @@ export class Audits {
 
   constructor(readonly d: AuditDeps) {
     this.store = new AuditStore(d.db, d.now);
+  }
+
+  /** v3 F7.1 (ADR 0072): the `core_upgrade` fix's planner, set by the runtime once the tool layer exists. */
+  private coreUpgrader: CoreUpgrader | null = null;
+  setCoreUpgrader(u: CoreUpgrader | null): void {
+    this.coreUpgrader = u;
   }
 
   /** Closes a run a restart interrupted. */
@@ -371,7 +380,7 @@ export class Audits {
         tagSource: cfg.tagSource,
         ...(governance ? { keepBlocksOf: new Set(governance.roots) } : {}),
         // v3 F7 (G7): every page under each character's repository index, whose lines may name asset folders.
-        keepBlocksWhere: (p) => characterPages.has(p.id),
+        keepBlocksWhere: (p) => characterPages.has(p.id) || CORE_OR_ART_PAGE.test(p.name),
       });
       if (!built.ok) {
         const summary =
@@ -480,6 +489,8 @@ export class Audits {
         ): Promise<unknown>;
         submit(req: Record<string, unknown>): Promise<Record<string, unknown>>;
       };
+      /** v3 F7.1 (ADR 0072): the automation's Apply of a code allowing it: submitted as a job (guards judging it). */
+      readonly direct?: boolean;
     } = {},
   ): Promise<FixResult> {
     const f = this.store.get(projectId, findingId);
@@ -539,6 +550,8 @@ export class Audits {
           engine: (opts.engine ?? this.d.engine) as never,
           now: this.d.now,
           ...(opts.origin ? { origin: opts.origin } : {}),
+          ...(this.coreUpgrader ? { coreUpgrade: this.coreUpgrader } : {}),
+          ...(opts.direct === true ? { direct: true } : {}),
           narrativeOrder: (() => {
             const n = this.narrativeInput(projectId);
             return n ? narrativeCompare(n.rules) : null;
@@ -873,6 +886,13 @@ export class Audits {
         }
       })(),
       ...(this.d.outfits ? { outfitsOf: (id: string) => this.d.outfits!.forCharacter(projectId, id) } : {}),
+      mainBlocks: (pageId: string) => {
+        const p = model.pages.get(pageId);
+        if (!p || !model.blocks) return null;
+        const doc = p.documents.find((d) => d.name === 'Main') ?? p.documents.find((d) => d.type === 'page');
+        const blocks = doc ? model.blocks.get(doc.id) : undefined;
+        return doc && blocks ? { documentId: doc.id, blocks } : null;
+      },
       characterPages: (character: string): ArtPageText[] => {
         // v3 F7 (G7): every page under the character's repository index (the index too), from the snapshots.
         const out: ArtPageText[] = [];

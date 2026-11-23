@@ -35,6 +35,8 @@ import { classifyName, nameKey as treeNameKey } from '../tree/classify.js';
 import { isKnownRun, runsHashOf, runsText, splitRunsAtBreaks } from './model.js';
 import { AuditError } from './errors.js';
 import type { Finding, FixKind } from './types.js';
+import { CORE_TEXT_FILLER, reword, type CoreTextInput, type WordingRole } from '../packs/engine/core.js';
+import type { LkBlock } from '../markdown/index.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -62,7 +64,28 @@ export interface FixDeps {
   readonly origin?: JobOrigin;
   /** v3 F4c (ADR 0065): the order inside Narratives (an ordering fix whose args say `order: 'narrative'`). */
   readonly narrativeOrder?: SiblingCompare | null;
+  /**
+   * v3 F7.1 (ADR 0072): the `core_upgrade` fix, planned by the packs layer (src/packs/core-fix.ts): the page read live
+   * (FIX_STALE when its name changed), then arkona_create_character's upgrade through `engine.submit`.
+   */
+  readonly coreUpgrade?: CoreUpgrader;
+  /**
+   * v3 F7.1: the automation's Apply of a code that allows it: the fix submitted as a job (every guard judging it: the
+   * canon guard keeps an Authoritative page's rename a canonical proposal) rather than forced into a proposal.
+   */
+  readonly direct?: boolean;
 }
+
+/** v3 F7.1 (ADR 0072): what plans and submits a `core_upgrade` fix. */
+export type CoreUpgrader = (
+  projectId: string,
+  page: { readonly pageId: string; readonly name: string },
+  o: {
+    readonly origin: JobOrigin;
+    readonly engine: FixDeps['engine'];
+    readonly direct?: boolean;
+  },
+) => Promise<FixResult>;
 
 export type FixResult =
   | {
@@ -71,7 +94,14 @@ export type FixResult =
       readonly summary: string | null;
       readonly fix: FixKind;
     }
-  | { readonly status: 'nothing_to_do'; readonly message: string };
+  | { readonly status: 'nothing_to_do'; readonly message: string }
+  /** v3 F7.1: a fix the automation applied as a job (`direct`): the job's id. */
+  | {
+      readonly status: 'job_submitted';
+      readonly jobId: string;
+      readonly summary: string | null;
+      readonly fix: FixKind;
+    };
 
 export const stale = (what: string, details: Obj = {}): AuditError =>
   new AuditError(
@@ -722,7 +752,162 @@ export async function proposeFix(
       return fixNarrative(d, projectId, f, c.propertiesName);
     case 'art_layout':
       return fixArtLayout(d, projectId, f);
+    case 'core_upgrade': {
+      // v3 F7.1 (ADR 0072): the character tool's own upgrade, planned by the pack planner (one rule for every caller).
+      if (!d.coreUpgrade)
+        throw new AuditError(
+          'FIX_UNAVAILABLE',
+          'The character tool is not available here, so the upgrade cannot be planned now. Nothing was proposed.',
+        );
+      const a = f.fix.args as Obj;
+      return d.coreUpgrade(
+        projectId,
+        { pageId: String(a.pageId), name: String(a.name) },
+        {
+          origin: d.origin ?? ORIGIN,
+          engine: d.engine,
+          ...(d.direct === true ? { direct: true } : {}),
+        },
+      );
+    }
+    case 'core_wording':
+      return fixCoreWording(d, projectId, f);
   }
+}
+
+// ============================================================================================ v3 F7.1: Core wording
+
+interface WordingPart {
+  readonly pageId: string;
+  readonly name: string;
+  readonly documentId: string;
+  readonly role: WordingRole;
+  readonly replacements: readonly {
+    readonly blockId: string;
+    readonly before: string;
+    readonly after: string;
+  }[];
+}
+
+/**
+ * v3 F7.1 (ADR 0072): the `core_compact_wording` fix. Each page is read LIVE first (its name, its document): the
+ * replacements the helper's rules make now must be the ones the finding saw (else FIX_STALE, nothing proposed). Then ONE
+ * job, the Art page's write first and the Core's after, each filled inside the lock by `pack.core_text` (the rules applied
+ * to the named blocks only; nothing else touched, `unsupported` blocks kept), verified on read-back. A proposal, unless
+ * the automation's Apply asks for a direct job (`direct`), which every guard still judges.
+ */
+async function fixCoreWording(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const subject = String(a.subject);
+  const core = a.core as Obj;
+  const parts: WordingPart[] = [];
+  if (isObj(a.art))
+    parts.push({
+      pageId: String(a.art.pageId),
+      name: String(a.art.name),
+      documentId: String(a.art.documentId),
+      role: 'art',
+      replacements: (a.art.replacements as WordingPart['replacements'] | undefined) ?? [],
+    });
+  parts.push({
+    pageId: String(a.pageId),
+    name: String(a.name),
+    documentId: String(core.documentId),
+    role: 'core',
+    replacements: (core.replacements as WordingPart['replacements'] | undefined) ?? [],
+  });
+  const keyOf = (rs: readonly { blockId: string; before: string }[]) =>
+    rs
+      .map((r) => `${r.blockId}|${r.before}`)
+      .sort()
+      .join('\n');
+  const live: WordingPart[] = [];
+  for (const p of parts) {
+    const res = (await read(d, projectId, 'getResource', { path: { resourceId: p.pageId } })) as
+      Obj | undefined;
+    if (!isObj(res)) throw stale(`${p.name} is gone.`);
+    if (res.name !== p.name)
+      throw stale(`${p.name} is named “${String(res.name)}” now.`, { found: res.name });
+    const doc = (await read(d, projectId, 'getDocumentBlocks', {
+      path: { resourceId: p.pageId, documentId: p.documentId },
+    })) as Obj | undefined;
+    const blocks = isObj(doc) && Array.isArray(doc.blocks) ? (doc.blocks as LkBlock[]) : null;
+    if (!blocks) throw stale(`${p.name}'s text could not be read now.`);
+    const now = reword(blocks, p.role, subject).replacements;
+    if (keyOf(now) !== keyOf(p.replacements))
+      throw stale(
+        `${p.name}'s text has changed since the audit (the phrases to replace are not the ones it found).`,
+        {
+          found: now.map((r) => ({ blockId: r.blockId, before: r.before })),
+        },
+      );
+    if (now.length > 0) live.push({ ...p, replacements: now });
+  }
+  if (live.length === 0) return { status: 'nothing_to_do', message: 'No compact phrase is left to replace.' };
+  const n = live.reduce((k, p) => k + p.replacements.length, 0);
+  const title = `Replace ${n} compact phrase${n === 1 ? '' : 's'} for ${subject}'s Character Core (${live.map((p) => p.name).join(', ')})`;
+  const steps: StepSpec[] = live.map((p) => {
+    const input: CoreTextInput = {
+      role: p.role,
+      subject,
+      reword: [...new Set(p.replacements.map((r) => r.blockId))],
+      remove: [],
+    };
+    return {
+      op: 'replaceDocumentBlocks',
+      params: { path: { resourceId: p.pageId, documentId: p.documentId }, body: { blocks: [] } },
+      fill: { filler: CORE_TEXT_FILLER, input },
+      judgedInLock: true,
+      verifyAfterWrite: true,
+      journalOperation: {
+        tool: 'audits.core_wording',
+        page: { id: p.pageId, name: p.name },
+        from: 'audits.propose_fix',
+        write: `${p.replacements.length} compact phrase(s) now say Character Core`,
+      },
+    } satisfies StepSpec;
+  });
+  const operation = {
+    tool: 'audits.core_wording',
+    fromAudit: f.code,
+    replacements: live.flatMap((p) =>
+      p.replacements.map((r) => ({ page: p.name, before: r.before, after: r.after })),
+    ),
+  };
+  if (d.direct !== true)
+    return propose(d, projectId, {
+      steps,
+      title,
+      holdDocuments: live.map((p) => p.documentId),
+      operation,
+      page: { id: String(a.pageId), name: String(a.name) },
+      pageParts: live.map((p) => `${p.name}: ${p.replacements.length} phrase(s) → Character Core`),
+      fix: 'core_wording',
+    });
+  // The automation's Apply: a job, every guard judging it (a guard may still make it a proposal).
+  const r = await d.engine.submit({
+    kind: 'batch_ops',
+    project: projectId,
+    steps,
+    onError: 'stop',
+    priority: 'P1',
+    origin: d.origin ?? ORIGIN,
+    title: title.slice(0, 300),
+    holdDocuments: live.map((p) => p.documentId),
+    internal: true,
+    proposal: {
+      operation,
+      operations: [
+        { ...operation, page: { id: String(a.pageId), name: String(a.name) }, summaryLabel: title },
+      ],
+      summary: title,
+    },
+  });
+  if (typeof r.proposalId === 'string')
+    return { status: 'proposal_captured', proposalId: r.proposalId, summary: title, fix: 'core_wording' };
+  if (typeof r.jobId === 'string')
+    return { status: 'job_submitted', jobId: r.jobId, summary: title, fix: 'core_wording' };
+  throw new AuditError('NOT_PROPOSED', 'The fix was neither proposed nor submitted; nothing was done.');
 }
 
 // ============================================================================================ v3 F7: art layout

@@ -20,6 +20,8 @@ import type { RegistryType, TaxonomyEntry } from '../../registry/index.js';
 import { contentPages, fact, factAmbiguous, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
 import type { FindingCode, FindingDraft } from '../types.js';
+import { compactSentences, coreNeed, reword } from '../../packs/engine/core.js';
+import type { LkBlock } from '../../markdown/index.js';
 
 const DRIFT_CODE: Record<DriftCode, FindingCode> = {
   type_root_missing: 'taxonomy_type_root_missing',
@@ -207,6 +209,158 @@ export function taxonomyCheck(ctx: AuditContext): FindingDraft[] {
           message: `The ${type.placement.speciesRow} “${race}” belongs to the index “${hit[0]!.plural}”, but the page sits under “${under.plural}”.`,
           evidence: { race, entry: hit[0]!.plural, sitsUnder: under.plural },
         });
+    }
+  }
+  out.push(...coreMissing(ctx));
+  out.push(...coreWording(ctx));
+  return out;
+}
+
+/**
+ * v3 F7.1 (ADR 0072): a Character Core whose text still says it is a compact reference (a Core upgraded before F7.1, or
+ * by hand), by exactly the shared helper's deterministic rules (src/packs/engine/core.ts `reword`), and the character's
+ * Art page where "character reference" means the identity page (the helper's own test). Found only where a rule would
+ * replace something; any other sentence still saying "compact" is listed in the finding, never edited. The fix applies
+ * the same replacements: one proposal per character, the Art page first.
+ */
+function coreWording(ctx: AuditContext): FindingDraft[] {
+  const out: FindingDraft[] = [];
+  if (!ctx.mainBlocks) return out;
+  for (const type of ctx.types) {
+    if (!type.placement) continue;
+    const artType = nkey('Character Art');
+    for (const p of contentPages(ctx)) {
+      if (p.kind !== 'bsrc' && p.kind !== 'bwrk') continue;
+      if (characterRole(ctx, type, p) !== 'core') continue;
+      const core = ctx.mainBlocks(p.id);
+      if (!core) continue;
+      const subject =
+        fact(ctx, p, 'Canonical Display Name') || fact(ctx, p, 'Subject') || subjectOf(p.displayName, null);
+      if (!subject) continue;
+      const parent = p.parentId ? ctx.model.pages.get(p.parentId) : undefined;
+      const art =
+        parent && parent.kind === 'index' && nkey(parent.displayName) === nkey(subject)
+          ? ([...ctx.model.pages.values()].find(
+              (c) =>
+                c.parentId === parent.id &&
+                (c.kind === 'bsrc' || c.kind === 'bwrk') &&
+                (nkey(c.displayName) === nkey(`${subject} - Character Art`) ||
+                  nkey(fact(ctx, c, ctx.treeSettings.referenceTypeRow) ?? '') === artType),
+            ) ?? null)
+          : null;
+      const artDoc = art ? ctx.mainBlocks(art.id) : null;
+      const coreBlocks = core.blocks as LkBlock[];
+      const cw = reword(coreBlocks, 'core', subject);
+      const aw = artDoc ? reword(artDoc.blocks as LkBlock[], 'art', subject) : null;
+      if (cw.replacements.length === 0 && (aw?.replacements.length ?? 0) === 0) continue;
+      const left = [
+        ...compactSentences(cw.blocks, p.rawName),
+        ...(aw && art ? compactSentences(aw.blocks, art.rawName) : []),
+      ];
+      const pick = (r: { blockId: string; before: string; after: string }) => ({
+        blockId: r.blockId,
+        before: r.before,
+        after: r.after,
+      });
+      const n = cw.replacements.length + (aw?.replacements.length ?? 0);
+      out.push({
+        code: 'core_compact_wording',
+        key: p.id,
+        pageId: p.id,
+        message: `${p.rawName} is a Character Core, but ${n} phrase${n === 1 ? '' : 's'} on it${aw && aw.replacements.length > 0 && art ? ` or on ${art.rawName}` : ''} still call${n === 1 ? 's' : ''} it a compact reference. The fix replaces ${n === 1 ? 'it' : 'them'} with “Character Core” (the upgrade's own rules)${left.length > 0 ? `; ${left.length} other sentence${left.length === 1 ? '' : 's'} saying “compact” ${left.length === 1 ? 'is' : 'are'} listed for you, never edited` : ''}.`,
+        evidence: {
+          core: {
+            id: p.id,
+            name: p.rawName,
+            documentId: core.documentId,
+            replacements: cw.replacements.map(pick),
+          },
+          ...(art && artDoc && aw
+            ? {
+                art: {
+                  id: art.id,
+                  name: art.rawName,
+                  documentId: artDoc.documentId,
+                  replacements: aw.replacements.map(pick),
+                },
+              }
+            : {}),
+          left: left.slice(0, 50),
+        },
+        fix: {
+          kind: 'core_wording',
+          args: {
+            pageId: p.id,
+            name: p.rawName,
+            subject,
+            core: { documentId: core.documentId, replacements: cw.replacements.map(pick) },
+            ...(art && artDoc && aw && aw.replacements.length > 0
+              ? {
+                  art: {
+                    pageId: art.id,
+                    name: art.rawName,
+                    documentId: artDoc.documentId,
+                    replacements: aw.replacements.map(pick),
+                  },
+                }
+              : {}),
+          },
+          summary: `Replace ${n} compact phrase${n === 1 ? '' : 's'} for ${subject}'s Character Core (one proposal).`,
+        },
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * v3 F7.1 (ADR 0072): a character index whose identity page is a Compact Character Reference beside one or more other
+ * owner pages (Character Architecture: "a character with an index and several owners has a Character Core"). The
+ * counting is the planners' (src/packs/engine/core.ts: an owner page is a `[BSRC]` or `[BWRK]` page directly under the
+ * character's index). The fix is the same upgrade the planners make: one proposal per character, read live first.
+ */
+function coreMissing(ctx: AuditContext): FindingDraft[] {
+  const out: FindingDraft[] = [];
+  const children = new Map<string, AuditPage[]>();
+  for (const p of ctx.model.pages.values())
+    if (p.parentId) children.set(p.parentId, [...(children.get(p.parentId) ?? []), p]);
+  for (const type of ctx.types) {
+    if (!type.placement) continue;
+    for (const p of contentPages(ctx)) {
+      if (p.kind !== 'bsrc' && p.kind !== 'bwrk') continue;
+      if (characterRole(ctx, type, p) !== 'compact') continue;
+      const parent = p.parentId ? ctx.model.pages.get(p.parentId) : undefined;
+      if (!parent || parent.kind !== 'index') continue;
+      const subject =
+        fact(ctx, p, 'Canonical Display Name') || fact(ctx, p, 'Subject') || subjectOf(p.displayName, null);
+      if (!subject || nkey(parent.displayName) !== nkey(subject)) continue;
+      const others = (children.get(parent.id) ?? []).filter(
+        (c) => c.id !== p.id && (c.kind === 'bsrc' || c.kind === 'bwrk'),
+      );
+      const n = coreNeed({
+        role: 'compact',
+        from: 'compact',
+        hasIndex: true,
+        existing: others.length,
+        added: 0,
+      });
+      if (!n.needed) continue;
+      out.push({
+        code: 'character_core_missing',
+        key: p.id,
+        pageId: p.id,
+        message: `${parent.rawName} holds ${n.owners} owner pages, and its identity page ${p.rawName} is still a Compact Character Reference: a character with an index and several owners has a Character Core. The fix upgrades it in place (renamed “${subject} - Character Core”, Reference Type Character Core; its id, identity facts, links and prose kept).`,
+        evidence: {
+          index: { id: parent.id, name: parent.rawName },
+          identity: { id: p.id, name: p.rawName },
+          owners: others.map((o) => o.rawName).sort(),
+        },
+        fix: {
+          kind: 'core_upgrade',
+          args: { pageId: p.id, name: p.rawName, indexId: parent.id, subject },
+          summary: `Upgrade ${p.rawName} to ${subject} - Character Core (one proposal).`,
+        },
+      });
     }
   }
   return out;

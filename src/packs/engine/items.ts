@@ -15,6 +15,7 @@
  * whole runs exactly the steps it always did. A package whose steps cannot all be placed in an item is not itemized
  * (approved whole, as before), never guessed.
  */
+import { coreTextWords } from './core.js';
 import { EXPECT_STEP, LMR_STEP, RECORD_STEP, VERIFY_STEP } from '../../jobs/internal-steps.js';
 import { withStepDependencies, type PlanItem } from '../../jobs/items.js';
 import type { StepSpec } from '../../jobs/index.js';
@@ -157,6 +158,13 @@ export function itemizePackage(
         c.what ?? `${c.section}: ${c.lines.length} line(s) added`,
         c.lines.map((l) => ({ what: c.section, before: null, after: l })),
       );
+    else if (c.kind === 'core_text')
+      note(
+        c.page.id,
+        c.page.rawName,
+        coreTextWords(c),
+        c.replacements.map((r) => ({ what: 'wording', before: r.before, after: r.after })),
+      );
     else if (c.kind === 'images')
       note(
         c.page.id,
@@ -215,6 +223,14 @@ export function itemizePackage(
       if (it.id !== idItem && it.id.startsWith('page:'))
         items[k] = { ...it, dependsOn: [...new Set([...it.dependsOn, idItem])] };
     }
+  }
+  // v3 F7.1 (ADR 0072): a Core whose images move to the Art page needs that page's change first (never dropped).
+  for (const c of plan.existing) {
+    if (c.kind !== 'core_text' || c.role !== 'core' || !c.needs) continue;
+    const need = newIds.has(c.needs) ? `page:${c.needs}` : `existing:${c.needs}`;
+    const k = items.findIndex((i) => i.id === `existing:${c.page.id}`);
+    if (k >= 0 && items.some((i) => i.id === need) && need !== items[k]!.id)
+      items[k] = { ...items[k]!, dependsOn: [...new Set([...items[k]!.dependsOn, need])] };
   }
   const known = new Set(items.map((i) => i.id));
   // A step tagged with a page the plan does not list (it should not happen): the package is approved whole instead.

@@ -1203,7 +1203,11 @@ export class Appraisal {
               fix: `audit:${a.fix}`,
               reads: 1,
             }
-          : { status: 'nothing_to_do', message: a.message, reads: 1 };
+          : {
+              status: 'nothing_to_do',
+              message: 'message' in a ? a.message : 'the fix ran as a job',
+              reads: 1,
+            };
     } else {
       const settings = this.d.projectSettings(o.projectId);
       // CR-2026-11-R2 (R2-32): a fix is checked against the APPROVED rules; with none approved it is a proposal.

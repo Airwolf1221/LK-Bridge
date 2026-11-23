@@ -119,7 +119,8 @@ describe('arkona_create_character with target', () => {
       {
         page: '[BSRC] Kamigawa Miyuki - Character Core',
         set: false,
-        why: 'a new name; Reference Type (a housekeeping key); a move, not a major revision',
+        // v3 F7.1 (ADR 0072): its compact wording replaced ("compact reference" → "Character Core") counts as text.
+        why: '2 words of page text changed (fewer than 8); a new name; Reference Type (a housekeeping key); a move, not a major revision',
       },
     ]);
     age(C.miyuki);

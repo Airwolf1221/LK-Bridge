@@ -50,6 +50,18 @@ import type { TypeHook } from '../hooks.js';
 import type { Pack, RoleRule, TypeRules } from '../types.js';
 import { computeTags, type HeldSlot } from './tags.js';
 import {
+  compactSentences,
+  coreNeed,
+  imageKeys,
+  isOwnerRole,
+  ownersInIndex,
+  planCoreImages,
+  reword,
+  visualTextWarning,
+  type CompactLeft,
+  type Replacement as CoreReplacement,
+} from './core.js';
+import {
   currentCharacters,
   namesakeLine,
   namesakesOf,
@@ -125,6 +137,8 @@ export interface PackageInput {
    * sections itself, each leaving an interface summary, so it passes false (and the Reference is not read for it).
    */
   readonly upgradeOverlap?: boolean | undefined;
+  /** v3 F7.1 (ADR 0072): the upgraded page's main document as the caller already read it (the split); else read live. */
+  readonly upgradeText?: { readonly documentId: string; readonly blocks: readonly LkBlock[] } | undefined;
   readonly split?: unknown;
   /**
    * v3 F3b (ADR 0052): the names a relationship's page takes for its two participants, exactly as their indexes give
@@ -258,6 +272,31 @@ export type ExistingChange =
       readonly from: string;
       readonly to: string;
       readonly coreTemplateId: string;
+      /** v3 F7.1 (ADR 0072): the Compact template it had (recorded, so a revert puts it back). */
+      readonly compactTemplateId?: string | null;
+      /** v3 F7.1: why, when the planner upgraded it on its own (the character now has an index and several owners). */
+      readonly automatic?: boolean;
+    }
+  | {
+      /**
+       * v3 F7.1 (ADR 0072): the upgrade's text change on the upgraded page (`role` core) or on the character's Art page
+       * (`role` art), applied by the `pack.core_text` filler inside the job's lock on the page as it is then: the wording
+       * rules on the named blocks, the named image blocks removed while they still show the planned file, and (on the
+       * Art page) the Core's images it lacked appended under its images section. The Art page's change runs first.
+       */
+      readonly kind: 'core_text';
+      readonly page: NodeRef;
+      readonly documentId: string;
+      readonly role: 'core' | 'art';
+      readonly subject: string;
+      readonly replacements: readonly CoreReplacement[];
+      readonly remove: readonly { readonly blockId: string; readonly url: string }[];
+      /** Art page: the moved images (label, image, interpretation), appended under `section`. */
+      readonly append: readonly LkBlock[];
+      readonly section: string;
+      readonly boundaries: readonly string[];
+      /** Core: the Art page (an existing page's id, or the new one's) its moved images go to first. */
+      readonly needs?: string;
     }
   | {
       readonly kind: 'facts';
@@ -1553,6 +1592,70 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     warn('INDEX_TEXT_UNUSED', 'index.markdown was given but this package makes no index; it is not used.');
   }
 
+  // ---------------------------------------------------------------------------------- v3 F7.1: is a Core needed?
+  // Character Architecture: a character with an index and several owners has a Character Core. When this package would
+  // leave the character so under a Compact Character Reference, the upgrade is part of the same proposal (exactly as
+  // upgradeToCore: true), whichever tool asked; an explicit upgradeToCore: false is refused, never silently honoured.
+  // The counting is shared with the split planner (src/packs/engine/core.ts).
+  let need: { needed: boolean; owners: number } = { needed: false, owners: 0 };
+  if (mode === 'extend' && target && hook.upgrade && targetIdentityNode) {
+    const idxId = targetIndexNode?.id ?? null;
+    const inIndex = (p: PlannedPage) =>
+      'item' in p.parent ? p.parent.item === 'index' : idxId !== null && p.parent.existing === idxId;
+    need = coreNeed({
+      role: target.role,
+      from: hook.upgrade.from,
+      hasIndex: targetIndexNode !== null || indexPage !== null,
+      existing: targetIndexNode
+        ? ownersInIndex(ctx.tree.children(ctx.projectId, targetIndexNode.id).data, target.identity.id)
+        : 0,
+      added: pages.filter((p) => isOwnerRole(p.rule) && inIndex(p)).length,
+    });
+    if (need.needed && input.upgradeToCore === false)
+      refuse(
+        'CORE_REQUIRED',
+        `${subject} would have ${need.owners} owner pages in ${target.index?.rawName ?? `[INDEX] ${subject}`} and no Character Core: ${target.identity.rawName} is a Compact Character Reference, and a character with an index and several owners has a Character Core. Leave upgradeToCore out (or true): the package then upgrades it in the same proposal.`,
+        { identity: { id: target.identity.id, name: target.identity.rawName }, owners: need.owners },
+      );
+  }
+  // A relationship hosted under the other participant's index counts there: a Compact Reference heading it is refused
+  // (one package upgrades only its own character).
+  for (const p of pages) {
+    const hosted = drafts.find((d) => d.id === p.id);
+    if (!hosted?.partner || hosted.p.host !== 'other' || !('existing' in p.parent)) continue;
+    if (p.parent.existing === targetIndexNode?.id || !isOwnerRole(p.rule)) continue;
+    const host = ctx.tree.node(ctx.projectId, p.parent.existing).data;
+    if (!host || host.kind !== 'index' || (wi && host.id === wi.id)) continue;
+    const ch = ctx.types.characterOfPage(host.id);
+    if (!ch.ok || ch.value.via !== 'index' || ch.value.core.id === target?.identity.id) continue;
+    const n = coreNeed({
+      role: ch.value.role,
+      from: hook.upgrade?.from ?? null,
+      hasIndex: true,
+      existing: ownersInIndex(ctx.tree.children(ctx.projectId, host.id).data, ch.value.core.id),
+      added: pages.filter((x) => 'existing' in x.parent && x.parent.existing === host.id).length,
+    });
+    if (n.needed)
+      refuse(
+        'CORE_REQUIRED',
+        `${p.displayName}: hosted under ${host.rawName}, ${ch.value.subject} would have ${n.owners} owner pages and no Character Core (${ch.value.core.rawName} is a Compact Character Reference). Upgrade it first (arkona_create_character with target “${ch.value.core.rawName}” and upgradeToCore), or host the relationship here (host "self").`,
+        { identity: { id: ch.value.core.id, name: ch.value.core.rawName }, owners: n.owners },
+      );
+  }
+  const upgrading =
+    input.upgradeToCore === true ||
+    (need.needed && input.upgradeToCore === undefined && refusals.length === 0);
+  /** The upgrade could not be made although the character needs its Core: the whole package is refused. */
+  const upgradeRefused = (cause: string, message: string) => {
+    if (!need.needed) refuse(cause, message);
+    else
+      refuse(
+        'CORE_REQUIRED',
+        `${subject} would have ${need.owners} owner pages in ${target?.index?.rawName ?? `[INDEX] ${subject}`} and no Character Core, and ${target?.identity.rawName ?? 'its Compact Character Reference'} cannot become its Core now (${cause}: ${message}). Nothing is made. Ask the owner to fix that first; then add the pages again.`,
+        { cause, identity: target ? { id: target.identity.id, name: target.identity.rawName } : null },
+      );
+  };
+
   // ---------------------------------------------------------------------------------- an extension's changes to existing pages
   if (mode === 'extend' && target && targetSidebar && refusals.length === 0) {
     const why: string[] = [];
@@ -1571,26 +1674,34 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       }
     }
     let renamed: string | null = null;
-    if (input.upgradeToCore === true && hook.upgrade && target.role === hook.upgrade.from) {
+    if (upgrading && hook.upgrade && target.role === hook.upgrade.from) {
       const coreRule = roleRule(hook.upgrade.to)!;
       const compactRule = roleRule(hook.upgrade.from)!;
+      const before = refusals.length;
       const coreTid = templateId(coreRule);
       const compactTid = templateId(compactRule);
+      // A template refusal is the upgrade's: refused as CORE_REQUIRED when the character needs its Core.
+      if (need.needed && refusals.length > before) {
+        const got = refusals.splice(before);
+        for (const g of got) upgradeRefused(g.code, g.message);
+      }
       if (coreTid && compactTid) {
         const a = await readSidebar(pd, env.mctx, env.tool, coreTid, env.cc.sidebars, env.cc.templateTags);
         const b = await readSidebar(pd, env.mctx, env.tool, compactTid, env.cc.sidebars, env.cc.templateTags);
         const ka = a.ok ? keysOf(a.value, props) : null;
         const kb = b.ok ? keysOf(b.value, props) : null;
+        const kindPrefix = targetIdentityNode!.kind === 'bwrk' ? '[BWRK] ' : '[BSRC] ';
+        const to = `${kindPrefix}${fill(coreRule.name, { Name: subject })}`;
+        const np = nameProblem(to, rules);
         if (!ka || !kb || ka.map(factKey).join('|') !== kb.map(factKey).join('|')) {
-          refuse(
+          upgradeRefused(
             'TEMPLATES_DIFFER',
             `The Core and Compact templates' sidebar rows differ (${ka?.join(', ') ?? '?'} / ${kb?.join(', ') ?? '?'}), so a Compact Reference cannot become a Core in place. Ask the owner.`,
           );
+        } else if (np) {
+          upgradeRefused(np.code, np.message);
         } else {
-          const kindPrefix = targetIdentityNode!.kind === 'bwrk' ? '[BWRK] ' : '[BSRC] ';
-          const to = `${kindPrefix}${fill(coreRule.name, { Name: subject })}`;
-          const np = nameProblem(to, rules);
-          if (np) refuse(np.code, np.message);
+          const automatic = input.upgradeToCore !== true;
           renamed = to;
           existing.push({
             kind: 'rename',
@@ -1598,12 +1709,30 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
             from: target.identity.rawName,
             to,
             coreTemplateId: coreTid,
+            compactTemplateId: compactTid,
+            ...(automatic ? { automatic: true } : {}),
           });
           facts.push({ key: 'Reference Type', value: coreRule.referenceType ?? 'Character Core' });
           why.push(`Reference Type: ${compactRule.referenceType} → ${coreRule.referenceType}`);
+          if (need.needed)
+            notes.push(
+              `${target.identity.displayName} becomes ${fill(coreRule.name, { Name: subject })} (the character now has an index and several owners: ${need.owners}). Its id, documents, identity facts, links and text are kept; its Reference Type becomes ${coreRule.referenceType ?? 'Character Core'} and the Core template is recorded.`,
+            );
+          // v3 F7.1 (ADR 0072): its text stops calling it compact, and its images are left to the Art page.
+          const ct = await coreTextChanges(env, {
+            identity: target.identity,
+            subject,
+            pages,
+            indexNode: targetIndexNode,
+            split: input.upgradeOverlap === false,
+            ...(input.upgradeText ? { core: input.upgradeText } : {}),
+          });
+          for (const c of ct.changes) existing.push(c);
+          warnings.push(...ct.warnings);
+          notes.push(...ct.notes);
           // The Reference's body is kept; sections the new pages now own are warned about.
           if (input.upgradeOverlap !== false)
-            warnings.push(...(await overlapWarnings(env, target.identity, pages)));
+            warnings.push(...(await overlapWarnings(env, target.identity, pages, ct.coreBlocks)));
         }
       }
     }
@@ -2327,16 +2456,255 @@ export async function routingChange(
 }
 
 /** Sections of the Reference's body that the new pages' domains now own (by heading words): a follow-up trim is due. */
-async function overlapWarnings(env: PlanEnv, page: NodeRef, pages: readonly PlannedPage[]): Promise<Issue[]> {
-  const node = env.ctx.tree.node(env.ctx.projectId, page.id).data;
+/** A page's main document, read live (null: none, or unreadable now). */
+async function readMain(
+  env: PlanEnv,
+  pageId: string,
+): Promise<{ documentId: string; blocks: LkBlock[] } | null> {
+  const node = env.ctx.tree.node(env.ctx.projectId, pageId).data;
   const doc =
     node?.documents.find((d) => d.name === 'Main') ?? node?.documents.find((d) => d.type === 'page');
-  if (!node || !doc) return [];
+  if (!node || !doc) return null;
   const read = await liveRead(env.pd, env.mctx, env.tool, 'getDocumentBlocks', {
-    path: { resourceId: page.id, documentId: doc.id },
+    path: { resourceId: pageId, documentId: doc.id },
   });
-  if (!read.ok) return [];
-  const blocks = (read.value as { blocks?: LkBlock[] }).blocks ?? [];
+  if (!read.ok) return null;
+  return { documentId: doc.id, blocks: (read.value as { blocks?: LkBlock[] }).blocks ?? [] };
+}
+
+/** Inserts `add` at the end of the `section` heading's section, else before the first boundary section, else at the end. */
+function insertUnder(
+  blocks: readonly LkBlock[],
+  section: string,
+  boundaries: readonly string[],
+  add: readonly LkBlock[],
+): LkBlock[] {
+  const out = [...blocks];
+  const isHead = (b: LkBlock) => (b as unknown as Obj).kind === 'heading';
+  const level = (b: LkBlock) => Number((b as unknown as Obj).level ?? 1);
+  const at = out.findIndex((b) => isHead(b) && textKey(blockText(b)) === textKey(section));
+  if (at >= 0) {
+    let end = at + 1;
+    while (end < out.length && !(isHead(out[end]!) && level(out[end]!) <= level(out[at]!))) end++;
+    out.splice(end, 0, ...add);
+    return out;
+  }
+  const head = {
+    id: mintClientId(),
+    kind: 'heading',
+    level: 2,
+    content: [{ text: section }],
+  } as unknown as LkBlock;
+  const b = out.findIndex((x) => isHead(x) && boundaries.some((t) => textKey(t) === textKey(blockText(x))));
+  if (b >= 0) out.splice(b, 0, head, ...add);
+  else out.push(head, ...add);
+  return out;
+}
+
+/**
+ * v3 F7.1 (ADR 0072): the upgrade's text change, planned on the pages read live (the Core, and the character's Art
+ * page when it exists; a new Art page of the same package is changed in its plan):
+ *
+ * - the wording rules (src/packs/engine/core.ts) on the Core and on the Art page, every replacement shown;
+ * - each image of the Core that the Art page also holds removed from the Core; each it lacks copied to the Art page
+ *   under its images section (its following paragraphs as its interpretation) and then removed from the Core: never
+ *   dropped (no Art page, or a split's new Art page whose text the split writes: the image stays, and the owner is told);
+ * - any other sentence still saying "compact" listed for the owner, never edited; the visual text left in a section
+ *   whose images left the Core goes into the overlap warnings.
+ */
+async function coreTextChanges(
+  env: PlanEnv,
+  a: {
+    readonly identity: NodeRef;
+    readonly subject: string;
+    readonly pages: PlannedPage[];
+    readonly indexNode: TreeNode | null;
+    readonly split: boolean;
+    readonly core?: { readonly documentId: string; readonly blocks: readonly LkBlock[] };
+  },
+): Promise<{
+  changes: ExistingChange[];
+  warnings: Issue[];
+  notes: string[];
+  coreBlocks: LkBlock[] | null;
+}> {
+  const { ctx, type } = env;
+  const changes: ExistingChange[] = [];
+  const warnings: Issue[] = [];
+  const notes: string[] = [];
+  const core = a.core
+    ? { documentId: a.core.documentId, blocks: [...a.core.blocks] }
+    : await readMain(env, a.identity.id);
+  if (!core) {
+    warnings.push({
+      code: 'CORE_TEXT_UNREAD',
+      message: `${a.identity.rawName}: its text could not be read now, so its wording and images are not changed by the upgrade. Check it afterwards: it may still call itself compact.`,
+    });
+    return { changes, warnings, notes, coreBlocks: null };
+  }
+  const artRule = type.roles.find((r) => r.role === type.assets.role) ?? null;
+  const artName = artRule ? fill(artRule.name, { Name: a.subject }) : null;
+  const newArtAt = a.pages.findIndex((p) => p.role === type.assets.role);
+  const artNode =
+    newArtAt < 0 && a.indexNode
+      ? (ctx.tree
+          .children(ctx.projectId, a.indexNode.id)
+          .data.find(
+            (n) =>
+              n.kind !== 'index' &&
+              n.kind !== 'barc' &&
+              ((artName !== null && nameKey(n.displayName) === nameKey(artName)) ||
+                (artRule?.referenceType != null &&
+                  n.referenceType !== null &&
+                  textKey(n.referenceType) === textKey(artRule.referenceType))),
+          ) ?? null)
+      : null;
+  const art = artNode ? await readMain(env, artNode.id) : null;
+  if (artNode && !art)
+    warnings.push({
+      code: 'CORE_TEXT_UNREAD',
+      message: `${artNode.rawName}: it could not be read now, so the Core's images stay on the Core and the Art page's wording is not changed.`,
+    });
+  const newArt = newArtAt >= 0 ? a.pages[newArtAt]! : null;
+  const boundaries = ['Source Boundaries', 'Unresolved Material'];
+  const section = type.assets.section;
+
+  // The wording, on the Core.
+  const cw = reword(core.blocks, 'core', a.subject);
+  // The images.
+  const artBlocks = art?.blocks ?? newArt?.blocks ?? null;
+  let imgs = artBlocks
+    ? planCoreImages(core.blocks, imageKeys(artBlocks), a.subject, mintClientId)
+    : { remove: [], append: [], sections: [] };
+  const coreImages = core.blocks.filter((b) => (b as unknown as Obj).kind === 'image').length;
+  if (!artBlocks && coreImages > 0 && !artNode)
+    notes.push(
+      `${a.identity.rawName} holds ${coreImages} image${coreImages === 1 ? '' : 's'} and ${a.subject} has no Art page yet, so ${coreImages === 1 ? 'it stays' : 'they stay'} on the Core (arkona_add_character_art makes the Art page).`,
+    );
+  if (newArt && a.split && imgs.append.length > 0) {
+    // The split writes its new pages' text itself: an image the new Art page lacks stays on the Core.
+    const kept = imgs.remove.filter((r) => !r.onArt).length;
+    imgs = { ...imgs, remove: imgs.remove.filter((r) => r.onArt), append: [] };
+    warnings.push({
+      code: 'CORE_IMAGE_KEPT',
+      message: `${a.identity.rawName}: ${kept} image${kept === 1 ? '' : 's'} not on the new Art page stay${kept === 1 ? 's' : ''} on the Core (the split writes the new page's text). Move ${kept === 1 ? 'it' : 'them'} with arkona_add_character_art afterwards.`,
+      page: a.identity.rawName,
+    });
+  }
+  const after = reword(core.blocks, 'core', a.subject).blocks.filter(
+    (b) => !imgs.remove.some((r) => r.blockId === (b as unknown as Obj).id),
+  );
+  const left: CompactLeft[] = compactSentences(after, a.identity.rawName);
+
+  // The Art page: its wording, and the moved images.
+  let artReplacements: CoreReplacement[] = [];
+  if (art && artNode) {
+    const aw = reword(art.blocks, 'art', a.subject);
+    artReplacements = aw.replacements;
+    left.push(...compactSentences(aw.blocks, artNode.rawName));
+    if (aw.replacements.length > 0 || imgs.append.length > 0)
+      changes.push({
+        kind: 'core_text',
+        page: {
+          id: artNode.id,
+          rawName: artNode.rawName,
+          displayName: artNode.displayName,
+          kind: artNode.kind,
+          path: artNode.path.names.join(' / '),
+        },
+        documentId: art.documentId,
+        role: 'art',
+        subject: a.subject,
+        replacements: aw.replacements,
+        remove: [],
+        append: imgs.append,
+        section,
+        boundaries,
+      });
+  } else if (newArt && newArt.blocks) {
+    const aw = reword(newArt.blocks, 'art', a.subject);
+    artReplacements = aw.replacements;
+    const blocks =
+      imgs.append.length > 0 ? insertUnder(aw.blocks, section, boundaries, imgs.append) : aw.blocks;
+    if (aw.replacements.length > 0 || imgs.append.length > 0) {
+      let markdown = newArt.markdown;
+      try {
+        markdown = toMarkdown({ blocks }).markdown;
+      } catch {
+        // the preview keeps the planned Markdown
+      }
+      a.pages[newArtAt] = {
+        ...newArt,
+        blocks,
+        markdown,
+        headings: sectionsOf(blocks)
+          .filter((s) => s.heading)
+          .map((s) => s.title),
+        notes: [
+          ...(newArt.notes ?? []),
+          ...(imgs.append.length > 0
+            ? [`${imgs.remove.filter((r) => !r.onArt).length} image(s) moved here from the Character Core`]
+            : []),
+        ],
+      };
+    }
+    left.push(...compactSentences(blocks, newArt.rawName));
+  }
+
+  // The Core: its wording, and its images removed (after the Art page has them).
+  if (cw.replacements.length > 0 || imgs.remove.length > 0)
+    changes.push({
+      kind: 'core_text',
+      page: a.identity,
+      documentId: core.documentId,
+      role: 'core',
+      subject: a.subject,
+      replacements: cw.replacements,
+      remove: imgs.remove.map((r) => ({ blockId: r.blockId, url: r.url })),
+      append: [],
+      section,
+      boundaries,
+      ...(imgs.remove.some((r) => !r.onArt) ? { needs: artNode?.id ?? newArt?.id ?? '' } : {}),
+    });
+  const all = [...cw.replacements, ...artReplacements];
+  if (all.length > 0)
+    notes.push(
+      `Wording: ${all.length} phrase${all.length === 1 ? '' : 's'} that called it compact now say Character Core (${all
+        .slice(0, 6)
+        .map((r) => `“${r.before.slice(0, 120)}” → “${r.after.slice(0, 120)}”`)
+        .join('; ')}${all.length > 6 ? `; and ${all.length - 6} more` : ''}).`,
+    );
+  const onArt = imgs.remove.filter((r) => r.onArt).length;
+  const moved = imgs.remove.length - onArt;
+  if (imgs.remove.length > 0)
+    notes.push(
+      `Images: ${onArt > 0 ? `${onArt} the Art page already holds removed from the Core` : ''}${onArt > 0 && moved > 0 ? '; ' : ''}${moved > 0 ? `${moved} the Art page lacked moved to its ${section} (with ${moved === 1 ? 'its' : 'their'} interpretation) and then removed from the Core` : ''}. No prose is removed.`,
+    );
+  warnings.push(...visualTextWarning(a.identity.rawName, imgs.sections));
+  if (left.length > 0) {
+    warnings.push({
+      code: 'COMPACT_WORDING_LEFT',
+      message: `${left.length} sentence${left.length === 1 ? '' : 's'} still say${left.length === 1 ? 's' : ''} “compact” after the upgrade's replacements; listed for the owner, never edited.`,
+      sentences: left.slice(0, 20),
+    });
+    notes.push(
+      `For the owner (not edited): ${left
+        .slice(0, 5)
+        .map((l) => `${l.page}: “${l.sentence.slice(0, 160)}”`)
+        .join('; ')}${left.length > 5 ? `; and ${left.length - 5} more` : ''}.`,
+    );
+  }
+  return { changes, warnings, notes, coreBlocks: core.blocks };
+}
+
+async function overlapWarnings(
+  env: PlanEnv,
+  page: NodeRef,
+  pages: readonly PlannedPage[],
+  read?: LkBlock[] | null,
+): Promise<Issue[]> {
+  const blocks = read ?? (await readMain(env, page.id))?.blocks;
+  if (!blocks) return [];
   const domains = env.type.text.overload.domains;
   const owned = new Set<string>();
   for (const p of pages) {

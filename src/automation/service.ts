@@ -284,7 +284,7 @@ export class AutomationService {
         mode: this.modeOf(projectId, e),
         // v3 F7 (ADR 0070): a proposal-only code is Off or Propose, never Apply.
         modes:
-          e.automatable === 'propose'
+          e.automatable === 'propose' && e.applyDirect !== true
             ? (['off', 'propose'] as Mode[])
             : (['off', 'propose', 'apply'] as Mode[]),
         paused: s?.pausedAt ? { at: s.pausedAt, reason: s.pausedReason ?? '' } : null,
@@ -755,7 +755,7 @@ export class AutomationService {
         'NOT_ELIGIBLE',
         `${code} is not an automatable code: only codes whose fix the bridge fully determines can be switched on.`,
       );
-    if (e.automatable === 'propose' && mode === 'apply')
+    if (e.automatable === 'propose' && e.applyDirect !== true && mode === 'apply')
       throw new AutomationError(
         'PROPOSE_ONLY',
         `${code} is proposal-only: each of its fixes moves, renames or deletes assets, which is always a proposal for the owner. Choose Off or Propose.`,
@@ -1124,7 +1124,7 @@ export class AutomationService {
     ctx: RunContext,
   ): Promise<CodeOutcome> {
     if (e.source === 'retag') return this.runRetag(projectId, runId, e, mode, cap, ctx);
-    if (e.automatable === 'propose') return this.runProposals(projectId, runId, e, cap);
+    if (e.automatable === 'propose') return this.runProposals(projectId, runId, e, cap, mode);
     let candidates: Candidate[];
     try {
       candidates = (await this.candidates(projectId, e, ctx)).filter((c) => ctx.allows(c.pageId));
@@ -1184,6 +1184,7 @@ export class AutomationService {
     runId: string,
     e: CodeEntry,
     cap: number,
+    mode: Exclude<Mode, 'off'> = 'propose',
   ): Promise<CodeOutcome> {
     const list = this.d.audits.store
       .list(projectId, { code: [e.code], state: 'open', limit: 5000 })
@@ -1192,9 +1193,14 @@ export class AutomationService {
     const done = new Set(
       this.store
         .codeItems(projectId, e.code, 5000)
-        .filter((i) => i.proposalId !== null && i.pageId !== null)
+        .filter(
+          (i) =>
+            (i.proposalId !== null || (i.outcome === 'applied' && i.jobId !== null)) && i.pageId !== null,
+        )
         .map((i) => i.pageId!),
     );
+    // v3 F7.1 (ADR 0072): a code whose fix may run as a job once the owner switches it to Apply (`applyDirect`).
+    const direct = mode === 'apply' && e.applyDirect === true;
     let attempted = 0;
     let capped = false;
     for (const f of list) {
@@ -1215,10 +1221,34 @@ export class AutomationService {
           Promise.resolve({ ok: false, code: 'PROPOSE_ONLY', reason: 'proposed through the audit' }),
       };
       try {
-        const r = await this.d.audits.proposeFix('automation', projectId, f.id, { origin: this.origin(e) });
+        const r = await this.d.audits.proposeFix('automation', projectId, f.id, {
+          origin: this.origin(e),
+          ...(direct ? { direct: true } : {}),
+        });
         if (r.status === 'proposal_captured')
-          this.item(projectId, runId, e.code, c, 'proposed', { proposalId: r.proposalId });
-        else
+          this.item(projectId, runId, e.code, c, 'proposed', {
+            proposalId: r.proposalId,
+            // Apply: a guard (the canon guard, for an Authoritative page's rename) made it a proposal, as always.
+            ...(direct
+              ? { reasonCode: 'GUARDED', reason: 'a guard made it a proposal (canon is the owner’s)' }
+              : {}),
+          });
+        else if (r.status === 'job_submitted') {
+          const job = await this.settle(projectId, r.jobId, this.d.settleMs ?? 600_000);
+          if (job?.status === 'succeeded')
+            this.item(projectId, runId, e.code, c, 'applied', { jobId: r.jobId });
+          else {
+            await this.fail(
+              projectId,
+              runId,
+              e,
+              c,
+              'JOB_FAILED',
+              `the job ${r.jobId} ended ${job?.status ?? 'unknown'}`,
+            );
+            return { kind: 'done', attempted };
+          }
+        } else
           this.item(projectId, runId, e.code, c, 'skipped', {
             reasonCode: 'NOTHING_TO_DO',
             reason: r.message,
@@ -1353,7 +1383,8 @@ export class AutomationService {
           submit: cap.submit,
         },
       });
-      if (r.status !== 'proposal_captured') return { ok: false, code: 'NOTHING_TO_DO', reason: r.message };
+      if (r.status !== 'proposal_captured')
+        return { ok: false, code: 'NOTHING_TO_DO', reason: 'message' in r ? r.message : 'not planned' };
     } catch (err) {
       return { ok: false, code: errCode(err), reason: errMessage(err) };
     }
