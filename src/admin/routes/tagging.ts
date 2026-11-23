@@ -43,6 +43,15 @@ const STATUS: Readonly<Record<string, number>> = {
   RECONCILIATION_CLOSED: 409,
   INVALID_PARAMS: 400,
   SCOPE_TOO_LARGE: 400,
+  // v3 F5a (ADR 0067, H2)
+  PAGE_NOT_FOUND: 404,
+  TAG_NOT_ON_PAGE: 409,
+  NOT_AN_EXCEPTION: 409,
+  SOURCE_ELSEWHERE: 409,
+  SECTION_NOT_READABLE: 409,
+  SECTION_NOT_EDITABLE: 409,
+  TAG_NOT_LISTABLE: 400,
+  ALREADY_LISTED: 409,
 };
 
 const ORIGIN = (tool: string): JobOrigin => ({
@@ -217,6 +226,98 @@ export const registerTagging: Register = (api, ctx) => {
     );
     const p = ctx.project(b.project);
     return wrap(() => ({ removed: retag().unclassify('owner', p.id, b.pageId) }));
+  });
+
+  // ---------------------------------------------------------------------------------- v3 F5a (ADR 0067, H2)
+
+  /** The latest run's exceptions, each with the owner's rulings and the agents' suggestions, and the supplementary list. */
+  api.get('/tagging/exceptions', (req) => {
+    const q = parseInput(z.object({ project: projectParam, run: runIdSchema.optional() }), req.query);
+    const p = ctx.project(q.project);
+    const r = retag();
+    let supplementary: readonly string[] = [];
+    try {
+      supplementary = r.policyFor(p.id).rules.retag?.supplementary?.tags ?? [];
+    } catch {
+      supplementary = [];
+    }
+    const run = q.run ? r.store.run(q.run) : r.store.latestRun(p.id);
+    if (!run || run.projectId !== p.id) return { run: null, exceptions: [], supplementary };
+    return {
+      run,
+      supplementary,
+      exceptions: r.store.verdicts(run.id, { disposition: 'exception' }).map((v) => ({
+        ...verdictView(v, run.policy, true),
+        rulings: r.store.rulings(p.id, v.pageId),
+        suggestions: r.store.rulingSuggestions(p.id, v.pageId),
+      })),
+    };
+  });
+
+  /** "Keep this tag here": the owner's ruling for one page (re-authenticated; audited `retag.keep_here`). */
+  api.post('/tagging/keep-here', async (req) => {
+    requireReauth(ctx.deps.services, req);
+    const b = parseInput(
+      z
+        .object({
+          project: projectParam,
+          pageId: pageIdSchema,
+          tag: z.string().min(1).max(100),
+          reason: z.string().min(1).max(1000),
+          confirm: z.literal(true),
+        })
+        .strict(),
+      req.body,
+    );
+    const p = ctx.project(b.project);
+    return wrap(async () => ({
+      ruling: await retag().keepHere('owner', p.id, { pageId: b.pageId, tag: b.tag, reason: b.reason }),
+    }));
+  });
+
+  /** Withdraws a "Keep this tag here" ruling: a tightening, one click (ADR 0062's rule). */
+  api.post('/tagging/unkeep', async (req) => {
+    const b = parseInput(
+      z
+        .object({ project: projectParam, pageId: pageIdSchema, tag: z.string().min(1).max(100), confirm: z.literal(true) })
+        .strict(),
+      req.body,
+    );
+    const p = ctx.project(b.project);
+    return wrap(() => ({ removed: retag().unkeep('owner', p.id, b.pageId, b.tag) }));
+  });
+
+  /**
+   * "Allow this tag everywhere": the bridge edits the Tagging Standard's Approved Supplementary Tags to add the tag, as
+   * the owner's action. `dryRun` (one read, no step-up) returns the paragraph before and after; the edit itself asks for
+   * the step-up, runs as one job (journalled, revertible) and is audited `retag.allow_everywhere`.
+   */
+  api.post('/tagging/allow-everywhere', async (req) => {
+    const b = parseInput(
+      z
+        .object({
+          project: projectParam,
+          tag: z.string().min(1).max(100),
+          pageId: pageIdSchema.optional(),
+          dryRun: z.boolean().optional(),
+          confirm: z.literal(true).optional(),
+        })
+        .strict(),
+      req.body,
+    );
+    if (b.dryRun !== true) {
+      if (b.confirm !== true)
+        throw new AdminHttpError(400, 'CONFIRM_REQUIRED', 'Confirm the edit (confirm: true), or ask for a dry run.');
+      requireReauth(ctx.deps.services, req);
+    }
+    const p = ctx.project(b.project);
+    return wrap(async () =>
+      retag().allowEverywhere('owner', p.id, {
+        tag: b.tag,
+        pageId: b.pageId ?? null,
+        ...(b.dryRun === true ? { dryRun: true } : {}),
+      }),
+    );
   });
 
   api.post('/tagging/batches', async (req) => {

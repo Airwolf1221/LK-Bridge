@@ -23,7 +23,7 @@ import type { Appraisal } from '../../appraisal/service.js';
 import type { LiveRead } from '../../appraisal/reader.js';
 import { EXPECT_STEP, VERIFY_STEP } from '../../jobs/internal-steps.js';
 import { stateHash } from '../../jobs/sidebar-state.js';
-import type { JobEngine, JobOrigin, JobView, StepSpec } from '../../jobs/index.js';
+import { SYSTEM_PRINCIPAL, type JobEngine, type JobOrigin, type JobView, type StepSpec } from '../../jobs/index.js';
 import type { PlanItem } from '../../jobs/items.js';
 import { lifecycleFrom } from '../../lifecycle/settings.js';
 import type { ProjectSettings } from '../../projects/settings.js';
@@ -38,8 +38,10 @@ import {
   inputsHashOf,
   policyOf,
   retagPage,
+  tagsHashOf,
   vocabularyOf,
   type Disposition,
+  type TagRuling,
   type RetagContext,
   type RetagPolicy,
   type RetagVerdict,
@@ -52,8 +54,11 @@ import {
   type Outcome,
   type Reconciliation,
   type RetagRun,
+  type RulingSuggestion,
   type RunCounts,
+  type TagRulingRecord,
 } from './store.js';
+import { addSupplementaryTag, sectionBlocksOf } from '../sections.js';
 
 type Obj = Record<string, unknown>;
 /**
@@ -71,6 +76,8 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 export const RETAG_PACK = 'arkona';
 export const APPLY_TOOL = 'arkona_retag_apply';
 export const AUDIT_TOOL = 'arkona_retag_audit';
+/** v3 F5a (ADR 0067, H2): the owner's "Allow this tag everywhere" (the job's origin tool, the journal's operation). */
+export const ALLOW_TOOL = 'tagging.allow_everywhere';
 /** The most pages `live: true` re-reads in one audit (one read each). */
 export const MAX_LIVE_PAGES = 50;
 /** The most pages one audit verdicts (a whole-repository run of Arkona is about 1,500). */
@@ -96,7 +103,10 @@ export interface RetagDeps {
   readonly appraisal: Pick<Appraisal, 'reader' | 'freshness'>;
   /** The template the bridge recorded for a page (the tree's), or null. */
   readonly templateOf: (projectId: string, pageId: string) => string | null;
-  readonly engine: Pick<JobEngine, 'submit' | 'stepRecords' | 'events' | 'queries'>;
+  readonly engine: Pick<JobEngine, 'submit' | 'stepRecords' | 'events' | 'queries'> &
+    Partial<Pick<JobEngine, 'internalRead'>>;
+  /** v3 F5a (H2): a project's name (a governance source names its project by name). */
+  readonly projectName?: (projectId: string) => string | null;
   readonly proposals: {
     addHooks(h: {
       afterSubmit?(ctx: { readonly proposal: ProposalView; readonly jobId: string }): void;
@@ -191,6 +201,11 @@ export class RetagService {
           this.onJob(e.job);
         } catch (err) {
           this.d.log?.warn({ err, jobId: e.job.id }, 'a retag batch could not record its job');
+        }
+        try {
+          this.afterSupplementaryEdit(e.job);
+        } catch (err) {
+          this.d.log?.warn({ err, jobId: e.job.id }, 'an Approved Supplementary Tags edit could not be followed');
         }
       }),
     );
@@ -403,6 +418,8 @@ export class RetagService {
                   detail: `the owner, ${new Date(owner.at).toISOString().slice(0, 10)}: ${owner.reason}`,
                 }
               : null,
+            // v3 F5a (ADR 0067, H2): the owner's "Keep this tag here" rulings of the page.
+            rulings: this.rulingsFor(o.projectId, id),
           },
           ctx,
         ),
@@ -832,6 +849,20 @@ export class RetagService {
         ...(differences.length > 0 ? { differences } : {}),
       };
     }
+    // v3 F5a (ADR 0067, H2, chosen): the apply's own verified write is the change the audit proposed WITH the owner's
+    // "Keep this tag here" rulings in force, so they are carried to the new array; any other change lapses them.
+    for (const [pageId, disp] of Object.entries(out)) {
+      if (disp.outcome !== 'applied' || disp.verified !== true) continue;
+      const page = b.pages.find((x) => x.pageId === pageId);
+      if (page)
+        this.store.carryRulings(
+          job.projectId,
+          pageId,
+          tagsHashOf(page.current),
+          page.proposed,
+          tagsHashOf(page.proposed),
+        );
+    }
     const state: Batch['state'] = job.status === 'succeeded' ? 'done' : 'stopped';
     this.store.updateBatch(b.id, { jobId: job.id, state, dispositions: out });
     if (b.reconciliationId)
@@ -950,6 +981,243 @@ export class RetagService {
       reason: o.reason.trim().slice(0, 1000),
       by,
       at: this.d.now(),
+    });
+  }
+
+  // ============================================================================================ v3 F5a: rulings (H2)
+
+  /**
+   * The owner's "Keep this tag here" (ADR 0067, H2): a ruling for one page, tied to the page's tag array as the
+   * snapshots hold it now. While the array is unchanged the audit keeps the tag on that page alone; if it changes, the
+   * ruling lapses. Owner only; audited `retag.keep_here`.
+   */
+  async keepHere(
+    actor: string,
+    projectId: string,
+    o: { readonly pageId: string; readonly tag: string; readonly reason: string },
+  ): Promise<TagRulingRecord> {
+    if (actor !== 'owner')
+      throw new RetagError('NOT_OWNER', 'Only the owner rules on an exception; an agent may suggest a ruling.');
+    const reason = o.reason.trim();
+    if (reason === '') throw new RetagError('REASON_REQUIRED', 'A ruling needs a reason (what the owner checked).');
+    const { pack, rules } = this.policyFor(projectId);
+    const { reader } = await this.d.appraisal.reader(projectId);
+    const lp = await reader.load(o.pageId);
+    if (!lp?.resource)
+      throw new RetagError('PAGE_NOT_FOUND', `Page ${o.pageId} is not in the snapshots: audit it first.`);
+    const tags = extractResource(lp.resource).tags;
+    const tag = tags.find((t) => textKey(t) === textKey(o.tag));
+    if (tag === undefined)
+      throw new RetagError('TAG_NOT_ON_PAGE', `“${o.tag}” is not among ${lp.page.rawName}’s tags (${tags.join(', ') || 'none'}).`);
+    const v = retagPage(
+      {
+        id: o.pageId,
+        rawName: lp.page.rawName,
+        kind: lp.page.kind,
+        tags,
+        facts: lp.sidebar?.facts ?? new Map(),
+        lifecycle: lp.labels.lifecycle,
+        ancestors: lp.path.names.slice(0, -1),
+        area: lp.labels.area,
+        templateId: this.d.templateOf(projectId, o.pageId),
+        packRecord: null,
+        owner: this.ownerRecord(projectId, o.pageId),
+      },
+      this.context(projectId, rules, pack),
+    );
+    // Not an exception: a tag the grammar places (status, category, specialist, identity), an Approved Supplementary
+    // Tag, or one a rule removes. (A held page's other tags are not judged yet, so they may be kept.)
+    const placed = v.slots.some((x) => x.slot !== 'other' && x.tag !== null && textKey(x.tag) === textKey(tag));
+    const removed = v.removals.some((x) => textKey(x.tag) === textKey(tag));
+    if (v.scope !== 'grammar' || placed || removed)
+      throw new RetagError(
+        'NOT_AN_EXCEPTION',
+        `“${tag}” is not an exception on ${lp.page.rawName} (the grammar places it, it is an Approved Supplementary Tag, a rule removes it, or the page is outside the grammar): there is nothing to keep.`,
+      );
+    const ruling: TagRulingRecord = {
+      pageId: o.pageId,
+      pageName: lp.page.rawName,
+      tag,
+      tagsHash: tagsHashOf(tags),
+      tags,
+      reason: reason.slice(0, 1000),
+      by: actor,
+      at: this.d.now(),
+    };
+    const before = this.store.rulings(projectId, o.pageId).find((r) => r.tag === tag) ?? null;
+    this.store.setRuling(projectId, ruling);
+    this.d.audit(actor, 'retag.keep_here', o.pageId, before, {
+      project: projectId,
+      page: ruling.pageName,
+      tag,
+      tags,
+      reason: ruling.reason.slice(0, 200),
+    });
+    return ruling;
+  }
+
+  /** Withdraws a "Keep this tag here" ruling (owner only; audited). */
+  unkeep(actor: string, projectId: string, pageId: string, tag: string): boolean {
+    if (actor !== 'owner') throw new RetagError('NOT_OWNER', 'Only the owner withdraws a ruling.');
+    const had = this.store.rulings(projectId, pageId).find((r) => textKey(r.tag) === textKey(tag));
+    if (!had) return false;
+    this.store.clearRuling(projectId, pageId, had.tag);
+    this.d.audit(actor, 'retag.unkeep', pageId, { tag: had.tag, tags: had.tags }, null);
+    return true;
+  }
+
+  /** An agent's suggestion of either owner action on an exception, with its reason: kept for the owner, never acted on. */
+  suggestRuling(
+    by: string,
+    projectId: string,
+    o: {
+      readonly pageId: string;
+      readonly tag: string;
+      readonly action: 'keep_here' | 'allow_everywhere';
+      readonly reason: string;
+    },
+  ): RulingSuggestion {
+    this.policyFor(projectId);
+    const reason = o.reason.trim();
+    if (reason === '') throw new RetagError('REASON_REQUIRED', 'A suggestion needs its reason.');
+    const tag = o.tag.trim();
+    if (tag === '' || tag.length > 100) throw new RetagError('INVALID_PARAMS', 'Name the tag (at most 100 characters).');
+    return this.store.suggestRuling(projectId, {
+      pageId: o.pageId,
+      tag,
+      action: o.action,
+      reason: reason.slice(0, 1000),
+      by,
+      at: this.d.now(),
+    });
+  }
+
+  /**
+   * The owner's "Allow this tag everywhere" (ADR 0067, H2): the Tagging Standard's Approved Supplementary Tags edited to
+   * add the tag, keeping the sentence's structure. `dryRun` reads the section (one read) and returns the paragraph
+   * before and after; otherwise ONE job of the bridge's (one `replaceBlock` of that paragraph, If-Match the version
+   * read), journalled and revertible. Once it has run, the governance check offers the pack's new version for approval.
+   * Owner only (the route asks for the step-up); audited `retag.allow_everywhere`.
+   */
+  async allowEverywhere(
+    actor: string,
+    projectId: string,
+    o: { readonly tag: string; readonly pageId?: string | null; readonly dryRun?: boolean },
+  ): Promise<{
+    readonly dryRun: boolean;
+    readonly tag: string;
+    readonly section: string;
+    readonly before: string;
+    readonly after: string;
+    readonly tags: readonly string[];
+    readonly jobId: string | null;
+    readonly page: { readonly id: string; readonly documentId: string; readonly blockId: string };
+  }> {
+    if (actor !== 'owner')
+      throw new RetagError('NOT_OWNER', 'Only the owner allows a tag everywhere; an agent may suggest it.');
+    const { pack } = this.policyFor(projectId);
+    const sup = pack.rules.retag?.supplementary;
+    if (!sup)
+      throw new RetagError(
+        'RETAG_UNAVAILABLE',
+        'This pack version has no Approved Supplementary Tags: approve the version that adds them (arkona-…-f5a) on the Packs page.',
+      );
+    const src = pack.governance.find((g) => g.key === sup.source);
+    const here = this.d.projectName?.(projectId) ?? null;
+    if (!src || src.resourceId === '' || src.documentId === '' || here === null || here.toLowerCase() !== src.project.toLowerCase())
+      throw new RetagError(
+        'SOURCE_ELSEWHERE',
+        `The Tagging Standard (${src?.name ?? sup.source}) is not a page of this project, so it cannot be edited from here.`,
+      );
+    if (!this.d.engine.internalRead) throw new RetagError('RETAG_UNAVAILABLE', 'The bridge cannot read the Tagging Standard here.');
+    const read = (await this.d.engine.internalRead(
+      projectId,
+      'getDocumentBlocks',
+      { path: { resourceId: src.resourceId, documentId: src.documentId } },
+      { priority: 'P1' },
+    )) as { version?: unknown; blocks?: unknown } | null;
+    if (!read || typeof read.version !== 'string')
+      throw new RetagError('SECTION_NOT_READABLE', 'The Tagging Standard could not be read.');
+    const edit = addSupplementaryTag(sectionBlocksOf(read.blocks, sup.section), o.tag);
+    if (!edit.ok) throw new RetagError(edit.code, `${edit.reason}. Nothing was written.`);
+    const tag = edit.tags.at(-1)!;
+    const page = { id: src.resourceId, documentId: src.documentId, blockId: edit.blockId };
+    const base = {
+      tag,
+      section: sup.section,
+      before: edit.beforeText,
+      after: edit.afterText,
+      tags: edit.tags,
+      page,
+    };
+    if (o.dryRun === true) return { ...base, dryRun: true, jobId: null };
+    const r = await this.d.engine.submit({
+      kind: 'batch_ops',
+      project: projectId,
+      steps: [
+        {
+          op: 'replaceBlock',
+          params: {
+            path: { resourceId: src.resourceId, documentId: src.documentId, blockId: edit.blockId },
+            body: edit.after,
+            ifMatch: read.version,
+          },
+          journalOperation: {
+            tool: ALLOW_TOOL,
+            page: { id: src.resourceId, name: src.name },
+            section: sup.section,
+            tag,
+            before: edit.beforeText.slice(0, 2000),
+            after: edit.afterText.slice(0, 2000),
+          },
+        },
+      ],
+      onError: 'stop',
+      priority: 'P1',
+      origin: { kind: 'ui', client: 'owner', tool: ALLOW_TOOL, detail: `tag:${tag}`, principal: SYSTEM_PRINCIPAL },
+      title: `Allow “${tag}” everywhere: the Tagging Standard’s ${sup.section}`.slice(0, 300),
+      internal: true,
+      lastMajorRevision: 'skip',
+    });
+    const jobId = 'jobId' in r ? r.jobId : null;
+    this.store.recordSupplementaryEdit({
+      id: newId('rts'),
+      projectId,
+      tag,
+      pageId: o.pageId ?? null,
+      jobId,
+      beforeText: edit.beforeText,
+      afterText: edit.afterText,
+      by: actor,
+      at: this.d.now(),
+    });
+    this.d.audit(actor, 'retag.allow_everywhere', src.resourceId, { text: edit.beforeText }, {
+      project: projectId,
+      tag,
+      text: edit.afterText,
+      jobId,
+      ...(o.pageId ? { fromPage: o.pageId } : {}),
+    });
+    if (jobId) {
+      const job = this.d.engine.queries.getJob(projectId, jobId);
+      if (job) this.afterSupplementaryEdit(job);
+    }
+    return { ...base, dryRun: false, jobId };
+  }
+
+  /** Whether a job is an "Allow this tag everywhere" edit (Revert applies to it, as to the owner's other work here). */
+  isSupplementaryEditJob(projectId: string, jobId: string): boolean {
+    return this.store.supplementaryEdits(projectId).some((e) => e.jobId === jobId);
+  }
+
+  private readonly followedEdits = new Set<string>();
+
+  /** Once an edit's job has succeeded, the governance check: it offers the pack's new version for approval. */
+  private afterSupplementaryEdit(job: JobView): void {
+    if (job.status !== 'succeeded' || job.origin.tool !== ALLOW_TOOL || this.followedEdits.has(job.id)) return;
+    this.followedEdits.add(job.id);
+    void this.d.packs.governance(RETAG_PACK).catch((err: unknown) => {
+      this.d.log?.warn({ err, jobId: job.id }, 'the governance check after an Approved Supplementary Tags edit failed');
     });
   }
 
@@ -1224,7 +1492,29 @@ export class RetagService {
           : null;
       },
       templateOf: (pageId) => this.d.templateOf(projectId, pageId),
+      rulings: (pageId) => this.rulingsFor(projectId, pageId),
     };
+  }
+
+  /** The owner's classification of a page, as the engine reads it. */
+  private ownerRecord(projectId: string, pageId: string) {
+    const c = this.store.classification(projectId, pageId);
+    return c
+      ? {
+          primary: c.primary,
+          specialist: c.specialist,
+          detail: `the owner, ${new Date(c.at).toISOString().slice(0, 10)}: ${c.reason}`,
+        }
+      : null;
+  }
+
+  /** v3 F5a (ADR 0067, H2): a page's "Keep this tag here" rulings, as the engine reads them. */
+  rulingsFor(projectId: string, pageId: string): TagRuling[] {
+    return this.store.rulings(projectId, pageId).map((r) => ({
+      tag: r.tag,
+      tagsHash: r.tagsHash,
+      detail: `${r.by}, ${new Date(r.at).toISOString().slice(0, 10)}: ${r.reason}`,
+    }));
   }
 
   // ============================================================================================ revert

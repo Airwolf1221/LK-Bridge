@@ -25,6 +25,8 @@ import {
   pinnedSections,
   type FoundSection,
   type OutlineHeading,
+  parseSupplementaryTags,
+  sectionBlocksOf,
 } from './sections.js';
 import { PackStore } from './store.js';
 import {
@@ -108,6 +110,36 @@ export interface GovernanceStatus {
   /** The pack version the status is about, and the approved one. */
   readonly version: number;
   readonly approvedVersion: number | null;
+  /**
+   * v3 F5a (ADR 0067, H1): the Approved Supplementary Tags as their section reads now: `same` (this version's list),
+   * `offered` (a different list: a new version was made for the owner's approval), `unreadable` (the sentence cannot be
+   * read exactly: the approval is refused). Absent when the version has no such section.
+   */
+  readonly supplementary?: {
+    readonly state: 'same' | 'offered' | 'unreadable';
+    readonly tags: readonly string[];
+    readonly reason?: string;
+  };
+}
+
+/**
+ * v3 F5a (ADR 0067, H1): the version's Approved Supplementary Tags against their section as read now. Null when the
+ * version names no such section, or its source could not be read (the source's own state says so).
+ */
+function deriveSupplementary(
+  pack: Pack,
+  blocks: ReadonlyMap<string, unknown>,
+): { state: 'same' | 'differs' | 'unreadable'; tags: string[]; reason?: string } | null {
+  const sup = pack.rules.retag?.supplementary;
+  if (!sup || !blocks.has(sup.source)) return null;
+  // Read only where the source pins the section (its change is then drift too); otherwise the version's list stands.
+  const src = pack.governance.find((g) => g.key === sup.source);
+  if (!(src?.sections ?? []).some((h) => headingKey(h) === headingKey(sup.section))) return null;
+  const parsed = parseSupplementaryTags(sectionBlocksOf(blocks.get(sup.source), sup.section));
+  if (!parsed.ok) return { state: 'unreadable', tags: [...sup.tags], reason: parsed.reason };
+  const same =
+    parsed.tags.length === sup.tags.length && parsed.tags.every((t, i) => t === sup.tags[i]);
+  return { state: same ? 'same' : 'differs', tags: parsed.tags };
 }
 
 export interface PackView extends Pack {
@@ -459,6 +491,8 @@ export function createPacks(d: PacksDeps): Packs {
     headings: string[];
     /** ADR 0052 amendment: the document's outline (empty when the source pins none or could not be read). */
     outline: OutlineHeading[];
+    /** v3 F5a (H1): the document's blocks as read (for the sections the rules parse), or undefined. */
+    blocks?: unknown;
   }> => {
     const none = {
       sections: [] as FoundSection[],
@@ -499,6 +533,7 @@ export function createPacks(d: PacksDeps): Packs {
         sections: pinnedSections(r.blocks, src.sections ?? []),
         headings: (src.sections ?? []).length > 0 ? headingsOf(r.blocks) : [],
         outline: (src.sections ?? []).length > 0 ? outlineOf(r.blocks) : [],
+        blocks: r.blocks,
       };
     } catch (e) {
       return { version: null, digest: null, reason: e instanceof Error ? e.message : String(e), ...none };
@@ -509,12 +544,14 @@ export function createPacks(d: PacksDeps): Packs {
   const lastSections = new Map<string, { sections: FoundSection[]; headings: string[] }>();
 
   const governance = async (packId: string, o: { signal?: AbortSignal } = {}): Promise<GovernanceStatus> => {
-    const pack = store.get(packId);
+    let pack = store.get(packId);
     if (!pack) throw new PackError('PACK_NOT_FOUND', `No pack ${packId}.`);
     const approved = pack.approved;
     const sources: SourceStatus[] = [];
+    const blocksBySource = new Map<string, unknown>();
     for (const src of pack.governance) {
       const read = await readSource(src, o.signal);
+      if (read.version !== null) blocksBySource.set(src.key, read.blocks);
       lastSections.set(src.key, { sections: read.sections, headings: read.headings });
       const approvedSource = approved?.sources.find((x) => x.key === src.key);
       const was = approvedSource?.version ?? null;
@@ -580,7 +617,47 @@ export function createPacks(d: PacksDeps): Packs {
         )
         .join(', ')})`;
     };
-    const base = { sources, version: pack.version, approvedVersion: approved?.version ?? null };
+    // v3 F5a (ADR 0067, H1): the Approved Supplementary Tags, parsed from their section as it reads now. A list that
+    // differs from this version's is offered as a NEW version (the author's decision recorded on the page), never
+    // applied until the owner approves it; a section that cannot be read exactly is reported and refuses the approval.
+    const supplementary = deriveSupplementary(pack, blocksBySource);
+    if (supplementary?.state === 'differs') {
+      const rules = packRulesSchema.parse({
+        ...pack.rules,
+        retag: {
+          ...pack.rules.retag!,
+          supplementary: { ...pack.rules.retag!.supplementary!, tags: supplementary.tags },
+        },
+      });
+      const before = pack.rules.retag!.supplementary!.tags;
+      pack = store.newVersion(
+        pack.id,
+        rules,
+        `the Tagging Standard's ${pack.rules.retag!.supplementary!.section} now lists ${supplementary.tags.join(', ')}`,
+      );
+      d.audit(
+        'system',
+        'pack.derive_supplementary',
+        pack.id,
+        { tags: before },
+        { version: pack.version, tags: supplementary.tags },
+      );
+      changed();
+    }
+    const base = {
+      sources,
+      version: pack.version,
+      approvedVersion: approved?.version ?? null,
+      ...(supplementary
+        ? {
+            supplementary: {
+              state: supplementary.state === 'differs' ? ('offered' as const) : supplementary.state,
+              tags: supplementary.tags,
+              ...(supplementary.reason ? { reason: supplementary.reason } : {}),
+            },
+          }
+        : {}),
+    };
     let out: GovernanceStatus;
     if (!approved) {
       out = {
@@ -619,8 +696,10 @@ export function createPacks(d: PacksDeps): Packs {
         message: 'The pack is approved and its governance sources are as approved.',
       };
     }
-    // A drift seen is recorded (the Packs page shows it); an approved, current pack clears an old one.
-    if (out.state === 'changed') {
+    // A drift seen is recorded (the Packs page shows it); an approved, current pack clears an old one. v3 F5a (ADR 0067):
+    // also while a newer version waits for approval (`rules_changed`): a governance source changed since the approval
+    // is drift either way, so the approved version computes nothing until the owner approves again.
+    if (out.state === 'changed' || (out.state === 'rules_changed' && sources.some((s) => s.state === 'changed'))) {
       const drift: PackDrift = {
         at: now(),
         changed: sources
@@ -784,6 +863,21 @@ export function createPacks(d: PacksDeps): Packs {
         if (actor !== ACTOR_OWNER) throw new PackError('NOT_OWNER', 'Only the owner approves a pack.');
         const pack = requirePack(packId);
         const status = await governance(packId);
+        // v3 F5a (ADR 0067, H1): the check may have offered a new version (the Approved Supplementary Tags changed on the
+        // page): the version the owner looked at is no longer the current one, so it is not approved under the new text.
+        const fresh = requirePack(packId);
+        if (fresh.version !== pack.version)
+          throw new PackError(
+            'NEW_VERSION_OFFERED',
+            `The governance check just offered version ${fresh.version} (${status.supplementary?.state === 'offered' ? `the Approved Supplementary Tags now read ${status.supplementary.tags.join(', ')}` : 'the rules changed'}): look at it, then approve that version.`,
+            { version: fresh.version, governance: status },
+          );
+        if (status.supplementary?.state === 'unreadable')
+          throw new PackError(
+            'GOVERNANCE_SECTION_UNPARSABLE',
+            `The pack cannot be approved: the Tagging Standard's Approved Supplementary Tags cannot be read exactly (${status.supplementary.reason ?? 'unreadable'}). Restore the sentence's form (“… permitted supplementary tags …: A, B and C.”) on the page.`,
+            { governance: status },
+          );
         const unreadable = status.sources.filter((s) => s.current === null);
         if (unreadable.length > 0) {
           throw new PackError(

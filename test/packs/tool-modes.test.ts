@@ -13,11 +13,13 @@ import { PROJECT } from '../tools/helpers.js';
 import { approve, compactPackage, packWorld, type PackWorld } from './world.js';
 import { fixture } from '../images/world.js';
 
-describe('the seed (arkona-2026-11-21-r4, superseding F3.4’s arkona-2026-11-17-f3-4)', () => {
+describe('the seed (arkona-2026-11-23-f5a, superseding F3.4’s arkona-2026-11-17-f3-4)', () => {
   it('supersedes F3.3’s seed (labelled f3d) and F3.4’s', () => {
     // v3 F3e (ADR 0059), F3f (ADR 0060), F4a (ADR 0063), F4b (ADR 0064), F4b.1 (ADR 0064 amendment 1) and F4c (ADR 0065) made new seeds; F3.4's
     // switches are unchanged in them.
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-21-r4');
+    // v3 F5a (ADR 0067): the seed is now arkona-2026-11-23-f5a, superseding -r4.
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-23-f5a');
+    expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-21-r4');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b1');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-19-f4a');

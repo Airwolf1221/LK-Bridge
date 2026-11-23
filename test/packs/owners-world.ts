@@ -145,8 +145,14 @@ export const PINNED = {
     'Exact Tag Grammar',
     'Closed Primary Categories and Specialist Functions',
     'Excluded Routine Tags',
+    // v3 F5a (ADR 0067, H1): and the Approved Supplementary Tags (parsed as the pack's list).
+    'Approved Supplementary Tags',
   ],
 } as const;
+
+/** v3 F5a: the Approved Supplementary Tags section's sentence, verbatim as Arkona's page has it (23 November 2026). */
+export const SUPPLEMENTARY_SENTENCE =
+  'Under the Exact Tag Grammar’s provision for a deliberately approved exception, the author has approved these existing tags as permitted supplementary tags on any eligible owner (author ruling, 23 November 2026): Cosmology, Chronology and Setting Framework. A permitted supplementary tag is kept, after the grammar’s slots, wherever it appears. It is not a primary category or a specialist function, it is never added to a page by inference or by an audit, and it is never proposed for removal as incidental. Adding a tag to this list, or removing one, is an author decision recorded here.';
 
 const heading = (id: string, level: number, text: string) => ({
   id,
@@ -359,7 +365,10 @@ export async function ownersWorld(o: Parameters<typeof packWorld>[0] = {}): Prom
         para(`${doc}p0`, `${title}: the owner's rules.`),
         ...sections.flatMap((s, i) => [
           heading(`${doc}h${i + 1}`, 2, s),
-          para(`${doc}p${i + 1}`, `The rules of ${s}.`),
+          para(
+            `${doc}p${i + 1}`,
+            s === 'Approved Supplementary Tags' ? SUPPLEMENTARY_SENTENCE : `The rules of ${s}.`,
+          ),
         ]),
       ],
     });

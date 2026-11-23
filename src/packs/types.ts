@@ -435,6 +435,23 @@ export const retagRulesSchema = z
      */
     excludedRoutineTags: z.array(text(100)).max(100),
     /**
+     * v3 F5a (ADR 0067, H1): the Standard's "Approved Supplementary Tags" (a pinned section, read by its governing name,
+     * F4b.1's rule): tags permitted wherever they appear, kept after the grammar's slots, never added by inference and
+     * never proposed for removal. `tags` is the list as the section states it when this version was made; the bridge
+     * parses the section at each governance check and offers a new version when the list there differs (an author
+     * decision recorded on the page). Absent: no supplementary tags (an older version).
+     */
+    supplementary: z
+      .object({
+        /** The governance source holding the section (its key). */
+        source: z.string().regex(/^[a-z][a-z0-9-]{0,59}$/),
+        /** The section's heading, as pinned. */
+        section: text(200),
+        tags: z.array(text(100)).max(100),
+      })
+      .strict()
+      .optional(),
+    /**
      * Indexes (by name, prefix aside) whose pages are never retagged by inference: the Legacy Canon Archive, the Design
      * References, repository governance. Navigation indexes and the governance sources' own pages are always excluded.
      */

@@ -45,6 +45,8 @@ export function retagVerdicts(ctx: AuditContext): RetagVerdict[] {
           templateId: hook.templateOf(p.id),
           packRecord: hook.packRecord(p.id),
           owner: hook.owner(p.id),
+          // v3 F5a (ADR 0067, H2): the owner's "Keep this tag here" rulings.
+          ...(hook.rulings ? { rulings: hook.rulings(p.id) } : {}),
         },
         hook.context,
       ),

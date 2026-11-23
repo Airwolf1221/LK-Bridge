@@ -277,9 +277,10 @@ afterAll(async () => {
 describe('the approved pack', () => {
   // The reviewer ran this pass on arkona-2026-11-20-f41; the seed is now arkona-2026-11-21-r4 (this review's own version).
   it('control: the world runs on the seed, approved', async () => {
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-21-r4');
+    // v3 F5a (ADR 0067): the seed is now arkona-2026-11-23-f5a (its consistency rules are r4's, unchanged).
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-23-f5a');
     const pack = w.stack.runtime.packs.get('arkona')!;
-    expect(pack.seed).toBe('arkona-2026-11-21-r4');
+    expect(pack.seed).toBe('arkona-2026-11-23-f5a');
     expect(pack.approved?.version).toBe(pack.version);
     expect(pack.rules.consistency?.aliveValues).toEqual(['Alive', 'Living']);
     // The consistency tools are listed (the approved version has consistency rules) and answer.

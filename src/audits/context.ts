@@ -15,7 +15,7 @@ import type { AuditModel } from './reader.js';
 import type { FindingDraft, FindingSource } from './types.js';
 import type { AssetLibrary } from './checks/assets.js';
 import type { GovernanceAuditInput } from './checks/governance.js';
-import type { ClassificationRecord, RetagContext } from '../packs/retag/engine.js';
+import type { ClassificationRecord, RetagContext, TagRuling } from '../packs/retag/engine.js';
 import type { NarrativeRules } from '../packs/types.js';
 import type { Calendar, DateTextStyle } from '../calendar/index.js';
 import { nkey, rootsOf, type NView } from '../narrative/layout.js';
@@ -129,6 +129,8 @@ export interface RetagAuditHook {
   readonly packRecord: (pageId: string) => ClassificationRecord | null;
   readonly owner: (pageId: string) => ClassificationRecord | null;
   readonly templateOf: (pageId: string) => string | null;
+  /** v3 F5a (ADR 0067, H2): the owner's "Keep this tag here" rulings of a page (absent: none). */
+  readonly rulings?: (pageId: string) => readonly TagRuling[];
 }
 
 export function makeContext(o: Omit<AuditContext, 'tree' | 'snapshotTree' | 'narrativeIds'>): AuditContext {

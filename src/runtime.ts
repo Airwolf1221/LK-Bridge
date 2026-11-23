@@ -1127,7 +1127,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     // v3 F4b (ADR 0064, D6): the job of an owner's pick is revertible like an approved retag batch.
     approvedRevertible: (projectId, jobId) =>
-      (retagRef.current?.isApplyJob(projectId, jobId) ?? false) || consistency.isPickJob(projectId, jobId),
+      (retagRef.current?.isApplyJob(projectId, jobId) ?? false) ||
+      // v3 F5a (ADR 0067, H2): the owner's "Allow this tag everywhere" edit of the Tagging Standard.
+      (retagRef.current?.isSupplementaryEditJob(projectId, jobId) ?? false) ||
+      consistency.isPickJob(projectId, jobId),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReverts = reverts.start();
@@ -1256,6 +1259,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     appraisal,
     templateOf: (projectId, pageId) => tree.queries.node(projectId, pageId).data?.templateId ?? null,
     engine,
+    // v3 F5a (ADR 0067, H2): "Allow this tag everywhere" edits the Tagging Standard where its source's project is this one.
+    projectName: (projectId) => projectStore.byId(projectId)?.name ?? null,
     proposals: {
       addHooks: (h) => policy.proposals.addHooks(h),
       get: (id) => policy.proposals.get(id),
