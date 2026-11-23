@@ -81,6 +81,12 @@ export interface JobOrigin {
    * carries it make the protected changes it was approved for.
    */
   readonly canonicalApprovedBy?: string;
+  /**
+   * v3 F5c (ADR 0069, H8): the workstream label the work belongs to (an agent's `workstream` argument, or its
+   * connection's default). Recorded on the job, its proposal and its journal entries; an approved proposal's job keeps
+   * the proposal's.
+   */
+  readonly workstream?: string;
 }
 
 /** Caller-facing input of a registry operation: `{ path?, query?, ifMatch?, body? }` (see src/lk/registry). */
@@ -300,7 +306,7 @@ export interface ItemPartShape {
  * job before it continues from where it stopped).
  */
 export interface ResumableShape {
-  readonly kind: 'package' | 'rename' | 'recreate' | 'split' | 'retag';
+  readonly kind: 'package' | 'rename' | 'recreate' | 'split' | 'retag' | 'identity';
   /** The steps (1-based) run again on resume before the step it stopped at (the job's own checks). */
   readonly recheck?: readonly number[];
   /**
@@ -312,6 +318,13 @@ export interface ResumableShape {
   readonly recheckCheckers?: readonly string[];
   /** What the kind needs to find its record (a recreate's restore id). */
   readonly ref?: string;
+  /**
+   * v3 F5c (ADR 0069, H6): failures are isolated per item. A step that names items and fails (or whose outcome is
+   * unknown) does not stop the job: the later steps of its items are not run (recorded `cancelled`, "its item failed"),
+   * and every other item carries on. A failed step that names no item (a shared check) still stops the job. The job ends
+   * `failed` when any item failed, so Resume runs again exactly the steps that did not succeed.
+   */
+  readonly isolateItems?: boolean;
 }
 
 /**

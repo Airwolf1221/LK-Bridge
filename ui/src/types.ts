@@ -2723,3 +2723,57 @@ export interface AutomationOvernight {
   }[];
   paused: boolean;
 }
+
+/** v3 F5c (ADR 0069, H8): one workstream on the Workstreams page. */
+export interface WorkstreamRow {
+  projectId: string;
+  workstream: string;
+  principals: { id: string; name: string | null }[];
+  first: string | null;
+  last: string | null;
+  jobs: number;
+  openJobs: number;
+  failedJobs: number;
+  proposals: number;
+  awaitingOwner: number;
+  writes: number;
+  pages: number;
+  unknownOutcomes: number;
+}
+
+export interface WorkstreamsPayload {
+  project: { id: string; name: string };
+  workstreams: WorkstreamRow[];
+}
+
+export interface WorkstreamWrite {
+  journalId: number;
+  op: string;
+  what?: string;
+  versionBefore: string | null;
+  versionAfter: string | null;
+  outcome: string;
+}
+
+export interface WorkstreamReport {
+  cost: string;
+  counts: Record<string, number>;
+  groups: {
+    writtenAndVerified: {
+      page: { id: string; name: string | null };
+      writes: WorkstreamWrite[];
+      verified: boolean | null;
+    }[];
+    acceptedNotYetRun: Record<string, unknown>[];
+    deliberatelyExcluded: Record<string, unknown>[];
+    awaitingJudgement: Record<string, unknown>[];
+    residualInconsistencies: {
+      unknownOutcomes: Record<string, unknown>[];
+      verificationMismatches: Record<string, unknown>[];
+      failedJobs: Record<string, unknown>[];
+      openFindings: Record<string, unknown>[];
+      consistencyFollowUps: Record<string, unknown>[];
+    };
+  };
+  stillToDo: string[];
+}

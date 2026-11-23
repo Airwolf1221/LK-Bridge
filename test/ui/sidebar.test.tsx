@@ -22,7 +22,7 @@ const EXPECTED: [string, string[]][] = [
   ['Assets', ['Asset Tree', 'Staging']],
   ['Backups & Recovery', ['Off-site copy', 'Snapshots']],
   ['Limits', ['Concurrent Writers', 'Request Budgets']],
-  ['Monitoring', ['Errors', 'Journal', 'Tool calls']],
+  ['Monitoring', ['Errors', 'Journal', 'Tool calls', 'Workstreams']],
   ['Quality', ['Appraisal', 'Audits', 'Automation', 'Evaluation']],
   ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree', 'Tagging']],
   ['Setup', ['Maintenance Jobs', 'Packs', 'Projects', 'Repository Mappings', 'Settings']],
@@ -102,6 +102,7 @@ describe('the sidebar', () => {
       'Errors',
       'Journal',
       'Tool calls',
+      'Workstreams',
       'Zebra',
     ]);
     // The table itself is in any order: shuffling it changes nothing.

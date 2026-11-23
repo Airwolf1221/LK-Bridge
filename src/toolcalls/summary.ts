@@ -90,6 +90,8 @@ export interface OutcomeSummary {
   readonly jobId: string | null;
   readonly proposalId: string | null;
   readonly resultChars: number;
+  /** v3 F5c (ADR 0069, H8): the workstream label the result echoed, if any. */
+  readonly workstream?: string | null;
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v.slice(0, 200) : null);
@@ -122,7 +124,9 @@ export function outcomeOf(result: McpToolResult): OutcomeSummary {
   const project = str(body?.project);
   const jobId = str(body?.jobId) ?? str(err?.jobId);
   const proposalId = str(body?.proposalId);
-  const base = { project, jobId, proposalId, resultChars: text.length };
+  // v3 F5c (ADR 0069, H8): the workstream label the result echoes (a write tool's), so a refusal is reported with it.
+  const workstream = str(body?.workstream);
+  const base = { project, jobId, proposalId, resultChars: text.length, workstream };
   if (result.isError === true || err)
     return { ...base, outcome: 'error', code: str(err?.code) ?? plainErrorCode(text) };
   if (status === 'proposal_captured') return { ...base, outcome: 'proposal', code: status };

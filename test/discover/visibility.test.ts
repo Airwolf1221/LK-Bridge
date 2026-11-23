@@ -36,6 +36,11 @@ describe('showLowLevelTools, per profile', () => {
         'bridge_journal_lookup',
         'bridge_proposal_status',
         'bridge_result_page',
+        // v3 F5c (ADR 0069): workstreams, query_facts and the identity reconcile.
+        'bridge_workstream',
+        'bridge_workstream_report',
+        'query_facts',
+        'arkona_identity_reconcile',
         'browse_asset_tree',
         'browse_repository_tree',
         'get_bridge_guide',
@@ -146,9 +151,10 @@ describe('showLowLevelTools, per profile', () => {
     // v3 F3d's bridge_job_resume and arkona_rename (+2); v3 F3e's arkona_split_appraisal and arkona_split_owner (+2);
     // v3 F3f's arkona_retag_audit and arkona_retag_apply (+2); v3 F4a's arkona_name_check and arkona_brief (+2); v3 F4b's four consistency tools (+4).
     // CR-2026-11-R4 (LD-01): the 12 consistency and narrative tools are not listed while the pack is not approved.
-    expect(await list(t.token)).toHaveLength(86 - 12);
+    // v3 F5c (ADR 0069): bridge_workstream, bridge_workstream_report, query_facts and arkona_identity_reconcile (+4).
+    expect(await list(t.token)).toHaveLength(86 - 12 + 4);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(86 - 12 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

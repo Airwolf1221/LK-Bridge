@@ -412,6 +412,25 @@ createServer((req, res) => {
         });
       a.store.finishRun(runId, 'succeeded', 'blank_paragraphs: 1 page; out_of_order: 2 pages', null);
       res.end(JSON.stringify({ runId }));
+    } else if (url.pathname === '/workstream-fixture') {
+      // v3 F5c (ADR 0069, H8): a write recorded under a workstream label, as an agent's would be.
+      const r = await engine.submit({
+        project: PROJECT,
+        kind: 'batch_ops',
+        title: 'E2E workstream write',
+        origin: { ...origin, workstream: 'E2E stream' },
+        steps: [
+          {
+            op: 'replaceDocumentBlocks',
+            params: {
+              path: { resourceId: 'res1', documentId: 'd_res1' },
+              body: { blocks: [{ kind: 'paragraph', content: [{ text: 'Workstream text' }] }] },
+            },
+          },
+        ],
+      });
+      if ('jobId' in r) await engine.wait(PROJECT, r.jobId, 10_000);
+      res.end(JSON.stringify(r));
     } else if (url.pathname === '/ready') {
       res.end('{"ready":true}');
     } else {

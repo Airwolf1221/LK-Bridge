@@ -49,6 +49,7 @@ import {
   type Disposition,
   type TagRuling,
   type RetagContext,
+  type RetagPageInput,
   type RetagPolicy,
   type RetagVerdict,
 } from './engine.js';
@@ -472,6 +473,45 @@ export class RetagService {
     );
     if (o.reconciliationId) this.store.absorbRun(o.reconciliationId, run.id, verdicts);
     return { run, verdicts };
+  }
+
+  /**
+   * v3 F5c (ADR 0069, H6): the engine's verdict for one page as it WILL be (its live tags and the facts it is about to
+   * get), under the approved policy: `arkona_identity_reconcile` reconciles a character's tags with its new identity
+   * facts. The page's place (lifecycle, area, ancestors) comes from the caller (the tree); its records, the owner's
+   * classification and rulings, and its template from the bridge's own tables. Pure: nothing is read or stored.
+   */
+  verdictFor(
+    projectId: string,
+    page: Omit<RetagPageInput, 'packRecord' | 'owner' | 'rulings' | 'templateId'>,
+  ): { verdict: RetagVerdict; policy: RetagPolicy } {
+    const { pack, rules, policy } = this.policyFor(projectId);
+    const ctx = this.context(projectId, rules, pack);
+    const owner = this.store.classification(projectId, page.id);
+    const record = this.store.pageRecord(projectId, page.id);
+    const verdict = retagPage(
+      {
+        ...page,
+        templateId: this.d.templateOf(projectId, page.id),
+        packRecord: record
+          ? {
+              primary: record.primary,
+              specialist: record.specialist,
+              detail: `${record.tool}, ${record.type} ${record.role}`,
+            }
+          : null,
+        owner: owner
+          ? {
+              primary: owner.primary,
+              specialist: owner.specialist,
+              detail: `the owner, ${new Date(owner.at).toISOString().slice(0, 10)}: ${owner.reason}`,
+            }
+          : null,
+        rulings: this.rulingsFor(projectId, page.id),
+      },
+      ctx,
+    );
+    return { verdict, policy };
   }
 
   // ============================================================================================ the apply

@@ -847,7 +847,7 @@ export class TreeModel {
       const row: Row = {
         id: newId('w'),
         key: typeof body.key === 'string' ? body.key : '',
-        text: typeof body.text === 'string' ? body.text : '',
+        text: typeof body.text === 'string' ? body.text : (runsText(body.content) ?? ''),
         rank: rankOf((prop.rows.length + 1) * 1000),
       };
       prop.rows.push(row);
@@ -863,6 +863,8 @@ export class TreeModel {
     if (M === 'PATCH') {
       if (typeof body.key === 'string') row.key = body.key;
       if (typeof body.text === 'string') row.text = body.text;
+      // v3 F5c: a value written as runs (set_facts' `content`), as LegendKeeper takes it.
+      else if (runsText(body.content) !== null) row.text = runsText(body.content)!;
       res.propsVersion++;
       this.mutations.push({ op: 'updatePropertyRow', id: row.id });
       return {
@@ -1042,4 +1044,12 @@ export function seedWorld(
     if (t % 3 === 0) m.seed({ name: `[BSRC] Template child ${t}`, parentId: tpl.id });
   }
   return { rootId: root.id, ids };
+}
+
+/** v3 F5c: the plain text of a row value written as runs (`content`), or null when there are none. */
+function runsText(content: unknown): string | null {
+  if (!Array.isArray(content)) return null;
+  return (content as Record<string, unknown>[])
+    .map((r) => (typeof r.text === 'string' ? r.text : r.break === true ? '\n' : ''))
+    .join('');
 }

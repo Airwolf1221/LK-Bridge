@@ -400,8 +400,8 @@ export class JobsRepo {
       this.db
         .prepare(
           `INSERT INTO jobs (id, project_id, kind, title, origin, origin_kind, principal_id, profile, approved_by,
-             priority, status, on_error, steps_total, options, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             priority, status, on_error, steps_total, options, created_at, updated_at, workstream)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           job.id,
@@ -420,6 +420,9 @@ export class JobsRepo {
           json(job.options),
           at,
           at,
+          typeof job.origin.workstream === 'string' && job.origin.workstream !== ''
+            ? job.origin.workstream
+            : null,
         );
       job.steps.forEach((s, i) => this.insertStepRow(job.id, job.projectId, i + 1, s, at));
     })();

@@ -44,6 +44,9 @@ const rules: PackRules = packRulesSchema.parse({
       arkona_appraisal_fix: 'scope',
       // v3 F3f (ADR 0060): the Tagging Standard calls for a separately approved apply, so every batch is a proposal.
       arkona_retag_apply: 'propose',
+      // v3 F5c (ADR 0069, H6): bulk identity facts with their tags follow the agent's scope (direct at `write` for 10
+      // pages or fewer; the bulk rail makes more a proposal with one item per character; a proposal at `propose`).
+      arkona_identity_reconcile: 'scope',
       // v3 F4c (ADR 0065, design E5): routine narrative organisation follows the agent's scope (direct at `write`, on
       // the Review page and Revertible); renumbering more than 10 pages meets the bulk rail. Promoting lore to canon is
       // always a proposal (E7).
@@ -1215,8 +1218,10 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // `-f5b` (ADR 0068, 23 November 2026; session F5b): the automation framework's caps (`automation`) and Repository
   // Automation as a governance source, its "Default Boundary", "Approved Narrow Automations" and "Source Boundaries"
   // pinned.
-  seed: 'arkona-2026-11-23-f5b',
+  // `-f5c` (ADR 0069, 23 November 2026; session F5c): `arkona_identity_reconcile`'s switch (follows the agent's scope).
+  seed: 'arkona-2026-11-23-f5c',
   supersedes: [
+    'arkona-2026-11-23-f5b',
     'arkona-2026-11-23-f5a',
     'arkona-2026-11-21-r4',
     'arkona-2026-11-20-f41',

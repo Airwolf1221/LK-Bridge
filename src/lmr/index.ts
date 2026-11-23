@@ -185,8 +185,9 @@ export function classifyStep(
     return { category, pageId };
   }
   if (ROW_OPS.has(op)) {
-    // Only set_facts counts (its plan names each row's key); a restore's sidebar is not the page's text.
-    if (tool !== 'set_facts') return null;
+    // Only set_facts counts (its plan names each row's key); a restore's sidebar is not the page's text. v3 F5c (ADR
+    // 0069, H6): arkona_identity_reconcile writes its facts with set_facts' own plan, so it counts the same way.
+    if (tool !== 'set_facts' && tool !== 'arkona_identity_reconcile') return null;
     const factKey = typeof journal?.factKey === 'string' ? journal.factKey : undefined;
     return { category: 'facts', pageId, ...(factKey !== undefined ? { factKey } : {}) };
   }

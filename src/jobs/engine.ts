@@ -1718,6 +1718,23 @@ export class JobEngine {
     const items = step.options.items ?? [];
     if (items.length === 0 || step.status === 'running' || step.maybeSent || step.firstSentAt !== null)
       return false;
+    // v3 F5c (ADR 0069, H6): an item that failed earlier in an item-isolating job runs no further step.
+    if (this.isolatesItems(job.id)) {
+      const failedAt = this.failedItems(job.id, step.stepNo);
+      if (items.every((i) => failedAt.has(i))) {
+        const first = Math.min(...items.map((i) => failedAt.get(i)!));
+        this.repo.updateStep(job.id, step.stepNo, {
+          status: 'cancelled',
+          resultSummary: {
+            notRun: `its item failed at step ${first}: the rest of the item is not run (Resume runs it again)`,
+            items: [...items],
+            failedAt: first,
+          },
+          finishedAt: this.clock.now(),
+        });
+        return true;
+      }
+    }
     const earlier = this.repo.skippedItems(job.id, step.stepNo);
     const skipped = new Set(earlier.map((x) => x.item));
     if (skipped.size === 0 || !items.every((i) => skipped.has(i))) return false;
@@ -1737,6 +1754,29 @@ export class JobEngine {
       finishedAt: now,
     });
     return true;
+  }
+
+  /** v3 F5c (ADR 0069, H6): whether a job isolates its items' failures (`ResumableShape.isolateItems`). */
+  private isolatesItems(jobId: string): boolean {
+    const r = this.repo.jobOptions(jobId)[RESUMABLE_OPTION] as ResumableShape | undefined;
+    return r?.isolateItems === true;
+  }
+
+  /** v3 F5c (H6): the items whose steps failed (or ended uncertain) before `beforeStep`, with the first such step. */
+  private failedItems(jobId: string, beforeStep: number): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const s of this.repo.steps(jobId)) {
+      if (s.stepNo >= beforeStep) break;
+      if (s.status !== 'failed' && s.status !== 'uncertain') continue;
+      if (s.options.followUp) continue;
+      for (const i of s.options.items ?? []) if (!out.has(i)) out.set(i, s.stepNo);
+    }
+    return out;
+  }
+
+  /** v3 F5c (H6): a failed step that isolates its items: the job carries on with the others. */
+  private isolatedFailure(job: JobView, step: StepView): boolean {
+    return (step.options.items ?? []).length > 0 && this.isolatesItems(job.id);
   }
 
   /** The version a step's `ifMatchFrom` names (undefined when it names none, or the source gave none). */
@@ -2700,7 +2740,7 @@ export class JobEngine {
         }
         this.repo.updateJob(jobId, { lastError: errorToJson(bound) });
         this.emitJob(jobId, 'updated');
-        if (job.onError === 'stop') {
+        if (job.onError === 'stop' && !this.isolatedFailure(job, step)) {
           await this.flushDeferred(job, entry.current.signal);
           this.finish(jobId);
           return { last, values };
@@ -2753,7 +2793,8 @@ export class JobEngine {
             ...(outcome.uncertain ? { uncertain: true } : {}),
           });
           this.emitJob(jobId, 'updated');
-          if (job.onError === 'stop') {
+          // v3 F5c (ADR 0069, H6): an item-isolating job carries on with its other items.
+          if (job.onError === 'stop' && !this.isolatedFailure(job, step)) {
             await this.flushDeferred(job, entry.current.signal);
             this.finish(jobId);
             return { last, values };
@@ -3749,7 +3790,8 @@ function resumableOf(r: BatchSubmit['resumable']): ResumableShape | undefined {
       r.kind !== 'rename' &&
       r.kind !== 'recreate' &&
       r.kind !== 'split' &&
-      r.kind !== 'retag')
+      r.kind !== 'retag' &&
+      r.kind !== 'identity')
   )
     return undefined;
   const recheck = (r.recheck ?? []).filter((n) => Number.isInteger(n) && n >= 1);
@@ -3761,6 +3803,7 @@ function resumableOf(r: BatchSubmit['resumable']): ResumableShape | undefined {
     ...(recheck.length > 0 ? { recheck } : {}),
     ...(recheckCheckers.length > 0 ? { recheckCheckers } : {}),
     ...(typeof r.ref === 'string' && r.ref !== '' ? { ref: r.ref.slice(0, 100) } : {}),
+    ...(r.isolateItems === true ? { isolateItems: true } : {}),
   };
 }
 

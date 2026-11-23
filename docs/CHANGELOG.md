@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased: v3 F5c, orchestration: identity facts in bulk, query_facts, workstreams (23 November 2026)
+
+[ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md), building H6, H7 and H8 of the
+owner-approved design [design/F5-orchestration.md](design/F5-orchestration.md). Migration `4300_workstreams_identity.sql`;
+pack version `arkona-2026-11-23-f5c` (for the owner's approval). Nothing was run against a live system: the mock only.
+
+- **H6, `arkona_identity_reconcile`**: many characters' identity facts and their tags as ONE job with one item per
+  character (a culture split's 27 changes in one call): the identity page resolved, read fresh, only the given facts set
+  (`set_facts`' plan), the tags recomputed from the new facts by the retag engine (grammar order, supplementary tags
+  kept, the old value's own token replaced), both read back, `arkona_name_check`'s culture report per Naming Culture,
+  `arkona_consistency`'s findings as follow-ups. A rename, a protected fact or an unmapped value refuses its item only; a
+  hold or exception writes no tags. A dry run previews it all. Failures are isolated per item (the job engine learns
+  `isolateItems`) and the job resumes. The approval boundaries are unchanged: direct at scope `write` for 10 pages or
+  fewer, the bulk rail's ONE proposal with an item per character beyond, a proposal at `propose`; always a proposal until
+  the owner approves the new pack version.
+- **H7, `query_facts`**: the same fields of many pages as one compact table (`columns`, then `rows` as arrays; CSV),
+  selected by Reference Type, tag, branch, kind, lifecycle or name, or every current identity page of a continuity; free
+  from the stored sidebars, each row's coverage (`ok`, `stale`, `missing`) and the data's age stated; `live` re-reads with
+  the estimate first.
+- **H8, workstreams**: every write tool takes `workstream`, recorded on the job, the proposal, the journal and the
+  tool-call log, and echoed; `bridge_workstream` sets a connection's default (12 hours); `bridge_workstream_report` reports
+  a workstream in ChatGPT's five groups with a "still to do" drawn only from them, free; the dashboard's **Workstreams**
+  page.
+- **The sandbox check** `identity-f5c` (written, not run; passing on the mock in the ordinary suite).
+- The mock's tree model takes a key-value row written as runs (`content`), as LegendKeeper does.
+
 ## Unreleased: v3 F5b, automatic actions for audits (23 November 2026)
 
 [ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md), building H5 of the owner-approved design
