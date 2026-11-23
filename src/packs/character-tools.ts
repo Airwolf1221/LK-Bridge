@@ -387,6 +387,13 @@ export async function runArt(
     });
   }
   const plan = planArtExtension(env, ch.hit, subject, art, images, place);
+  // v3 F7.1 (ADR 0072): the character already has an index and several owners under a Compact Reference (the shape
+  // the audit's character_core_missing finds): this call adds no owner page, so it does not upgrade; it says so.
+  if (ch.hit.role === 'compact' && index)
+    plan.warnings.push({
+      code: 'CORE_MISSING',
+      message: `${ch.hit.identity.rawName} is still a Compact Character Reference at the head of ${index.rawName}, which has several owners: a character with an index and several owners has a Character Core. Upgrade it with arkona_create_character (target “${ch.hit.identity.rawName}”, upgradeToCore: true), or ask the owner to approve the audit's character_core_missing proposal.`,
+    });
   return finishPackage(pd, mctx, o, env, {
     ...plan,
     art: artPlan,

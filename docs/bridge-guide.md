@@ -685,7 +685,9 @@ identity page is not given again. The new pages take the character's standing: W
 canon beside a canon one, its continuity kept (an AU character's pages stay AU and carry `AU` in place of `CANON`). `status: "working"` instead drafts them
 flat under `[INDEX] Working`, to promote into the character's place later. A Compact Reference that gains sibling pages
 gets its own index in its place (the Reference moves under it and keeps its id); `upgradeToCore: true` renames the
-Compact Reference to its Character Core (its text kept). New pages are announced in the index's "How to Use This Index"
+Compact Reference to its Character Core (its text kept). A Compact Reference becomes the Character Core automatically,
+in the same proposal, when its character gains an index with several owners (its compact wording replaced, its images
+left to the Art page; `upgradeToCore: false` is then refused with `CORE_REQUIRED`). New pages are announced in the index's "How to Use This Index"
 section. The tool refuses a name that matches several characters (`TARGET_AMBIGUOUS`, with the candidates: pass the
 id), an Archived character (`TARGET_ARCHIVED`: it is unarchived first, by the owner), a domain the character already has
 (`DOMAIN_EXISTS`: edit that page with `write_page`) and splitting an existing page (`MONOLITH_SPLIT_UNSUPPORTED`).

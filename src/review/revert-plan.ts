@@ -670,6 +670,25 @@ export async function planResource(t: ResourceTarget, io: PlanIo): Promise<Targe
       deferTreeReread: true,
       journalOperation: journalOp(io, t),
     },
+    // v3 F7.1 (ADR 0072): the template the job recorded with the rename (a Core upgrade), recorded back.
+    ...(t.template && 'name' in t.before
+      ? [
+          {
+            op: 'bridge.record',
+            params: {
+              body: {
+                action: 'complete',
+                store: 'pack',
+                record: {
+                  kind: 'set_template',
+                  resourceId: t.resourceId,
+                  templateId: t.template.before,
+                },
+              },
+            },
+          } satisfies StepSpec,
+        ]
+      : []),
     {
       op: VERIFY_STEP,
       params: {
@@ -688,9 +707,10 @@ export async function planResource(t: ResourceTarget, io: PlanIo): Promise<Targe
   ];
   return ready(
     t,
-    Object.entries(t.before)
-      .map(([k, v]) => `${k} back to ${JSON.stringify(v)}`)
-      .join('; '),
+    [
+      ...Object.entries(t.before).map(([k, v]) => `${k} back to ${JSON.stringify(v)}`),
+      ...(t.template && 'name' in t.before ? [`its template recorded back (${t.template.before})`] : []),
+    ].join('; '),
     steps,
     { resources: [t.resourceId] },
   );

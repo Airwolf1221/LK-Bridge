@@ -95,6 +95,13 @@ export interface CodeEntry {
   readonly automatable?: 'mechanical' | 'propose';
   /** v3 F7: the mode a code has before the owner sets one (default Off). Only a `propose` code may default to Propose. */
   readonly defaultMode?: 'propose';
+  /**
+   * v3 F7.1 (ADR 0072): a `propose` code whose fix may also run as a job once the owner switches it to Apply (Off,
+   * Propose or Apply; default Propose): submitted as the Automation principal without being forced into a proposal, so
+   * every guard judges it as it judges any write (the canon guard keeps an Authoritative page's rename a canonical
+   * proposal). Only the owner's switch allows it.
+   */
+  readonly applyDirect?: true;
 }
 
 export class AutomationFlagError extends Error {
@@ -112,6 +119,8 @@ export class AutomationFlagError extends Error {
 export function defineCode(e: CodeEntry): CodeEntry {
   if (e.defaultMode === 'propose' && e.automatable !== 'propose')
     throw new AutomationFlagError(`${e.code} cannot default to Propose: only a proposal-only code can.`);
+  if (e.applyDirect === true && e.automatable !== 'propose')
+    throw new AutomationFlagError(`${e.code}: only a proposal-only audit code can allow a direct Apply.`);
   if (e.automatable === 'propose' && e.source !== 'audit')
     throw new AutomationFlagError(
       `${e.code} cannot be proposal-only: only an audit code’s fix is a proposal of its own.`,
@@ -482,6 +491,22 @@ export const CATALOGUE: readonly CodeEntry[] = [
     changes: [],
     automatable: 'propose',
     defaultMode: 'propose',
+  }),
+  // ======================================================================== v3 F7.1 (ADR 0072): default Propose, Apply allowed
+  defineCode({
+    code: 'character_core_missing',
+    source: 'audit',
+    name: 'Character Core missing',
+    example:
+      '[INDEX] Kamigawa Shirahime holds her Compact Character Reference and her Character Art: the Reference becomes “Kamigawa Shirahime - Character Core”.',
+    transformation:
+      'ONE proposal per character: arkona_create_character’s upgrade (target, upgradeToCore) of its Compact Character Reference, read live first: renamed “<Name> - Character Core”, Reference Type Character Core, the Core template recorded, its compact wording replaced, the images its Art page holds removed from it (those the Art page lacks moved there first); its id, identity facts, links and prose kept. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s rename stays a canonical proposal',
+    traits: ['fact', 'canon'],
+    target: 'resource',
+    changes: ['name', 'properties'],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
   }),
   defineCode({
     code: 'scope_overload',

@@ -252,7 +252,7 @@ describe('targeting an existing character', () => {
 });
 
 describe('a Compact Reference with no index (the Kamigawa Miyuki pattern), and upgradeToCore (scenario 4)', () => {
-  it('index made in its place, the Reference moved under it with its id kept; upgraded to a Core, its text untouched', async () => {
+  it('index made in its place, the Reference moved under it with its id kept; upgraded to a Core, its text kept but for its compact wording (F7.1)', async () => {
     const before = mainBlocks(C.miyuki);
     const pkg = {
       name: 'ignored',
@@ -292,7 +292,12 @@ describe('a Compact Reference with no index (the Kamigawa Miyuki pattern), and u
     expect(rowsOf(C.miyuki)['Reference Type']).toBe('Character Core');
     // Tags unchanged; the body untouched; the Core template recorded on its tree node.
     expect(ref.tags).toEqual(['CANON', 'Character', 'Human', 'Fujimatsuan']);
-    expect(mainBlocks(C.miyuki).blocks).toEqual(before.blocks);
+    // v3 F7.1 (ADR 0072): the one phrase calling it compact now says Character Core; every other block as it was.
+    expect(mainBlocks(C.miyuki).blocks).toEqual(
+      (before.blocks as { id: string }[]).map((b) =>
+        b.id === 'my2' ? { ...b, content: [{ text: 'The Character Core for Kamigawa Miyuki.' }] } : b,
+      ),
+    );
     expect(w.stack.runtime.tree.queries.node(PROJECT, C.miyuki).data?.templateId).toBe(TPL.core);
     // The new index's routing lists both pages; the Biography is under it.
     const bioPage = pageNamed('[BSRC] Kamigawa Miyuki - Biography')!;
@@ -331,7 +336,9 @@ describe('a Compact Reference with no index (the Kamigawa Miyuki pattern), and u
         pages: [bio('Notes')],
         dryRun: true,
       });
-      expect(err(r).code).toBe('TEMPLATES_DIFFER');
+      // v3 F7.1 (ADR 0072): the character needs its Core (an index and two owners), so the whole package is refused.
+      expect(err(r).code).toBe('CORE_REQUIRED');
+      expect(err(r).cause).toBe('TEMPLATES_DIFFER');
     } finally {
       kv.rows = saved;
     }

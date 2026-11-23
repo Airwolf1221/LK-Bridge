@@ -91,7 +91,14 @@ export type FixKind =
    * or found), `delete_empty` (an empty Forms, Outfits or Details folder, deepest first, each only if empty when the job
    * runs), `rename` (an asset's G4 name) and `update_line` (a line's stale folder path). Each re-read live first.
    */
-  | 'art_layout';
+  | 'art_layout'
+  /**
+   * v3 F7.1 (ADR 0072): a Compact Character Reference at the head of a multi-owner index upgraded to its Character
+   * Core, through the character tool's own planner (arkona_create_character with target and upgradeToCore): renamed,
+   * Reference Type Character Core, the Core template recorded, its compact wording replaced, its images left to the Art
+   * page. Read live first; always ONE proposal (Apply, when the owner switches it, lets the guards decide).
+   */
+  | 'core_upgrade';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -266,6 +273,13 @@ export const CODES = {
     category: 'taxonomy',
     severity: 'warning',
     title: 'A character page’s race is not in the taxonomy',
+  },
+  // v3 F7.1 (ADR 0072): a character index headed by a Compact Character Reference beside other owner pages.
+  character_core_missing: {
+    category: 'taxonomy',
+    severity: 'warning',
+    title: 'A character with an index and several owners has no Character Core',
+    fix: 'core_upgrade',
   },
   race_index_mismatch: {
     category: 'taxonomy',

@@ -49,10 +49,18 @@ import { pageConverterContext } from '../../pages/index.js';
 import { cleanPrefixes } from '../../registry/names.js';
 import { blockIds, unwritableBlocks } from '../../snapshots/canonical.js';
 import type { TreeNode } from '../../tree/index.js';
-import { buildPackJob, PACK_CHECKS, shiftStep, type PackJob } from '../engine/job.js';
+import { buildPackJob, coreTextStep, PACK_CHECKS, shiftStep, type PackJob } from '../engine/job.js';
+import { coreNeed, coreTextWords, ownersInIndex } from '../engine/core.js';
 import { itemizePackage } from '../engine/items.js';
 import { planOwner } from '../engine/owner.js';
-import { planPackage, routingLine, type PackagePage, type PackPlan, type PlanEnv } from '../engine/plan.js';
+import {
+  planPackage,
+  routingLine,
+  type ExistingChange,
+  type PackagePage,
+  type PackPlan,
+  type PlanEnv,
+} from '../engine/plan.js';
 import { textKey } from '../engine/text.js';
 import { GENERIC_HOOK } from '../hooks.js';
 import { characterEnv, envOf, type PackBasis } from '../run.js';
@@ -1089,18 +1097,23 @@ export async function planSplit(
     const index =
       up && set?.ok && set.value.core.id === character.core.id && set.value.via === 'index' ? up : null;
     // The owners the character keeps (a source to be retired leaves the set), and the new ones the split makes for it.
+    // v3 F7.1 (ADR 0072): counted by the rule the package planner uses (src/packs/engine/core.ts).
     const others = index
-      ? ctx.tree
-          .children(projectId, index.id)
-          .data.filter(
-            (c) =>
-              (c.kind === 'bsrc' || c.kind === 'bwrk') &&
-              c.id !== character.core.id &&
-              !(retire && c.id === node.id),
-          ).length
+      ? ownersInIndex(
+          ctx.tree.children(projectId, index.id).data,
+          character.core.id,
+          retire ? new Set([node.id]) : undefined,
+        )
       : 0;
     const made = [...dests.values()].filter((r) => r.isNew).length;
-    return { needed: others + made > 0, owners: 1 + others + made, index };
+    const n = coreNeed({
+      role: character.role,
+      from: 'compact',
+      hasIndex: index !== null,
+      existing: others,
+      added: made,
+    });
+    return { needed: n.needed, owners: n.owners, index };
   })();
   const upgradeToCore = core?.needed === true && identity && !retire;
   if (core?.needed === true && !identity && character)
@@ -1466,7 +1479,14 @@ export async function planSplit(
         target: character.core.id,
         pages,
         // The split moves the sections itself (each leaves an interface summary): no overlap to warn about.
-        ...(upgradeToCore ? { upgradeToCore: true, upgradeOverlap: false } : {}),
+        ...(upgradeToCore
+          ? {
+              upgradeToCore: true,
+              upgradeOverlap: false,
+              // v3 F7.1: the source as this plan read it (no second read for the upgrade's text change).
+              upgradeText: { documentId, blocks: blocks as unknown as LkBlock[] },
+            }
+          : {}),
       });
       const keys = new Map<string, string>();
       newDests.forEach((r, i) => keys.set(`p${i}`, r.d.key));
@@ -1609,6 +1629,7 @@ export async function planSplit(
   // The routing lines a pack plan would append are written one per page instead (each its own item), and the planned
   // text of each new page is its Purpose and its moved blocks.
   const routes: { index: TreeNode; section: string; pageKey: string }[] = [];
+  const coreText: Extract<ExistingChange, { kind: 'core_text' }>[] = [];
   for (const pp of packPlans) {
     const routing = pp.plan.existing.filter((c) => c.kind === 'routing');
     for (const c of routing) {
@@ -1619,7 +1640,21 @@ export async function planSplit(
         if (key) routes.push({ index, section: c.section, pageKey: key });
       }
     }
-    const kept = pp.plan.existing.filter((c) => c.kind !== 'routing');
+    // v3 F7.1 (ADR 0072): the upgrade's text change runs after phase 1's verification (the split's checks compare the
+    // source's blocks with what it planned), on the blocks that stay in the source.
+    for (const c of pp.plan.existing)
+      if (c.kind === 'core_text') {
+        if (c.role === 'core' && c.page.id === node.id) {
+          const stays = (id: string) => o.byId.has(id) && toOf(id) === STAYS;
+          const r = {
+            ...c,
+            replacements: c.replacements.filter((x) => stays(x.blockId)),
+            remove: c.remove.filter((x) => stays(x.blockId)),
+          };
+          if (r.replacements.length > 0 || r.remove.length > 0) coreText.push(r);
+        } else coreText.push(c);
+      }
+    const kept = pp.plan.existing.filter((c) => c.kind !== 'routing' && c.kind !== 'core_text');
     pp.plan.existing.splice(0, pp.plan.existing.length, ...kept);
     for (let i = 0; i < pp.plan.pages.length; i++) {
       const p = pp.plan.pages[i]!;
@@ -2241,6 +2276,23 @@ export async function planSplit(
     ],
   });
   labels.push('verify phase 1 (a direct re-read of the affected graph)');
+  // v3 F7.1 (ADR 0072): the upgraded source's text change (the Art page's first), after the verification; with the
+  // upgrade's item.
+  if (upgradeToCore)
+    for (const c of [
+      ...coreText.filter((x) => x.role === 'art'),
+      ...coreText.filter((x) => x.role === 'core'),
+    ]) {
+      const item = itemIds.get(`existing:${node.id}`) ?? `existing:${node.id}`;
+      const at = stepNo();
+      body.push({
+        ...coreTextStep(c, journal({ id: c.page.id, name: c.page.rawName }, coreTextWords(c))),
+        items: [item],
+      });
+      labels.push(`${c.page.rawName}: ${coreTextWords(c)}`);
+      wrote(c.page.id, at);
+      touch(c.page.id, item);
+    }
 
   // The first check: governance, nothing of the new pages' names appeared, and the source as planned.
   const srcInput: SourceCheckInput = {

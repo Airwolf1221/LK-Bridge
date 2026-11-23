@@ -62,7 +62,28 @@ export interface FixDeps {
   readonly origin?: JobOrigin;
   /** v3 F4c (ADR 0065): the order inside Narratives (an ordering fix whose args say `order: 'narrative'`). */
   readonly narrativeOrder?: SiblingCompare | null;
+  /**
+   * v3 F7.1 (ADR 0072): the `core_upgrade` fix, planned by the packs layer (src/packs/core-fix.ts): the page read live
+   * (FIX_STALE when its name changed), then arkona_create_character's upgrade through `engine.submit`.
+   */
+  readonly coreUpgrade?: CoreUpgrader;
+  /**
+   * v3 F7.1: the automation's Apply of a code that allows it: the fix submitted as a job (every guard judging it: the
+   * canon guard keeps an Authoritative page's rename a canonical proposal) rather than forced into a proposal.
+   */
+  readonly direct?: boolean;
 }
+
+/** v3 F7.1 (ADR 0072): what plans and submits a `core_upgrade` fix. */
+export type CoreUpgrader = (
+  projectId: string,
+  page: { readonly pageId: string; readonly name: string },
+  o: {
+    readonly origin: JobOrigin;
+    readonly engine: FixDeps['engine'];
+    readonly direct?: boolean;
+  },
+) => Promise<FixResult>;
 
 export type FixResult =
   | {
@@ -71,7 +92,14 @@ export type FixResult =
       readonly summary: string | null;
       readonly fix: FixKind;
     }
-  | { readonly status: 'nothing_to_do'; readonly message: string };
+  | { readonly status: 'nothing_to_do'; readonly message: string }
+  /** v3 F7.1: a fix the automation applied as a job (`direct`): the job's id. */
+  | {
+      readonly status: 'job_submitted';
+      readonly jobId: string;
+      readonly summary: string | null;
+      readonly fix: FixKind;
+    };
 
 export const stale = (what: string, details: Obj = {}): AuditError =>
   new AuditError(
@@ -722,6 +750,24 @@ export async function proposeFix(
       return fixNarrative(d, projectId, f, c.propertiesName);
     case 'art_layout':
       return fixArtLayout(d, projectId, f);
+    case 'core_upgrade': {
+      // v3 F7.1 (ADR 0072): the character tool's own upgrade, planned by the pack planner (one rule for every caller).
+      if (!d.coreUpgrade)
+        throw new AuditError(
+          'FIX_UNAVAILABLE',
+          'The character tool is not available here, so the upgrade cannot be planned now. Nothing was proposed.',
+        );
+      const a = f.fix.args as Obj;
+      return d.coreUpgrade(
+        projectId,
+        { pageId: String(a.pageId), name: String(a.name) },
+        {
+          origin: d.origin ?? ORIGIN,
+          engine: d.engine,
+          ...(d.direct === true ? { direct: true } : {}),
+        },
+      );
+    }
   }
 }
 

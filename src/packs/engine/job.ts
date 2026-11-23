@@ -25,6 +25,7 @@ import type { SidebarProperty } from '../../facts/sidebar.js';
 import { expandFacts } from '../../facts/expand.js';
 import { LMR_STEP, VERIFY_STEP, type ExpectCheck, type VerifyTarget } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
+import type { LkBlock } from '../../markdown/index.js';
 import { stateHash } from '../../jobs/sidebar-state.js';
 import { WRITE_PAGE_PLANNER } from '../../pages/index.js';
 import { compareSiblings } from '../../registry/ordering.js';
@@ -44,6 +45,7 @@ import {
   type LmrDecision,
 } from './lmr.js';
 import type { PackPlan, PlannedPage } from './plan.js';
+import { coreTextWords, type CoreTextInput } from './core.js';
 import { mapArtRecordSteps } from '../../jobs/items.js';
 import type { PlanEnv } from './plan.js';
 
@@ -59,6 +61,8 @@ export const PACK_CHECKS = {
 export const PACK_FILLER = 'pack.body';
 /** v3 F3b (ADR 0052): appends new image sections to an existing Art page inside the lock. */
 export const PACK_ART_FILLER = 'pack.art_append';
+/** v3 F7.1 (ADR 0072): the Compact → Core upgrade's text change (wording, images) inside the lock. */
+export const PACK_CORE_FILLER = 'pack.core_text';
 export const PACK_RECORD_STORE = 'pack';
 
 /** Adds `base` to every step number a step names (its bindings, and the bridge's own steps' references). */
@@ -279,7 +283,13 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
           body: {
             action: 'complete',
             store: 'pack',
-            record: { kind: 'set_template', resourceId: c.page.id, templateId: c.coreTemplateId },
+            record: {
+              kind: 'set_template',
+              resourceId: c.page.id,
+              templateId: c.coreTemplateId,
+              // v3 F7.1 (ADR 0072): what it had, so a revert of this job records the Compact template again.
+              ...(c.compactTemplateId ? { previousTemplateId: c.compactTemplateId } : {}),
+            },
           },
         },
       });
@@ -299,7 +309,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
           'Reference Type Character Core',
           `the ${type.name} Core template recorded`,
         ],
-        summaryLabel: `${c.from}: upgraded to ${c.to} (id, documents, facts, links and text kept)`,
+        summaryLabel: `${c.from}: upgraded to ${c.to} (id, documents, facts, links and text kept)${c.automatic ? ': the character now has an index and several owners' : ''}`,
       });
     } else if (c.kind === 'facts') {
       const fx = expandFacts(c.plan, { id: c.page.id, name: c.page.rawName }, c.sidebar, {
@@ -604,6 +614,36 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       page: { id: c.page.id, name: c.page.rawName },
       pageParts: [`${c.section}: ${c.images.length} image(s) added, each with its label and interpretation`],
       summaryLabel: `${c.page.rawName}: ${c.section} gains ${c.images.map((im) => `“${im.name}”`).join(', ')}`,
+    });
+  }
+
+  // v3 F7.1 (ADR 0072): the upgrade's text change, the Art page's first (it receives the Core's images it lacked), then
+  // the Core's (its wording; its images removed only while each still shows the planned file).
+  for (const c of [
+    ...plan.existing.filter((x) => x.kind === 'core_text' && x.role === 'art'),
+    ...plan.existing.filter((x) => x.kind === 'core_text' && x.role === 'core'),
+  ]) {
+    if (c.kind !== 'core_text') continue;
+    const at = steps.length + 1;
+    steps.push(coreTextStep(c, journal({ id: c.page.id, name: c.page.rawName }, coreTextWords(c))));
+    labels.push(`${c.page.rawName}: ${coreTextWords(c)}`);
+    const e = editOf(edits, c.page.id, c.page.rawName);
+    e.after.push(at);
+    e.evidence.push({
+      kind: 'text',
+      before: textUnits(c.replacements.map((r) => para(r.before))),
+      after: textUnits([...c.replacements.map((r) => para(r.after)), ...c.append]),
+    });
+    e.hasRow ??= treeHasRow(c.page.id);
+    operations.push({
+      tool,
+      pack: pack.id,
+      page: { id: c.page.id, name: c.page.rawName },
+      pageParts: [coreTextWords(c)],
+      summaryLabel: `${c.page.rawName}: ${coreTextWords(c)}`,
+      ...(c.replacements.length
+        ? { replacements: c.replacements.map((r) => ({ before: r.before, after: r.after })) }
+        : {}),
     });
   }
 
@@ -950,4 +990,35 @@ function withPack(s: StepSpec, packId: string): StepSpec {
 
 export function packFail(env: PlanEnv, code: string, message: string) {
   return { ok: false as const, result: errorResult({ code, message }, env.pd) };
+}
+
+/** A paragraph of `text` (for the Last Major Revision evidence of a phrase replaced). */
+function para(text: string): LkBlock {
+  return { id: 'x', kind: 'paragraph', content: [{ text }] };
+}
+
+/**
+ * v3 F7.1 (ADR 0072): the write of one `core_text` change: the page's document, filled inside the lock by
+ * `pack.core_text` on the document as it is then (the split runs it after its own verification).
+ */
+export function coreTextStep(
+  c: Extract<PackPlan['existing'][number], { kind: 'core_text' }>,
+  journalOperation: Record<string, unknown>,
+): StepSpec {
+  const input: CoreTextInput = {
+    role: c.role,
+    subject: c.subject,
+    reword: [...new Set(c.replacements.map((r) => r.blockId))],
+    remove: c.remove,
+    section: c.section,
+    boundaries: c.boundaries,
+  };
+  return {
+    op: 'replaceDocumentBlocks',
+    params: { path: { resourceId: c.page.id, documentId: c.documentId }, body: { blocks: [...c.append] } },
+    fill: { filler: PACK_CORE_FILLER, input },
+    judgedInLock: true,
+    verifyAfterWrite: true,
+    journalOperation,
+  };
 }

@@ -43,7 +43,7 @@ import {
 } from './context.js';
 import { narrativeCompare } from '../narrative/names.js';
 import { AuditError } from './errors.js';
-import { proposeFix as proposeFixVia, type FixResult } from './fixes.js';
+import { proposeFix as proposeFixVia, type CoreUpgrader, type FixResult } from './fixes.js';
 import {
   extractResource,
   extractSidebar,
@@ -191,6 +191,12 @@ export class Audits {
 
   constructor(readonly d: AuditDeps) {
     this.store = new AuditStore(d.db, d.now);
+  }
+
+  /** v3 F7.1 (ADR 0072): the `core_upgrade` fix's planner, set by the runtime once the tool layer exists. */
+  private coreUpgrader: CoreUpgrader | null = null;
+  setCoreUpgrader(u: CoreUpgrader | null): void {
+    this.coreUpgrader = u;
   }
 
   /** Closes a run a restart interrupted. */
@@ -480,6 +486,8 @@ export class Audits {
         ): Promise<unknown>;
         submit(req: Record<string, unknown>): Promise<Record<string, unknown>>;
       };
+      /** v3 F7.1 (ADR 0072): the automation's Apply of a code allowing it: submitted as a job (guards judging it). */
+      readonly direct?: boolean;
     } = {},
   ): Promise<FixResult> {
     const f = this.store.get(projectId, findingId);
@@ -539,6 +547,8 @@ export class Audits {
           engine: (opts.engine ?? this.d.engine) as never,
           now: this.d.now,
           ...(opts.origin ? { origin: opts.origin } : {}),
+          ...(this.coreUpgrader ? { coreUpgrade: this.coreUpgrader } : {}),
+          ...(opts.direct === true ? { direct: true } : {}),
           narrativeOrder: (() => {
             const n = this.narrativeInput(projectId);
             return n ? narrativeCompare(n.rules) : null;

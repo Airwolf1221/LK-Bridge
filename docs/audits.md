@@ -74,6 +74,18 @@ entry in **Repository Mappings**, and the next audit matches it.
 A match by anchor is checked for placement exactly as a full match is: a page whose race belongs to another index than
 the one it sits under is `race_index_mismatch` (a subrace under its parent race's index is fine).
 
+## A character with an index and several owners has a Core (`character_core_missing`, category Taxonomy; v3 F7.1)
+
+A character index whose identity page is a Compact Character Reference beside one or more other owner pages (a `[BSRC]`
+or `[BWRK]` page directly under the index: the counting the package and split planners share, `src/packs/engine/core.ts`).
+"Propose a fix" plans the upgrade with the character tool's own planner (`arkona_create_character` with `target` and
+`upgradeToCore`): ONE proposal per character, its page read live first (`FIX_STALE` when it has been renamed since):
+renamed “<Name> - Character Core”, Reference Type Character Core, the Core template recorded, its compact wording
+replaced, the images its Art page also holds removed from it (those the Art page lacks moved there first); its id,
+identity facts, links and prose kept. An Authoritative page's rename is a canonical proposal, as always. In the
+automation the code defaults to **Propose** (each finding its own proposal); the owner may switch it to Apply, which
+submits the same job with every guard judging it (ADR 0072).
+
 ## Authoritative without CANON (`lifecycle_inconsistent`, category Lifecycle)
 
 A `[BSRC]` page normally needs Status Authoritative, the `CANON` tag and a place outside the Working and Archived areas.

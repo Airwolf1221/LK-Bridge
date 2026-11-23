@@ -28,7 +28,8 @@ import { KEEP_KINDS } from '../../markdown/model.js';
 import type { Registry } from '../../registry/index.js';
 import { cleanPrefixes, key as nameKey } from '../../registry/names.js';
 import type { Packs } from '../service.js';
-import { PACK_ART_FILLER, PACK_CHECKS, PACK_FILLER, PACK_RECORD_STORE } from './job.js';
+import { PACK_ART_FILLER, PACK_CHECKS, PACK_CORE_FILLER, PACK_FILLER, PACK_RECORD_STORE } from './job.js';
+import { applyCoreText, type CoreTextInput } from './core.js';
 import { blockText, sectionsOf, textKey } from './text.js';
 import { mintClientId } from '../../jobs/ids.js';
 import type { OutfitStore } from '../../art/store.js';
@@ -92,6 +93,7 @@ export function registerPackEngine(
     engine.registerAsyncChecker(PACK_CHECKS.art, (ctx) => artLayoutCheck(ctx)),
     engine.registerFiller(PACK_FILLER, fillBody),
     engine.registerFiller(PACK_ART_FILLER, appendImages),
+    engine.registerFiller(PACK_CORE_FILLER, coreTextFill),
     engine.registerRecordHandler((job, _step, params) => {
       const r = ((params.body ?? {}) as { record?: Obj }).record ?? {};
       if (r.kind === 'set_template' && typeof r.resourceId === 'string' && typeof r.templateId === 'string') {
@@ -590,6 +592,28 @@ export function appendImages(ctx: FillContext): FillResult {
   if (b >= 0) current.splice(offset(b), 0, ...withHead);
   else current.push(...withHead);
   return { blocks: current, note: { madeSection: section, blocks: withHead.length } };
+}
+
+/**
+ * v3 F7.1 (ADR 0072): the Compact → Core upgrade's text change, on the page as it is when the job runs: the wording rules
+ * on the blocks the plan named, the image blocks it named removed while each still shows the planned file, then (the Art
+ * page) the Core's images it lacked appended under its images section, as the Art filler appends. Nothing else is
+ * touched, so every `unsupported` block stays where it is.
+ */
+export function coreTextFill(ctx: FillContext): FillResult {
+  const input = (ctx.input ?? {}) as CoreTextInput;
+  const done = applyCoreText(ctx.current.blocks as LkBlock[], input);
+  if ((ctx.planned ?? []).length === 0)
+    return { blocks: done.blocks, note: { replaced: done.replaced, removed: done.removed } };
+  const appended = appendImages({
+    ...ctx,
+    input: { section: input.section ?? 'Reference Images', boundaries: input.boundaries ?? [] },
+    current: { version: ctx.current.version, blocks: done.blocks },
+  });
+  return {
+    blocks: appended.blocks,
+    note: { replaced: done.replaced, removed: done.removed, ...(appended.note ?? {}) },
+  };
 }
 
 // ============================================================================================ v3 F7: outfit art

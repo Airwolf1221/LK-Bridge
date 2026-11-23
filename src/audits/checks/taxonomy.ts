@@ -20,6 +20,7 @@ import type { RegistryType, TaxonomyEntry } from '../../registry/index.js';
 import { contentPages, fact, factAmbiguous, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
 import type { FindingCode, FindingDraft } from '../types.js';
+import { coreNeed } from '../../packs/engine/core.js';
 
 const DRIFT_CODE: Record<DriftCode, FindingCode> = {
   type_root_missing: 'taxonomy_type_root_missing',
@@ -207,6 +208,60 @@ export function taxonomyCheck(ctx: AuditContext): FindingDraft[] {
           message: `The ${type.placement.speciesRow} “${race}” belongs to the index “${hit[0]!.plural}”, but the page sits under “${under.plural}”.`,
           evidence: { race, entry: hit[0]!.plural, sitsUnder: under.plural },
         });
+    }
+  }
+  out.push(...coreMissing(ctx));
+  return out;
+}
+
+/**
+ * v3 F7.1 (ADR 0072): a character index whose identity page is a Compact Character Reference beside one or more other
+ * owner pages (Character Architecture: "a character with an index and several owners has a Character Core"). The
+ * counting is the planners' (src/packs/engine/core.ts: an owner page is a `[BSRC]` or `[BWRK]` page directly under the
+ * character's index). The fix is the same upgrade the planners make: one proposal per character, read live first.
+ */
+function coreMissing(ctx: AuditContext): FindingDraft[] {
+  const out: FindingDraft[] = [];
+  const children = new Map<string, AuditPage[]>();
+  for (const p of ctx.model.pages.values())
+    if (p.parentId) children.set(p.parentId, [...(children.get(p.parentId) ?? []), p]);
+  for (const type of ctx.types) {
+    if (!type.placement) continue;
+    for (const p of contentPages(ctx)) {
+      if (p.kind !== 'bsrc' && p.kind !== 'bwrk') continue;
+      if (characterRole(ctx, type, p) !== 'compact') continue;
+      const parent = p.parentId ? ctx.model.pages.get(p.parentId) : undefined;
+      if (!parent || parent.kind !== 'index') continue;
+      const subject =
+        fact(ctx, p, 'Canonical Display Name') || fact(ctx, p, 'Subject') || subjectOf(p.displayName, null);
+      if (!subject || nkey(parent.displayName) !== nkey(subject)) continue;
+      const others = (children.get(parent.id) ?? []).filter(
+        (c) => c.id !== p.id && (c.kind === 'bsrc' || c.kind === 'bwrk'),
+      );
+      const n = coreNeed({
+        role: 'compact',
+        from: 'compact',
+        hasIndex: true,
+        existing: others.length,
+        added: 0,
+      });
+      if (!n.needed) continue;
+      out.push({
+        code: 'character_core_missing',
+        key: p.id,
+        pageId: p.id,
+        message: `${parent.rawName} holds ${n.owners} owner pages, and its identity page ${p.rawName} is still a Compact Character Reference: a character with an index and several owners has a Character Core. The fix upgrades it in place (renamed “${subject} - Character Core”, Reference Type Character Core; its id, identity facts, links and prose kept).`,
+        evidence: {
+          index: { id: parent.id, name: parent.rawName },
+          identity: { id: p.id, name: p.rawName },
+          owners: others.map((o) => o.rawName).sort(),
+        },
+        fix: {
+          kind: 'core_upgrade',
+          args: { pageId: p.id, name: p.rawName, indexId: parent.id, subject },
+          summary: `Upgrade ${p.rawName} to ${subject} - Character Core (one proposal).`,
+        },
+      });
     }
   }
   return out;

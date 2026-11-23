@@ -255,8 +255,9 @@ or an `[INDEX] {name}` with a Character Core and one page per domain for a devel
 placed in the character's asset folder; relationships hosted under one participant and linked from both. It previews
 everything first (`dryRun`), then makes **one proposal**; on approval it runs as one job and verifies what it wrote. With
 `target` it adds pages to an existing character without duplicating it: new pages take the character's standing, a
-Compact Reference gets an index in its place when it gains siblings (its id kept), `upgradeToCore` makes it a Core, and
-the index's routing section gains a line per new page. Its gate: a new character's six identity fields are required,
+Compact Reference gets an index in its place when it gains siblings (its id kept), `upgradeToCore` makes it a Core (and
+v3 F7.1, ADR 0072: any package that leaves a character with an index and several owners makes it its Core in the same
+proposal, whichever tool it comes from), and the index's routing section gains a line per new page. Its gate: a new character's six identity fields are required,
 and an agent asks the owner rather than guess. The full reference is in [tools.md](tools.md#setting-packs-arkona_create_character-v3-f3a).
 
 ## The owner table (v3 F3b)

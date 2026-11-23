@@ -94,6 +94,11 @@ export function copyBridgeState(o: {
   readonly target: Db;
   readonly projectId: string;
   readonly runtime: Runtime;
+  /**
+   * v3 F7.1 (ADR 0072): also the project's type registry and taxonomy (`registry_types`, `taxonomy_entries`,
+   * `registry_state`), for a check that runs the character planner (it places a character by its race's index).
+   */
+  readonly registry?: boolean;
 }): CopyReport {
   const src = new Database(o.bridgeDbPath, { readonly: true, fileMustExist: true });
   try {
@@ -141,6 +146,13 @@ export function copyBridgeState(o: {
         copy('packs', 'id = ?', [id]);
         copy('pack_versions', 'pack_id = ?', [id]);
         copy('pack_projects', 'pack_id = ? AND project_id = ?', [id, pid]);
+      }
+      if (o.registry === true) {
+        o.target.pragma('defer_foreign_keys = ON');
+        for (const t of ['taxonomy_entries', 'registry_types', 'registry_state'])
+          o.target.prepare(`DELETE FROM ${t} WHERE project_id = ?`).run(pid);
+        for (const t of ['registry_state', 'registry_types', 'taxonomy_entries'])
+          copy(t, 'project_id = ?', [pid]);
       }
       o.target.prepare('UPDATE projects SET settings = ? WHERE id = ?').run(project.settings ?? '{}', pid);
       // The kept calendars, so the copied chronology settings find their calendar (ADR 0064 amendment 2).

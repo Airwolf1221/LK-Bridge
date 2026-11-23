@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased: v3 F7.1, the Character Core rule (23 November 2026)
+
+[ADR 0072](adr/0072-v3-f7-1-the-character-core-rule.md). No migration, no new pack seed. Nothing was run against a live
+system: the mock only.
+
+- **One rule** (`src/packs/engine/core.ts`), used by the package planner and the split: a package that leaves a
+  character with an index and two or more owner pages under a Compact Character Reference upgrades it to its Character
+  Core in the same proposal (as `upgradeToCore: true`): `arkona_add_character_art`, `arkona_create_character` with
+  `target`, `arkona_create_relationship`, `arkona_create_owner` homed in a character's index. `upgradeToCore: false`
+  then, or an upgrade that cannot be made (`TEMPLATES_DIFFER`, a name problem), refuses the whole package
+  (`CORE_REQUIRED`).
+- **The upgrade's text** (the owner's addition): the compact wording replaced ("Compact Main CANON reference" → "Main
+  CANON Character Core", "compact (character) reference" → "Character Core"; on the Art page "her character reference"
+  → "her Character Core"), every replacement shown, other "compact" sentences listed; images the Art page holds removed
+  from the Core, those it lacks moved there first (never dropped); the split's R3-66 upgrade does the same.
+- **Revert** of such a package puts back the Compact Reference's name, Reference Type and template record.
+- **The audit** `character_core_missing` (category Taxonomy): its fix is the character tool's own upgrade, one proposal
+  per character; in the automation, default Propose, Apply only when the owner switches it.
+- **The sandbox check** `f7-1-core` (written, not run; passing on the mock in the ordinary suite).
+
 ## Unreleased: v3 F7b, seeing character art (23 November 2026)
 
 [ADR 0071](adr/0071-v3-f7b-seeing-character-art.md), building D1 to D4, D6 and D7 of the owner-approved design
