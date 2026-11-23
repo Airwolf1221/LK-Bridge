@@ -61,7 +61,13 @@ export function echoWorkstream(result: McpToolResult, frame: WorkstreamFrame): M
   }
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return result;
   const b = body as Record<string, unknown>;
-  if ('workstream' in b) return result;
+  // A body that names a workstream of its own (a record read back) keeps it; the label in force is noted only when the
+  // two agree.
+  if ('workstream' in b) {
+    if (b.workstream !== frame.label || frame.source !== 'default' || 'workstreamSource' in b) return result;
+    const text = JSON.stringify({ ...b, workstreamSource: 'default (bridge_workstream)' });
+    return { ...result, content: [{ ...first, text: `${text}${tail}` }, ...content.slice(1)] as McpToolResult['content'] };
+  }
   const { project, ...rest } = b;
   const next = {
     ...(project !== undefined ? { project } : {}),

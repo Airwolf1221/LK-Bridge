@@ -35,6 +35,8 @@ export const M = {
   daryanIndex: 'mkdaridx',
   daryan: 'mkdaryan',
   khepri: 'mkkhepri',
+  /** An AU character (Continuity Type AU, Continuity Shattered Crown), for query_facts' continuity. */
+  auChar: 'mkauchar',
 } as const;
 
 /** The bulk characters' ids (`mkbulk01` …). */
@@ -134,6 +136,14 @@ export async function identityWorld(): Promise<IdentityWorld> {
         'Compact Character Reference',
         identity('Human', 'Menkheti'),
       );
+      page(M.auChar, '[BSRC] Mehrana Sefet - Character Core', M.desk, ['AU', 'Character', 'Human', 'Menkheti'], 'Character Core', [
+        ['Status', 'Authoritative'],
+        ['Continuity Type', 'AU'],
+        ['Continuity', 'Shattered Crown'],
+        ['Inheritance', 'None'],
+        ['Race / Species', 'Human'],
+        ['Naming Culture', 'Menkheti'],
+      ]);
       BULK.forEach((id, i) =>
         page(
           id,

@@ -34,7 +34,7 @@ import { lifecycleFrom } from '../../lifecycle/settings.js';
 import { textKey } from '../../packs/engine/text.js';
 import { tokenFor } from '../../packs/engine/tags.js';
 import { IDENTITY_CHECKS, IDENTITY_REBASERS } from '../../packs/identity/checks.js';
-import { IDENTITY_TOOL, summaryOf } from '../../packs/identity/service.js';
+import { IDENTITY_TOOL, outcomesOf, summaryOf } from '../../packs/identity/service.js';
 import type { IdentityRecord, PlannedItem } from '../../packs/identity/store.js';
 import { nameCheck, NEVER_INFER } from '../../packs/naming/check.js';
 import {
@@ -711,6 +711,15 @@ async function plan(
     },
     rule: NEVER_INFER,
   };
+  const principalId = mctx.principal?.principalId ?? 'unknown';
+  const workstream = currentWorkstream();
+  const recordPlan = { items: planned, reconcileTags, ...(policy ? { policy: { version: policy.version, digest: policy.digest } } : {}) };
+  if (args.dryRun !== true && toRun.length === 0) {
+    // Nothing to submit: the refusals are still recorded (the workstream report lists them).
+    const rec = service.records.save({ projectId: pd.project.id, principalId, workstream, jobId: null, proposalId: null, plan: recordPlan });
+    const items = outcomesOf(planned, [], new Map(), 'succeeded');
+    service.records.finish(rec.id, { items, summary: summaryOf(items) });
+  }
   if (args.dryRun === true || toRun.length === 0) {
     return finish(
       pd,
@@ -914,9 +923,6 @@ async function plan(
   } catch (e) {
     return errorFromThrown(e, pd);
   }
-  const principalId = mctx.principal?.principalId ?? 'unknown';
-  const workstream = currentWorkstream();
-  const recordPlan = { items: planned, reconcileTags, ...(policy ? { policy: { version: policy.version, digest: policy.digest } } : {}) };
   if ('proposalId' in r) {
     const rec = service.records.save({
       projectId: pd.project.id,

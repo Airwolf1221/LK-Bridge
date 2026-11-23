@@ -227,8 +227,8 @@ export class ToolCallLog {
         this.o.db
           .prepare(
             `INSERT INTO tool_calls (at, principal_id, profile, scope, tool, project, args, outcome, code, job_id,
-               proposal_id, duration_ms, budget_requests, budget_writes, result_chars, no_base_version)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               proposal_id, duration_ms, budget_requests, budget_writes, result_chars, no_base_version, workstream)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             startedAt,
@@ -247,6 +247,7 @@ export class ToolCallLog {
             before && after ? Math.max(0, after.writes - before.writes) : null,
             o.resultChars,
             isWriteWithoutBaseVersion(tool, summary, o.code, o.outcome) ? 1 : 0,
+            'workstream' in o && typeof o.workstream === 'string' ? o.workstream.slice(0, 80) : null,
           );
         if (this.now() - this.lastPrune > PRUNE_EVERY_MS) this.prune();
       } catch (err) {

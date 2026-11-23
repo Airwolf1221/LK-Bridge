@@ -9,6 +9,10 @@ ALTER TABLE proposals ADD COLUMN workstream TEXT;
 CREATE INDEX proposals_workstream ON proposals (project_id, workstream, created_at) WHERE workstream IS NOT NULL;
 ALTER TABLE write_journal ADD COLUMN workstream TEXT;
 CREATE INDEX write_journal_workstream ON write_journal (project_id, workstream, id) WHERE workstream IS NOT NULL;
+-- The tool-call log keeps the label a write tool's result echoed, so a refusal that made no job (FIX_STALE, an unmapped
+-- value) is reported with its workstream. A label is the agent's own short text, never page content.
+ALTER TABLE tool_calls ADD COLUMN workstream TEXT;
+CREATE INDEX tool_calls_workstream ON tool_calls (workstream, at) WHERE workstream IS NOT NULL;
 
 -- 2. H8: `bridge_workstream { set }`: a connection's default label, held on the server and expiring after 12 hours of
 --    no use (`last_used_at`). The connection is its principal (the OAuth grant or the personal access token).

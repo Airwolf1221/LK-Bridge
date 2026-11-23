@@ -50,6 +50,8 @@ export interface WorkstreamReportDeps {
   readonly pageName?: (projectId: string, pageId: string) => string | null;
   /** A principal's display name (a connection's label). */
   readonly principalName?: (principalId: string) => string | null;
+  /** A project's name (the tool-call log names projects by name). */
+  readonly projectName?: (projectId: string) => string | null;
 }
 
 interface JobRow {
@@ -289,17 +291,20 @@ export class WorkstreamReports {
                WHERE project_id = ? AND job_id IN (${ids.map(() => '?').join(',')}) ORDER BY id`,
             )
             .all(projectId, ...ids) as JournalRow[]);
+    // H10: every write whose outcome was unknown at some point (it has a reconciliation), settled or not.
     const reconciliations = new Map<number, Obj>();
-    const unsettled = journal.filter((j) => j.outcome === 'unknown' || j.outcome === 'superseded');
-    if (unsettled.length > 0) {
+    if (journal.length > 0) {
       const rows = db
         .prepare(
           `SELECT journal_id, state, outcome, attempts, settled_at, settled_by, reason FROM write_reconciliations
-           WHERE journal_id IN (${unsettled.map(() => '?').join(',')})`,
+           WHERE journal_id IN (${journal.map(() => '?').join(',')})`,
         )
-        .all(...unsettled.map((j) => j.id)) as Obj[];
+        .all(...journal.map((j) => j.id)) as Obj[];
       for (const r of rows) reconciliations.set(r.journal_id as number, r);
     }
+    const unsettled = journal.filter(
+      (j) => j.outcome === 'unknown' || j.outcome === 'superseded' || reconciliations.has(j.id),
+    );
     // The version each write left (its step's result), for "before → after".
     const after = new Map<string, string>();
     if (ids.length > 0) {
@@ -468,6 +473,47 @@ export class WorkstreamReports {
       const e = parse(j.last_error) as Obj | null;
       if (j.status === 'failed' && e && (e.code === 'FIX_STALE' || e.code === 'RETAG_POLICY_CHANGED'))
         excluded.push({ kind: 'refused', jobId: j.id, code: e.code, why: e.message ?? e.code });
+    }
+
+    // Refusals that made no job (FIX_STALE, an unmapped value, a rename steered elsewhere): the tool-call log keeps the
+    // label each write tool's result echoed.
+    const projectName = this.d.projectName?.(projectId) ?? null;
+    if (scope.workstream !== undefined || scope.principal !== undefined || scope.since !== undefined) {
+      const c: string[] = ["outcome = 'error'", 'workstream IS NOT NULL'];
+      const a: unknown[] = [];
+      if (scope.workstream !== undefined) {
+        c.push('workstream = ?');
+        a.push(scope.workstream);
+      }
+      if (scope.principal !== undefined) {
+        c.push('principal_id = ?');
+        a.push(scope.principal);
+      }
+      if (scope.since !== undefined) {
+        c.push('at >= ?');
+        a.push(scope.since);
+      }
+      if (projectName !== null) {
+        c.push('(project IS NULL OR project = ?)');
+        a.push(projectName);
+      }
+      try {
+        const rows = db
+          .prepare(
+            `SELECT id, at, tool, code, job_id FROM tool_calls WHERE ${c.join(' AND ')} AND job_id IS NULL ORDER BY at DESC LIMIT ?`,
+          )
+          .all(...a, LIST_MAX) as { id: number; at: number; tool: string; code: string | null }[];
+        for (const r of rows)
+          excluded.push({
+            kind: 'refused',
+            tool: r.tool,
+            code: r.code,
+            at: iso(r.at),
+            why: `${r.tool} was refused${r.code ? ` (${r.code})` : ''}; nothing was written`,
+          });
+      } catch {
+        // No tool-call log (tests of the report alone).
+      }
     }
 
     // ---- arkona_identity_reconcile's records (refused, held, skipped and failed items, and follow-ups)

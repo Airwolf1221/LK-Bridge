@@ -1409,6 +1409,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
     pageName: (projectId, pageId) => tree.queries.node(projectId, pageId).data?.displayName ?? null,
     principalName: (id) => policy.store.describePrincipals([id]).get(id)?.name ?? null,
+    projectName: (projectId) => projectStore.byId(projectId)?.name ?? null,
   });
   const toolDeps: ToolDeps = {
     engine,
