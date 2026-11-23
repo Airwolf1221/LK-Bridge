@@ -144,6 +144,26 @@ describe('an asset download follows a redirect between asset hosts (E5.2)', () =
     ]);
   });
 
+  it('v3 F7b (ADR 0071): a download counted as one read costs one read, its redirect hop included; none by default', async () => {
+    routes.set('assets.test /counted.webp', { status: 302, location: at('assets2.test', '/counted.webp') });
+    routes.set('assets2.test /counted.webp', { status: 200, body: FILE });
+    const lk = client();
+    const used = () => lk.governor.snapshot().tiers['key-day'].used;
+    await downloadAsset(lk, at('assets.test', '/counted.webp'), {
+      hosts: HOSTS,
+      priority: 'P1',
+      opId: 'test.download',
+    });
+    expect(used()).toBe(0);
+    await downloadAsset(lk, at('assets.test', '/counted.webp'), {
+      hosts: HOSTS,
+      priority: 'P1',
+      opId: 'test.download',
+      costs: { tiers: ['key-min', 'key-hour', 'key-day', 'project-hour'] },
+    });
+    expect(used()).toBe(1);
+  });
+
   it('a file served directly has no final URL of its own', async () => {
     routes.set('assets.test /direct.webp', { status: 200, body: FILE });
     const got = await download(at('assets.test', '/direct.webp'));

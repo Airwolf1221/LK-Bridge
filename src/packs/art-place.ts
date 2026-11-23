@@ -18,7 +18,10 @@ import { textKey } from './engine/text.js';
 type Obj = Record<string, unknown>;
 
 /** The character's race as the tree has it, else read once from its page (as the art step always did). */
-export async function raceOf(env: PlanEnv, hit: CharacterHit): Promise<string | null> {
+export async function raceOf(
+  env: Pick<PlanEnv, 'pd' | 'mctx' | 'tool'>,
+  hit: CharacterHit,
+): Promise<string | null> {
   if (hit.race !== null) return hit.race;
   const read = await liveRead(env.pd, env.mctx, env.tool, 'getResource', {
     path: { resourceId: hit.identity.id },
@@ -47,13 +50,26 @@ export interface ArtPlace {
   readonly live: { readonly requests: number; readonly ok: boolean; readonly error?: string };
 }
 
-export async function placeArt(
-  env: PlanEnv,
+/** v3 F7b (ADR 0071): the character's asset folder read live (G9), and its layout; or why it could not be read. */
+export interface LiveArtFolder {
+  readonly race: string | null;
+  /** The character's folder (null: it has none yet). */
+  readonly characterFolderId: string | null;
+  readonly layout: ArtLayout | null;
+  /** The live reads made (G9). */
+  readonly live: { readonly requests: number; readonly ok: boolean; readonly error?: string };
+}
+
+/**
+ * v3 F7 (G9), shared by the art tool and v3 F7b's `arkona_get_art`: the character's folder found as the planner finds
+ * it (its race's index), its parent read live first when the tree does not hold it, then the folder and three levels
+ * below it read live. A failed read is `ART_FOLDERS_UNREADABLE`: nothing is decided from a cached tree.
+ */
+export async function liveArtFolder(
+  env: Pick<PlanEnv, 'pd' | 'mctx' | 'tool' | 'ctx' | 'type'>,
   hit: CharacterHit,
   subject: string,
-  o: { outfit?: string | null | undefined; newOutfit?: boolean | undefined; arriving: number },
-  outfits: OutfitStore | undefined,
-): Promise<{ ok: true; value: ArtPlace } | { ok: false; result: McpToolResult }> {
+): Promise<{ ok: true; value: LiveArtFolder } | { ok: false; result: McpToolResult }> {
   const { pd, ctx, type } = env;
   const images = pd.services?.images;
   const assets = pd.services?.assets;
@@ -117,6 +133,23 @@ export async function placeArt(
   const layout = characterFolderId
     ? readLayout(queriesView(assets.queries, ctx.projectId), characterFolderId)
     : null;
+  return {
+    ok: true,
+    value: { race, characterFolderId, layout, live: { requests, ok, ...(error ? { error } : {}) } },
+  };
+}
+
+export async function placeArt(
+  env: PlanEnv,
+  hit: CharacterHit,
+  subject: string,
+  o: { outfit?: string | null | undefined; newOutfit?: boolean | undefined; arriving: number },
+  outfits: OutfitStore | undefined,
+): Promise<{ ok: true; value: ArtPlace } | { ok: false; result: McpToolResult }> {
+  const { pd, ctx } = env;
+  const folder = await liveArtFolder(env, hit, subject);
+  if (!folder.ok) return folder;
+  const { race, characterFolderId, layout, live } = folder.value;
   const records = characterFolderId && outfits ? outfits.forCharacter(ctx.projectId, characterFolderId) : [];
   const placement = decidePlacement({
     character: subject,
@@ -140,12 +173,6 @@ export async function placeArt(
     };
   return {
     ok: true,
-    value: {
-      placement,
-      race,
-      characterFolderId,
-      layout,
-      live: { requests, ok, ...(error ? { error } : {}) },
-    },
+    value: { placement, race, characterFolderId, layout, live },
   };
 }

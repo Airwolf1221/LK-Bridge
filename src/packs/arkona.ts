@@ -1178,6 +1178,19 @@ const rules: PackRules = packRulesSchema.parse({
     section: 'Approved Narrow Automations',
     sweepMarker: 'Assign Block IDs Sweep',
   },
+  // v3 F7b (ADR 0071, D2): where arkona_get_art reads an image's written authority first (the character's Art and
+  // Wardrobe pages), and how much of the text under an image it returns.
+  artView: {
+    ownerPages: {
+      referenceTypes: [
+        'Character Art',
+        'Character Physical & Visual Reference',
+        'Character Wardrobe & Personal Presentation Reference',
+      ],
+      tags: ['Character Art', 'Visual Reference', 'Wardrobe'],
+    },
+    textChars: 1200,
+  },
   rulings: [
     {
       key: 'au-status-tag',
@@ -1219,8 +1232,10 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // Automation as a governance source, its "Default Boundary", "Approved Narrow Automations" and "Source Boundaries"
   // pinned.
   // `-f5c` (ADR 0069, 23 November 2026; session F5c): `arkona_identity_reconcile`'s switch (follows the agent's scope).
-  seed: 'arkona-2026-11-23-f5c',
+  // `-f7b` (ADR 0071, 23 November 2026; session F7b): `artView`, where `arkona_get_art` reads an image's authority.
+  seed: 'arkona-2026-11-23-f7b',
   supersedes: [
+    'arkona-2026-11-23-f5c',
     'arkona-2026-11-23-f5b',
     'arkona-2026-11-23-f5a',
     'arkona-2026-11-21-r4',

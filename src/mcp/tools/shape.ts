@@ -61,6 +61,7 @@ import type { GuardOptions } from './upload-http.js';
 import type { WorkstreamDefaults } from '../../workstreams/defaults.js';
 import type { WorkstreamReports } from '../../workstreams/report.js';
 import type { IdentityService } from '../../packs/identity/service.js';
+import type { ArtCache } from '../../art/view/cache.js';
 
 /** The projects as the tools see them (v2 A1): `ProjectRegistry` and `StaticProjects` both provide this. */
 export type ToolProjects = ProjectsRuntime & SelectableProjects & { list(): ProjectView[] };
@@ -135,6 +136,8 @@ export interface DiscoverServices {
   readonly workstreamReports?: WorkstreamReports;
   /** v3 F5c (ADR 0069, H6): `arkona_identity_reconcile`'s records. */
   readonly identity?: IdentityService;
+  /** v3 F7b (ADR 0071, D6): the derivatives `arkona_get_art` delivers inline, on the bridge's disk. */
+  readonly artCache?: ArtCache;
 }
 
 /** What every tool handler needs. */

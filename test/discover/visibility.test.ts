@@ -66,6 +66,7 @@ describe('showLowLevelTools, per profile', () => {
         'arkona_create_relationship',
         'arkona_add_character_art',
         'arkona_character_brief',
+        'arkona_get_art', // v3 F7b (ADR 0071)
         // v3 F3c: the Arkona pack's appraisal tools
         'arkona_appraise_owner',
         'arkona_change_impact',
@@ -144,7 +145,7 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 86 tools off and 86 + 3 + 2 + 89 on', async () => {
+  it('shows 86 tools off and 86 + 3 + 2 + 89 on (with the later tools)', async () => {
     const t = w.stack.newToken('counting', 'write');
     // 61 before v2 E3b; get_resources, bridge_proposals_mine and bridge_job_wait were merged (-3) and lk_upload_image and
     // create_bare_resource are hidden by default (-2); v3 F3b's four pack tools (+4); v3 F3c's five appraisal tools (+5);
@@ -152,9 +153,10 @@ describe('showLowLevelTools, per profile', () => {
     // v3 F3f's arkona_retag_audit and arkona_retag_apply (+2); v3 F4a's arkona_name_check and arkona_brief (+2); v3 F4b's four consistency tools (+4).
     // CR-2026-11-R4 (LD-01): the 12 consistency and narrative tools are not listed while the pack is not approved.
     // v3 F5c (ADR 0069): bridge_workstream, bridge_workstream_report, query_facts and arkona_identity_reconcile (+4).
-    expect(await list(t.token)).toHaveLength(86 - 12 + 4);
+    // v3 F7b (ADR 0071): arkona_get_art (+1).
+    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 1);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 1 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

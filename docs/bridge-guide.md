@@ -53,6 +53,7 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 | Make an Arkona character, or add pages to one       | `arkona_create_character` (one package)                     | `create_character`, `create_resource` calls   |
 | Make any other Arkona owner page (polity, race…)    | `arkona_create_owner` (one package; its home checked)       | `create_resource` and `set_facts` calls       |
 | Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`    | separate creates; a placed `upload_image`     |
+| See a character's art (before describing it)        | `arkona_get_art` (inline, or the url to browse)             | a web or image search; code on the url        |
 | Brief on any Arkona subject (or a character)        | `arkona_brief` (free; a character: delegated)               | many `get_resource` and `read_document` calls |
 | Check a character's name before an intake or rename | `arkona_name_check` (free; never infers)                    | guessing a culture from the name              |
 | Rename an Arkona character or owner everywhere      | `arkona_rename` (one proposal, item by item)                | `update_resource`, `write_page` page by page  |
@@ -347,6 +348,7 @@ naming the projects they work on). The Arkona pack has twenty-one tools. Ask for
 | Make any other Arkona owner page                   | `arkona_create_owner`        | `Arkona owners`                           |
 | Relate two existing Arkona characters              | `arkona_create_relationship` | `Arkona relationships, art and the brief` |
 | Add art to an existing Arkona character            | `arkona_add_character_art`   | `Arkona relationships, art and the brief` |
+| See a character's art, with what it establishes    | `arkona_get_art`             | `Seeing character art`                    |
 | Recall who an Arkona character is (free, no read)  | `arkona_character_brief`     | `Arkona relationships, art and the brief` |
 | Appraise pages against Source Formatting (free)    | `arkona_appraise_owner`      | `Arkona appraisal`                        |
 | See what depends on a page, a rename, a proposal   | `arkona_change_impact`       | `Arkona appraisal`                        |
@@ -839,6 +841,30 @@ nothing is proposed), then make ONE `arkona_add_character_art` call naming every
 free: the six identity fields, every page of their set with its Reference Type and Scope, their relationships, their Art
 pages with image counts, open audit findings and Unresolved Material, each with how fresh it is. `live: true` re-reads the
 identity fields (one read). Use it before you write about a character, and tell the person who is under discussion.
+
+### Seeing character art
+
+**Before you describe, draw on or write about a character's appearance, call `arkona_get_art`.** It is the only way to
+see the character's real art. Give exactly one of `character` (all its art; `outfit` for one outfit by its name or an
+alias; `design: true` for the pieces in its own folder), `asset` (1 to 6 asset ids or file URLs) or `page` (every image
+on a page, in order). At most 6 images a call; call again with `nextCursor` for more.
+
+**What comes back is literal.** Use each image as a literal visual reference, read together with its `authority`: the
+pages that show it, each with the image's label and the owner's `text` under it, which records what the image
+establishes, its precedence and its limits. **The authority text governs**: where it limits the image, so do you.
+Authoritative pages come first. `authority: "none"` means no owner page embeds the image: it establishes nothing about
+canon, so say so before you rely on it.
+
+**How to see it.** `delivery: "both"` (the default) gives each image's `url` and the image itself, resized, after the
+JSON. If the images did not arrive inline (some clients drop them), open each `url` with your **web browsing tool**,
+never with code: code sandboxes cannot reach the asset host. `delivery: "link"` gives the urls alone (no download, no
+budget).
+
+**Never substitute.** Never use an image found elsewhere (a web or image search, an image you made) as if it were the
+character. If neither the inline image nor the url reaches you, say that you could not see the art; do not describe it.
+
+Cost: none for links; 1 read per image downloaded for inline (cached), plus the live reads that select (a character's
+folders, a page's documents).
 
 ### Arkona appraisal
 

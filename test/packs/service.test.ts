@@ -68,6 +68,7 @@ describe('the Arkona pack, as data', () => {
       'arkona_create_relationship',
       'arkona_add_character_art',
       'arkona_character_brief',
+      'arkona_get_art',
       'arkona_create_owner',
     ]);
     expect(view.attachments.map((x) => x.projectName)).toEqual(['test']);

@@ -894,6 +894,24 @@ export const packRulesSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * v3 F7b (ADR 0071, D2): what `arkona_get_art` reads an image's written authority from. `ownerPages`: the pages
+     * looked at first and marked `ownerPage` (a character's Art and Wardrobe pages), by Reference Type or by the pack's
+     * art role's page name; `textChars`: the text under an image kept for each embedding page. Absent: the defaults
+     * (`DEFAULT_ART_VIEW`, the same values as Arkona's seed).
+     */
+    artView: z
+      .object({
+        ownerPages: z
+          .object({
+            referenceTypes: z.array(text(200)).max(20),
+            tags: z.array(text(100)).max(20),
+          })
+          .strict(),
+        textChars: z.number().int().min(200).max(5000),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
@@ -935,6 +953,20 @@ export const packRulesSchema = z
     }
   });
 export type PackRules = z.infer<typeof packRulesSchema>;
+export type ArtViewRules = NonNullable<PackRules['artView']>;
+
+/** v3 F7b (ADR 0071): `artView` when a pack's rules carry none (a version stored before the F7b seed). */
+export const DEFAULT_ART_VIEW: ArtViewRules = {
+  ownerPages: {
+    referenceTypes: [
+      'Character Art',
+      'Character Physical & Visual Reference',
+      'Character Wardrobe & Personal Presentation Reference',
+    ],
+    tags: ['Character Art', 'Visual Reference', 'Wardrobe'],
+  },
+  textChars: 1200,
+};
 
 /** v3 F3.4 (ADR 0055 decision D): how a pack tool's packages are submitted. */
 export type PackToolMode = 'propose' | 'scope';

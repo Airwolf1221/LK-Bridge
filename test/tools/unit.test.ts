@@ -26,6 +26,12 @@ describe('tools configuration', () => {
       outboundExtraPorts: new Set(),
       images: DEFAULT_IMAGE_SETTINGS,
       snapshots: DEFAULT_SNAPSHOT_SETTINGS,
+      // v3 F7b (ADR 0071, D6): the art cache, beside the database, 500 MB.
+      artCache: { dir: null, maxBytes: 500 * 1024 * 1024 },
+    });
+    expect(loadToolsConfig({ ART_CACHE_DIR: '/srv/art', ART_CACHE_MAX_MB: '20' }).artCache).toEqual({
+      dir: '/srv/art',
+      maxBytes: 20 * 1024 * 1024,
     });
     // v2 E1a (ADR 0042): the snapshot store's defaults (10 GiB minimum free space; every full snapshot for 30 days, then 8 weekly; 30 days of change snapshots), spelled out.
     expect(DEFAULT_SNAPSHOT_SETTINGS).toEqual({

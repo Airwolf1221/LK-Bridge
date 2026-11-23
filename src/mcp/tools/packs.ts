@@ -8,6 +8,7 @@
  */
 import * as z from 'zod';
 import { characterBrief } from '../../packs/brief.js';
+import { COST_LINE, getArt, MAX_IMAGES } from '../../art/view/get-art.js';
 import { runArt, runRelationship } from '../../packs/character-tools.js';
 import { runOwner, runPackage } from '../../packs/run.js';
 import { renameReport, runRename } from '../../packs/rename/run.js';
@@ -220,6 +221,7 @@ export const EXPLICIT_PACK_TOOLS: ReadonlySet<string> = new Set([
   'arkona_character_brief',
   'arkona_rename',
   'arkona_split_owner',
+  'arkona_get_art',
 ]);
 
 /** v3 F3b: how an agent stages art for a pack (design section 6): no destination, so nothing is proposed. */
@@ -975,6 +977,67 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             tool: 'arkona_character_brief',
             character: args.character,
             live: args.live === true,
+          }),
+        ),
+    }),
+    defineTool({
+      name: 'arkona_get_art',
+      title: 'See an Arkona character’s art (pack, read-only)',
+      access: 'read',
+      description:
+        'The Arkona pack, read-only: SEE a character’s art, to use it as a literal visual reference. Call it before describing, drawing on or writing about a character’s appearance. Exactly one selector: `asset` (1 to 6 asset ids or LegendKeeper file URLs), `character` (all its art; with `outfit` one outfit by name or alias, a near miss refused with OUTFIT_NEAR_MATCH; or `design: true` for the pieces in its own folder only; its folders are read live first), or `page` (every image block of the page, in document order; `document` for one). At most ' +
+        `${MAX_IMAGES}` +
+        ' images a call: call again with `nextCursor` for more. ' +
+        'Each image comes with its asset fields and its `authority`: every page that embeds it (Authoritative first), with the section, lifecycle, the image’s alt text as `label`, and `text`, the paragraphs under it, where the owner records what it establishes, its precedence and its limits. The authority text GOVERNS; `authority: "none"` means no owner page embeds the image and it establishes nothing about canon. ' +
+        '`delivery`: "both" (default: the url and the image), "link" (the url only: never downloads) or "inline" (the images, as image content after the JSON, resized to at most 1,568 px). If images do not arrive inline, open each `url` with your web browsing tool, never with code (code sandboxes cannot reach this host). Never substitute an image found elsewhere; if no route reaches you, say you could not see the art. ' +
+        'Live reads to select: a character’s folders (one listing per folder, usually 2 to 5), a page’s documents (one each), an asset id the asset tree lacks (one). ' +
+        COST_LINE,
+      inputSchema: z.object({
+        asset: z
+          .array(z.string().min(1).max(2048))
+          .min(1)
+          .max(MAX_IMAGES)
+          .optional()
+          .describe('1 to 6 asset ids or LegendKeeper asset file URLs (as getAsset gives them).'),
+        character: z.string().min(1).max(200).optional().describe('A character (name, alias or id).'),
+        outfit: z
+          .string()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe('With character: one outfit, by its name or an alias.'),
+        design: z
+          .boolean()
+          .optional()
+          .describe('With character: true for the design pieces in its own folder only.'),
+        page: z.string().min(1).max(500).optional().describe('A page (name or id): every image block on it.'),
+        document: z.string().min(1).max(200).optional().describe('With page: one document (id or name).'),
+        delivery: z
+          .enum(['both', 'link', 'inline'])
+          .optional()
+          .describe('"both" (default), "link" (urls only, nothing downloaded) or "inline" (images only).'),
+        limit: z.number().int().min(1).max(MAX_IMAGES).optional().describe('Images this call (at most 6).'),
+        cursor: z.string().min(1).max(500).optional().describe('The previous answer’s nextCursor.'),
+        project: projectArg,
+      }),
+      annotations: READ_ANNOTATIONS,
+      listed: hasCharacters,
+      handler: (args, mctx) =>
+        withProject(deps, args.project, 'read', (pd) =>
+          getArt(pd, mctx, {
+            packId: 'arkona',
+            tool: 'arkona_get_art',
+            input: {
+              ...(args.asset !== undefined ? { asset: args.asset } : {}),
+              ...(args.character !== undefined ? { character: args.character } : {}),
+              ...(args.outfit !== undefined ? { outfit: args.outfit } : {}),
+              ...(args.design !== undefined ? { design: args.design } : {}),
+              ...(args.page !== undefined ? { page: args.page } : {}),
+              ...(args.document !== undefined ? { document: args.document } : {}),
+              ...(args.delivery !== undefined ? { delivery: args.delivery } : {}),
+              ...(args.limit !== undefined ? { limit: args.limit } : {}),
+              ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+            },
           }),
         ),
     }),

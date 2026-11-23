@@ -206,3 +206,12 @@ its assets), **Refresh now**, and the read-only **Try it** panel for placement p
 | `POST /api/admin/asset-tree/plan?project=`                                    | "Try it": a read-only plan; not audited, nothing requested from LegendKeeper         |
 
 Errors: `409 PASS_RUNNING`, `NOTHING_TO_CONFIRM`, `NOTHING_TO_CANCEL`; `400 INVALID_INPUT`.
+
+## Seeing an asset's image: `arkona_get_art` and the art cache (v3 F7b)
+
+`arkona_get_art` ([ADR 0071](adr/0071-v3-f7b-seeing-character-art.md)) reads image assets from this tree (an id or a
+file URL it lacks is read live: `getAsset`, or F7's throttled listing for a URL) and gives each image's file URL exactly
+as the tree holds it. Its inline images are downloaded through `downloadAsset` (one read each, counted on the project's
+budget) and kept, resized, in the art cache: `ART_CACHE_DIR` (default `art-cache/` beside the database, so inside the
+service's `ReadWritePaths=/var/lib/lk-bridge`; a directory set elsewhere must be added there), at most `ART_CACHE_MAX_MB`
+(default 500), least recently used first. Deleting the directory is safe: it is only a cache.

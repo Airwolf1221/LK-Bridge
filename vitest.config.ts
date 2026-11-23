@@ -41,6 +41,7 @@ export default defineConfig({
       'test/blockids/**/*.test.ts', // v3 F3.5: the block-id sweep, an approved narrow automation (ADR 0056)
       'test/automation/**/*.test.ts', // v3 F5b: automatic actions for audits, one finding code at a time (ADR 0068)
       'test/f7/**/*.test.ts', // v3 F7: guided character art (ADR 0070)
+      'test/f7b/**/*.test.ts', // v3 F7b: seeing character art, arkona_get_art (ADR 0071)
       'test/sandbox-mock/**/*.test.ts', // CR-2026-11-R4 (S): every sandbox check, run against the mock in the ordinary suite
       'test/ui/**/*.test.{ts,tsx}',
     ],
