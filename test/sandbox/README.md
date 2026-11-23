@@ -435,6 +435,19 @@ this tag here" on the second page (compliant); T6 its tags reordered with the ra
 the throwaway index deleted with everything under it, in the check's `finally` and the test file's `afterAll`. Needs the
 seed `arkona-2026-11-23-f5a` deployed (T0 says so otherwise). On the mock: `test/sandbox-mock/tagging-f5a.test.ts`.
 
+## Automatic actions for audits (v3 F5b)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- automation-f5b` (`automation-f5b.ts`;
+ADR 0068). WRITES, then cleans up (about 14 writes and 60 reads). In the check's TEMPORARY database only, the Arkona
+pack's governance sources (Repository Automation's three pinned sections among them) are pointed at a throwaway
+governance page the check makes, and the pack is approved there. A1 that page and the approval; A2 two probe pages made
+with the raw client (a decorative blank paragraph; tags `Law, CANON`), only they snapshotted; A3 `blank_paragraphs` and
+`retag_correction` set to Apply (each paragraph written after the sweep's, read back live; the pack still current); A4
+the run, limited to the two probe pages: both applied by the Automation principal, each on the Review page; A5 both
+fixes read back live; A6 both codes switched Off (each paragraph amended). Clean-up: the throwaway index deleted with
+everything under it, in the check's `finally` and the test file's `afterAll`. Needs the seed `arkona-2026-11-23-f5b`
+deployed (A0 says so otherwise). On the mock: `test/sandbox-mock/automation-f5b.test.ts`.
+
 ## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
 
 Each check's steps are an exported runner beside its thin `.test.ts` wrapper (the wrapper is the real run, unchanged in

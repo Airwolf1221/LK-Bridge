@@ -1176,6 +1176,11 @@ export class Appraisal {
     readonly origin: JobOrigin;
     readonly read: LiveRead;
     readonly forceProposal?: boolean;
+    /**
+     * v3 F5b (ADR 0068): the automation engine captures the planned job here instead of submitting it (bridge code
+     * only); the audits' handed-over fixes are not offered to it (it plans those from the audits' own findings).
+     */
+    readonly submit?: (req: Record<string, unknown>) => Promise<Record<string, unknown>>;
   }): Promise<FixResult> {
     const f = this.finding(o.projectId, o.findingId);
     if (f.followUp.kind !== 'fix' || !f.fix)
@@ -1208,7 +1213,9 @@ export class Appraisal {
         {
           projectId: o.projectId,
           read: o.read,
-          submit: (req) => this.d.engine.submit(req as never) as unknown as Promise<Record<string, unknown>>,
+          submit:
+            o.submit ??
+            ((req) => this.d.engine.submit(req as never) as unknown as Promise<Record<string, unknown>>),
           origin: o.origin,
           forceProposal: o.forceProposal !== false || approved === null,
           relatedName: (approved ?? this.rules(o.projectId)).sidebar.related,

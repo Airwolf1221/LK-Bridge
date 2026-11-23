@@ -29,6 +29,7 @@ import { registerAudits } from './routes/audits.js';
 import { registerAppraisal } from './routes/appraisal.js';
 import { registerConsistency } from './routes/consistency.js';
 import { registerTagging } from './routes/tagging.js';
+import { registerAutomation } from './routes/automation.js';
 import { registerToolCalls } from './routes/toolcalls.js';
 import { registerEvaluation } from './routes/evaluation.js';
 import { registerChronology } from './routes/chronology.js';
@@ -123,6 +124,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerAppraisal(api, ctx); // v3 F3c: the appraisal tools (read-only; fixes are proposals)
       registerConsistency(api, ctx); // v3 F4b: the owner's "Pick the right value" (a step-up; one proposal)
       registerTagging(api, ctx); // v3 F3f: the retag audit, holds, batches and reconciliations
+      registerAutomation(api, ctx); // v3 F5b (ADR 0068)
       registerReview(api, ctx); // v3 F3.4: the Review page and Revert (ADR 0055)
 
       /**

@@ -103,6 +103,26 @@ function projectLookup(deps: ToolDeps) {
   };
 }
 
+/** v3 F5b (ADR 0068): what bridge_info says about the automation (never a setting an agent can change). */
+function automationInfo(deps: ToolDeps, projectId: string) {
+  const a = deps.services?.automation;
+  if (!a) return { codes: [], note: 'automation is not running on this bridge' };
+  const codes = a.automated(projectId);
+  return {
+    pausedAll: a.store.global().paused,
+    codes: codes.map((c) => ({
+      code: c.code,
+      name: c.name,
+      setting: c.mode === 'apply' ? 'apply automatically' : 'propose automatically',
+      paused: c.paused,
+    })),
+    note:
+      codes.length === 0
+        ? 'no finding code is automated in this project'
+        : 'the bridge fixes these findings itself after the nightly audit (or proposes the fix); do not propose or apply the same fixes. Only the owner changes these settings, on the dashboard.',
+  };
+}
+
 function infoTool(deps: ToolDeps) {
   const lookup = projectLookup(deps);
   return defineTool({
@@ -171,6 +191,9 @@ function infoTool(deps: ToolDeps) {
                 : ctx.scope === 'propose'
                   ? 'proposal (the owner approves)'
                   : 'no (read-only)',
+            // v3 F5b (ADR 0068, H5): the finding codes the bridge's automation already handles in this project, so an
+            // agent does not duplicate the work. Only the owner changes these settings (on the dashboard).
+            automation: automationInfo(deps, pd.project.id),
           },
           pd,
         );

@@ -957,6 +957,40 @@ off).
 Audited: `appraisal.propose_fix`. The page's link to LegendKeeper uses one URL pattern, `LK_PAGE_URL` in
 `ui/src/pages/appraisal.tsx`: check it opens the page after deploying.
 
+## Automation (v3 F5b)
+
+The **Automation** page (Quality group; [ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md)) switches on
+automatic actions for audit and appraisal findings, one finding code at a time. Only codes whose fix the bridge fully
+determines are listed (13; the never-automatic ones are listed below them, and cannot be switched on). Everything starts
+Off.
+
+- **Each code**: its plain name, an example, the one transformation, its setting (Off, Propose automatically, Apply
+  automatically: a labelled select and **Change**; a confirmation says what is recorded, then the step-up), whether it
+  is paused (and why, with **Resume**, the step-up) or was switched off by the bridge (and why), when it last ran, and
+  what it did or skipped (each item linking to its job or the Proposals page).
+- **Switching a code on** first writes its paragraph into Repository Automation's "Approved Narrow Automations", after
+  the block-id sweep's paragraph, in the sweep's form (the code and its plain name, the owner's approval through the
+  dashboard and its date, the setting, scope, transformation, verification, concurrency rules and stop conditions);
+  nothing runs unless the governance says so. Switching it off amends that paragraph to say so, and when (it is never
+  deleted). Each write is on the Review page and can be Reverted; reverting the paragraph switches the code off.
+- **Pause all automation**: one click (a brake, for every project); **Resume automation** asks for a confirmation and
+  the step-up. **Run automation now** runs the codes switched on in this project at once (the step-up).
+  **Check Repository Automation** reads the governance sources and says whether automation may run (drift, or a
+  bridge-managed paragraph edited outside the bridge, stops it).
+- **The Overview** shows an **Automation overnight** tile: for the last 24 hours, per code, the pages applied,
+  proposed, skipped, and stopped or caught by a guard, linking to the Review and Proposals pages.
+
+| Route                                           | What                                                                                              |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `GET /api/admin/automation`                     | The codes, their settings and recent items, the brake, the caps, the latest runs, the never list. |
+| `GET /api/admin/automation/governance`          | Whether the governance lets automation run (one read of each governance source).                  |
+| `POST /api/admin/automation/codes/:code`        | `{ mode, confirm }`: the setting (the step-up, always). Audited `automation.set_mode`.            |
+| `POST /api/admin/automation/codes/:code/resume` | `{ confirm }`: a paused code resumed (the step-up).                                               |
+| `POST /api/admin/automation/pause` / `resume`   | `{ confirm }`: the brake (one click) / its release (the step-up).                                 |
+| `POST /api/admin/automation/run`                | `{ confirm, wait? }`: Run automation now (the step-up).                                           |
+| `GET /api/admin/automation/runs/:id`            | A run and its items.                                                                              |
+| `GET /api/admin/automation/overnight`           | The last 24 hours, per code (the Overview's tile; also in `GET /api/admin/overview`).             |
+
 ## The block-id sweep (v3 F3.5)
 
 [ADR 0056](adr/0056-block-id-sweep.md), [maintenance.md](maintenance.md#the-block-id-sweep-v3-f35). Below the Maintenance

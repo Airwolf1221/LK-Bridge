@@ -522,6 +522,15 @@ export class PolicyStore {
         out.set(id, { id, name: 'System', type: 'system', removedAt: null });
         continue;
       }
+      // v3 F5b (ADR 0068): the automation engine's principal, and the owner's own governance writes on the Review page.
+      if (id === 'automation') {
+        out.set(id, { id, name: 'Automation', type: 'system', removedAt: null });
+        continue;
+      }
+      if (id === 'owner') {
+        out.set(id, { id, name: 'The owner (dashboard)', type: 'system', removedAt: null });
+        continue;
+      }
       const live = this.getConnection(id);
       if (live) {
         out.set(id, { id, name: live.label.slice(0, 120) || 'Connection', type: live.type, removedAt: null });

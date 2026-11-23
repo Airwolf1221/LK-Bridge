@@ -52,6 +52,8 @@ export interface PolicyGateOptions {
 }
 
 export const SYSTEM_PRINCIPAL_ID = 'system';
+/** v3 F5b (ADR 0068): the automation engine's principal (`AUTOMATION_PRINCIPAL` in src/jobs/types.ts). */
+export const AUTOMATION_PRINCIPAL_ID = 'automation';
 
 /** v3 F3.4 (ADR 0055): what the rails need from the repository tree (set once the tree exists). */
 export interface RailLookups {
@@ -190,6 +192,20 @@ export class LivePolicyGate implements PolicyGate {
       return { decision: 'allow' };
     }
 
+    // 2a. v3 F5b (ADR 0068): the automation engine's own principal, for the codes the owner switched on. Only the
+    // engine acts as it (origin `maintenance`, tool `automation.*`); the canon and lifecycle guards and the rails still
+    // judge every request (the rails at their defaults, `rails` below).
+    if (principal.principalId === AUTOMATION_PRINCIPAL_ID) {
+      // Its reads carry the origin's kind through the bridge's own machinery (a proposal's capture reads as
+      // `proposal_capture`); its writes name the engine's tool.
+      if (origin.kind !== 'maintenance')
+        return deny('only the bridge’s automation engine acts as the Automation principal');
+      if (op.kind !== 'read' && (typeof origin.tool !== 'string' || !origin.tool.startsWith('automation.')))
+        return deny('only the bridge’s automation engine acts as the Automation principal');
+      if (adminBlocked) return deny(MEMBER_ADMIN_REASON);
+      return { decision: 'allow' };
+    }
+
     // 3. An agent: its profile's scope, read now.
     const resolved = this.resolve(principal.principalId);
     if (!resolved) return deny('the connection is not known to the bridge');
@@ -272,6 +288,14 @@ export class LivePolicyGate implements PolicyGate {
     },
   ): Promise<RailDecision | null> {
     if (principal.principalId === SYSTEM_PRINCIPAL_ID) return null;
+    // v3 F5b (ADR 0068): the automation engine meets the rails at the owner's defaults (never bypassed).
+    if (principal.principalId === AUTOMATION_PRINCIPAL_ID)
+      return this.judge(DEFAULT_WRITE_RAILS, items, {
+        project: ctx.project,
+        ...(ctx.tool !== undefined ? { tool: ctx.tool } : {}),
+        readRestores: true,
+        memberRemovals: true,
+      });
     const r = this.resolve(principal.principalId);
     if (!r?.active || r.scope !== 'write') return null;
     return this.judge(r.rails, items, {

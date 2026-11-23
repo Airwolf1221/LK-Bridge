@@ -8,7 +8,7 @@
  * - when the test itself would time out first (a step's timeout longer than the test's), the clean-up the test file runs
  *   in its `afterAll` deletes the probe while the check is still stuck;
  * - the harness itself: each clean-up action once, newest first, each with its own timeout; a failing one named;
- * - all 18 sandbox checks run through it (each test file has the step frame and the `afterAll`; v3 F5a added tagging-f5a).
+ * - all 19 sandbox checks run through it (each test file has the step frame and the `afterAll`; v3 F5a added tagging-f5a, v3 F5b automation-f5b).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -162,12 +162,12 @@ describe('the harness (test/sandbox/steps.ts)', () => {
   });
 });
 
-describe('all 18 sandbox checks run through the harness', () => {
+describe('all 19 sandbox checks run through the harness', () => {
   const dir = join(import.meta.dirname, '..', 'sandbox');
   const files = readdirSync(dir).filter((f) => f.endsWith('.test.ts'));
 
-  it('there are 18, and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
-    expect(files).toHaveLength(18);
+  it('there are 19, and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
+    expect(files).toHaveLength(19);
     for (const f of files) {
       const s = readFileSync(join(dir, f), 'utf8');
       expect(s, f).toMatch(/sandboxRun\(\{ name: '[a-z0-9-]+'/);
@@ -179,9 +179,10 @@ describe('all 18 sandbox checks run through the harness', () => {
   });
 
   it('each runner routes its steps through the run and its clean-up through `defer`', () => {
-    // The 17 runner modules (soak-runtime-readonly.test.ts runs no LegendKeeper check of its own).
+    // The 18 runner modules (v3 F5b added automation-f5b) (soak-runtime-readonly.test.ts runs no LegendKeeper check of its own).
     const runners = [
       'assign-block-ids.ts',
+      'automation-f5b.ts',
       'assumptions-r2.ts',
       'assumptions-r3.ts',
       'assumptions-r4.ts',

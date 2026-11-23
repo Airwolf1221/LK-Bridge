@@ -424,6 +424,20 @@ export class Audits {
        * proposal is the agent's own. Absent: the owner's, from the dashboard.
        */
       readonly origin?: JobOrigin;
+      /**
+       * v3 F5b (ADR 0068): the automation engine plans the fix through these instead of the engine's own (its reads at
+       * P3, and the planned job captured rather than submitted, so the engine can apply it or gather it into one
+       * proposal). Bridge code only.
+       */
+      readonly engine?: {
+        internalRead(
+          projectId: string,
+          op: string,
+          params: Record<string, unknown>,
+          o: object,
+        ): Promise<unknown>;
+        submit(req: Record<string, unknown>): Promise<Record<string, unknown>>;
+      };
     } = {},
   ): Promise<FixResult> {
     const f = this.store.get(projectId, findingId);
@@ -480,7 +494,7 @@ export class Audits {
     } else {
       r = await proposeFixVia(
         {
-          engine: this.d.engine as never,
+          engine: (opts.engine ?? this.d.engine) as never,
           now: this.d.now,
           ...(opts.origin ? { origin: opts.origin } : {}),
           narrativeOrder: (() => {

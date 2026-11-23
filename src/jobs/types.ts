@@ -46,6 +46,18 @@ export const SYSTEM_PRINCIPAL: Principal = Object.freeze({
   label: 'System',
 });
 
+/**
+ * v3 F5b (ADR 0068, H5): the automation framework's own principal. Its jobs are direct writes of the codes the owner
+ * switched to "Apply automatically": journalled under it, listed on the Review page and Revertible. The policy gate lets
+ * it write only from the automation engine (origin `maintenance`, tool `automation.*`), never over MCP, and judges the
+ * safety rails at their defaults for it, as for an agent at scope `write`.
+ */
+export const AUTOMATION_PRINCIPAL: Principal = Object.freeze({
+  principalId: 'automation',
+  profile: 'automation',
+  label: 'Automation',
+});
+
 /** Who asked for the work. `kind` and the principal are filterable; the rest is shown in the UI. */
 export interface JobOrigin {
   readonly kind: 'mcp' | 'ui' | 'system' | 'maintenance' | 'test';

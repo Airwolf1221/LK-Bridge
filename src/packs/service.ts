@@ -213,6 +213,24 @@ export interface Packs {
   peek(packId: string): Pack | null;
   /** Reads every governance source's current version (one read each) and records any drift. */
   governance(packId: string, o?: { signal?: AbortSignal }): Promise<GovernanceStatus>;
+  /**
+   * v3 F5b (ADR 0068): carries the owner's approval of one governance source over a write the bridge itself made to it
+   * (a bridge-managed paragraph of Repository Automation, written as the owner's action). Only when the approval
+   * recorded exactly the version the write was based on (`beforeVersion`): the source's version becomes `after.version`
+   * and its pinned sections' digests are worked out from `after.blocks`. The caller has checked that the document now
+   * reads exactly as the write planned (so nothing but the bridge's paragraph changed). Audited
+   * `pack.carry_approval`. Returns whether it was carried.
+   */
+  carryApproval(
+    packId: string,
+    sourceKey: string,
+    o: {
+      readonly beforeVersion: string;
+      readonly after: { readonly version: string; readonly blocks: unknown };
+      readonly actor: string;
+      readonly reason: string;
+    },
+  ): boolean;
   readonly commands: {
     /** The owner approves the CURRENT version: governance versions recorded, templates worked out again. Audited. */
     approve(actor: string, packId: string): Promise<{ pack: Pack; governance: GovernanceStatus }>;
@@ -802,6 +820,46 @@ export function createPacks(d: PacksDeps): Packs {
       return () => listeners.delete(fn);
     },
     ensureSeeded,
+    carryApproval(packId, sourceKey, o) {
+      const pack = store.get(packId);
+      const approved = pack?.approved;
+      if (!pack || !approved) return false;
+      const src = pack.governance.find((g) => g.key === sourceKey);
+      if (!src || src.resourceId === '' || src.documentId === '') return false;
+      // Every source kept on the document written (a sandbox puts them all on one page): each must have been approved
+      // at exactly the version written over, and each pinned section must be found in the document as it reads now.
+      const same = pack.governance.filter(
+        (g) => g.resourceId === src.resourceId && g.documentId === src.documentId,
+      );
+      const next = new Map<string, PackApproval['sources'][number]>();
+      for (const g of same) {
+        const had = approved.sources.find((x) => x.key === g.key);
+        if (!had || had.version !== o.beforeVersion) return false;
+        const pinned = pinnedSections(o.after.blocks, g.sections ?? []).filter(
+          (x): x is FoundSection & { digest: string } => x.digest !== null,
+        );
+        if (pinned.length !== (g.sections ?? []).length) return false;
+        next.set(g.key, {
+          key: g.key,
+          version: o.after.version,
+          ...(pinned.length > 0
+            ? { sections: pinned.map((p) => ({ heading: p.heading, digest: p.digest })) }
+            : {}),
+        });
+      }
+      const before = approved.sources.filter((x) => next.has(x.key));
+      store.replaceApproval(pack.id, {
+        ...approved,
+        sources: approved.sources.map((x) => next.get(x.key) ?? x),
+      });
+      d.audit(o.actor, 'pack.carry_approval', pack.id, before, {
+        sources: [...next.keys()],
+        version: o.after.version,
+        reason: o.reason.slice(0, 500),
+      });
+      changed();
+      return true;
+    },
     list: () => store.list().map(viewOf),
     get: (id) => store.get(id),
     view: (id) => {

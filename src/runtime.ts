@@ -1,4 +1,5 @@
 import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
+import { AutomationService } from './automation/service.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
 import { findPageByName } from './packs/find-page.js';
@@ -200,6 +201,8 @@ export interface Runtime {
   readonly retag: RetagService;
   /** v3 F5a (ADR 0067, H10): the reconciliation of writes whose outcome is unknown. */
   readonly outcomes: OutcomeReconciler;
+  /** v3 F5b (ADR 0068, H5): automatic actions for audits, one finding code at a time (the owner's settings). */
+  readonly automation: AutomationService;
   readonly tools: readonly McpToolProvider[];
   /** Tells connected MCP sessions when what is listed changes (`notifications/tools/list_changed`). */
   readonly toolList: ToolListWatch;
@@ -839,6 +842,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v3 F3f (ADR 0060): the retag service is made later (it needs the appraisal and the proposals); the audits (its tag
   // findings) and Revert (an approved retag batch is revertible) reach it through this.
   const retagRef: { current: RetagService | null } = { current: null };
+  // v3 F5b (ADR 0068): the automation framework (made after the retag; Revert asks it about governance writes).
+  const automationRef: { current: AutomationService | null } = { current: null };
   // v3 F4a (ADR 0063): the governance check compares the governance pages with the bridge's tool list, made below.
   const toolsRef: { current: readonly McpToolProvider[] } = { current: [] };
   // v3 F4b (ADR 0064): the consistency check (made below, over the appraisal's overlay) feeds the audits' category.
@@ -1131,6 +1136,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       // v3 F5a (ADR 0067, H2): the owner's "Allow this tag everywhere" edit of the Tagging Standard.
       (retagRef.current?.isSupplementaryEditJob(projectId, jobId) ?? false) ||
       consistency.isPickJob(projectId, jobId),
+    // v3 F5b (ADR 0068): a governance amendment recording an automation switched off is not reverted.
+    refuse: (projectId, jobId) => automationRef.current?.revertRefusal(projectId, jobId) ?? null,
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReverts = reverts.start();
@@ -1278,6 +1285,30 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const detachRetag = retag.start();
   retagRef.current = retag;
 
+  // v3 F5b (ADR 0068, H5): automatic actions for audits, switched on one finding code at a time by the owner; each
+  // switch recorded in Repository Automation's "Approved Narrow Automations".
+  const automation = new AutomationService({
+    db: o.db,
+    engine,
+    packs,
+    audits,
+    appraisal,
+    retag,
+    review,
+    projects: {
+      anyClient: (id) => projects.anyClient(id),
+    },
+    projectName: (projectId) => projectStore.byId(projectId)?.name ?? null,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: {
+      info: (obj, msg) => log.info(obj, msg),
+      warn: (obj, msg) => log.warn(obj, msg),
+    },
+  });
+  const detachAutomation = automation.start();
+  automationRef.current = automation;
+
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
   const maintenance = createMaintenance({
@@ -1297,6 +1328,16 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     snapshots,
     audits: { run: (projectId, trigger) => audits.run(projectId, trigger) },
     blockIds,
+    automation: {
+      run: async (projectId, trigger) => {
+        const r = await automation.run(projectId, trigger);
+        return {
+          summary: r.summary ?? r.state,
+          changed: r.state !== 'skipped',
+          ...(r.state === 'skipped' ? { skipped: true } : {}),
+        };
+      },
+    },
   });
   maintenance.start();
   // CR-2026-11-R3 (R3-65): the process's memory in the log every 10 minutes (and once at start), so a long run shows which
@@ -1379,6 +1420,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       splits,
       // v3 F3f (ADR 0060): the retag audit and apply.
       retag,
+      // v3 F5b (ADR 0068): which codes the automation runs (bridge_info tells agents; they cannot change it).
+      automation,
     },
   };
   // v3 F3e (ADR 0059, D2): phase 2 is archive_page's own plan, proposed by the bridge (it needs the tool layer's deps).
@@ -1505,6 +1548,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits,
     retag,
     outcomes,
+    automation,
     tools,
     toolList,
     resources: guideResources(),
@@ -1533,7 +1577,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         chronology.stop();
         snapshots.stop();
         images.stop();
-        await maintenance.stop(o.backgroundMs ?? 10_000);
+        await Promise.allSettled([
+          automation.stop(o.backgroundMs ?? 10_000),
+          maintenance.stop(o.backgroundMs ?? 10_000),
+        ]);
       })();
       const { parked, stillRunning } = await parking;
       await bounded(
@@ -1558,6 +1605,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       lifecycle.stop(); // a link sweep in flight stops, to be continued by the next run
       chronology.stop(); // a chronology check in flight stops (the next run starts again)
       snapshots.stop(); // a full snapshot in flight stops after its current read (it continues at the next start)
+      await automation.stop(); // v3 F5b: a run stops at its next step boundary
       await maintenance.stop(); // stops cleanly, before the engine and database wind down
       images.stop();
       let timer: NodeJS.Timeout | undefined;
@@ -1607,6 +1655,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     unregisterRouteBack();
     for (const f of unmarkRelock) f();
     detachRetag();
+    detachAutomation();
     detachOutcomes();
     unregisterRetagChecks();
     detachReview();

@@ -755,18 +755,26 @@ export class RetagService {
       readonly origin: JobOrigin;
       readonly actor: string;
       readonly reconciliationId?: string | null;
+      /**
+       * v3 F5b (ADR 0068), the automation engine only: its priority (P3), and whether the batch is ONE proposal
+       * (`propose`) or the owner's recorded approval of "Apply automatically" lets it run directly (`direct`, never
+       * from an agent: the pack's switch decides for everyone else).
+       */
+      readonly priority?: 'P1' | 'P3';
+      readonly mode?: 'propose' | 'direct';
     },
   ): Promise<{ batch: Batch; proposalId: string | null; jobId: string | null; summary: string | null }> {
+    const propose = o.mode === 'propose' || (o.mode !== 'direct' && plan.mode === 'propose');
     const r = await this.d.engine.submit({
       kind: 'batch_ops',
       project: o.projectId,
       steps: plan.steps,
       onError: 'stop',
-      priority: 'P1',
+      priority: o.priority ?? 'P1',
       origin: o.origin,
       title: plan.title.slice(0, 300),
       internal: true,
-      ...(plan.mode === 'propose' ? { forceProposal: true } : {}),
+      ...(propose ? { forceProposal: true } : {}),
       // ADR 0051: tags are excluded from Last Major Revision; a retag never dates a page.
       lastMajorRevision: 'skip',
       resumable: { kind: 'retag', recheck: [1] },

@@ -867,6 +867,24 @@ export const packRulesSchema = z
     consistency: consistencyRulesSchema.optional(),
     /** v3 F4c (ADR 0065): the fiction layout and its tools (absent: no narrative tools, no narrative audit). */
     narrative: narrativeRulesSchema.optional(),
+    /**
+     * v3 F5b (ADR 0068, H5): the automation framework's limits: at most `perCode` pages for each code a run, and at most
+     * `perRun` pages for every code together (absent: 25 and 100). Which codes run is the owner's setting per project,
+     * stored in the bridge's database and recorded in Repository Automation, never pack data.
+     */
+    automation: z
+      .object({
+        perCode: z.number().int().min(1).max(500),
+        perRun: z.number().int().min(1).max(2000),
+        /** The governance source that records the approved narrow automations (Repository Automation). */
+        source: text(100),
+        /** Its section, read by its governing name. */
+        section: text(200),
+        /** The words of the block-id sweep's paragraph, which the bridge's paragraphs follow. */
+        sweepMarker: text(200),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
