@@ -347,14 +347,14 @@ describe('upload_image: destinations (the old bridge’s rules)', () => {
       name: 'Winter',
       destination: {
         for_character: { name: 'Asagiri Miyabi', race: 'Foxians' },
-        subfolders: ['Outfits', 'Winter'],
+        subfolders: ['Wardrobe', 'Winter'],
       },
     });
     expect(r.body).toMatchObject({
       status: 'uploaded',
-      destination: { path: ['Characters', 'Beastkin', 'Foxians', 'Asagiri Miyabi', 'Outfits', 'Winter'] },
+      destination: { path: ['Characters', 'Beastkin', 'Foxians', 'Asagiri Miyabi', 'Wardrobe', 'Winter'] },
     });
-    const winter = w.assets.at('Characters', 'Beastkin', 'Foxians', 'Asagiri Miyabi', 'Outfits', 'Winter');
+    const winter = w.assets.at('Characters', 'Beastkin', 'Foxians', 'Asagiri Miyabi', 'Wardrobe', 'Winter');
     expect((r.body.asset as { folderId: string }).folderId).toBe(winter);
     const byId = await call(w, {
       data_base64: b64('already.webp'),

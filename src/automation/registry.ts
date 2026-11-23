@@ -87,7 +87,14 @@ export interface CodeEntry {
   readonly changes?: readonly string[];
   /** The non-current area the code is about (none of today's): only then is that area in its scope. */
   readonly area?: 'legacy' | 'design';
-  readonly automatable?: 'mechanical';
+  /**
+   * `mechanical`: Off, Propose or Apply. v3 F7 (ADR 0070): `propose`: Off or Propose only, never Apply: every fix is a
+   * proposal the owner approves (the art layout's moves, renames and deletes, G7), so the never-eligible traits do not
+   * stop it; Apply is refused (PROPOSE_ONLY).
+   */
+  readonly automatable?: 'mechanical' | 'propose';
+  /** v3 F7: the mode a code has before the owner sets one (default Off). Only a `propose` code may default to Propose. */
+  readonly defaultMode?: 'propose';
 }
 
 export class AutomationFlagError extends Error {
@@ -103,6 +110,12 @@ export class AutomationFlagError extends Error {
  * without a read-back target, and on one with no mechanical trait at all (a code must say what it changes).
  */
 export function defineCode(e: CodeEntry): CodeEntry {
+  if (e.defaultMode === 'propose' && e.automatable !== 'propose')
+    throw new AutomationFlagError(`${e.code} cannot default to Propose: only a proposal-only code can.`);
+  if (e.automatable === 'propose' && e.source !== 'audit')
+    throw new AutomationFlagError(
+      `${e.code} cannot be proposal-only: only an audit code’s fix is a proposal of its own.`,
+    );
   if (e.automatable === 'mechanical') {
     const bad = e.traits.filter((t) => NEVER_TRAITS.includes(t));
     if (bad.length > 0)
@@ -395,6 +408,81 @@ export const CATALOGUE: readonly CodeEntry[] = [
     transformation: 'none: merging deletes folders',
     traits: ['delete', 'image'],
   }),
+  // ======================================================================== v3 F7 (ADR 0070, G7): proposals only
+  defineCode({
+    code: 'art_outfit_folder_single',
+    source: 'audit',
+    name: 'One-piece outfit folder',
+    example: 'Wardrobe / Silk Robe holds one piece: it is moved into Wardrobe and the folder deleted.',
+    transformation:
+      'ONE proposal: one updateAsset moving the piece into Wardrobe, then a deleteAsset of the emptied folder (only if empty when the job runs); every target read live first',
+    traits: ['image', 'delete'],
+    target: 'asset',
+    changes: ['folderId'],
+    automatable: 'propose',
+    defaultMode: 'propose',
+  }),
+  defineCode({
+    code: 'art_loose_outfit_pieces',
+    source: 'audit',
+    name: 'Loose pieces of one outfit',
+    example: 'Two loose “Jade Moon Kimono” pieces: Wardrobe / Jade Moon Kimono is made and both moved in.',
+    transformation:
+      'ONE proposal: Wardrobe / <Outfit> found or made (createAssetFolder, found when it exists), then one updateAsset per piece moving it in; every piece read live first',
+    traits: ['image', 'create'],
+    target: 'asset',
+    changes: ['folderId'],
+    automatable: 'propose',
+    defaultMode: 'propose',
+  }),
+  defineCode({
+    code: 'art_legacy_folder_empty',
+    source: 'audit',
+    name: 'Empty Forms, Outfits or Details folder',
+    example: 'An empty Forms / Primary Appearance under a character is deleted.',
+    transformation:
+      'ONE proposal: one deleteAsset per empty folder, deepest first, each only if empty when the job runs; read live first',
+    traits: ['delete'],
+    target: 'asset',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+  }),
+  defineCode({
+    code: 'art_legacy_folder_holds_assets',
+    source: 'audit',
+    name: 'Forms, Outfits or Details folder with assets',
+    example: 'Outfits / Court Dress still holds two images.',
+    transformation: 'none: where each image belongs is the owner’s call',
+    traits: ['judgement', 'image'],
+  }),
+  defineCode({
+    code: 'art_asset_name',
+    source: 'audit',
+    name: 'Character art name',
+    example: '“Soraya bint al-Noor - Portrait.png” becomes “Soraya bint al-Noor - Portrait”.',
+    transformation:
+      'ONE proposal: one updateAsset renaming the asset to its G4 name (a file extension dropped, or an outfit folder’s piece given its outfit); refused when its folder holds that name; read live first',
+    traits: ['asset_name'],
+    target: 'asset',
+    changes: ['name'],
+    automatable: 'propose',
+    defaultMode: 'propose',
+  }),
+  defineCode({
+    code: 'art_stale_folder_ref',
+    source: 'audit',
+    name: 'Stale asset folder in page text',
+    example:
+      'A line naming “… / Soraya bint al-Noor / Outfits / Jade Moon Kimono” names “… / Wardrobe / Jade Moon Kimono”.',
+    transformation:
+      'ONE proposal: one replaceBlock with the stale path replaced by the folder’s place now, at the document version read live (a later edit stops the job)',
+    traits: ['text_punctuation'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+  }),
   defineCode({
     code: 'scope_overload',
     source: 'appraisal',
@@ -465,6 +553,14 @@ export const CATALOGUE: readonly CodeEntry[] = [
 export const ELIGIBLE: readonly CodeEntry[] = CATALOGUE.filter((e) => e.automatable === 'mechanical');
 
 export const isEligible = (code: string): boolean => ELIGIBLE.some((e) => e.code === code);
+
+/** v3 F7 (ADR 0070): the proposal-only codes (Off or Propose, never Apply), in the catalogue's order. */
+export const PROPOSE_ONLY: readonly CodeEntry[] = CATALOGUE.filter((e) => e.automatable === 'propose');
+
+/** v3 F7: every code the owner can switch (the eligible ones, then the proposal-only ones). */
+export const SWITCHABLE: readonly CodeEntry[] = [...ELIGIBLE, ...PROPOSE_ONLY];
+
+export const isSwitchable = (code: string): boolean => SWITCHABLE.some((e) => e.code === code);
 
 export function entryOf(code: string): CodeEntry | null {
   return CATALOGUE.find((e) => e.code === code) ?? null;

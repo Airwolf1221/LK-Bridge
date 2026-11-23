@@ -3,6 +3,8 @@
  * lifecycle records and the chronology check's last run. Built once per run by the audit service; checks are pure
  * functions of it, so each is tested with a hand-made context.
  */
+import type { OutfitRecord } from '../art/store.js';
+import type { ArtPageText } from './checks/art-layout.js';
 import type { LifecycleConfig } from '../lifecycle/index.js';
 import type { LifecycleTagRules } from '../lifecycle/tags.js';
 import type { RegistryType, TaxonomyEntry } from '../registry/index.js';
@@ -75,6 +77,10 @@ export interface AuditContext {
   readonly snapshotTree: SnapshotTree;
   /** v3 F2: the asset library as the bridge's asset tree holds it (null when it is not built). */
   readonly assetLibrary?: AssetLibrary | null;
+  /** v3 F7 (ADR 0070, G7): a character folder's outfit record (the art layout check). */
+  readonly outfitsOf?: (characterFolderId: string) => readonly OutfitRecord[];
+  /** v3 F7 (G7): every page under a character's repository index (by its name), with its blocks from the snapshots. */
+  readonly characterPages?: (character: string) => readonly ArtPageText[];
   /**
    * v3 F3f (ADR 0060): the retag engine, when the project's approved pack has retag rules: the tag findings then come
    * from it (the same verdicts as `arkona_retag_audit`), never from the tag-definition document.

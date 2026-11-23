@@ -2274,7 +2274,7 @@ export interface PackTypeRules {
   generalKeys: string[];
   specialistTags: string[];
   suggestedReferenceTypes: Record<string, string>;
-  assets: { subfolders: Record<string, string>; displayName: string; section: string; role: string };
+  assets: { displayName: string; section: string; role: string };
 }
 
 /** v3 F3b (ADR 0052): where an owner page may live. */
@@ -2676,6 +2676,8 @@ export interface AutomationCode {
   transformation: string;
   source: 'audit' | 'appraisal' | 'retag';
   mode: AutomationMode;
+  /** v3 F7: the modes the owner can choose (a proposal-only code: Off or Propose). */
+  modes?: AutomationMode[];
   paused: { at: number; reason: string } | null;
   stopped: { at: number; reason: string } | null;
   governancePending: string | null;

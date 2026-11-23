@@ -262,6 +262,17 @@ and check, stale rows, failed re-reads, the correction log, a folder browser, **
 panel that shows where a character's images would go. Its routes and behaviour are in
 [assets.md](assets.md#dashboard-and-admin-api).
 
+### Outfits (v3 F7)
+
+On the Asset Tree page, the **Outfits** panel holds each character's outfit record ([ADR 0070](adr/0070-v3-f7-guided-character-art.md)
+decisions 3 and 4): the characters with outfits, each outfit's pieces, folder (or "loose in Wardrobe") and aliases.
+**Seed (read live)** reads one character's folders live (by the folder's name) and lists the outfits it found (a
+`Wardrobe / <X>` folder; a loose piece named `<Character> - <Outfit> - …`) and, separately, anything it could not read
+without guessing; nothing is recorded until you **Save** it (with the step-up) or **Discard** it. **Add alias** and
+**Remove** change an outfit's aliases: an art call naming an alias adds to that outfit. Routes:
+`GET /api/admin/art/outfits`, `POST /api/admin/art/outfits/seed`, `POST /api/admin/art/outfits/seed/:id/save` and
+`…/discard`, `POST /api/admin/art/outfits/:id/aliases` and `…/aliases/remove`; each change audited (`art.*`).
+
 ## Packs (v3 F3a)
 
 The **Packs** page (navigation: Setup) shows each setting pack the bridge holds: today the Arkona pack, whose tools are
@@ -994,6 +1005,11 @@ Off.
 **The project an action acts on** (ADR 0068 amendment 1): every mutating route that names a project takes it from the
 address (`?project=`, as the dashboard sends the selected project); a body naming another project is refused
 (`400 PROJECT_MISMATCH`) and nothing is done; with no address, the body's; with neither, the default project.
+
+**Proposal-only codes (v3 F7).** The art layout's five fixable codes (`art_outfit_folder_single`,
+`art_loose_outfit_pieces`, `art_legacy_folder_empty`, `art_asset_name`, `art_stale_folder_ref`) offer Off and Propose
+only, never Apply, and are **Propose by default** until you set them: each run proposes each open finding once, as its
+own proposal (ADR 0070 decision 7).
 
 ## Workstreams (v3 F5c)
 

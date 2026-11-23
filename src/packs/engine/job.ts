@@ -44,6 +44,7 @@ import {
   type LmrDecision,
 } from './lmr.js';
 import type { PackPlan, PlannedPage } from './plan.js';
+import { mapArtRecordSteps } from '../../jobs/items.js';
 import type { PlanEnv } from './plan.js';
 
 type Obj = Record<string, unknown>;
@@ -52,6 +53,8 @@ export const PACK_CHECKS = {
   governance: 'pack.governance',
   absent: 'pack.absent',
   page: 'pack.page',
+  /** v3 F7 (ADR 0070, G2, G9): each loose piece an art job moves is still where the plan read it (read live). */
+  art: 'pack.art_layout',
 } as const;
 export const PACK_FILLER = 'pack.body';
 /** v3 F3b (ADR 0052): appends new image sections to an existing Art page inside the lock. */
@@ -103,6 +106,11 @@ export function shiftStep(s: StepSpec, base: number): StepSpec {
     };
   } else if (body && s.op === 'upload_image.verify' && typeof body.assetStep === 'number') {
     out.params = { ...s.params, body: { ...body, assetStep: body.assetStep + base } };
+  } else if (body && s.op === 'bridge.record' && (body.record as Obj | undefined)?.kind === 'art_outfit') {
+    out.params = {
+      ...s.params,
+      body: { ...body, record: mapArtRecordSteps(body.record as Obj, (n) => n + base) },
+    };
   }
   return out as unknown as StepSpec;
 }
@@ -203,6 +211,15 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       },
     });
   }
+  // v3 F7 (ADR 0070, G2, G9): the loose pieces the job moves are read live again before any write.
+  const moves = plan.art?.outfit?.moves ?? [];
+  if (moves.length > 0)
+    checks.push({
+      label: 'art layout',
+      kind: 'registered',
+      checker: PACK_CHECKS.art,
+      input: { moves: moves.map((m) => ({ assetId: m.assetId, name: m.name, folderId: m.fromFolderId })) },
+    });
   steps.push({ op: 'bridge.expect', params: { body: { checks } } });
   labels.push('check');
 
@@ -399,6 +416,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
 
   // 5. The images, then the image page's text.
   const assetSteps = new Map<string, number>();
+  /** v3 F7: each image's destination: the step that makes its folder (0: none), else the folder's id. */
+  const folderOf = new Map<string, { step: number; id: string | null; first: number }>();
   for (const im of plan.images) {
     const first = steps.length + 1;
     im.creates.forEach((c, i) => {
@@ -417,6 +436,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       labels.push(`folder ${c.name}`);
     });
     const lastFolder = im.creates.length > 0 ? steps.length : 0;
+    folderOf.set(im.stagedId, { step: lastFolder, id: im.folderId, first });
     const contentHash = im.row.webp.sha256;
     steps.push({
       op: 'createImageUpload',
@@ -472,6 +492,69 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       createsFolders: im.creates.map((c) => c.name),
     });
   }
+  // v3 F7 (ADR 0070, G2): the loose pieces moved into the outfit's new folder (made with the first image), then the
+  // outfit record (G3), before the Art page's text.
+  const art = plan.art;
+  const firstImage = plan.images[0];
+  const dest = firstImage ? folderOf.get(firstImage.stagedId) : undefined;
+  if (art?.outfit && dest) {
+    for (const m of art.outfit.moves) {
+      steps.push({
+        op: 'updateAsset',
+        params: { path: { assetId: m.assetId }, body: { folderId: dest.step > 0 ? 'pending' : dest.id! } },
+        ...(dest.step > 0 ? { bindFrom: { step: dest.step, to: 'body.folderId' as const } } : {}),
+        journalOperation: journal(null, `move “${m.name}” into ${art.outfit.toPath}`),
+      });
+      labels.push(`move ${m.name} into ${art.outfit.toPath}`);
+      operations.push({
+        kind: 'move_asset',
+        tool,
+        pack: pack.id,
+        assetId: m.assetId,
+        name: m.name,
+        from: m.fromPath,
+        to: art.outfit.toPath,
+        summaryLabel: `move “${m.name}” from ${m.fromPath ?? 'Wardrobe'} into ${art.outfit.toPath} (the outfit’s second piece arrives)`,
+      });
+    }
+    // The character's folder, when this job makes it: its place in the first image's chain of folders.
+    const subLen = art.outfit.into === 'folder' ? 2 : 1;
+    const charIndex = firstImage!.creates.length - 1 - subLen;
+    const record: Obj = {
+      kind: 'art_outfit',
+      characterName: art.characterName,
+      ...(art.characterFolderId
+        ? { characterFolderId: art.characterFolderId }
+        : charIndex >= 0
+          ? { characterFolderStep: dest.first + charIndex }
+          : {}),
+      outfit: art.outfit.name,
+      ...(art.outfit.into === 'folder'
+        ? dest.step > 0
+          ? { folderStep: dest.step }
+          : { folderId: dest.id }
+        : {}),
+      pieces: plan.images
+        .filter((im) => assetSteps.has(im.stagedId))
+        .map((im) => ({ assetStep: assetSteps.get(im.stagedId)!, name: im.name })),
+      moved: art.outfit.moves.map((m) => ({ assetId: m.assetId, name: m.name })),
+      // G5: lines naming a moved piece, listed for the owner in the job's result (never edited).
+      ...(art.outfit.linesForOwner?.length ? { linesForOwner: art.outfit.linesForOwner } : {}),
+    };
+    steps.push({
+      op: 'bridge.record',
+      params: { body: { action: 'complete', store: PACK_RECORD_STORE, record } },
+    });
+    labels.push(`record outfit ${art.outfit.name}`);
+    for (const m of art.outfit.moves)
+      targets.push({
+        kind: 'asset',
+        label: `moved “${m.name}”`,
+        assetId: m.assetId,
+        fields: dest.step > 0 ? { name: m.name } : { name: m.name, folderId: dest.id },
+        ...(dest.step > 0 ? { folderFrom: { step: dest.step } } : {}),
+      });
+  }
   if (imagePage) {
     bodyStep(imagePage, {
       bindAssetUrls: plan.images
@@ -486,7 +569,14 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     steps.push({
       op: 'replaceDocumentBlocks',
       params: { path: { resourceId: c.page.id, documentId: c.documentId }, body: { blocks: [...c.blocks] } },
-      fill: { filler: PACK_ART_FILLER, input: { section: c.section, boundaries: c.boundaries } },
+      fill: {
+        filler: PACK_ART_FILLER,
+        input: {
+          section: c.section,
+          boundaries: c.boundaries,
+          ...(c.outfit ? { outfit: c.outfit } : {}),
+        },
+      },
       judgedInLock: true,
       verifyAfterWrite: true,
       bindAssetUrls: c.images

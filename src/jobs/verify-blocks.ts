@@ -18,6 +18,13 @@
  * 4. The id of a block sent without one: "A block without an id is given a new id" (spec `DocumentBlocksWrite`). The
  *    bridge mints ids for the blocks it adds, so this only concerns legacy blocks that never had one.
  * 5. The document's own `version`, `text` and `schema`: only `blocks` is compared.
+ * 6. v3 F7 (ADR 0070, G10): a titled block's default `title` and `isTitleHidden`. Every titled kind (image, embed,
+ *    keyValue, meter, resourceCollection, resourceLink, map, textField) has both fields in the spec, which gives no
+ *    defaults; LegendKeeper fills them in when a block is written without them (an image becomes `title: "Image"`,
+ *    `isTitleHidden: true`: jobs jkrmpgt21y38x5dp, j5udx2rpurxqcj9k and j3u162l831nskgsl). A field the planned block
+ *    does not carry is dropped from the stored block only when it equals its kind's recorded default
+ *    (`TITLED_BLOCK_DEFAULTS`, confirmed kinds only: a kind not yet confirmed by the sandbox probe still counts). A value
+ *    the plan sent is always compared, and so is a stored value other than the default.
  *
  * Everything else counts, key order excepted.
  */
@@ -29,6 +36,32 @@ export const VERIFY_IGNORED_FIELDS: readonly string[] = [
   'runs normalised as LegendKeeper does on write (empty text runs dropped, neighbouring runs with the same marks merged)',
   'the id LegendKeeper gives a block sent without one',
   'the document’s own version, text and schema (only the blocks are compared)',
+  'a titled block’s title and isTitleHidden when the bridge sent neither and LegendKeeper stored its kind’s confirmed default (image: “Image”, hidden); a value the bridge sent, or any other stored value, is compared',
+];
+
+/**
+ * v3 F7 (ADR 0070, G10): the `title` and `isTitleHidden` LegendKeeper gives a block of each titled kind written without
+ * them. ONLY kinds confirmed against LegendKeeper are listed: `image` (jobs j3u162l831nskgsl and others, 23 November
+ * 2026). The other titled kinds (embed, keyValue, meter, resourceCollection, resourceLink, map, textField) are added once
+ * the sandbox probe (`test/sandbox/f7-art.sandbox.test.ts`, "titled block defaults") has printed what LegendKeeper
+ * stores; until then a difference on them is still reported.
+ */
+export const TITLED_BLOCK_DEFAULTS: Readonly<
+  Record<string, { readonly title: string; readonly isTitleHidden: boolean }>
+> = {
+  image: { title: 'Image', isTitleHidden: true },
+};
+
+/** Every block kind the spec gives `title` and `isTitleHidden` (the probe's list). */
+export const TITLED_BLOCK_KINDS: readonly string[] = [
+  'image',
+  'embed',
+  'keyValue',
+  'meter',
+  'resourceCollection',
+  'resourceLink',
+  'map',
+  'textField',
 ];
 
 export interface BlockDifference {
@@ -195,8 +228,14 @@ function dropMintedIds(planned: unknown, stored: unknown, depth = 0): unknown {
   }
   if (!isObj(planned) || !isObj(stored)) return stored;
   const out: Obj = {};
+  // G10: a titled field the plan did not send, stored as its kind's confirmed default, is LegendKeeper's, not a change.
+  const dflt =
+    typeof planned.kind === 'string' && planned.kind === stored.kind
+      ? TITLED_BLOCK_DEFAULTS[planned.kind]
+      : undefined;
   for (const [k, x] of Object.entries(stored)) {
     if (k === 'id' && typeof planned.kind === 'string' && planned.id === undefined) continue;
+    if (dflt && (k === 'title' || k === 'isTitleHidden') && !(k in planned) && x === dflt[k]) continue;
     if (k === 'content' && isRuns(x) && isRuns(planned[k])) {
       out[k] = dropFilledLabels(planned[k], x);
       continue;
@@ -267,4 +306,59 @@ export function compareStoredBlocks(planned: unknown, stored: unknown, limit = 2
   const state = { n: 0 };
   walk(a, b, '', differences, state, limit);
   return { ok: state.n === 0, differences, count: state.n };
+}
+
+/** v3 F7 (ADR 0070, G10): what a verify mismatch most likely means. */
+export type MismatchCause = 'concurrent_edit' | 'stored_differently';
+
+/**
+ * v3 F7 (ADR 0070, G10): `concurrent_edit` only on evidence of another writer: the version read back is not the one the
+ * write returned, or a difference lies in a top-level block the plan did not write (a block it sent exactly as the page
+ * held it before, by id, or a stored block beyond the ones it sent). Otherwise `stored_differently`: the difference lies
+ * in what the plan wrote, so LegendKeeper may have changed it on save.
+ */
+export function mismatchCause(
+  differences: readonly BlockDifference[],
+  planned: unknown,
+  before: unknown,
+  versions: { readonly written?: string | undefined; readonly stored?: string | undefined },
+): MismatchCause {
+  if (versions.written !== undefined && versions.stored !== undefined && versions.written !== versions.stored)
+    return 'concurrent_edit';
+  const sent: readonly unknown[] = Array.isArray(planned) ? planned : [];
+  const prior = new Map<string, string>();
+  for (const b of Array.isArray(before) ? before : [])
+    if (isObj(b) && typeof b.id === 'string') prior.set(b.id, JSON.stringify(sortKeys(normalise(b))));
+  for (const d of differences) {
+    const m = /^\[(\d+)\]/.exec(d.path);
+    if (!m) continue;
+    const i = Number(m[1]);
+    const p: unknown = sent[i];
+    if (p === undefined) return 'concurrent_edit';
+    if (isObj(p) && typeof p.id === 'string' && prior.get(p.id) === JSON.stringify(sortKeys(normalise(p))))
+      return 'concurrent_edit';
+  }
+  return 'stored_differently';
+}
+
+/** v3 F7 (ADR 0070, G10): the warning for a page write read back differently, in words that fit the evidence. */
+export function mismatchWarning(o: {
+  readonly cause?: MismatchCause | undefined;
+  readonly count: number;
+  readonly first?: BlockDifference | undefined;
+  readonly tail: string;
+}): string {
+  const where = `${o.count} difference(s)${o.first ? `, first at blocks${o.first.path}` : ''}`;
+  if (o.cause === 'concurrent_edit')
+    return (
+      `written but not as planned: the page read back after the write differs from what was sent (${where}); ` +
+      `something else may have edited the page at the same moment. ${o.tail}`
+    );
+  const what = o.first
+    ? ` (blocks${o.first.path}: sent ${JSON.stringify(o.first.expected)}, stored ${JSON.stringify(o.first.actual)})`
+    : '';
+  return (
+    `written but not as planned: the page read back differs from what was sent in what this write changed (${where})${what}; ` +
+    `LegendKeeper may have changed it on save. ${o.tail}`
+  );
 }

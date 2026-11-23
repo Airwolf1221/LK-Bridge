@@ -6,6 +6,7 @@
  * `createImageAsset` tied to it as LegendKeeper ties them (the asset serves exactly the bytes PUT under its upload key,
  * with the stored file's pixel size; the images world's model, ADR 0041). Nothing here leaves loopback.
  */
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import sharp from 'sharp';
@@ -31,6 +32,7 @@ export async function addImageHosts(w: {
 }): Promise<ImageHosts> {
   const { key, cert } = certificate();
   const puts = new Map<string, Buffer>();
+  const fileIds = new Map<string, string>();
   const served = new Map<string, Buffer>();
   const dims = new Map<string, { width: number; height: number }>();
   const server: Server = createServer({ key, cert }, (req, res) => {
@@ -51,7 +53,8 @@ export async function addImageHosts(w: {
         return;
       }
       if (req.method === 'GET' && url.startsWith('/a/')) {
-        const b = served.get(url.slice(3).replace(/\.webp$/, ''));
+        const name = url.slice(3).replace(/\.webp$/, '');
+        const b = served.get(fileIds.get(name) ?? name);
         if (!b) return void res.writeHead(404).end();
         res.writeHead(200, { 'content-type': 'image/webp', 'content-length': b.length });
         return void res.end(b);
@@ -88,7 +91,10 @@ export async function addImageHosts(w: {
         if (!r || r.status !== 201) return r;
         const id = (r.body as { id: string }).id;
         const a = w.assets.assets.get(id)!;
-        a.url = `https://assets.test:${port}/a/${id}.webp`;
+        // v3 F7 (ADR 0070): the file name's uuid is not the asset's id, as LegendKeeper's (live evidence, 23 November 2026).
+        const file = randomUUID();
+        fileIds.set(file, id);
+        a.url = `https://assets.test:${port}/a/${file}.webp`;
         const uploadKey = (req.body as { uploadKey: string }).uploadKey;
         const d = dims.get(uploadKey);
         if (d) Object.assign(a, d);

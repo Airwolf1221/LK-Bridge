@@ -732,7 +732,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Browse the asset folders',
     access: 'read',
     description:
-      'Shows the asset library as folders (to `depth`, default 2) with their asset counts; includeAssets: true lists the assets in each folder. `folder` is an id, a name or a path such as "Characters / Beastkin / Qishen". To list one folder’s assets with their urls use list_assets. The library is not limited to the AI REPOSITORY. Example: { "folder": "Characters", "depth": 1 }. Cost: none.',
+      'Shows the asset library as folders (to `depth`, default 2) with their asset counts; includeAssets: true lists the assets in each folder. `folder` is an id, a name or a path such as "Characters / Beastkin / Qishen". It answers from the bridge’s asset tree (its `confirmed` time says how old); refresh: true reads that folder and the levels shown LIVE first (the owner may have changed them in LegendKeeper since). To list one folder’s assets with their urls use list_assets. The library is not limited to the AI REPOSITORY. Example: { "folder": "Characters", "depth": 1 }. Cost: none; with refresh, one read per folder shown (and one per item gone since).',
     inputSchema: z.object({
       folder: z
         .string()
@@ -750,16 +750,46 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
         .optional()
         .describe('Most assets listed per folder. Default 20.'),
       limit: z.number().int().min(1).max(400).optional().describe('Most folders to list. Default 150.'),
+      refresh: z
+        .boolean()
+        .optional()
+        .describe('Read the folder (and the levels shown) live first. Needs `folder`.'),
       project: projectArg,
     }),
     annotations: READ_ANNOTATIONS,
-    handler: ({ folder, depth, includeAssets, assetsPerFolder, limit, project }, mctx) =>
-      withProject(deps, project, 'read', (pd) => {
+    handler: ({ folder, depth, includeAssets, assetsPerFolder, limit, refresh, project }, mctx) =>
+      withProject(deps, project, 'read', async (pd) => {
         const ac = assetContext(pd);
         if (!ac.ok) return ac.result;
-        const { q, id, meta, now } = ac;
-        const top = locateFolder(pd, q, id, folder);
+        const { q, id, now } = ac;
+        let top = locateFolder(pd, q, id, folder);
         if (!top.ok) return top.result;
+        // v3 F7 (ADR 0070, G9): refresh reads the folder live before answering (the tree may be hours old).
+        let refreshed: Record<string, unknown> | null = null;
+        if (refresh === true) {
+          const live = pd.services?.assets.refreshFolder;
+          if (!top.folder || !live)
+            return errorResult(
+              {
+                code: 'REFRESH_NEEDS_FOLDER',
+                message: 'refresh reads one folder live: give `folder` (an id, a name or a path).',
+              },
+              pd,
+            );
+          const r = await live(id, top.folder.id, { depth: (depth ?? 2) + 1 });
+          if (!r.ok)
+            return errorResult(
+              {
+                code: 'REFRESH_FAILED',
+                message: `The folder could not be read live: ${r.error ?? 'a read failed'}.`,
+              },
+              pd,
+            );
+          refreshed = { live: true, requests: r.requests };
+          top = locateFolder(pd, q, id, top.folder.id);
+          if (!top.ok) return top.result;
+        }
+        const meta = q.status(id);
         const perFolder = assetsPerFolder ?? 20;
         const budget = { left: limit ?? 150 };
         let truncated = false;
@@ -800,6 +830,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
           'browse_asset_tree',
           {
             assetTree: assetInfo(meta, now),
+            ...(refreshed ? { refreshed } : {}),
             ...(top.folder ? { path: top.path } : {}),
             foldersShown: shown,
             ...(truncated

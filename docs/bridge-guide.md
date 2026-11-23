@@ -573,8 +573,9 @@ one, the tags in order, every template row, each page's place, each link and eac
   identity page, exactly one for a new character; `specialist`, with a `title` such as `"Biography"` (the page is
   `{name} - {title}`), an optional `referenceType` (one is suggested) and at most one `specialistTag` (Biography,
   Personality, Relationship, Character Art, Visual Reference, Wardrobe, Magic or Equipment); `art`, with `images` (each a
-  `staged_id` from `upload_image` with `stage: true` and no destination, a `label` `"{Visual Role} - {Descriptor}"`, its `interpretation`,
-  what the image establishes, and an optional `subfolder` such as `"Outfits / Court Dress"`); and `relationship`, with
+  `staged_id` from `upload_image` with `stage: true` and no destination, a `label` `"{Visual Role} - {Descriptor}"` and its `interpretation`,
+  what the image establishes: design pieces, placed in the character's own folder; add outfit art afterwards with
+  `arkona_add_character_art` and `outfit`); and `relationship`, with
   `with` (the other character), an optional `label` and `host` (`"self"`, the default, or `"other"`). The relationship
   is added to both characters' Related Sources (a Working relationship
   is linked from a canon character only after promotion: the warning `PARTNER_LINK_DEFERRED` says to add it then).
@@ -813,15 +814,26 @@ Sources in the same proposal (a Working relationship is linked from a canon char
 (`RELATIONSHIP_EXISTS`, naming it: edit that page with `write_page`). For a relationship of a character you are making
 now, give a `relationship` page in its `arkona_create_character` package instead.
 
-**Art for an existing character: `arkona_add_character_art`.** `{ "character": "…", "images": [{ "staged_id": "…",
-"label": "Outfit Reference - Ceremonial Robes", "interpretation": "…", "subfolder": "Outfits / Ceremonial Robes" }] }`.
-Each image goes in the character's asset folder (`Characters / <race path> / <name>`, with `Forms / <form>`,
-`Outfits / <outfit>` or `Details` subfolders, found or made when the job runs) as `<name> - <label>` (no file extension;
-numbered when the name is taken), and on the character's Art page with its label and interpretation: the Art page is
-made when it is missing, or extended under its "Reference Images" section, nothing else on it changed. Every image needs
-its `interpretation`, what it establishes (`BARE_IMAGE` otherwise). Sources: `staged_id` (staged with no destination),
-`upload_id` (from `prepare_image_upload`), or in ChatGPT the attached `file` for one image; an upload or file is staged
-first, even on a dry run, and its `staged_id` is in the answer.
+**Art for an existing character: `arkona_add_character_art`.** ONE call, ONE target. Design pieces:
+`{ "character": "…", "images": [{ "staged_id": "…", "label": "Primary Reference - Character Portrait", "interpretation": "…" }] }`.
+An outfit's pieces: `{ "character": "…", "outfit": "Ceremonial Robes", "images": [{ "staged_id": "…", "label": "Outfit Reference - Front", "interpretation": "…" }] }`.
+`outfit` applies to every image of the call; without it they are design pieces. You never name a folder: the bridge
+reads the character's folders LIVE and decides. Design pieces go in the character's own folder
+(`Characters / <race path> / <name>`) as `<name> - <label>`. An outfit's pieces are named `<name> - <outfit> - <label>`:
+an outfit's only piece lies loose in `Wardrobe`; with two or more pieces the outfit has its folder `Wardrobe / <outfit>`,
+made when the second piece arrives, the loose piece moved into it in the same job; an outfit that has its folder takes
+new pieces there. Forms, Outfits and Details are retired: nothing makes them again (`LEGACY_ART_FOLDER`). The outfit is
+matched by its name or an alias the owner gave it (case and spacing ignored). A name CLOSE to an existing outfit's
+("Imperial Regalia" beside "Supreme Imperial Regalia") is refused with `OUTFIT_NEAR_MATCH`, which lists the candidates:
+call again with the exact name, or with `newOutfit: true` when it really is another outfit. Names are never given a file
+extension and are numbered when taken. On the character's Art page, design pieces go under "Reference Images"; an
+outfit's go under a heading naming it (wherever it is on the page), else a new one under the page's first heading
+holding "Wardrobe", else a new "Wardrobe" section; the Art page is made when it is missing, nothing else on it changed.
+Every image needs its `interpretation`, what it establishes (`BARE_IMAGE` otherwise). Up to 30 images a call. Sources:
+`staged_id` (staged with no destination), `upload_id` (from `prepare_image_upload`), or in ChatGPT the attached `file`
+for one image; an upload or file is staged first, even on a dry run, and its `staged_id` is in the answer. **Several
+images from ChatGPT:** stage each one first (`upload_image` with `stage: true` and the attached `file`, no destination:
+nothing is proposed), then make ONE `arkona_add_character_art` call naming every `staged_id`.
 
 **Recall who a character is: `arkona_character_brief`.** `{ "character": "…" }` answers from the bridge's own records,
 free: the six identity fields, every page of their set with its Reference Type and Scope, their relationships, their Art
@@ -1344,9 +1356,13 @@ its folder, with its final name, and verified. With a `propose` connection every
 proposal for the owner: do not retry it. The same image sent again returns the existing asset
 (`deduplicated: true`); never upload a copy to "move" an image.
 
-**Using it.** Put an image on a page with `write_page`: `![alt text](asset url)` (only this project's assets). It can
-also go in an image block (an `lk-block`), as a map pin's image, or as a map's image (`update_document`'s settings).
-`list_assets` and `browse_asset_tree` show what the bridge knows of images it uploaded (`bridgeUpload`). Deleting an
+**Using it.** Put an image on a page with `write_page`: `![alt text](asset url)`, with the asset's exact `url` (only
+this project's image assets: any other is refused with `IMAGE_URL_REFUSED`, after the bridge has read the project's asset
+listing live, so an image uploaded in LegendKeeper a moment ago is accepted; it reads the listing at most once every five
+minutes, and a refusal in between says when to try again). It can also go in an image block (an
+`lk-block`), as a map pin's image, or as a map's image (`update_document`'s settings). `list_assets` and
+`browse_asset_tree` show what the bridge knows of images it uploaded (`bridgeUpload`); they answer from the bridge's
+asset tree, whose age they state: `browse_asset_tree` with `refresh: true` and a `folder` reads that folder live first. Deleting an
 asset keeps its bytes in the bridge first; if they cannot be kept the delete is refused until the owner allows it.
 
 ## Snapshots and restores

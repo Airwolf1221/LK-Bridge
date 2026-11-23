@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased: v3 F7, guided character art (23 November 2026)
+
+[ADR 0070](adr/0070-v3-f7-guided-character-art.md), building G1 to G11 of the owner-approved design
+`LK-Bridge-F7-guided-art-design.md`. Migration `4350_art_outfits.sql`. Nothing was run against a live system: the mock
+only.
+
+- **G1, one call, one target**: `arkona_add_character_art` takes `outfit` (for every image of the call; none: design
+  pieces in the character's own folder) and `newOutfit`; `subfolder` is gone from the tool, `arkona_create_character`'s
+  art page, the pack's `assets.subfolders` (an older stored pack version is read with it dropped) and the guides. ChatGPT
+  sends one file per declared field: several images are staged first, then named in one call.
+- **G2 and G9, the bridge places outfit art**: the character's folders read live first; an outfit's only piece loose in
+  `Wardrobe`, two or more in `Wardrobe / <Outfit>` (made when missing, the loose piece moved into it in the same job, read
+  live again before any write); `Wardrobe` made on first use, nothing else.
+- **G3, the outfit record**: per character (its asset folder): outfits, aliases, pieces and folder; written by the art
+  jobs; seeded by the owner on the Asset Tree page's **Outfits** panel (read live, reviewed, then saved; anything
+  ambiguous listed, never guessed); aliases there. A close name is refused with `OUTFIT_NEAR_MATCH` (the test is in the
+  ADR) unless `newOutfit: true`.
+- **G4**: `<Character> - <Label>` and `<Character> - <Outfit> - <Label>`, numbered when taken, never an extension.
+- **G5, the Art page**: outfit pieces under a heading naming the outfit (anywhere), else under the first "Wardrobe"
+  heading, else a new "Wardrobe" section. When a piece is moved, every page under the character's index is read and each
+  line naming it (by asset id or name) is listed for the owner, never edited.
+- **G6**: no Forms, Outfits or Details folder is ever made (`LEGACY_ART_FOLDER`: the planner, `upload_image`,
+  `lk_api_write` and `lk_api_batch`).
+- **G7, the art layout audit**: six codes in category Asset library (one-piece outfit folders, loose pieces of one outfit,
+  empty and non-empty legacy folders, names, stale folder paths and ids on any of the character's pages); every fix a proposal, read live first; in
+  the automation the five fixable codes are proposal-only (Off or Propose, never Apply) and Propose by default.
+- **G10, the verifier**: a titled block's `title` and `isTitleHidden` that the plan did not send are not a difference when
+  they equal the kind's confirmed default (image: "Image", hidden); the warning says "something else may have edited the
+  page" only on evidence of another writer, else what differs and that LegendKeeper may have changed it on save.
+- **G11, the image URL check**: `write_page`, the narrative tools and the pack tools check a new image's URL against the
+  project's assets (both URL forms). An asset's id is not derivable from its URL: on a miss the project's whole asset
+  listing is read live once, at most every five minutes per project; then `IMAGE_URL_REFUSED` (within the window, at
+  once, saying when the listing was read and when to retry).
+- **`browse_asset_tree { refresh: true }`** reads a folder live first.
+- **The sandbox check** `f7-art` (written, not run; passing on the mock in the ordinary suite): the outfit folder made and
+  the loose piece moved on the real API, and the titled-block probe whose values go into `TITLED_BLOCK_DEFAULTS`.
+
 ## Unreleased: v3 F5c, orchestration: identity facts in bulk, query_facts, workstreams (23 November 2026)
 
 [ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md), building H6, H7 and H8 of the

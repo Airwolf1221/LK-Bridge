@@ -511,7 +511,7 @@ export function appraisalTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Check the visual references (Arkona pack, read-only)',
       access: 'read',
       description:
-        'The Arkona pack, read-only: the asset library and the images pages show, as CANDIDATES only (never defects repaired automatically): asset names with a file extension (the one with a fix: a rename, as a proposal), non-WebP images, an image outside its character’s folder (Characters / race path / Name / Forms | Outfits | Details), orphan candidates (no page shows them; a whole-library run only), image blocks whose asset is gone, Art page images with no interpretation text, and two images labelled as one subject’s Primary Reference. Default: the whole library; `page` or `under` narrows it to the images those pages show. Nothing is ever written. ' +
+        'The Arkona pack, read-only: the asset library and the images pages show, as CANDIDATES only (never defects repaired automatically): asset names with a file extension (the one with a fix: a rename, as a proposal), non-WebP images, an image outside its character’s folder (Characters / race path / Name, with its Wardrobe and Wardrobe / <Outfit>), orphan candidates (no page shows them; a whole-library run only), image blocks whose asset is gone, Art page images with no interpretation text, and two images labelled as one subject’s Primary Reference. Default: the whole library; `page` or `under` narrows it to the images those pages show. Nothing is ever written. ' +
         'Cost: none (the bridge’s asset tree and the snapshots).',
       inputSchema: z.object({
         page: pageArg.optional().describe('Only the images this page shows.'),

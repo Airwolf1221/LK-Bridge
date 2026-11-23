@@ -6,7 +6,7 @@
  *
  * - an asset name that includes a file extension (the one candidate with a deterministic repair: a rename);
  * - a non-WebP image (its format read from the first bytes the snapshot store holds; unknown when it holds none);
- * - an asset outside its subject's `Characters / <race path> / <Name>` folder (and its Forms, Outfits and Details), for
+ * - an asset outside its subject's `Characters / <race path> / <Name>` folder (and its Wardrobe and outfit folders), for
  *   the images a character's pages show (the folder worked out as the pack's art tool works it out);
  * - orphan candidates: image assets no page shows (a whole-library run only);
  * - broken image references: image blocks whose asset is gone from the library;
@@ -254,7 +254,7 @@ export async function visualHygiene(ctx: VisualContext): Promise<{ drafts: Draft
     const set = await setOf(i.pageId);
     if (!set) continue;
     const asset = byPath.get(i.urlPath);
-    // Misplaced: the asset sits outside the character's folder (and its Forms, Outfits and Details).
+    // Misplaced: the asset sits outside the character's folder (and its Wardrobe and outfit folders).
     if (asset) {
       const expected = ctx.characterFolder(set.subject, set.race);
       if (expected && expected.length > 0) {

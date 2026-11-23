@@ -4,6 +4,7 @@ import type { Consistency } from '../consistency/service.js';
 import type { ImageService } from '../images/service.js';
 import type { Lifecycle } from '../lifecycle/index.js';
 import type { Audits } from '../audits/index.js';
+import type { OutfitStore } from '../art/store.js';
 import type { Chronology } from '../chronology/index.js';
 import type { AuthServices } from '../auth/services.js';
 import type { AdminSettings, Config } from '../config/index.js';
@@ -52,6 +53,8 @@ export interface AdminRuntime {
   readonly registry: Registry;
   /** v2 A4: the asset tree of each project. */
   readonly assets: AssetService;
+  /** v3 F7 (ADR 0070, G3): each character's outfits (seeding, aliases); optional for tests' runtimes. */
+  readonly outfits?: OutfitStore;
   /** v2 C2c: the page lifecycle (settings, the lifecycle record, the link index); optional for tests' runtimes. */
   readonly lifecycle?: Lifecycle;
   /** v2 D1: chronology sync (settings, records, the check); optional for tests' runtimes. */

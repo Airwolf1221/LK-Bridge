@@ -124,7 +124,6 @@ describe('ATK-04 (HELD expected): a pack tool with no switch of its own', () => 
       specialistTags: [],
       suggestedReferenceTypes: {},
       assets: {
-        subfolders: { form: 'Forms', outfit: 'Outfits', details: 'Details' },
         displayName: '{Subject} - {Label}',
         section: 'Reference Images',
         role: 'core',

@@ -206,6 +206,12 @@ const ROUTES: Record<string, Route> = {
     params: { id: '1' },
     body: { confirm: true, side: 'r4x' },
   },
+  // ---- v3 F7 (ADR 0070, G3): the outfit record. A seeding only reads and lists; saving records it (asks).
+  'POST /api/admin/art/outfits/seed': { kind: 'outside' },
+  'POST /api/admin/art/outfits/seed/:id/save': { kind: 'asks', params: { id: 'seed_r4x' } },
+  'POST /api/admin/art/outfits/seed/:id/discard': { kind: 'one-click' },
+  'POST /api/admin/art/outfits/:id/aliases': { kind: 'outside' },
+  'POST /api/admin/art/outfits/:id/aliases/remove': { kind: 'outside' },
   'PUT /api/admin/tool-calls/retention': { kind: 'asks', body: { days: 30, confirm: true } },
   // ---- evaluation (the owner's notes)
   'POST /api/admin/evaluation/runs': { kind: 'outside' },

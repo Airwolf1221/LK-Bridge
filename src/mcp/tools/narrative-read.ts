@@ -42,7 +42,7 @@ import { shiftStep } from '../../packs/engine/job.js';
 import type { StepSpec } from '../../jobs/index.js';
 import type { PlanItem } from '../../jobs/items.js';
 import type { LkBlock } from '../../markdown/index.js';
-import { planPageWrite, WRITE_PAGE_PLANNER } from '../../pages/index.js';
+import { blockImageUrls, planPageWrite, withImageCheck, WRITE_PAGE_PLANNER } from '../../pages/index.js';
 import { runWriteJob } from './write-job.js';
 import { finish, liveRead, resolvePage } from './repo.js';
 import { errorFromThrown, projectArg, withProject, type ToolDeps } from './shape.js';
@@ -953,7 +953,13 @@ async function promoteEdits(
         plan = planPageWrite(
           { version: cur.version, blocks: cur.blocks },
           { mode: 'append_to_section', section: c.section, markdown: c.markdown },
-          env.converter,
+          await withImageCheck(
+            env.pd.services?.assets,
+            env.ctx.projectId,
+            env.converter,
+            c.markdown,
+            blockImageUrls(cur.blocks),
+          ),
         );
       } catch (e) {
         refused.push({

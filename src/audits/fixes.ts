@@ -720,6 +720,226 @@ export async function proposeFix(
       return fixMergeFolders(d, projectId, f);
     case 'narrative':
       return fixNarrative(d, projectId, f, c.propertiesName);
+    case 'art_layout':
+      return fixArtLayout(d, projectId, f);
+  }
+}
+
+// ============================================================================================ v3 F7: art layout
+
+/** A live getAsset (null: gone). */
+async function liveAsset(d: FixDeps, projectId: string, id: string): Promise<Obj | null> {
+  try {
+    const a = await read(d, projectId, 'getAsset', { path: { assetId: id } });
+    return isObj(a) ? a : null;
+  } catch (e) {
+    if ((e as { status?: unknown }).status === 404 || (e as { lkCode?: unknown }).lkCode === 'NOT_FOUND')
+      return null;
+    throw e;
+  }
+}
+
+/** A folder's direct children, listed live (paged). */
+async function liveChildren(d: FixDeps, projectId: string, folderId: string): Promise<Obj[]> {
+  const out: Obj[] = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < 50; i++) {
+    const page = (await read(d, projectId, 'listAssets', {
+      query: { limit: 100, folderId, ...(cursor ? { cursor } : {}) },
+    })) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown } | undefined;
+    for (const x of Array.isArray(page?.data) ? page.data : []) if (isObj(x)) out.push(x);
+    if (page?.hasMore === true && typeof page.nextCursor === 'string' && page.nextCursor)
+      cursor = page.nextCursor;
+    else break;
+  }
+  return out;
+}
+
+/**
+ * v3 F7 (ADR 0070, G7, G9): the art layout's fixes. Every target is read LIVE first and compared with what the audit
+ * saw (else FIX_STALE: nothing proposed); then ONE proposal for the owner. Moves are `updateAsset` (journalled), a
+ * folder is found or made inside the job (`findOrCreate`), deletes are `onlyIfEmpty` (never with anything in them), a
+ * line is replaced with the document version read now (a later edit makes the job stop, never overwrite).
+ */
+async function fixArtLayout(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const tool = 'audits.art_layout';
+  const character = typeof a.character === 'string' ? a.character : '';
+  const firstId = [a.folderId, a.wardrobeId, a.assetId, a.pageId].find(
+    (x): x is string => typeof x === 'string',
+  );
+  const page = { id: firstId ?? '', name: character };
+  const journal = (write: string) => ({ tool, write });
+  const moves = (Array.isArray(a.moves) ? a.moves : []) as {
+    assetId: string;
+    name: string;
+    fromId: string;
+  }[];
+  const checkMoves = async () => {
+    for (const m of moves) {
+      const live = await liveAsset(d, projectId, m.assetId);
+      if (!live) throw stale(`“${m.name}” is gone.`);
+      if ((live.folderId ?? null) !== m.fromId) throw stale(`“${m.name}” has been moved since the audit.`);
+      if (live.name !== m.name) throw stale(`“${m.name}” has been renamed since the audit.`);
+    }
+  };
+  switch (a.action) {
+    case 'unfold': {
+      await checkMoves();
+      const folderId = String(a.folderId);
+      if (!(await liveAsset(d, projectId, String(a.wardrobeId)))) throw stale('Wardrobe is gone.');
+      const kids = await liveChildren(d, projectId, folderId);
+      if (kids.length !== 1) throw stale(`The folder now holds ${kids.length} item(s).`);
+      const m = moves[0]!;
+      return propose(d, projectId, {
+        steps: [
+          {
+            op: 'updateAsset',
+            params: { path: { assetId: m.assetId }, body: { folderId: String(a.wardrobeId) } },
+            journalOperation: journal(`move “${m.name}” into ${String(a.wardrobePath)}`),
+          },
+          {
+            op: 'deleteAsset',
+            params: { path: { assetId: folderId } },
+            onlyIfEmpty: true,
+            journalOperation: journal(`delete the emptied ${String(a.folderPath)}`),
+          },
+        ],
+        title: `${character}: move “${m.name}” into Wardrobe and delete the one-piece folder ${String(a.folderPath)}`,
+        operation: { tool, action: 'unfold', folder: a.folderPath, piece: m.name },
+        page,
+        pageParts: ['asset folders'],
+        fix: 'art_layout',
+      });
+    }
+    case 'fold': {
+      await checkMoves();
+      const wardrobeId = String(a.wardrobeId);
+      const kids = await liveChildren(d, projectId, wardrobeId);
+      const name = String(a.folderName ?? a.outfit);
+      const existing =
+        (typeof a.folderId === 'string'
+          ? kids.find((k) => k.id === a.folderId && k.type === 'FOLDER')
+          : undefined) ?? kids.find((k) => k.type === 'FOLDER' && k.name === name);
+      const steps: StepSpec[] = [];
+      if (!existing) {
+        steps.push({
+          op: 'createAssetFolder',
+          params: { body: { name, folderId: wardrobeId } },
+          findOrCreate: true,
+          journalOperation: journal(`folder ${String(a.wardrobePath)} / ${name}`),
+        });
+      }
+      for (const m of moves)
+        steps.push({
+          op: 'updateAsset',
+          params: {
+            path: { assetId: m.assetId },
+            body: { folderId: existing ? String(existing.id) : 'pending' },
+          },
+          ...(existing ? {} : { bindFrom: { step: 1, to: 'body.folderId' as const } }),
+          journalOperation: journal(`move “${m.name}” into ${String(a.wardrobePath)} / ${name}`),
+        });
+      return propose(d, projectId, {
+        steps,
+        title: `${character}: ${existing ? '' : `make Wardrobe / ${name} and `}move its ${moves.length} loose pieces into it`,
+        operation: { tool, action: 'fold', outfit: a.outfit, pieces: moves.map((m) => m.name) },
+        page,
+        pageParts: ['asset folders'],
+        fix: 'art_layout',
+      });
+    }
+    case 'delete_empty': {
+      const deletes = (Array.isArray(a.deletes) ? a.deletes : []) as { folderId: string; path: string }[];
+      const ids = new Set(deletes.map((x) => x.folderId));
+      for (const x of deletes) {
+        if (!(await liveAsset(d, projectId, x.folderId))) throw stale(`${x.path} is gone.`);
+        const kids = await liveChildren(d, projectId, x.folderId);
+        if (kids.some((k) => !ids.has(String(k.id)))) throw stale(`${x.path} is no longer empty.`);
+      }
+      return propose(d, projectId, {
+        steps: deletes.map((x) => ({
+          op: 'deleteAsset',
+          params: { path: { assetId: x.folderId } },
+          onlyIfEmpty: true,
+          journalOperation: journal(`delete the empty ${x.path}`),
+        })),
+        title: `${character}: delete the empty ${deletes.at(-1)?.path ?? 'folder'}`,
+        operation: { tool, action: 'delete_empty', folders: deletes.map((x) => x.path) },
+        page,
+        pageParts: ['asset folders'],
+        fix: 'art_layout',
+      });
+    }
+    case 'rename': {
+      const live = await liveAsset(d, projectId, String(a.assetId));
+      if (!live) throw stale(`“${String(a.from)}” is gone.`);
+      if (live.name !== a.from) throw stale(`“${String(a.from)}” has been renamed since the audit.`);
+      const siblings = await liveChildren(d, projectId, String(live.folderId ?? a.folderId));
+      if (siblings.some((s) => s.name === a.to)) throw stale(`“${String(a.to)}” is taken in its folder now.`);
+      return propose(d, projectId, {
+        steps: [
+          {
+            op: 'updateAsset',
+            params: { path: { assetId: String(a.assetId) }, body: { name: String(a.to) } },
+            journalOperation: journal(`rename “${String(a.from)}” to “${String(a.to)}”`),
+          },
+        ],
+        title: `${character}: rename “${String(a.from)}” to “${String(a.to)}”`,
+        operation: { tool, action: 'rename', from: a.from, to: a.to },
+        page,
+        pageParts: ['asset name'],
+        fix: 'art_layout',
+      });
+    }
+    case 'update_line': {
+      const pageId = String(a.pageId);
+      const documentId = String(a.documentId);
+      const blockId = String(a.blockId);
+      const from = String(a.from);
+      const to = String(a.to);
+      const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as
+        Obj | undefined;
+      if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+      const doc = (await read(d, projectId, 'getDocumentBlocks', {
+        path: { resourceId: pageId, documentId },
+      })) as Obj | undefined;
+      const version = isObj(doc) && typeof doc.version === 'string' ? doc.version : null;
+      const block = findBlock(isObj(doc) && Array.isArray(doc.blocks) ? doc.blocks : [], blockId);
+      if (!block || !version) throw stale(`The line ${blockId} is no longer in the document.`);
+      const runs = Array.isArray(block.content) ? (block.content as Obj[]) : [];
+      const at = runs.findIndex((r) => typeof r.text === 'string' && r.text.includes(from));
+      if (at < 0)
+        throw new AuditError(
+          'FIX_NOT_APPLICABLE',
+          'The stale path is no longer in one piece of the line’s text (edited, or split by formatting); nothing was proposed. Update it by hand.',
+        );
+      const content = runs.map((r, i) => (i === at ? { ...r, text: String(r.text).replace(from, to) } : r));
+      return propose(d, projectId, {
+        steps: [
+          {
+            op: 'replaceBlock',
+            params: {
+              path: { resourceId: pageId, documentId, blockId },
+              body: {
+                ...Object.fromEntries(Object.entries(block).filter(([k]) => k !== 'version')),
+                content,
+              },
+              ifMatch: version,
+            },
+            journalOperation: { tool, page: { id: pageId, name: String(res.name) }, block: blockId },
+          },
+        ],
+        title: `${String(res.name)}: update a line naming ${from} to ${to}`,
+        holdDocuments: [documentId],
+        operation: { tool, action: 'update_line', from, to, block: blockId },
+        page: { id: pageId, name: String(res.name) },
+        pageParts: ['page content: one line updated'],
+        fix: 'art_layout',
+      });
+    }
+    default:
+      throw new AuditError('NO_FIX', 'This finding offers no fix.');
   }
 }
 

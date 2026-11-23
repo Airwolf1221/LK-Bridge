@@ -17,9 +17,14 @@ import * as z from 'zod';
 import { VersionConflictError, type VerifiedWriteValue } from '../../jobs/index.js';
 import { operationInputSchema } from '../../lk/registry.js';
 import { MarkdownError, toMarkdown, type EditMode } from '../../markdown/index.js';
+import { mismatchWarning } from '../../jobs/verify-blocks.js';
+import type { FromMarkdownContext } from '../../markdown/index.js';
 import {
+  blockImageUrls,
   markdownDiff,
   pageConverterContext,
+  prepareImageUrls,
+  projectAssetCheck,
   mentionChoices,
   PageVersionConflictError,
   planPageWrite,
@@ -291,6 +296,14 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           );
         }
         const current = { version: body.version, blocks: body.blocks as never[] };
+        // v3 F7 (ADR 0070, G11): each new image's URL checked against the project's assets (live once for a miss).
+        const images = await prepareImageUrls(pd.services?.assets, ctx.projectId, args.markdown, {
+          skip: blockImageUrls(current.blocks),
+        });
+        const isProjectAsset = projectAssetCheck(pd.services?.assets, ctx.projectId, images.known);
+        const checked: FromMarkdownContext = isProjectAsset
+          ? { ...converter, isProjectAsset, ...(images.note ? { imageUrlNote: images.note } : {}) }
+          : converter;
         const rendered = toMarkdown({ blocks: current.blocks });
         const versions = pd.services?.versions;
         versions?.remember(ctx.projectId, doc.id, current.version, rendered.markdown);
@@ -304,7 +317,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
               markdown: args.markdown,
               ...(args.dropRegions ? { dropRegions: args.dropRegions } : {}),
             },
-            converter,
+            checked,
             {
               rendered,
               ...(args.baseVersion !== undefined ? { baseVersion: args.baseVersion } : {}),
@@ -570,12 +583,14 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
                 verified,
                 ...(ver.status === 'mismatch'
                   ? {
-                      warning:
-                        `written but not as planned: the page read back after the write differs from what was sent ` +
-                        `(${ver.differenceCount ?? ver.differences?.length ?? 0} difference(s)${first ? `, first at blocks${first.path}` : ''}); ` +
-                        `something else probably edited the page at the same moment. The write was not retried. The page as it was ` +
-                        `before is in journal entry ${ver.journalId ?? '?'} (bridge_journal_lookup with jobId ${run.jobId ?? '?'}). ` +
-                        'Read the page and check it.',
+                      warning: mismatchWarning({
+                        cause: ver.cause,
+                        count: ver.differenceCount ?? ver.differences?.length ?? 0,
+                        first,
+                        tail:
+                          `The write was not retried. The page as it was before is in journal entry ${ver.journalId ?? '?'} ` +
+                          `(bridge_journal_lookup with jobId ${run.jobId ?? '?'}). Read the page and check it.`,
+                      }),
                       verification: ver,
                     }
                   : ver.status === 'not_checked'

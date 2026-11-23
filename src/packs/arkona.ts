@@ -255,7 +255,6 @@ const rules: PackRules = packRulesSchema.parse({
         abilities: 'Character Powers & Mechanics Reference',
       },
       assets: {
-        subfolders: { form: 'Forms', outfit: 'Outfits', details: 'Details' },
         displayName: '{Subject} - {Label}',
         section: 'Reference Images',
         role: 'art',

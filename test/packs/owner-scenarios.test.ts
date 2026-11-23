@@ -177,12 +177,13 @@ describe('the F3b Arkona evaluation scenarios, as a good run sends them', () => 
     expect(staged.body.status, staged.text).toBe('staged');
     const pkg = {
       character: 'Asagiri Miyabi',
+      // v3 F7 (ADR 0070): one call, one target: the outfit names every image's; the bridge picks the folder.
+      outfit: 'Ceremonial Robes',
       images: [
         {
           staged_id: String(staged.body.staged_id),
-          label: 'Outfit Reference - Ceremonial Robes',
+          label: 'Outfit Reference - Front',
           interpretation: 'The white-and-vermilion robes she wears for the lantern rites.',
-          subfolder: 'Outfits / Ceremonial Robes',
         },
       ],
       project: 'test',
@@ -191,8 +192,8 @@ describe('the F3b Arkona evaluation scenarios, as a good run sends them', () => 
     expect(dry.isError, dry.text).toBe(false);
     expect(dry.body.assets).toEqual([
       expect.objectContaining({
-        name: 'Asagiri Miyabi - Outfit Reference - Ceremonial Robes',
-        folder: 'Characters / Beastkin / Foxians / Asagiri Miyabi / Outfits / Ceremonial Robes',
+        name: 'Asagiri Miyabi - Ceremonial Robes - Outfit Reference - Front',
+        folder: 'Characters / Beastkin / Foxians / Asagiri Miyabi / Wardrobe',
       }),
     ]);
     const p = await w.call('arkona_add_character_art', pkg);
@@ -215,12 +216,12 @@ describe('the F3b Arkona evaluation scenarios, as a good run sends them', () => 
     expect(up.body.status, up.text).toBe('proposal_captured');
     const p = await w.stack.call(proposer, 'arkona_add_character_art', {
       character: 'Asagiri Miyabi',
+      outfit: 'Ceremonial Robes',
       images: [
         {
           staged_id: String(up.body.staged_id),
-          label: 'Outfit Reference - Ceremonial Robes Back',
+          label: 'Outfit Reference - Back',
           interpretation: 'The robes from behind: the vermilion sash knot.',
-          subfolder: 'Outfits / Ceremonial Robes',
         },
       ],
       project: 'test',

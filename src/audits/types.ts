@@ -84,7 +84,14 @@ export type FixKind =
    * chapter's first block made the dateline written from In-world Date) or `link` (a plan's Chapter or a chapter's
    * Chapter Plan field set to the page it belongs with). Never the prose.
    */
-  | 'narrative';
+  | 'narrative'
+  /**
+   * v3 F7 (ADR 0070, G7): the art layout's fixes, by `args.action`: `unfold` (a one-piece outfit folder: the piece moved
+   * into Wardrobe, the folder deleted once empty), `fold` (loose pieces of one outfit moved into Wardrobe/<Outfit>, made
+   * or found), `delete_empty` (an empty Forms, Outfits or Details folder, deepest first, each only if empty when the job
+   * runs), `rename` (an asset's G4 name) and `update_line` (a line's stale folder path). Each re-read live first.
+   */
+  | 'art_layout';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -415,6 +422,42 @@ export const CODES = {
     severity: 'warning',
     title: 'Sibling asset folders with exactly the same name',
     fix: 'merge_asset_folders',
+  },
+  // v3 F7 (ADR 0070, G7): the art layout (Characters / … / <Character>, its Wardrobe and Wardrobe / <Outfit>).
+  art_outfit_folder_single: {
+    category: 'assets',
+    severity: 'info',
+    title: 'An outfit folder with a single piece',
+    fix: 'art_layout',
+  },
+  art_loose_outfit_pieces: {
+    category: 'assets',
+    severity: 'warning',
+    title: 'Two or more loose Wardrobe pieces of one outfit',
+    fix: 'art_layout',
+  },
+  art_legacy_folder_empty: {
+    category: 'assets',
+    severity: 'info',
+    title: 'An empty Forms, Outfits or Details folder',
+    fix: 'art_layout',
+  },
+  art_legacy_folder_holds_assets: {
+    category: 'assets',
+    severity: 'warning',
+    title: 'A Forms, Outfits or Details folder that still holds assets',
+  },
+  art_asset_name: {
+    category: 'assets',
+    severity: 'info',
+    title: 'A character art name that breaks the naming rule',
+    fix: 'art_layout',
+  },
+  art_stale_folder_ref: {
+    category: 'assets',
+    severity: 'warning',
+    title: 'A line naming an asset folder that no longer exists',
+    fix: 'art_layout',
   },
   chronology_name_drift: {
     category: 'chronology',

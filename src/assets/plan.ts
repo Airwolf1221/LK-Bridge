@@ -25,6 +25,7 @@
 import { RACE_SEARCH_DEPTH } from '../registry/classify.js';
 import type { TreeQueries } from '../tree/queries.js';
 import type { TreeNode } from '../tree/types.js';
+import { isLegacyName } from '../art/layout.js';
 import { nameKey } from './classify.js';
 import type { AssetQueries } from './queries.js';
 import type { AssetFolder, AssetMeta } from './types.js';
@@ -156,6 +157,8 @@ export interface AssetPlan {
 
 export type PlanErrorCode =
   | 'INVALID_REQUEST'
+  /** v3 F7 (ADR 0070, G6): a retired Forms, Outfits or Details folder would be made. */
+  | 'LEGACY_ART_FOLDER'
   | 'INVALID_NAME'
   | 'ASSET_TREE_NOT_READY'
   | 'REPOSITORY_TREE_NOT_READY'
@@ -402,6 +405,16 @@ function done(
   assetTree: AssetPlan['assetTree'],
 ): PlanResult {
   const last = steps.at(-1)!;
+  // v3 F7 (ADR 0070, G6): the retired Forms, Outfits and Details folders are never made again, whatever is asked.
+  const legacy = steps.find((s) => s.action === 'create' && isLegacyName(s.name));
+  if (legacy)
+    return {
+      ok: false,
+      error: {
+        code: 'LEGACY_ART_FOLDER',
+        message: `A folder named “${legacy.name}” is never made: Forms, Outfits and Details are retired. Design pieces go in the character’s own folder and outfit pieces in its Wardrobe (arkona_add_character_art with \`outfit\` places them).`,
+      },
+    };
   return {
     ok: true,
     plan: {

@@ -221,7 +221,7 @@ describe('arkona_add_character_art (design section 3)', () => {
     ).toEqual(['created folder']);
   });
 
-  it('extends an existing Art page under “Reference Images”, the folder found (and a subfolder made) when the job runs', async () => {
+  it('extends an existing Art page under “Reference Images”, the character’s folder found when the job runs', async () => {
     const art = pageNamed('[BSRC] Mehrana I al-Khalid - Character Art')!;
     const a = await stage('orientation-6.jpg');
     const b = await stage('already.webp');
@@ -233,9 +233,8 @@ describe('arkona_add_character_art (design section 3)', () => {
           interpretation: 'Her signet ring, worn on the left hand.',
         }),
         image(b, {
-          label: 'Outfit Reference - Court Dress',
-          interpretation: 'Her court dress.',
-          subfolder: 'Outfits / Court Dress',
+          label: 'Expression Reference - Court Smile',
+          interpretation: 'Her composed smile at court.',
         }),
       ],
       project: 'test',
@@ -243,7 +242,7 @@ describe('arkona_add_character_art (design section 3)', () => {
     expect(p.body.status, p.text).toBe('proposal_captured');
     const prop = w.stack.runtime.policy.proposals.get(String(p.body.proposalId))!;
     expect(prop.pages.join('\n')).toMatch(
-      /Character Art: Reference Images gains “Mehrana I al-Khalid - Detail Reference - Signet Ring”, “Mehrana I al-Khalid - Outfit Reference - Court Dress”/,
+      /Character Art: Reference Images gains “Mehrana I al-Khalid - Detail Reference - Signet Ring”, “Mehrana I al-Khalid - Expression Reference - Court Smile”/,
     );
     const done = await approve(w, prop.id);
     expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
@@ -252,28 +251,26 @@ describe('arkona_add_character_art (design section 3)', () => {
     expect(imagesOn(art.id).map((x) => x.alt)).toEqual([
       'Primary Reference - Character Portrait',
       'Detail Reference - Signet Ring',
-      'Outfit Reference - Court Dress',
+      'Expression Reference - Court Smile',
     ]);
+    // v3 F7 (G1): design pieces go in the character's own folder, which was there when planned: no folder is made.
     const used =
       (done.job?.result as { foldersUsed?: { name: string; outcome: string }[] }).foldersUsed ?? [];
-    // The character's folder was there when planned (used by its id); the outfit's subfolders were made in the job.
-    expect(used.map((f) => [f.name, f.outcome])).toEqual([
-      ['Outfits', 'created folder'],
-      ['Court Dress', 'created folder'],
-    ]);
+    expect(used).toEqual([]);
   });
 
   it('a folder made by another job since the plan is found when the job runs, never made twice', async () => {
-    // Two packages planned before either runs: both plan to make Outfits / Gown under the character's folder.
+    // Two packages planned before either runs: each is the outfit's only piece, so both plan to make Wardrobe.
     const one = await stage('png-named.jpg');
     const two = await stage('animated.gif');
-    const pkg = (id: string, label: string) => ({
+    const pkg = (id: string, outfit: string) => ({
       character: 'Mehrana I al-Khalid',
-      images: [image(id, { label, subfolder: 'Outfits / Gown' })],
+      outfit,
+      images: [image(id, { label: 'Outfit Reference - Front' })],
       project: 'test',
     });
-    const p1 = await w.call('arkona_add_character_art', pkg(one, 'Outfit Reference - Gown Front'));
-    const p2 = await w.call('arkona_add_character_art', pkg(two, 'Outfit Reference - Gown Back'));
+    const p1 = await w.call('arkona_add_character_art', pkg(one, 'Gown'));
+    const p2 = await w.call('arkona_add_character_art', pkg(two, 'Riding Habit'));
     expect(p1.body.status, p1.text).toBe('proposal_captured');
     expect(p2.body.status, p2.text).toBe('proposal_captured');
     const d1 = await approve(w, String(p1.body.proposalId));
@@ -284,15 +281,15 @@ describe('arkona_add_character_art (design section 3)', () => {
       ((d.job?.result as { foldersUsed?: { name: string; outcome: string }[] }).foldersUsed ?? []).map(
         (f) => [f.name, f.outcome],
       );
-    expect(outcome(d1)).toEqual([['Gown', 'created folder']]);
-    expect(outcome(d2)).toEqual([['Gown', 'found existing folder']]);
-    expect(w.assets.byName('Gown')).toHaveLength(1);
+    expect(outcome(d1)).toEqual([['Wardrobe', 'created folder']]);
+    expect(outcome(d2)).toEqual([['Wardrobe', 'found existing folder']]);
+    expect(w.assets.byName('Wardrobe')).toHaveLength(1);
     const art = pageNamed('[BSRC] Mehrana I al-Khalid - Character Art')!;
     expect(
       imagesOn(art.id)
         .map((x) => x.alt)
         .slice(-2),
-    ).toEqual(['Outfit Reference - Gown Front', 'Outfit Reference - Gown Back']);
+    ).toEqual(['Outfit Reference - Front', 'Outfit Reference - Front']);
   });
 
   it('refuses an image without its interpretation, and a label with a file extension', async () => {

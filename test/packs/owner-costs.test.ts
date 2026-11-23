@@ -117,9 +117,10 @@ it('reads and writes per typical package', async () => {
     'promoteNation: index, Reference moved, owner: job': [31, 16],
     'relationship of two canon characters: plan': [14, 0],
     'relationship of two canon characters: job': [40, 15],
-    'art: a new Art page with 1 image: plan': [7, 0],
+    // v3 F7 (ADR 0070, G9): one more read to plan each: the character's folder listed live before placing anything.
+    'art: a new Art page with 1 image: plan': [8, 0],
     'art: a new Art page with 1 image: job': [27, 16],
-    'art: 1 image on an existing Art page: plan': [4, 0],
+    'art: 1 image on an existing Art page: plan': [5, 0],
     'art: 1 image on an existing Art page: job': [11, 3],
     'brief: plan': [0, 0],
     'brief, live: plan': [1, 0],

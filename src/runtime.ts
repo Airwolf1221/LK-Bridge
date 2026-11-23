@@ -19,6 +19,7 @@ import { governanceAuditHook } from './packs/governance-audit.js';
 import { knownNamesOf } from './mcp/tools/known-names.js';
 import { textRemovalReader } from './policy/text-removal.js';
 import { registerPackEngine } from './packs/engine/checks.js';
+import { OutfitStore } from './art/store.js';
 import { PACK_CHECKS } from './packs/engine/job.js';
 import { addPackTaxonomyEntry, renamePackTaxonomyEntry } from './packs/taxonomy.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
@@ -169,6 +170,8 @@ export interface Runtime {
   readonly registry: Registry;
   /** v2 A4: the asset tree of each project's asset library (build, after-write updates, refresh, check, queries, placement). */
   readonly assets: AssetService;
+  /** v3 F7 (ADR 0070, G3): each character's outfits. */
+  readonly outfits: OutfitStore;
   /** v2 C2c (ADR 0035): the page lifecycle (settings, records, the link index). */
   readonly lifecycle: Lifecycle;
   /** v2 D1 (ADR 0038): chronology sync (settings, the calendar cache, records, links, the check). */
@@ -477,9 +480,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       ? narrativeCompare(scope.rules)
       : null;
   });
+  // v3 F7 (ADR 0070, G3): each character's outfits (the art jobs' record, the owner's seeding and aliases).
+  const outfits = new OutfitStore(o.db, () => (o.clock ?? systemClock).now());
   const unregisterPackEngine = registerPackEngine(engine, {
     packs,
     registry,
+    outfits,
+    stepValue: (jobId, stepNo) => engine.stepValue(jobId, stepNo),
     setTemplate: (projectId, resourceId, templateId) =>
       tree.store.setTemplate(projectId, resourceId, templateId),
     // v3 F3b (ADR 0052): the job's check that each staged image it places is still its to place (read when jobs run,
@@ -869,6 +876,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
     // v3 F2 (ADR 0049 decision 9): duplicate asset folders, from the bridge's asset tree (no LegendKeeper read).
     assetLibrary: (projectId) => assetLibraryOf(assets, projectId),
+    // v3 F7 (ADR 0070, G7): the outfit record, for the art layout check.
+    outfits,
     // v3 F3d (ADR 0053): where the lifecycle tag goes and the AU ruling, from the project's approved pack.
     lifecycleTags: (projectId) => packs.lifecycleRules(projectId),
     // v3 F3f (ADR 0060): the tag findings from the retag engine, where the approved pack has retag rules.
@@ -1425,6 +1434,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       tree,
       registry,
       assets,
+      outfits,
       versions,
       projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
       templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
@@ -1578,6 +1588,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     tree,
     registry,
     assets,
+    outfits,
     lifecycle,
     chronology,
     images,

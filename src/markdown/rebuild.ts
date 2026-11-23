@@ -684,7 +684,7 @@ function imageProblems(b: LkBlock, base: BasePage, st: State, out: LimitProblem[
   if (st.ctx.isProjectAsset) {
     if (!st.ctx.isProjectAsset(url))
       refuse(
-        `${url} is not an image asset of this project. Upload it first (upload_image) and use the asset URL it returns.`,
+        `${url} is not an image asset of this project. Upload it first (upload_image) and use the asset URL it returns.${st.ctx.imageUrlNote ? ` ${st.ctx.imageUrlNote}` : ''}`,
       );
     return;
   }

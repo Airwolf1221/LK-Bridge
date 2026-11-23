@@ -52,14 +52,6 @@ const image = z
         '“{Visual Role} - {Descriptor}”, e.g. “Primary Reference - Character Portrait”; no file extension.',
       ),
     interpretation: z.string().max(5000).optional().describe('What this reference establishes (required).'),
-    subfolder: z
-      .string()
-      .max(300)
-      .nullable()
-      .optional()
-      .describe(
-        '“Forms / <named form>”, “Outfits / <named outfit>” or “Details”; omit for the character’s folder.',
-      ),
   })
   .strict();
 
@@ -528,12 +520,27 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Add art to an Arkona character (pack)',
       access: 'write',
       description:
-        'The Arkona pack: adds reference images to an EXISTING character (`character`: name, alias or id): each placed in the character’s asset folder (Characters / race / name, with Forms, Outfits or Details subfolders; folders found or made when the job runs) under a semantic, extension-free name (“{name} - {label}”, numbered if taken), and shown on the character’s Art page with its label and interpretation: the Art page is made when missing, or extended under its “Reference Images” section. Each image needs `interpretation` (what it establishes); a bare image is refused. ' +
+        'The Arkona pack: adds reference images to an EXISTING character (`character`: name, alias or id). ONE call, ONE target: `outfit` applies to every image. Without it (or null) they are DESIGN pieces, always in the character’s own folder (Characters / … / <Character>), named “<Character> - <Label>”. With `outfit` they are pieces of that outfit, named “<Character> - <Outfit> - <Label>”, and the BRIDGE decides the folder from the character’s folders read live and its outfit record: an outfit’s only piece goes loose in Wardrobe; two or more go in Wardrobe / <Outfit> (made when missing, the loose piece moved into it in the same job); an outfit that has its folder takes them there. You never name a folder (Forms, Outfits and Details are retired). An outfit is matched by its name or an alias (case and spacing ignored); a name CLOSE to an existing outfit’s (e.g. “Imperial Regalia” beside “Supreme Imperial Regalia”) is refused with OUTFIT_NEAR_MATCH listing the candidates: use the exact name, or newOutfit: true if it really is another outfit. Names use the character’s full canonical name, are numbered if taken, never carry a file extension. Each image is shown on the character’s Art page with its label and interpretation: design pieces under “Reference Images”; an outfit’s under a heading naming it (found anywhere on the page, else made under the page’s first heading holding “Wardrobe”, else in a new “Wardrobe” section); the Art page is made when missing. Each image needs `interpretation` (what it establishes); a bare image is refused. Up to 30 images. ' +
         'Sources: `staged_id` (from upload_image { stage: true } with NO destination, which proposes nothing), `upload_id` (prepare_image_upload), or in ChatGPT the attached `file` (for the one image with neither). An upload or file is staged on the bridge’s server first, even on a dry run (its staged_id is in the answer). ' +
         'dryRun shows the preview; otherwise ONE proposal for the owner whatever your scope: nothing reaches LegendKeeper until the owner approves it. Never resubmit it. ' +
-        'Cost: 4 to 7 reads to plan; the job about 11 reads and 3 writes for one image on an existing Art page, about 27 and 16 when it makes the Art page.',
+        'Cost: 4 to 7 reads to plan, plus the live read of the character’s folders (one listing per folder, usually 2 to 5 reads); the job about 11 reads and 3 writes for one image on an existing Art page, about 27 and 16 when it makes the Art page, and one more write for each loose piece moved.',
       inputSchema: z.object({
         character: z.string().min(1).max(200).describe('An existing character (name, alias or id).'),
+        outfit: z
+          .string()
+          .min(1)
+          .max(100)
+          .nullable()
+          .optional()
+          .describe(
+            'The outfit EVERY image belongs to (its name or an alias); omit or null for design pieces. The bridge picks the folder.',
+          ),
+        newOutfit: z
+          .boolean()
+          .optional()
+          .describe(
+            'true: `outfit` is a new outfit although its name is close to an existing one’s (after OUTFIT_NEAR_MATCH).',
+          ),
         images: z
           .array(
             z
@@ -550,14 +557,6 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
                   .max(5000)
                   .optional()
                   .describe('What this reference establishes (required).'),
-                subfolder: z
-                  .string()
-                  .max(300)
-                  .nullable()
-                  .optional()
-                  .describe(
-                    '“Forms / <form>”, “Outfits / <outfit>” or “Details”; omit for the character’s folder.',
-                  ),
               })
               .strict(),
           )
@@ -599,6 +598,8 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             tool: 'arkona_add_character_art',
             input: {
               character: args.character,
+              ...(args.outfit !== undefined ? { outfit: args.outfit } : {}),
+              ...(args.newOutfit !== undefined ? { newOutfit: args.newOutfit } : {}),
               images: args.images,
               ...(args.file !== undefined ? { file: args.file } : {}),
               ...(args.scope !== undefined ? { scope: args.scope } : {}),

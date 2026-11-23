@@ -581,7 +581,6 @@ describe('an authoritative developed character with art and a relationship (scen
               staged_id: s2.body.staged_id,
               label: 'Outfit Reference - Court Robes',
               interpretation: 'Her court dress.',
-              subfolder: 'Outfits / Court Robes',
             },
           ],
         },
@@ -597,7 +596,7 @@ describe('an authoritative developed character with art and a relationship (scen
     expect(dry.isError, dry.text).toBe(false);
     expect(dry.body.assets.map((a: { folder: string }) => a.folder)).toEqual([
       'Characters / Elves / Sun Elves / Halime al-Sabri',
-      'Characters / Elves / Sun Elves / Halime al-Sabri / Outfits / Court Robes',
+      'Characters / Elves / Sun Elves / Halime al-Sabri',
     ]);
     expect(dry.body.assets.map((a: { name: string }) => a.name)).toEqual([
       'Halime al-Sabri - Primary Reference - Character Portrait',
@@ -649,7 +648,7 @@ describe('an authoritative developed character with art and a relationship (scen
         .props.find((x) => x.title === 'Dependencies')!
         .items!.map((i) => i.resourceId),
     ).toEqual([C.sunCore]);
-    // The images: in the mirrored folder and its subfolder, verified, and on the Art page.
+    // The images: in the mirrored folder (v3 F7: a new character's art page takes design pieces), verified, on the page.
     const art = pageNamed('[BSRC] Halime al-Sabri - Character Art')!;
     const imgs = blocksOf(art.id).filter((b) => b.kind === 'image');
     expect(imgs).toHaveLength(2);
@@ -659,7 +658,7 @@ describe('an authoritative developed character with art and a relationship (scen
       expect(imgs.map((b) => b.url)).toContain(w.assets.assets.get(row.assetId!)!.url);
     }
     expect(w.stack.runtime.images.staged(PROJECT, s2.body.staged_id)!.folderId).toBe(
-      w.assets.at('Characters', 'Elves', 'Sun Elves', 'Halime al-Sabri', 'Outfits', 'Court Robes'),
+      w.assets.at('Characters', 'Elves', 'Sun Elves', 'Halime al-Sabri'),
     );
     // The index kept its template's collection block under Subpages.
     const idx = pageNamed('[INDEX] Halime al-Sabri')!;

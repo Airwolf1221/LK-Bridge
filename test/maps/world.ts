@@ -14,6 +14,7 @@
  *   (its `parentId` still names the folder that is gone), and `parentId: ""` moves a feature to the top level (it then reads back with `parentId: ""`; one created there has no field) while `parentId: null` is refused with LegendKeeper's own 400 issue (the owner's probe of 12 November 2026);
  * - failures can be injected at a chosen write, and the stored features are open to edits made "in the app".
  */
+import { randomUUID } from 'node:crypto';
 import { labelSizeListRefusal, labelSizeWriteRefusal } from './label-size-bug.js';
 import { keyBetween } from '../../src/maps/rank.js';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
@@ -383,7 +384,7 @@ export async function mapsWorld(o: Parameters<typeof resourcesWorld>[0] = {}): P
               return err(400, 'VALIDATION_ERROR', 'mapImage.assetId');
             doc.mapImage = {
               assetId: a.id,
-              url: a.url ?? `https://assets.legendkeeper.com/${a.id}.webp`,
+              url: a.url ?? `https://assets.legendkeeper.com/${randomUUID()}.webp`,
               ...appFrame(a.width ?? 512, a.height ?? 768),
             };
             D.type = 'map';
@@ -480,7 +481,7 @@ export async function mapsWorld(o: Parameters<typeof resourcesWorld>[0] = {}): P
     const a = w.assets.assets.get(assetIds[name]!)!;
     maps.get(d)!.mapImage = {
       assetId: a.id,
-      url: a.url ?? `https://assets.legendkeeper.com/${a.id}.webp`,
+      url: a.url ?? `https://assets.legendkeeper.com/${randomUUID()}.webp`,
       ...appFrame(a.width ?? 512, a.height ?? 768),
     };
   };

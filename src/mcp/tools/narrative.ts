@@ -22,7 +22,12 @@ import { mintClientId } from '../../jobs/ids.js';
 import type { LifecycleMarker, StepSpec } from '../../jobs/index.js';
 import type { PlanItem } from '../../jobs/items.js';
 import { EXPECT_STEP, VERIFY_STEP } from '../../jobs/internal-steps.js';
-import { PageVersionConflictError, planPageWrite } from '../../pages/index.js';
+import {
+  blockImageUrls,
+  PageVersionConflictError,
+  planPageWrite,
+  withImageCheck,
+} from '../../pages/index.js';
 import { datelineOf, formatName, holdsReservedWord, narrativeCompare } from '../../narrative/names.js';
 import { nkey, type StoryLayout } from '../../narrative/layout.js';
 import { narrativeTags } from '../../narrative/tags.js';
@@ -879,7 +884,14 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
       planned = planPageWrite(
         { version: current.version, blocks: current.blocks as LkBlock[] },
         { mode: 'replace', markdown },
-        env.converter,
+        // v3 F7 (G11): each new image's URL checked against the project's assets (live once for a miss).
+        await withImageCheck(
+          pd.services?.assets,
+          env.ctx.projectId,
+          env.converter,
+          markdown,
+          blockImageUrls(current.blocks),
+        ),
         { baseVersion: args.baseVersion },
       );
     } catch (e) {
@@ -993,7 +1005,11 @@ async function chapterSave(env: Env, args: SaveArgs): Promise<McpToolResult> {
   if (!ff.ok) return ff.result;
   let blocks: LkBlock[];
   try {
-    blocks = fromMarkdown(markdown, { blocks: [] }, env.converter).blocks;
+    blocks = fromMarkdown(
+      markdown,
+      { blocks: [] },
+      await withImageCheck(pd.services?.assets, env.ctx.projectId, env.converter, markdown),
+    ).blocks;
   } catch (e) {
     if (e instanceof MarkdownError)
       return errorResult({ code: e.code, message: e.message, ...e.details }, pd);

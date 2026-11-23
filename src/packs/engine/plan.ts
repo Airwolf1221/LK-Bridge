@@ -32,7 +32,7 @@ import {
   type FromMarkdownContext,
   type LkBlock,
 } from '../../markdown/index.js';
-import { pageConverterContext } from '../../pages/index.js';
+import { pageConverterContext, withImageCheck } from '../../pages/index.js';
 import { cleanPrefixes, key as nameKey, subjectOf } from '../../registry/names.js';
 import { slotAmong } from '../../registry/ordering.js';
 import type { NodeRef } from '../../registry/index.js';
@@ -80,7 +80,17 @@ export interface PackageImage {
   readonly staged_id: string;
   readonly label: string;
   readonly interpretation?: string | undefined;
-  readonly subfolder?: string | null | undefined;
+}
+
+/**
+ * v3 F7 (ADR 0070, G2): where a call's images go, as the bridge decided (src/art/placement.ts): the folder chain under
+ * the character's folder (none: a design piece), the outfit (G4's name part) and the names already in the target
+ * folder that the job does not see in the tree yet (the loose pieces it moves into a new folder).
+ */
+export interface ImagePlacement {
+  readonly subfolders: readonly string[];
+  readonly outfit: string | null;
+  readonly taken?: ReadonlySet<string>;
 }
 
 export interface PackagePage {
@@ -108,6 +118,8 @@ export interface PackageInput {
   readonly index?: { readonly markdown: string } | undefined;
   readonly target?: string | undefined;
   readonly upgradeToCore?: boolean | undefined;
+  /** v3 F7 (ADR 0070, G2): where the Art page's images go, as the bridge decided (none: design pieces). */
+  readonly imagePlacement?: ImagePlacement | undefined;
   /**
    * With upgradeToCore: warn about the Reference's sections a new page now owns (default true). A split (F3e) moves those
    * sections itself, each leaving an interface summary, so it passes false (and the Reference is not read for it).
@@ -290,7 +302,51 @@ export type ExistingChange =
       readonly section: string;
       readonly boundaries: readonly string[];
       readonly images: readonly PlannedImage[];
+      /**
+       * v3 F7 (ADR 0070, G5): outfit pieces: placed under a heading naming the outfit (or an alias) anywhere on the page,
+       * else a new one under the page's first heading holding "Wardrobe", else in a new "Wardrobe" section.
+       */
+      readonly outfit?: { readonly name: string; readonly aliases: readonly string[] };
     };
+
+/** v3 F7 (ADR 0070, G5): the section an Art page's outfits go under when it has no heading holding "Wardrobe". */
+export const WARDROBE_SECTION = 'Wardrobe';
+
+/** v3 F7 (ADR 0070, G2, G3): what an art job does besides the images: the moves and the outfit record. */
+export interface ArtPlan {
+  readonly characterName: string;
+  /** The character's folder (null: the job makes it, with the first image's folders). */
+  readonly characterFolderId: string | null;
+  readonly outfit: {
+    readonly name: string;
+    readonly aliases: readonly string[];
+    readonly into: 'wardrobe' | 'folder';
+    /** The outfit's folder when it exists now (null: loose, or made by the job). */
+    readonly folderId: string | null;
+    readonly moves: readonly {
+      readonly assetId: string;
+      readonly name: string;
+      readonly fromFolderId: string | null;
+      readonly fromPath: string | null;
+      readonly url?: string;
+    }[];
+    readonly toPath: string;
+    /**
+     * v3 F7 (G5): the lines on the character's pages (every page under its index, read live when planned) naming a
+     * moved piece by id or name: they may state its location, so they are listed for the owner, never edited.
+     */
+    readonly linesForOwner?: readonly ArtLine[];
+  } | null;
+}
+
+/** v3 F7 (G5): a line on one of a character's pages, for the owner. */
+export interface ArtLine {
+  readonly pageId: string;
+  readonly page: string;
+  readonly documentId: string;
+  readonly blockId: string;
+  readonly text: string;
+}
 
 export interface PackPlan {
   readonly pack: Pack;
@@ -333,6 +389,8 @@ export interface PackPlan {
   readonly summaryNote?: string;
   /** v3 F3b: staged images whose own pending placement proposal the package takes over (design section 6). */
   readonly takeovers?: readonly { readonly stagedId: string; readonly proposalId: string }[];
+  /** v3 F7 (ADR 0070): a guided art call's moves and outfit record (arkona_add_character_art). */
+  readonly art?: ArtPlan;
   /**
    * v3 F3b (design 1.1a): a character navigation index the package makes, recorded in the Character taxonomy when the
    * job runs, so the character tool can place a character of that race.
@@ -1011,7 +1069,16 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     ownByName.set(nameKey(d.rawName), { id: d.id, name: d.rawName });
   }
   if (indexPage) ownByName.set(nameKey(indexPage.rawName), { id: indexPage.id, name: indexPage.rawName });
-  const base = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
+  const plain = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
+  // v3 F7 (ADR 0070, G11): an image in a page's text must be one of the project's assets (live once for a miss).
+  const base = plain
+    ? await withImageCheck(
+        pd.services?.assets,
+        ctx.projectId,
+        plain,
+        input.pages.map((p) => p.markdown ?? ''),
+      )
+    : undefined;
   const converter: FromMarkdownContext | undefined = base
     ? {
         ...base,
@@ -1327,6 +1394,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         images: p.images,
         refuse,
         warn,
+        placement: input.imagePlacement,
       });
       pageImages.push(...planned);
       images.push(...planned);
@@ -1336,6 +1404,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         type.assets.section,
         rule.warnMissing.concat(['Source Boundaries', 'Unresolved Material']),
         converter!,
+        input.imagePlacement?.outfit ?? null,
       );
       headings.splice(
         0,
@@ -1878,12 +1947,19 @@ export function withImages(
   section: string,
   boundaries: readonly string[],
   ctx: FromMarkdownContext,
+  /** v3 F7 (G5): outfit pieces on a new page: a "Wardrobe" section, the outfit's heading (level 3), labels at level 4. */
+  outfit: string | null = null,
 ): LkBlock[] {
   if (images.length === 0) return [...blocks];
   const add: LkBlock[] = [];
+  if (outfit) {
+    add.push(...fromMarkdown(`### ${outfit}\n`, { blocks: [] }, ctx).blocks);
+    section = WARDROBE_SECTION;
+  }
+  const label = outfit ? '####' : '###';
   for (const im of images) {
     const parts = fromMarkdown(
-      `### ${im.label.replace(/^#+\s*/, '')}\n\n${im.interpretation}\n`,
+      `${label} ${im.label.replace(/^#+\s*/, '')}\n\n${im.interpretation}\n`,
       { blocks: [] },
       ctx,
     ).blocks;
@@ -1925,6 +2001,8 @@ export function planImages(
     images: readonly PackageImage[];
     refuse: (code: string, message: string, more?: Obj) => void;
     warn: (code: string, message: string, more?: Obj) => void;
+    /** v3 F7 (G2): the bridge's placement; none: design pieces in the character's own folder. */
+    placement?: ImagePlacement | undefined;
   },
 ): PlannedImage[] {
   const { pd, ctx, type } = env;
@@ -1935,7 +2013,8 @@ export function planImages(
   }
   const out: PlannedImage[] = [];
   const seen = new Set<string>();
-  const subfolders = type.assets.subfolders;
+  const sub = [...(o.placement?.subfolders ?? [])];
+  const outfit = o.placement?.outfit ?? null;
   for (const [i, im] of o.images.entries()) {
     const where = `${o.page}: images[${i}]`;
     if (!im.interpretation || im.interpretation.trim() === '') {
@@ -1991,22 +2070,11 @@ export function planImages(
       continue;
     }
     seen.add(im.staged_id);
-    let sub: string[] = [];
-    if (im.subfolder) {
-      const m = /^\s*([^/]+?)\s*(?:\/\s*(.+?)\s*)?$/.exec(im.subfolder);
-      const head = m?.[1] ?? '';
-      const kind = Object.entries<string>(subfolders).find(([, v]) => textKey(v) === textKey(head));
-      if (!kind || (kind[0] !== 'details' && !m?.[2]) || (kind[0] === 'details' && m?.[2])) {
-        o.refuse(
-          'SUBFOLDER_INVALID',
-          `${where}: subfolder is “${subfolders.form} / <named form>”, “${subfolders.outfit} / <named outfit>” or “${subfolders.details}”.`,
-        );
-        continue;
-      }
-      sub = kind[0] === 'details' ? [kind[1]] : [kind[1], m![2]!];
-    }
-    const name = type.assets.displayName.replace(/\{Subject\}/g, o.subject).replace(/\{Label\}/g, im.label);
-    if (out.some((x) => x.name === name && x.subfolder === (sub.join(' / ') || null))) {
+    // G4: `<Character> - <Label>` for a design piece; `<Character> - <Outfit> - <Label>` for an outfit piece.
+    const name = type.assets.displayName
+      .replace(/\{Subject\}/g, o.subject)
+      .replace(/\{Label\}/g, outfit ? `${outfit} - ${im.label}` : im.label);
+    if (out.some((x) => x.name === name || x.label === im.label)) {
       o.refuse('IMAGE_NAME_TWICE', `${where}: two images would both be named “${name}” in one folder.`);
       continue;
     }
@@ -2029,10 +2097,17 @@ export function planImages(
       continue;
     }
     const p = planned.plan;
-    const free =
+    let free =
       p.destination.folderId && p.wouldCreate.length === 0
         ? images.freeName(ctx.projectId, p.destination.folderId, name)
         : name;
+    // v3 F7 (G4): numbered past the names the job moves into a new folder too (` (2)`, ` (3)`, …).
+    const taken = o.placement?.taken;
+    if (taken?.has(free)) {
+      let n = 2;
+      while (taken.has(`${name} (${n})`)) n++;
+      free = `${name} (${n})`;
+    }
     if (free !== name)
       o.warn(
         'IMAGE_NAME_NUMBERED',
