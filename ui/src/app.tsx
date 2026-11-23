@@ -112,6 +112,8 @@ export const SUB_PAGES: { module: string; parent: string }[] = [
   // v3 F4b (ADR 0064): "Pick the right value" on a consistency finding of the Audits page.
   { module: 'consistency-pick', parent: '/audits' },
   { module: 'registry', parent: '/mappings' },
+  // v3 F7 (ADR 0070, G3): the Outfits panel of the Asset Tree page.
+  { module: 'outfits', parent: '/assets' },
 ];
 
 /** The router's table: a path, whether its sub-paths (`/jobs/abc`) are served too, and the page. */
