@@ -138,6 +138,11 @@ describe('G7: the findings', () => {
       'art_legacy_folder_empty',
       'art_asset_name',
       'art_stale_folder_ref',
+      // v3 F7.1 (ADR 0072): also Propose by default, and its Apply is the owner's switch (`applyDirect`).
+      'character_core_missing',
+    ]);
+    expect(PROPOSE_ONLY.filter((e) => e.applyDirect === true).map((e) => e.code)).toEqual([
+      'character_core_missing',
     ]);
     for (const e of PROPOSE_ONLY) expect(e).toMatchObject({ automatable: 'propose', defaultMode: 'propose' });
     expect(entryOf('art_legacy_folder_holds_assets')?.automatable).toBeUndefined();
