@@ -526,15 +526,16 @@ describe('proposals', () => {
       expect(r.status, JSON.stringify(body)).toBe(400);
       expect(r.json.error.code).toBe('INVALID_INPUT');
     }
-    // The cap is the same as the other bulk actions: 100 are taken, 101 are refused, for every action.
+    // The cap is the same as the other bulk actions: v3 F5a (ADR 0067, H4) raised it from 100 to 1,000 (a selection
+    // may span pages): 1,000 are taken, 1,001 are refused, for every action.
     const ids = (n: number) => Array.from({ length: n }, (_, i) => `prop_none${i}`);
     for (const extra of [
       { action: 'approve-as-canon', confirm: true },
       { action: 'approve' },
       { action: 'reject' },
     ]) {
-      expect((await stack.post(url, { ...extra, ids: ids(101) })).status, extra.action).toBe(400);
-      expect((await stack.post(url, { ...extra, ids: ids(100) })).status, extra.action).toBe(200);
+      expect((await stack.post(url, { ...extra, ids: ids(1001) })).status, extra.action).toBe(400);
+      expect((await stack.post(url, { ...extra, ids: ids(1000) })).status, extra.action).toBe(200);
     }
     expect((await stack.post(url, { action: 'approve-as-canon', confirm: true, ids: [] })).status).toBe(400);
     // Nothing was decided by any of those refusals.
