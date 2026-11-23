@@ -240,7 +240,7 @@ export class ReviewService {
       .prepare(
         `SELECT job_id AS id, at FROM write_journal
          WHERE project_id = ? AND resource_id = ? AND id > ? AND job_id IS NOT NULL AND job_id != ?
-           AND outcome IN ('applied', 'unknown')
+           AND outcome IN ('applied', 'unknown', 'superseded')
            AND op_id IN ('replaceDocumentBlocks', 'insertBlock', 'replaceBlock', 'updateBlock', 'deleteBlock', 'moveBlock')
          ORDER BY id`,
       )
@@ -265,7 +265,7 @@ export class ReviewService {
     const rows = this.d.db
       .prepare(
         `SELECT job_id, op_id, target_id, resource_id, document_id, params FROM write_journal
-         WHERE project_id = ? AND id > ? AND job_id IS NOT NULL AND job_id != ? AND outcome IN ('applied', 'unknown')
+         WHERE project_id = ? AND id > ? AND job_id IS NOT NULL AND job_id != ? AND outcome IN ('applied', 'unknown', 'superseded')
            AND job_id NOT IN (SELECT revert_job_id FROM job_reverts WHERE project_id = ?)
            AND job_id NOT IN (SELECT job_id FROM job_reverts WHERE project_id = ? AND state = 'succeeded' AND partial = 0)
          ORDER BY id LIMIT 5000`,
@@ -339,7 +339,7 @@ export class ReviewService {
       this.d.db
         .prepare(
           `SELECT resource_id AS id, MIN(id) AS first FROM write_journal
-           WHERE job_id = ? AND project_id = ? AND resource_id IS NOT NULL AND outcome IN ('applied', 'unknown')
+           WHERE job_id = ? AND project_id = ? AND resource_id IS NOT NULL AND outcome IN ('applied', 'unknown', 'superseded')
            GROUP BY resource_id ORDER BY first`,
         )
         .all(jobId, projectId) as { id: string }[]

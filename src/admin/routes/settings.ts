@@ -118,7 +118,7 @@ export const registerSettings: Register = (api, ctx) => {
     opId: idSchema.optional(),
     principalId: idSchema.optional(),
     profile: idSchema.optional(),
-    outcome: z.enum(['applied', 'pending', 'not_applied', 'unknown']).optional(),
+    outcome: z.enum(['applied', 'pending', 'not_applied', 'unknown', 'superseded']).optional(),
     withPreImage: z.enum(['true', 'false']).optional(),
     before: z.coerce.number().int().min(1).optional(),
     sinceMinutes: z.coerce
@@ -166,9 +166,12 @@ export const registerSettings: Register = (api, ctx) => {
     const [entry] = engine.queries.journalLookup(project.id, { id, limit: 1, includePreImage: true });
     if (!entry) throw new AdminHttpError(404, 'JOURNAL_ENTRY_NOT_FOUND', `No journal entry ${id}`);
     // View only. A pre-image is the owner's own LegendKeeper content, so it is shown whole (secrets still removed).
+    // v3 F5a (ADR 0067, H10): how an unknown outcome was (or is being) settled.
+    const reconciliation = ctx.deps.runtime.outcomes?.get(entry.id) ?? null;
     return {
       entry: redactDeep(entry, { maxString: 500_000, maxItems: 20_000, maxKeys: 2000, maxDepth: 64 }),
       principals: ctx.principals([entry.principalId]),
+      reconciliation,
     };
   });
 };

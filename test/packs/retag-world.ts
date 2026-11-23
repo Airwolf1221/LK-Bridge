@@ -10,7 +10,7 @@
  *
  * The approved pack version lists `Imported` as an Excluded Routine Tag and makes the lifecycle tag lead on this project.
  */
-import { ROOT } from '../discover/world.js';
+import { ROOT, type DiscoverWorld } from '../discover/world.js';
 import { appraisalWorld, type AppraisalWorld } from '../appraisal/world.js';
 import { PROJECT } from '../tools/helpers.js';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
@@ -69,7 +69,12 @@ export interface RetagWorld extends AppraisalWorld {
   approveRetag(o?: { readonly routine?: readonly string[]; readonly batchSize?: number }): void;
 }
 
-export async function retagWorld(): Promise<RetagWorld> {
+export async function retagWorld(
+  o: {
+    /** v3 F5a: more fixture pages, seeded with the world's own (so the tree and the first snapshot hold them). */
+    readonly seed?: (world: DiscoverWorld) => void;
+  } = {},
+): Promise<RetagWorld> {
   const w = await appraisalWorld({
     retag: true,
     seed: (world) => {
@@ -162,6 +167,7 @@ export async function retagWorld(): Promise<RetagWorld> {
       page(R.legacy, '[BSRC] Old Dominion - Polity Reference', R.legacyIndex, ['Polity'], 'Polity Reference');
       // Part D: an index whose routing lines are mentions with a custom label (and one plain mention).
       r.seed({ id: R.routing, name: '[INDEX] Routing Desk', parentId: R.desk });
+      o.seed?.(world);
     },
   });
   const approveRetag = (o: { readonly routine?: readonly string[]; readonly batchSize?: number } = {}) => {

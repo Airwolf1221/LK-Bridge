@@ -251,6 +251,8 @@ export interface Overview {
     uncertain: number;
   };
   errorsLastHour: { count: number; capped: boolean };
+  /** v3 F5a (ADR 0067, H10): writes with an unknown outcome (being read back, or left for the owner). */
+  unknownWrites?: { pending: number; unresolved: number };
   pendingProposals: number;
   /** v3 F3.4 (ADR 0055): agents' direct writes at scope `write` not reviewed yet (absent from an older bridge). */
   unreviewedDirectWrites?: number;
@@ -483,6 +485,8 @@ export type ProposalState =
   'pending' | 'approved' | 'rejected' | 'conflicted' | 'expired' | 'executing' | 'executed' | 'failed';
 
 export interface Proposal {
+  /** v3 F5a (ADR 0067, H4): the tool that proposed it, or null. */
+  tool?: string | null;
   id: string;
   principalId: string;
   principalLabel: string;
@@ -743,6 +747,18 @@ export interface ClientsResponse {
   settings: { autoRemoveDays: number; staleAfterDays: number };
   kinds: string[];
   scopes: Scope[];
+}
+
+/** v3 F5a (ADR 0067, H10): how a write whose outcome was unknown was (or is being) settled. */
+export interface Reconciliation {
+  journalId: number;
+  state: 'pending' | 'settled' | 'unresolved';
+  outcome: 'applied' | 'not_applied' | 'superseded' | 'unknown' | null;
+  attempts: number;
+  settledAt: number | null;
+  settledBy: string | null;
+  reason: string | null;
+  evidence: Record<string, unknown> | null;
 }
 
 export interface JournalEntry {

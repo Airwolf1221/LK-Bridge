@@ -15,11 +15,12 @@ import type { AuditModel } from './reader.js';
 import type { FindingDraft, FindingSource } from './types.js';
 import type { AssetLibrary } from './checks/assets.js';
 import type { GovernanceAuditInput } from './checks/governance.js';
-import type { ClassificationRecord, RetagContext } from '../packs/retag/engine.js';
+import type { ClassificationRecord, RetagContext, TagRuling } from '../packs/retag/engine.js';
 import type { NarrativeRules } from '../packs/types.js';
 import type { Calendar, DateTextStyle } from '../calendar/index.js';
 import { nkey, rootsOf, type NView } from '../narrative/layout.js';
 import { childrenByRank, SnapshotTree } from './snapshot-tree.js';
+import type { UnknownWriteItem } from '../jobs/reconcile.js';
 
 /** A lifecycle record or set record that stopped part-way (the audit reports it with its pages). */
 export interface IncompleteRecord {
@@ -94,6 +95,11 @@ export interface AuditContext {
    * no narrative audit, and Narratives is ordinary content).
    */
   readonly narrative?: NarrativeAuditInput | null;
+  /**
+   * v3 F5a (ADR 0067, H10): the writes the reconciler could not settle (outcome still unknown), from the bridge's own
+   * journal; absent: none reported.
+   */
+  readonly unknownWrites?: readonly UnknownWriteItem[];
   /** v3 F4c: every page under Narratives (narrative pages: E2's exemptions), worked out by `makeContext`. */
   readonly narrativeIds?: ReadonlySet<string>;
 }
@@ -123,6 +129,8 @@ export interface RetagAuditHook {
   readonly packRecord: (pageId: string) => ClassificationRecord | null;
   readonly owner: (pageId: string) => ClassificationRecord | null;
   readonly templateOf: (pageId: string) => string | null;
+  /** v3 F5a (ADR 0067, H2): the owner's "Keep this tag here" rulings of a page (absent: none). */
+  readonly rulings?: (pageId: string) => readonly TagRuling[];
 }
 
 export function makeContext(o: Omit<AuditContext, 'tree' | 'snapshotTree' | 'narrativeIds'>): AuditContext {

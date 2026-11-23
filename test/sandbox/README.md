@@ -422,6 +422,19 @@ first page's own edit (the block taken out, an interface summary in its place) l
 LegendKeeper does with an id the destination already uses is recorded as NOTED (the split never sends one: it derives
 another id and says so in the job). Both pages are deleted at the end. Written for the owner to run; agents never run it.
 
+## The Approved Supplementary Tags and a ruling (v3 F5a)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- tagging-f5a` (`tagging-f5a.ts`; ADR 0067).
+WRITES, then cleans up (about 12 writes and 25 reads). The Arkona pack's governance sources sit on Arkona, which the
+sandbox runtime does not serve, so in the check's TEMPORARY database only they are pointed at a throwaway governance page
+the check makes (every pinned heading; the Approved Supplementary Tags sentence verbatim) and the pack is approved there:
+the retag job's policy check reads it, as on Arkona. T1 that page and the approval; T2 two probe pages made with the raw
+client (CANON, Cosmology; CANON, Law, lkbf5aprobe), classified Law, their own pages snapshotted; T3 the audit: CANON,
+Cosmology is a correction to CANON, Law, Cosmology; T4 the apply approved as the owner would, read back live; T5 "Keep
+this tag here" on the second page (compliant); T6 its tags reordered with the raw client: the ruling lapses. Clean-up:
+the throwaway index deleted with everything under it, in the check's `finally` and the test file's `afterAll`. Needs the
+seed `arkona-2026-11-23-f5a` deployed (T0 says so otherwise). On the mock: `test/sandbox-mock/tagging-f5a.test.ts`.
+
 ## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
 
 Each check's steps are an exported runner beside its thin `.test.ts` wrapper (the wrapper is the real run, unchanged in
@@ -474,4 +487,4 @@ probe pages on the test world because its clean-up never ran. Every check now ru
 `test/sandbox-mock/steps-timeout.test.ts` proves it on the mock: consistency-f4b with its F3 never answering fails at F3's
 own timeout naming it, runs no later step, prints a start and a finish for each step and cleans up the probe; with a
 step timeout longer than the test's, the `afterAll` clean-up deletes the probe while the check is still stuck; and all
-17 test files and their 16 runners go through the harness.
+18 test files and their 17 runners go through the harness.

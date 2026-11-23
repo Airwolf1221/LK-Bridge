@@ -60,6 +60,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   governance: 'Governance',
   consistency: 'Consistency (dates and identity facts)',
   narrative: 'Narratives (stories, plans and chapters)',
+  writes: 'Writes with an unknown outcome',
   audit: 'The audit itself',
 };
 
@@ -757,11 +758,14 @@ function FindingRow({
                 {picking ? 'Hide the values' : 'Pick the right value'}
               </button>
             )}
-            {f.state === 'open' && f.category !== 'governance' && f.category !== 'consistency' && (
-              <Button className="small" busy={busy} disabled={!project} onClick={recheck}>
-                Re-check now
-              </Button>
-            )}
+            {f.state === 'open' &&
+              f.category !== 'governance' &&
+              f.category !== 'consistency' &&
+              f.category !== 'writes' && (
+                <Button className="small" busy={busy} disabled={!project} onClick={recheck}>
+                  Re-check now
+                </Button>
+              )}
             {f.state === 'open' && skill && (
               <Button className="small" busy={busy} disabled={!project} onClick={() => void allowName()}>
                 Allow this name

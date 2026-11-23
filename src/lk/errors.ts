@@ -6,7 +6,20 @@
 import { ConnectionError, LegendKeeperError } from '@legendkeeper/sdk';
 import type { BudgetTierId } from './governor/groups.js';
 
-export type ErrorClassification = 'user_fixable' | 'conflict' | 'auth' | 'budget' | 'upstream' | 'bridge';
+/**
+ * v3 F5a (ADR 0067, H11): `client` is a call the client cancelled (its own abort): not the bridge's fault, recorded as
+ * "cancelled by the caller" and left out of the error totals.
+ */
+export type ErrorClassification =
+  'user_fixable' | 'conflict' | 'auth' | 'budget' | 'upstream' | 'bridge' | 'client';
+
+/**
+ * v3 F5a (ADR 0067, H10): whether the request left the bridge. `no`: refused before anything was sent (validation, the
+ * allow-list, a budget wait, a connection that was never made); `yes`: LegendKeeper received it (a response, or a
+ * connection that broke after the request was written); `maybe`: the transport was called and failed in a way that does
+ * not say. Only `no` may be shown as "refused before it was sent".
+ */
+export type SentState = 'no' | 'yes' | 'maybe';
 
 export interface LkErrorIssue {
   readonly path: string;
@@ -24,6 +37,8 @@ export type BridgeErrorCode =
   | 'INVALID_REQUEST'
   | 'OPERATION_NOT_ALLOWED'
   | 'BUDGET_WAIT'
+  /** v3 F5a (H10): the response's headers arrived, then the connection broke or timed out while its body was read. */
+  | 'RESPONSE_INTERRUPTED'
   | 'UNEXPECTED';
 
 export interface BridgeLkErrorInit {
@@ -39,6 +54,8 @@ export interface BridgeLkErrorInit {
   readonly ambiguous?: boolean | undefined;
   readonly retryAfterMs?: number | undefined;
   readonly attempts?: number | undefined;
+  /** v3 F5a (H10): whether the request left the bridge (absent: not known, an older error). */
+  readonly sent?: SentState | undefined;
   readonly cause?: unknown;
 }
 
@@ -55,6 +72,7 @@ export class BridgeLkError extends Error {
   readonly ambiguous: boolean;
   readonly retryAfterMs: number | undefined;
   readonly attempts: number | undefined;
+  readonly sent: SentState | undefined;
 
   constructor(init: BridgeLkErrorInit) {
     super(init.message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -68,6 +86,7 @@ export class BridgeLkError extends Error {
     this.ambiguous = init.ambiguous ?? false;
     this.retryAfterMs = init.retryAfterMs;
     this.attempts = init.attempts;
+    this.sent = init.sent;
   }
 
   /** A copy with some fields replaced (errors are immutable once thrown). */
@@ -88,6 +107,7 @@ export class BridgeLkError extends Error {
       ambiguous: this.ambiguous,
       retryAfterMs: this.retryAfterMs,
       attempts: this.attempts,
+      sent: this.sent,
       cause: this.cause,
     };
   }
@@ -107,6 +127,7 @@ export class BridgeLkError extends Error {
       ambiguous: this.ambiguous,
       retryAfterMs: this.retryAfterMs,
       attempts: this.attempts,
+      ...(this.sent !== undefined ? { sent: this.sent } : {}),
     };
   }
 }
@@ -299,6 +320,63 @@ export interface WireFacts {
   readonly timedOut?: boolean | undefined;
   readonly aborted?: boolean | undefined;
   readonly transportError?: unknown;
+  /** v3 F5a (H10): the transport was called for this attempt (the request may have left). */
+  readonly fetched?: boolean | undefined;
+  /** v3 F5a (H10): a response's status and headers arrived (the request certainly left). */
+  readonly responded?: boolean | undefined;
+}
+
+/** Network codes that mean the connection was never made, so nothing was sent (v3 F5a, H10). */
+const NEVER_CONNECTED = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ERR_INVALID_URL',
+]);
+
+/** The error's own code and every cause's, and the names, as far down as they go. */
+function causeChain(e: unknown): { codes: string[]; names: string[]; messages: string[] } {
+  const codes: string[] = [];
+  const names: string[] = [];
+  const messages: string[] = [];
+  let cur: unknown = e;
+  for (let i = 0; i < 8 && cur !== null && cur !== undefined; i++) {
+    if (typeof cur === 'object') {
+      const o = cur as { code?: unknown; name?: unknown; message?: unknown; cause?: unknown };
+      if (typeof o.code === 'string') codes.push(o.code);
+      if (typeof o.name === 'string') names.push(o.name);
+      if (typeof o.message === 'string') messages.push(o.message);
+      cur = o.cause;
+    } else break;
+  }
+  return { codes, names, messages };
+}
+
+/**
+ * v3 F5a (ADR 0067, H10): whether a failed attempt's request left the bridge. Never sent when the transport was not
+ * called, or the connection was refused or never made; sent when a response arrived; otherwise maybe.
+ */
+export function sentStateOf(error: unknown, wire: WireFacts): SentState {
+  if (wire.fetched !== true) return 'no';
+  if (wire.responded === true) return 'yes';
+  const chain = causeChain(wire.transportError ?? error);
+  if (chain.codes.some((c) => NEVER_CONNECTED.has(c))) return 'no';
+  // "terminated", a socket reset, a timeout once connected: the request was written, the reply did not come.
+  if (
+    chain.codes.some((c) => c === 'ECONNRESET' || c === 'EPIPE' || c.startsWith('UND_ERR_SOCKET')) ||
+    chain.messages.some((m) => /\bterminated\b|other side closed|socket hang up/i.test(m))
+  )
+    return 'yes';
+  return 'maybe';
+}
+
+/** Whether an error (or its cause) is a timeout's abort (`AbortSignal.timeout`, the governor's own timer). */
+function isTimeoutError(e: unknown): boolean {
+  const c = causeChain(e);
+  return c.names.includes('TimeoutError') || c.messages.some((m) => /aborted due to timeout/i.test(m));
 }
 
 /**
@@ -310,16 +388,7 @@ export function toBridgeLkError(error: unknown, opId?: string, wire: WireFacts =
   // The SDK wraps anything its fetch throws (including the governor's own guards) in ConnectionError.
   if (error instanceof Error && error.cause instanceof BridgeLkError)
     return toBridgeLkError(error.cause, opId);
-  if (wire.aborted) {
-    return new BridgeLkError({
-      message: 'LegendKeeper call aborted by the caller',
-      code: 'ABORTED',
-      retryable: false,
-      classification: 'bridge',
-      opId,
-      cause: error,
-    });
-  }
+  if (wire.aborted) return callerAbortError(opId, error);
   if (wire.timedOut) {
     return new BridgeLkError({
       message: 'LegendKeeper request timed out',
@@ -350,6 +419,37 @@ export function toBridgeLkError(error: unknown, opId?: string, wire: WireFacts =
   if (wire.status !== undefined && wire.status >= 400) {
     return fromLkResponse({ ...wire, status: wire.status, opId, cause: error });
   }
+  // v3 F5a (ADR 0067, H10, H11): the response's headers arrived and reading its body failed: the SDK's own request timer
+  // (a body that never finished) or the connection breaking ("terminated", a socket reset). The request was sent, so a
+  // write's outcome is unknown; never "unexpected", never the bridge's fault.
+  if (wire.responded === true && !(error instanceof ConnectionError)) {
+    if (isTimeoutError(error))
+      return new BridgeLkError({
+        message: 'LegendKeeper request timed out (while its reply was being read)',
+        code: 'TIMEOUT',
+        retryable: true,
+        classification: 'upstream',
+        opId,
+        cause: error,
+      });
+    return new BridgeLkError({
+      message: `The connection to LegendKeeper broke after the request was sent, while its reply was being read: ${error instanceof Error ? error.message : String(error)}`,
+      code: 'RESPONSE_INTERRUPTED',
+      retryable: true,
+      classification: 'upstream',
+      opId,
+      cause: error,
+    });
+  }
+  if (isTimeoutError(error))
+    return new BridgeLkError({
+      message: 'LegendKeeper request timed out',
+      code: 'TIMEOUT',
+      retryable: true,
+      classification: 'upstream',
+      opId,
+      cause: error,
+    });
   if (error instanceof ConnectionError || wire.transportError !== undefined) {
     return new BridgeLkError({
       message: `Could not reach LegendKeeper: ${error instanceof Error ? error.message : String(error)}`,
@@ -367,5 +467,20 @@ export function toBridgeLkError(error: unknown, opId?: string, wire: WireFacts =
     classification: 'bridge',
     opId,
     cause: error,
+  });
+}
+
+/**
+ * v3 F5a (ADR 0067, H11): a call the client cancelled (its own AbortSignal): "cancelled by the caller", classification
+ * `client`. Not a bridge error: left out of the error totals.
+ */
+export function callerAbortError(opId: string | undefined, cause?: unknown): BridgeLkError {
+  return new BridgeLkError({
+    message: 'Cancelled by the caller: the client ended the call before LegendKeeper answered',
+    code: 'ABORTED',
+    retryable: false,
+    classification: 'client',
+    opId,
+    cause,
   });
 }

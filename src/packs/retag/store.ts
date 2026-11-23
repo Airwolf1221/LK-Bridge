@@ -17,7 +17,8 @@ const json = <T>(s: string | null | undefined, d: T): T => {
   }
 };
 
-export const newId = (prefix: 'rtg' | 'rtb' | 'rtr'): string => `${prefix}_${randomBytes(8).toString('hex')}`;
+export const newId = (prefix: 'rtg' | 'rtb' | 'rtr' | 'rts'): string =>
+  `${prefix}_${randomBytes(8).toString('hex')}`;
 
 /** What became of one page of an apply batch. */
 export type Outcome = 'applied' | 'already_compliant' | 'held' | 'conflicted' | 'inaccessible';
@@ -70,6 +71,43 @@ export interface Suggestion {
   readonly primary: string;
   readonly specialist: string | null;
   readonly reason: string;
+  readonly by: string;
+  readonly at: number;
+}
+
+/** v3 F5a (ADR 0067, H2): the owner's "Keep this tag here" ruling for one page. */
+export interface TagRulingRecord {
+  readonly pageId: string;
+  readonly pageName: string;
+  readonly tag: string;
+  /** The hash of the array it was made on (`tagsHashOf`), and the array. */
+  readonly tagsHash: string;
+  readonly tags: readonly string[];
+  readonly reason: string;
+  readonly by: string;
+  readonly at: number;
+}
+
+/** v3 F5a (H2): an agent's suggestion of either owner action on an exception: kept for the owner, never acted on. */
+export interface RulingSuggestion {
+  readonly id: number;
+  readonly pageId: string;
+  readonly tag: string;
+  readonly action: 'keep_here' | 'allow_everywhere';
+  readonly reason: string;
+  readonly by: string;
+  readonly at: number;
+}
+
+/** v3 F5a (H2): one "Allow this tag everywhere" edit of the Tagging Standard. */
+export interface SupplementaryEditRecord {
+  readonly id: string;
+  readonly projectId: string;
+  readonly tag: string;
+  readonly pageId: string | null;
+  readonly jobId: string | null;
+  readonly beforeText: string;
+  readonly afterText: string;
   readonly by: string;
   readonly at: number;
 }
@@ -377,6 +415,122 @@ export class RetagStore {
       primary: String(r.primary_tag),
       specialist: (r.specialist as string | null) ?? null,
       reason: String(r.reason),
+      by: String(r.by),
+      at: Number(r.at),
+    }));
+  }
+
+  // ============================================================================================ v3 F5a: rulings (H2)
+
+  /** The owner's "Keep this tag here" rulings of a page (all of a project without `pageId`). */
+  rulings(projectId: string, pageId?: string): TagRulingRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM retag_tag_rulings WHERE project_id = ? ${pageId ? 'AND page_id = ?' : ''} ORDER BY at DESC LIMIT 5000`,
+      )
+      .all(...(pageId ? [projectId, pageId] : [projectId])) as Obj[];
+    return rows.map((r) => ({
+      pageId: String(r.page_id),
+      pageName: String(r.page_name),
+      tag: String(r.tag),
+      tagsHash: String(r.tags_hash),
+      tags: json<string[]>(r.tags as string | null, []),
+      reason: String(r.reason),
+      by: String(r.by),
+      at: Number(r.at),
+    }));
+  }
+
+  setRuling(projectId: string, r: TagRulingRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO retag_tag_rulings (project_id, page_id, tag, page_name, tags_hash, tags, reason, by, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (project_id, page_id, tag) DO UPDATE SET page_name = excluded.page_name,
+           tags_hash = excluded.tags_hash, tags = excluded.tags, reason = excluded.reason, by = excluded.by, at = excluded.at`,
+      )
+      .run(projectId, r.pageId, r.tag, r.pageName, r.tagsHash, JSON.stringify(r.tags), r.reason, r.by, r.at);
+  }
+
+  clearRuling(projectId: string, pageId: string, tag: string): boolean {
+    return (
+      this.db
+        .prepare('DELETE FROM retag_tag_rulings WHERE project_id = ? AND page_id = ? AND tag = ?')
+        .run(projectId, pageId, tag).changes > 0
+    );
+  }
+
+  /** Carries a page's rulings made on `fromHash` to `to` (the retag apply's own verified write). Returns how many. */
+  carryRulings(
+    projectId: string,
+    pageId: string,
+    fromHash: string,
+    to: readonly string[],
+    toHash: string,
+  ): number {
+    return this.db
+      .prepare(
+        'UPDATE retag_tag_rulings SET tags_hash = ?, tags = ? WHERE project_id = ? AND page_id = ? AND tags_hash = ?',
+      )
+      .run(toHash, JSON.stringify(to), projectId, pageId, fromHash).changes;
+  }
+
+  suggestRuling(projectId: string, s: Omit<RulingSuggestion, 'id'>): RulingSuggestion {
+    const r = this.db.transaction(() => {
+      this.db
+        .prepare(
+          'DELETE FROM retag_ruling_suggestions WHERE project_id = ? AND page_id = ? AND tag = ? AND by = ?',
+        )
+        .run(projectId, s.pageId, s.tag, s.by);
+      return this.db
+        .prepare(
+          `INSERT INTO retag_ruling_suggestions (project_id, page_id, tag, action, reason, by, at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(projectId, s.pageId, s.tag, s.action, s.reason, s.by, s.at);
+    })();
+    return { ...s, id: Number(r.lastInsertRowid) };
+  }
+
+  rulingSuggestions(projectId: string, pageId?: string): RulingSuggestion[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM retag_ruling_suggestions WHERE project_id = ? ${pageId ? 'AND page_id = ?' : ''}
+           ORDER BY at DESC, id DESC LIMIT 500`,
+      )
+      .all(...(pageId ? [projectId, pageId] : [projectId])) as Obj[];
+    return rows.map((r) => ({
+      id: Number(r.id),
+      pageId: String(r.page_id),
+      tag: String(r.tag),
+      action: r.action === 'allow_everywhere' ? 'allow_everywhere' : 'keep_here',
+      reason: String(r.reason),
+      by: String(r.by),
+      at: Number(r.at),
+    }));
+  }
+
+  recordSupplementaryEdit(e: SupplementaryEditRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO retag_supplementary_edits (id, project_id, tag, page_id, job_id, before_text, after_text, by, at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(e.id, e.projectId, e.tag, e.pageId, e.jobId, e.beforeText, e.afterText, e.by, e.at);
+  }
+
+  supplementaryEdits(projectId: string): SupplementaryEditRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM retag_supplementary_edits WHERE project_id = ? ORDER BY at DESC LIMIT 100')
+      .all(projectId) as Obj[];
+    return rows.map((r) => ({
+      id: String(r.id),
+      projectId: String(r.project_id),
+      tag: String(r.tag),
+      pageId: (r.page_id as string | null) ?? null,
+      jobId: (r.job_id as string | null) ?? null,
+      beforeText: String(r.before_text),
+      afterText: String(r.after_text),
       by: String(r.by),
       at: Number(r.at),
     }));

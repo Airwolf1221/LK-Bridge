@@ -60,6 +60,8 @@ describe('the six exact headings', () => {
       'Closed Primary Categories and Specialist Functions',
       // v3 F3f (ADR 0060): pinned for the retag tools.
       'Excluded Routine Tags',
+      // v3 F5a (ADR 0067, H1): the Approved Supplementary Tags.
+      'Approved Supplementary Tags',
     ]);
     expect(seeded('source-formatting')).toEqual([...PINNED.formatting]);
     expect(seeded('tagging-standard')).toEqual([...PINNED.tagging]);
@@ -67,7 +69,7 @@ describe('the six exact headings', () => {
     const status = await packs().governance('arkona');
     expect(status.state).toBe('current');
     const found = status.sources.flatMap((s) => (s.sections ?? []).map((x) => [x.heading, x.found, x.state]));
-    expect(found).toHaveLength(7);
+    expect(found).toHaveLength(8);
     for (const [heading, at, state] of found) {
       expect(at).toBe(heading);
       expect(state).toBe('same');
@@ -192,6 +194,7 @@ describe('re-mapping a pinned heading', () => {
       'Exact Tag Grammar and Order',
       'Closed Primary Categories and Specialist Functions',
       'Excluded Routine Tags',
+      'Approved Supplementary Tags',
     ]);
     // The mapping waits for the owner with the version.
     expect(r.governance.state).toBe('rules_changed');
@@ -215,6 +218,7 @@ describe('re-mapping a pinned heading', () => {
       expect.objectContaining({ heading: 'Exact Tag Grammar and Order' }),
       expect.objectContaining({ heading: 'Closed Primary Categories and Specialist Functions' }),
       expect.objectContaining({ heading: 'Excluded Routine Tags' }),
+      expect.objectContaining({ heading: 'Approved Supplementary Tags' }),
     ]);
     const ok = await w.call('arkona_create_owner', compactPolity({ dryRun: true }));
     expect(ok.isError, ok.text).toBe(false);

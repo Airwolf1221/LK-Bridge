@@ -793,10 +793,10 @@ function otherTools(deps: ToolDeps) {
           .optional()
           .describe('Only writes made under this profile, e.g. "chatgpt".'),
         outcome: z
-          .enum(['applied', 'pending', 'not_applied', 'unknown'])
+          .enum(['applied', 'pending', 'not_applied', 'unknown', 'superseded'])
           .optional()
           .describe(
-            'applied: LegendKeeper made the change; not_applied: refused; unknown: could not be confirmed.',
+            'applied: LegendKeeper made the change; not_applied: refused, or read back unchanged; unknown: could not be confirmed (the bridge reads it back for about five minutes, then shows the owner); superseded: unknown, but later writes to the same target were applied, so it no longer matters.',
           ),
         withPreImage: z.boolean().optional().describe('Only destructive writes, which keep a pre-image.'),
         before: z

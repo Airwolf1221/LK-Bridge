@@ -286,3 +286,13 @@ kept), echoing every other block exactly as read. Never the prose. The tags fix 
 the page holds is kept, a status tag included (CR-2026-11-R4, [ADR 0065 amendment 2](adr/0065-v3-f4c-fiction.md)). A page
 carrying a lifecycle signal is reported (`narrative_lifecycle_page`) and is never read as a story's map, act, plan or
 chapter.
+
+## Writes with an unknown outcome (`write_outcome_unknown`, category Writes; v3 F5a)
+
+[ADR 0067](adr/0067-v3-f5a-supplementary-tags-rulings-bulk-actions-and-unknown-outcomes.md) (H10). Every write whose
+outcome the journal records as unknown is reconciled by the bridge: settled as applied, not applied or superseded (later
+writes to the same target were applied), by reading the target back with back-off for about five minutes and comparing
+it with what the job sent. One that still cannot be told is this finding (error): the journal entry, the operation, the
+version it was based on, the high-level operation, the intended change and the pre-image. Report only, from the bridge's
+own journal (no LegendKeeper read, no fix): compare the page with both, and restore from the pre-image by hand if
+needed. It goes when the entry is settled (the job's own recovery, a Resume, or the reconciler's next start-up sweep).

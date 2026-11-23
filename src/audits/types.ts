@@ -27,6 +27,7 @@ export type Category =
   | 'governance' // v3 F4a: the governance documents against the bridge (old tool names, external skills, missing names)
   | 'consistency' // v3 F4b: dates and identity facts restated differently on Authoritative pages (Contradictory only)
   | 'narrative' // v3 F4c: Narratives' layout, numbering, plans and chapters, datelines (the Narrative Integrity audit)
+  | 'writes' // v3 F5a (H10): the bridge's own writes whose outcome could not be settled (the reconciler's)
   | 'audit'; // about the run itself (a stale snapshot, a missing template read)
 
 export const CATEGORIES: readonly Category[] = [
@@ -45,6 +46,7 @@ export const CATEGORIES: readonly Category[] = [
   'governance',
   'consistency',
   'narrative',
+  'writes',
   'audit',
 ];
 
@@ -458,6 +460,13 @@ export const CODES = {
     title: 'The chronology has not been checked yet',
   },
   // ---- governance (v3 F4a, ADR 0063): report only, never a fix (governance edits are the owner's)
+  // v3 F5a (ADR 0067, H10): a write whose outcome stayed unknown after the reconciler read its target back for about
+  // five minutes. Report only: the owner checks the page against the pre-image and the intended change.
+  write_outcome_unknown: {
+    category: 'writes',
+    severity: 'error',
+    title: 'A write whose outcome is still unknown (it may or may not have applied)',
+  },
   governance_unknown_tool: {
     category: 'governance',
     severity: 'warning',

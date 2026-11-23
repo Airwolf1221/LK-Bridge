@@ -5,7 +5,7 @@ import { fmtBytes, fmtTime, principalText, type PrincipalNames } from '../format
 import { useApi } from '../hooks';
 import { useProject, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
-import type { ClientsResponse, JournalEntry } from '../types';
+import type { ClientsResponse, JournalEntry, Reconciliation } from '../types';
 
 const SINCE: [string, string][] = [
   ['', 'Any time'],
@@ -58,7 +58,9 @@ export function JournalPage() {
     nextBefore: number | null;
     principals?: PrincipalNames;
   }>(`/journal${qs({ ...f, limit: 100, ...(before !== undefined ? { before } : {}) })}`);
-  const detail = useScopedApi<{ entry: JournalEntry }>(open === null ? null : `/journal/${open}`);
+  const detail = useScopedApi<{ entry: JournalEntry; reconciliation?: Reconciliation | null }>(
+    open === null ? null : `/journal/${open}`,
+  );
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
     setCursors([]);
     setF({ ...f, [k]: e.target.value.trim() });
@@ -141,6 +143,7 @@ export function JournalPage() {
             <option value="applied">applied</option>
             <option value="not_applied">not applied</option>
             <option value="unknown">unknown</option>
+            <option value="superseded">superseded</option>
             <option value="pending">pending</option>
           </select>
         </div>
@@ -205,9 +208,15 @@ export function JournalPage() {
                   </td>
                   <td>
                     <Badge
-                      tone={e.outcome === 'applied' ? 'ok' : e.outcome === 'pending' ? 'warn' : 'neutral'}
+                      tone={
+                        e.outcome === 'applied'
+                          ? 'ok'
+                          : e.outcome === 'pending' || e.outcome === 'unknown'
+                            ? 'warn'
+                            : 'neutral'
+                      }
                     >
-                      {e.outcome}
+                      {e.outcome.replace('_', ' ')}
                     </Badge>
                   </td>
                   <td className="num">{fmtBytes(e.bytes)}</td>
@@ -280,6 +289,28 @@ export function JournalPage() {
                   <dd>{detail.data.entry.risk}</dd>
                 </div>
               </dl>
+              {detail.data.reconciliation && (
+                <>
+                  <h3>Reconciliation of an unknown outcome</h3>
+                  <p>
+                    <Badge tone={detail.data.reconciliation.state === 'unresolved' ? 'bad' : 'info'}>
+                      {detail.data.reconciliation.state === 'pending'
+                        ? 'reading it back'
+                        : detail.data.reconciliation.state === 'unresolved'
+                          ? 'still unknown: shown on the Audits page'
+                          : `settled: ${(detail.data.reconciliation.outcome ?? '').replace('_', ' ')}`}
+                    </Badge>{' '}
+                    {detail.data.reconciliation.reason}
+                  </p>
+                  <p className="muted small-text">
+                    {detail.data.reconciliation.attempts} read-back
+                    {detail.data.reconciliation.attempts === 1 ? '' : 's'}
+                    {detail.data.reconciliation.settledBy
+                      ? `; settled by ${detail.data.reconciliation.settledBy === 'job' ? 'the job itself' : 'the bridge'}`
+                      : ''}
+                  </p>
+                </>
+              )}
               {detail.data.entry.operation !== null && detail.data.entry.operation !== undefined && (
                 <>
                   <h3>Operation</h3>

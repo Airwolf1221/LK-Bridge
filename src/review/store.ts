@@ -58,7 +58,7 @@ const toRow = (r: Row): DirectWriteRow => ({
 
 /** A finished job that wrote something (applied, or possibly applied). */
 const LISTED = `j.status IN ('succeeded', 'failed', 'cancelled')
-  AND EXISTS (SELECT 1 FROM write_journal w WHERE w.job_id = d.job_id AND w.outcome IN ('applied', 'unknown'))`;
+  AND EXISTS (SELECT 1 FROM write_journal w WHERE w.job_id = d.job_id AND w.outcome IN ('applied', 'unknown', 'superseded'))`;
 
 export class ReviewStore {
   constructor(

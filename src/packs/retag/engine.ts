@@ -37,7 +37,7 @@ import type { OwnerType, PackRules, RetagRules, RoleRule, TypeRules } from '../t
 // ============================================================================================ types
 
 export type Disposition = 'compliant' | 'correction' | 'hold' | 'exception';
-export type Slot = 'status' | 'primary' | 'specialist' | 'race' | 'culture' | 'other';
+export type Slot = 'status' | 'primary' | 'specialist' | 'race' | 'culture' | 'supplementary' | 'other';
 
 /** Why a page is outside the automatic grammar. */
 export type ExclusionCode =
@@ -111,7 +111,27 @@ export interface RetagPageInput {
    * hash is unchanged): the apply's check and its write compare it, so a page moved since is never written.
    */
   readonly parentId?: string | null;
+  /**
+   * v3 F5a (ADR 0067, H2): the owner's "Keep this tag here" rulings for this page, each tied to the hash of the tag
+   * array it was made on (`tagsHashOf`). While the page's array is unchanged, the tag is kept like an Approved
+   * Supplementary Tag on this page alone; once it changes, the ruling has lapsed and the tag is an exception again.
+   */
+  readonly rulings?: readonly TagRuling[];
 }
+
+/** v3 F5a (H2): one "Keep this tag here" ruling, as the engine reads it. */
+export interface TagRuling {
+  readonly tag: string;
+  readonly tagsHash: string;
+  /** Words for the rationale: who and when. */
+  readonly detail: string;
+}
+
+/** v3 F5a (ADR 0067, H2): the hash a "Keep this tag here" ruling is tied to: the page's exact tag array, in order. */
+export const tagsHashOf = (tags: readonly string[]): string =>
+  createHash('sha256')
+    .update(JSON.stringify([...tags]))
+    .digest('hex');
 
 export interface RetagContext {
   /** The approved pack version's rules. */
@@ -330,6 +350,10 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
     owner: page.owner ? [page.owner.primary, page.owner.specialist] : null,
     name: page.rawName,
     kind: page.kind,
+    // v3 F5a (H2): a ruling made or withdrawn makes the verdict stale (only when there is one, so other hashes stay).
+    ...((page.rulings ?? []).length > 0
+      ? { rulings: [...(page.rulings ?? [])].map((r) => [r.tag, r.tagsHash]).sort() }
+      : {}),
   };
   const inputsHash = inputsHashOf(basis, page.tags);
   const base = {
@@ -637,8 +661,20 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
     }
   }
 
-  // ---- every other tag: an Excluded Routine Tag is removed; a held slot's token omitted; anything else an exception
+  // ---- every other tag: an Approved Supplementary Tag (or a tag the owner kept on this page) is kept after the grammar;
+  // an Excluded Routine Tag is removed; a held slot's token omitted; anything else an exception
   const routine = new Set((rules.retag?.excludedRoutineTags ?? []).map(textKey));
+  // v3 F5a (ADR 0067, H1): the Standard's "Approved Supplementary Tags": permitted wherever they appear, kept after the
+  // grammar's slots in their existing order, never added, never proposed for removal. Never merged with the Excluded
+  // Routine Tags (the opposite list): a tag on both is the owner's to settle, an exception.
+  const supplementaryList = new Set((rules.retag?.supplementary?.tags ?? []).map(textKey));
+  // v3 F5a (H2): the owner's "Keep this tag here" rulings, live only while the page's tags are those it was made on.
+  const hashNow = (page.rulings ?? []).length > 0 ? tagsHashOf(page.tags) : '';
+  const liveRuling = new Map<string, TagRuling>();
+  const lapsedRuling = new Map<string, TagRuling>();
+  for (const r of page.rulings ?? [])
+    (r.tagsHash === hashNow ? liveRuling : lapsedRuling).set(textKey(r.tag), r);
+  const supplementary: string[] = [];
   const kept: string[] = [];
   const seen = new Set<string>();
   const heldIdentity = holds.some((h) => h.kind === 'identity');
@@ -652,6 +688,39 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
     seen.add(k);
     if (statusWords.some((s) => sameTag(s, t))) continue;
     if (grammar.some((g) => sameTag(g, t))) continue;
+    if (supplementaryList.has(k) && routine.has(k)) {
+      exceptions.push({
+        tag: t,
+        reason: `“${t}” is listed both in the Tagging Standard’s Approved Supplementary Tags and in its Excluded Routine Tags: the two lists disagree, and which applies is the owner’s decision (kept)`,
+      });
+      kept.push(t);
+      slots.push({
+        slot: 'other',
+        tag: t,
+        source: `“${t}”: on both the supplementary and the excluded list`,
+        held: 'an owner exception: kept',
+      });
+      continue;
+    }
+    if (supplementaryList.has(k)) {
+      supplementary.push(t);
+      slots.push({
+        slot: 'supplementary',
+        tag: t,
+        source: `“${t}”: an Approved Supplementary Tag (the Tagging Standard), kept after the grammar wherever it appears`,
+      });
+      continue;
+    }
+    const ruling = liveRuling.get(k);
+    if (ruling) {
+      supplementary.push(t);
+      slots.push({
+        slot: 'supplementary',
+        tag: t,
+        source: `“${t}”: kept on this page by the owner’s ruling (${ruling.detail}), while its tags are unchanged`,
+      });
+      continue;
+    }
     if (routine.has(k)) {
       removals.push({ tag: t, why: 'listed in the Tagging Standard’s Excluded Routine Tags' });
       continue;
@@ -687,9 +756,12 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
       });
       continue;
     }
+    const lapsed = lapsedRuling.get(k);
     exceptions.push({
       tag: t,
-      reason: `“${t}” is outside the grammar and not an Excluded Routine Tag: whether it is incidental is the owner’s judgement (kept)`,
+      reason: lapsed
+        ? `“${t}” is outside the grammar; the owner’s ruling to keep it here (${lapsed.detail}) lapsed when the page’s tags changed, so the owner decides again (kept)`
+        : `“${t}” is outside the grammar and not an Excluded Routine Tag: whether it is incidental is the owner’s judgement (kept)`,
     });
     kept.push(t);
     slots.push({
@@ -699,7 +771,10 @@ export function retagPage(page: RetagPageInput, ctx: RetagContext): RetagVerdict
       held: 'an owner exception: kept',
     });
   }
-  const proposed = dedupe([...statusLead, ...grammar, ...kept]);
+  // v3 F5a (ADR 0067, H3): always in full grammar order (status, primary, specialist, race, culture), then the
+  // supplementary tags in their existing order: a page whose tags are right but out of order is a correction like any
+  // other, written in the same item.
+  const proposed = dedupe([...statusLead, ...grammar, ...supplementary, ...kept]);
   // CR-2026-11-R3 (R3-06, R3-07): status and lifecycle tags are never added or removed, only moved first, whatever
   // spelling they carry. Every tag that reads as one of them through the facts fold (case, width, invisible characters,
   // Cyrillic, Greek, Cherokee and small-capital look-alikes) must be in the proposed array exactly as on the page, as

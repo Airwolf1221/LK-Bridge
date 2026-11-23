@@ -13,7 +13,8 @@ beforeAll(async () => {
 afterAll(async () => stack.close());
 
 describe('POST /api/admin/proposals/bulk (approve-as-canon)', () => {
-  it('needs confirm: true (literal), at most 100 ids, and a session with CSRF', async () => {
+  // v3 F5a (ADR 0067, H4): at most 1,000 ids (was 100: a selection may span pages).
+  it('needs confirm: true (literal), at most 1,000 ids, and a session with CSRF', async () => {
     const ids = ['prop_x'];
     expect((await stack.post('/api/admin/proposals/bulk', { action: 'approve-as-canon', ids })).status).toBe(
       400,
@@ -22,7 +23,7 @@ describe('POST /api/admin/proposals/bulk (approve-as-canon)', () => {
       (await stack.post('/api/admin/proposals/bulk', { action: 'approve-as-canon', ids, confirm: 'true' }))
         .status,
     ).toBe(400);
-    const many = Array.from({ length: 101 }, (_, i) => `prop_${i}`);
+    const many = Array.from({ length: 1001 }, (_, i) => `prop_${i}`);
     expect(
       (
         await stack.post('/api/admin/proposals/bulk', {

@@ -19,5 +19,8 @@ docs/design/F4b-consistency-and-as-of.md
 # v3 F4c: the owner-approved fiction design (E1 to E10), kept exactly as approved (copied unchanged; never reformatted).
 docs/design/F4c-fiction.md
 
+# v3 F5: the owner-approved orchestration design (H1 to H12), kept exactly as approved (copied unchanged; never reformatted).
+docs/design/F5-orchestration.md
+
 # CR-2026-11-R4: a coding agent's worktrees (full copies of the repository) when they sit inside the checkout.
 .claude

@@ -679,6 +679,15 @@ const rules: PackRules = packRulesSchema.parse({
     identityReferenceTypes: ['Character Core', 'Compact Character Reference'],
     excludedRoutineTags: [],
     excludedAreas: ['Legacy Canon Archive', 'Design References', 'Repository Governance'],
+    // v3 F5a (ADR 0067, H1): the Tagging Standard's "Approved Supplementary Tags" (the author's ruling of 23 November
+    // 2026, read by its governing name): permitted wherever they appear, kept after the grammar's slots, never added,
+    // never proposed for removal. The list as the section stated it on 23 November 2026; the bridge parses the section
+    // at each governance check and offers a new version when it lists others.
+    supplementary: {
+      source: 'tagging-standard',
+      section: 'Approved Supplementary Tags',
+      tags: ['Cosmology', 'Chronology', 'Setting Framework'],
+    },
   },
   // v3 F4a (ADR 0063): the governance drift audit (the audits' `governance` category), from the owner's repository check
   // of 19 November 2026. The old bridge's call shapes; the equivalence map (each finding suggests its `use` as the
@@ -1192,9 +1201,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // Life State STARTING with "Alive" or "Living" (`aliveValues`, with a date read by `aliveAt`), and the Temporal Scope
   // phrasings "living at <date>" and "present <date>". `-r4` (CR-2026-11-R4, 21 November 2026; the fourth review and the
   // owner's requests): which kinds of new owner of a split address Source Boundaries and Unresolved Material
-  // (`splits.sections`), and the consistency phrasings this review's fixes and the owner's lives (L) add.
-  seed: 'arkona-2026-11-21-r4',
+  // (`splits.sections`), and the consistency phrasings this review's fixes and the owner's lives (L) add. `-f5a` (ADR
+  // 0067, 23 November 2026; session F5a): the Tagging Standard's "Approved Supplementary Tags" pinned, and its list as
+  // pack data (`retag.supplementary`).
+  seed: 'arkona-2026-11-23-f5a',
   supersedes: [
+    'arkona-2026-11-21-r4',
     'arkona-2026-11-20-f41',
     'arkona-2026-11-20-f4c',
     'arkona-2026-11-20-f4b1',
@@ -1240,10 +1252,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
       name: 'Controlled Native Tagging Standard',
       label: 'v1.8',
       // v3 F3f (ADR 0060): the retag tools also read the Excluded Routine Tags (the derived list is `retag`).
+      // v3 F5a (ADR 0067, H1): and the Approved Supplementary Tags (`retag.supplementary`, parsed from it).
       sections: [
         'Exact Tag Grammar',
         'Closed Primary Categories and Specialist Functions',
         'Excluded Routine Tags',
+        'Approved Supplementary Tags',
       ],
     },
     // v3 F4c (ADR 0065, design E9): the fiction Design References, found by their page names (any dash): the narrative

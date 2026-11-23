@@ -119,3 +119,158 @@ export function outlineOf(blocks: unknown, max = 200): OutlineHeading[] {
   }
   return out;
 }
+
+// ============================================================================================ v3 F5a: supplementary tags
+
+/**
+ * v3 F5a (ADR 0067, H1): the top-level blocks of one pinned section (its heading included), or null when the heading is
+ * not in the document exactly once (missing or ambiguous: nothing is read from it).
+ */
+export function sectionBlocksOf(blocks: unknown, heading: string): Obj[] | null {
+  const list = (Array.isArray(blocks) ? blocks : []).filter(
+    (b): b is Obj => typeof b === 'object' && b !== null,
+  );
+  const want = headingKey(heading);
+  const at = list.findIndex((b) => b.kind === 'heading' && headingKey(runsText(b)) === want);
+  if (at < 0) return null;
+  if (list.filter((b) => b.kind === 'heading' && headingKey(runsText(b)) === want).length > 1) return null;
+  const level = levelOf(list[at]!);
+  let end = at + 1;
+  while (end < list.length) {
+    const b = list[end]!;
+    if (b.kind === 'heading' && levelOf(b) <= level) break;
+    end++;
+  }
+  return list.slice(at, end);
+}
+
+/**
+ * The sentence that states the list: "… approved these existing tags as permitted supplementary tags on any eligible
+ * owner (author ruling, 23 November 2026): Cosmology, Chronology and Setting Framework." The list runs from the colon
+ * after "permitted supplementary tags" to the full stop that ends the sentence.
+ */
+const LIST_SENTENCE = /permitted supplementary tags\b[^:.]*:\s*([^.:]+?)\s*\.(?=\s|$)/i;
+
+/** "A", "A and B", "A, B and C" (a serial comma before "and" is read too): the tags, in order. */
+export function splitTagList(text: string): string[] {
+  const t = text.trim();
+  if (t === '') return [];
+  const parts = t.split(/\s*,\s*/);
+  const last = parts.pop()!;
+  const tail = /^(?:and\s+)?(.*?)(?:\s+and\s+(.+))?$/i.exec(last);
+  const out = [...parts];
+  if (tail) {
+    const [, a, b] = tail;
+    if (a) out.push(a);
+    if (b) out.push(b);
+  } else out.push(last);
+  return out.map((x) => x.trim()).filter((x) => x !== '');
+}
+
+/** The written form of a list: "A", "A and B", "A, B and C" (the section's own style). */
+export function joinTagList(tags: readonly string[]): string {
+  if (tags.length <= 1) return tags[0] ?? '';
+  return `${tags.slice(0, -1).join(', ')} and ${tags.at(-1)}`;
+}
+
+export type SupplementaryParse =
+  | {
+      readonly ok: true;
+      readonly tags: string[];
+      /** The index (among the section's blocks) of the paragraph holding the list, and the list's text. */
+      readonly blockIndex: number;
+      readonly listText: string;
+    }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * v3 F5a (ADR 0067, H1): the tags the "Approved Supplementary Tags" section approves, parsed from its sentence. Fails
+ * (never guesses) when no paragraph states the list in that form, or more than one does.
+ */
+export function parseSupplementaryTags(section: readonly Obj[] | null): SupplementaryParse {
+  if (!section) return { ok: false, reason: 'the section is not in the document exactly once' };
+  const hits: { index: number; list: string }[] = [];
+  section.forEach((b, index) => {
+    if (b.kind === 'heading') return;
+    const m = LIST_SENTENCE.exec(runsText(b));
+    if (m?.[1] !== undefined) hits.push({ index, list: m[1] });
+  });
+  if (hits.length === 0)
+    return {
+      ok: false,
+      reason:
+        'no sentence of the section states the list as “… permitted supplementary tags …: A, B and C.”; the bridge reads nothing it cannot read exactly',
+    };
+  if (hits.length > 1)
+    return {
+      ok: false,
+      reason: 'more than one sentence of the section states a list; which one governs cannot be told',
+    };
+  const tags = splitTagList(hits[0]!.list);
+  const bad = tags.find((t) => t.length > 100 || /[\n\r]/.test(t));
+  if (tags.length === 0 || bad !== undefined)
+    return { ok: false, reason: `the list “${hits[0]!.list}” does not read as tags` };
+  return { ok: true, tags, blockIndex: hits[0]!.index, listText: hits[0]!.list };
+}
+
+export type SupplementaryEdit =
+  | {
+      readonly ok: true;
+      /** The paragraph's id (the block written) and the block as it will be. */
+      readonly blockId: string;
+      readonly before: Obj;
+      readonly after: Obj;
+      readonly beforeText: string;
+      readonly afterText: string;
+      readonly tags: string[];
+    }
+  | { readonly ok: false; readonly code: string; readonly reason: string };
+
+/**
+ * v3 F5a (ADR 0067, H2): the section's paragraph with `tag` added at the end of its list, keeping the sentence's
+ * structure ("A, B and C" becomes "A, B, C and D"); every other run, mark and attribute of the block is kept. Refused
+ * when the list cannot be read, the tag is already listed, the tag would make the list ambiguous ("and", a comma, a
+ * full stop or a colon in it), or the list does not sit inside one plain text run (formatting inside it: edit it in
+ * the app).
+ */
+export function addSupplementaryTag(section: readonly Obj[] | null, tag: string): SupplementaryEdit {
+  const t = tag.trim();
+  if (t === '' || t.length > 100 || /[,.:;\n\r]/.test(t) || /\band\b/i.test(t))
+    return {
+      ok: false,
+      code: 'TAG_NOT_LISTABLE',
+      reason: `“${tag}” cannot be written into the list unambiguously (a comma, a full stop, a colon or “and” in a tag would change how the list reads)`,
+    };
+  const parsed = parseSupplementaryTags(section);
+  if (!parsed.ok) return { ok: false, code: 'SECTION_NOT_READABLE', reason: parsed.reason };
+  if (parsed.tags.some((x) => headingKey(x) === headingKey(t)))
+    return { ok: false, code: 'ALREADY_LISTED', reason: `“${t}” is already an Approved Supplementary Tag` };
+  const block = section![parsed.blockIndex]!;
+  if (typeof block.id !== 'string')
+    return { ok: false, code: 'SECTION_NOT_EDITABLE', reason: 'the paragraph has no block id' };
+  const runs = Array.isArray(block.content) ? (block.content as Obj[]) : [];
+  const nextList = joinTagList([...parsed.tags, t]);
+  const at = runs.findIndex((r) => typeof r.text === 'string' && LIST_SENTENCE.test(r.text));
+  const run = at >= 0 ? runs[at]! : null;
+  const text = run && typeof run.text === 'string' ? run.text : null;
+  const m = text ? LIST_SENTENCE.exec(text) : null;
+  if (!run || !text || !m || m[1] !== parsed.listText)
+    return {
+      ok: false,
+      code: 'SECTION_NOT_EDITABLE',
+      reason:
+        'the list does not sit inside one plain text run (part of it is formatted or a mention): add the tag in the LegendKeeper app',
+    };
+  const start = m.index + m[0].lastIndexOf(m[1]);
+  const newText = text.slice(0, start) + nextList + text.slice(start + m[1].length);
+  const after: Obj = { ...block, content: runs.map((r, i) => (i === at ? { ...r, text: newText } : r)) };
+  return {
+    ok: true,
+    blockId: block.id,
+    before: block,
+    after,
+    beforeText: runsText(block),
+    afterText: runsText(after),
+    tags: [...parsed.tags, t],
+  };
+}

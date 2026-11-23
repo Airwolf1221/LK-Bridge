@@ -8,7 +8,7 @@
  * - when the test itself would time out first (a step's timeout longer than the test's), the clean-up the test file runs
  *   in its `afterAll` deletes the probe while the check is still stuck;
  * - the harness itself: each clean-up action once, newest first, each with its own timeout; a failing one named;
- * - all 17 sandbox checks run through it (each test file has the step frame and the `afterAll`).
+ * - all 18 sandbox checks run through it (each test file has the step frame and the `afterAll`; v3 F5a added tagging-f5a).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -162,12 +162,12 @@ describe('the harness (test/sandbox/steps.ts)', () => {
   });
 });
 
-describe('all 17 sandbox checks run through the harness', () => {
+describe('all 18 sandbox checks run through the harness', () => {
   const dir = join(import.meta.dirname, '..', 'sandbox');
   const files = readdirSync(dir).filter((f) => f.endsWith('.test.ts'));
 
-  it('there are 17, and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
-    expect(files).toHaveLength(17);
+  it('there are 18, and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
+    expect(files).toHaveLength(18);
     for (const f of files) {
       const s = readFileSync(join(dir, f), 'utf8');
       expect(s, f).toMatch(/sandboxRun\(\{ name: '[a-z0-9-]+'/);
@@ -179,7 +179,7 @@ describe('all 17 sandbox checks run through the harness', () => {
   });
 
   it('each runner routes its steps through the run and its clean-up through `defer`', () => {
-    // The 16 runner modules (soak-runtime-readonly.test.ts runs no LegendKeeper check of its own).
+    // The 17 runner modules (soak-runtime-readonly.test.ts runs no LegendKeeper check of its own).
     const runners = [
       'assign-block-ids.ts',
       'assumptions-r2.ts',
@@ -197,6 +197,7 @@ describe('all 17 sandbox checks run through the harness', () => {
       'smoke.ts',
       'snapshots.ts',
       'split-ids.ts',
+      'tagging-f5a.ts',
     ];
     expect(runners.every((f) => files.includes(f.replace(/\.ts$/, '.test.ts')))).toBe(true);
     for (const f of runners) {

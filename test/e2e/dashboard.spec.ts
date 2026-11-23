@@ -327,3 +327,38 @@ test('ADR 0062: a link from another site opens the dashboard signed in (the Stri
   expect(arrivals).toHaveLength(2);
   expect(problems).toEqual([]);
 });
+
+test('v3 F5a: the Proposals page filters, selects and rejects in bulk with one confirmation (no step-up)', async ({
+  page,
+  request,
+}) => {
+  const problems = watch(page);
+  const ids: string[] = [];
+  for (const text of ['Bulk one', 'Bulk two'])
+    ids.push(
+      (
+        (await (await request.get(`${CONTROL}/proposal?text=${encodeURIComponent(text)}`)).json()) as {
+          proposalId: string;
+        }
+      ).proposalId,
+    );
+  await signIn(page, '/ui/proposals');
+  const filters = page.getByRole('search', { name: 'Filter proposals' });
+  await expect(filters).toBeVisible();
+  await filters.getByLabel('Age').selectOption('');
+  for (const id of ids) await expect(page.locator(`tr[data-proposal="${id}"]`)).toBeVisible();
+  // Keyboard: tick each with the space bar.
+  for (const id of ids) {
+    await page.locator(`tr[data-proposal="${id}"]`).getByRole('checkbox').focus();
+    await page.keyboard.press('Space');
+  }
+  const bar = page.getByRole('group', { name: 'Bulk actions' });
+  await expect(bar).toContainText('2 selected');
+  await bar.getByRole('button', { name: 'Reject selected' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Reject all' }).click();
+  await expect(page.getByRole('region', { name: 'Bulk results' })).toContainText('Rejected');
+  for (const id of ids) await expect(page.locator(`tr[data-proposal="${id}"]`)).toHaveCount(0);
+  // Rejecting is a brake: no step-up was asked.
+  expect(problems.filter((p) => /HTTP 403/.test(p))).toEqual([]);
+  expect(problems).toEqual([]);
+});

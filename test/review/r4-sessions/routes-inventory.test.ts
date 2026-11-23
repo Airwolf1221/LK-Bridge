@@ -50,6 +50,8 @@ const ROUTES: Record<string, Route> = {
   'POST /api/admin/proposals/:id/repropose': { kind: 'outside' }, // makes a proposal
   'POST /api/admin/proposals/:id/reject': { kind: 'one-click' },
   'POST /api/admin/proposals/bulk': { kind: 'conditional' },
+  // v3 F5a (ADR 0067, H4): a decision over a filter: rejecting is a brake (one click), approving asks when guarded.
+  'POST /api/admin/proposals/bulk-matching': { kind: 'conditional' },
   // ---- clients and access
   'POST /api/admin/clients/profiles': { kind: 'conditional' },
   'PUT /api/admin/clients/profiles/:id/scope': { kind: 'conditional' },
@@ -227,6 +229,15 @@ const ROUTES: Record<string, Route> = {
   'POST /api/admin/tagging/classify': { kind: 'asks' },
   'POST /api/admin/tagging/unclassify': { kind: 'asks' },
   'POST /api/admin/tagging/batches': { kind: 'conditional' },
+  // v3 F5a (ADR 0067, H2 and H4): the owner's rulings on exceptions, and the bulk apply.
+  'POST /api/admin/tagging/keep-here': { kind: 'asks' },
+  'POST /api/admin/tagging/unkeep': { kind: 'one-click' }, // a tightening: the ruling withdrawn
+  'POST /api/admin/tagging/allow-everywhere': { kind: 'conditional' }, // a dry run is one click; the edit asks
+  'POST /api/admin/tagging/apply-all': { kind: 'conditional' }, // more than 10 pages in all asks
+  'POST /api/admin/tagging/approve-batches': {
+    kind: 'asks',
+    body: { proposalIds: ['prop_r4x'], confirm: true },
+  },
   'POST /api/admin/tagging/reconciliations': { kind: 'outside' }, // an audit (free) only
   'POST /api/admin/tagging/reconciliations/:id/resume': {
     kind: 'asks',

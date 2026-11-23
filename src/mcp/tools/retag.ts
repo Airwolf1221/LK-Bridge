@@ -102,7 +102,7 @@ export function retagTools(deps: ToolDeps): McpToolProvider[] {
       access: 'read',
       description:
         'The Arkona pack, read-only and free: the Controlled Native Tagging Standard’s policy audit. Each current Authoritative page (Main CANON, or AU under the owner’s ruling) of one page (`page`), a branch (`under`) or everything (`all: true`) gets its expected array from the closed grammar and the approved pack version: its resource ID, current array, proposed array, a rationale for each slot (the fact or record it comes from), the policy version and digest, and its disposition: compliant, deterministic correction, hold (with reasons: an uncertain category, a specialist, an identity token, a status tag), or exception (an owner-level judgement, such as an existing tag outside the grammar). Working and Archived pages are checked for the lifecycle grammar only (the audits’ lifecycle_tag_not_leading); the Legacy Canon Archive, Design References, navigation indexes and repository governance are never retagged by inference. The category comes only from deterministic evidence (the owner’s classification, the page’s own pack record, or exactly one valid primary tag its Reference Type does not contradict): never from a name, a parent or the body. No unknown token is ever generated. ' +
-        'A run is stored: read it again a page at a time with `runId` (and `filter`). `reconciliation: "<name>"` starts or re-audits a named reconciliation (its record across batches). `suggest: { page, primary, specialist?, reason }` records your suggested classification for a hold, for the owner (never used until the owner classifies). Nothing is ever written to LegendKeeper. ' +
+        'A run is stored: read it again a page at a time with `runId` (and `filter`). `reconciliation: "<name>"` starts or re-audits a named reconciliation (its record across batches). `suggest: { page, primary, specialist?, reason }` records your suggested classification for a hold, for the owner (never used until the owner classifies). `suggestRuling: { page, tag, action: keep_here | allow_everywhere, reason }` records your suggested ruling on an exception (only the owner rules). The Tagging Standard’s Approved Supplementary Tags (Cosmology, Chronology, Setting Framework, as the approved pack lists them) are kept wherever they appear, after the grammar, and never removed. Nothing is ever written to LegendKeeper. ' +
         'Cost: none (the snapshots). live: true re-reads each page now (1 read each, at most 50).',
       inputSchema: z.object({
         page: z.string().min(1).max(500).optional().describe('One page (name or id).'),
@@ -145,6 +145,17 @@ export function retagTools(deps: ToolDeps): McpToolProvider[] {
           .describe(
             'Suggest a classification for a hold, with your reason (kept for the owner; never used by itself).',
           ),
+        suggestRuling: z
+          .object({
+            page: z.string().min(1).max(500),
+            tag: z.string().min(1).max(100),
+            action: z.enum(['keep_here', 'allow_everywhere']),
+            reason: z.string().min(1).max(1000),
+          })
+          .optional()
+          .describe(
+            'Suggest the owner’s ruling on an exception, with your reason: keep_here (keep this tag on this page) or allow_everywhere (add it to the Tagging Standard’s Approved Supplementary Tags). Kept for the owner; only the owner takes either action.',
+          ),
         project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
@@ -155,6 +166,30 @@ export function retagTools(deps: ToolDeps): McpToolProvider[] {
           if (!s.ok) return s.result;
           const actor = actorOf(mctx, 'arkona_retag_audit');
           try {
+            // v3 F5a (ADR 0067, H2): agents suggest a ruling on an exception; only the owner takes it.
+            if (args.suggestRuling) {
+              const rc = repoContext(pd);
+              if (!rc.ok) return rc.result;
+              const r = resolvePage(rc.ctx, args.suggestRuling.page);
+              if (!r.ok) return r.result;
+              const saved = s.r.suggestRuling(actor, pd.project.id, {
+                pageId: r.node.id,
+                tag: args.suggestRuling.tag,
+                action: args.suggestRuling.action,
+                reason: args.suggestRuling.reason,
+              });
+              return finish(
+                pd,
+                mctx,
+                'arkona_retag_audit',
+                {
+                  suggestedRuling: { page: { id: r.node.id, name: r.node.rawName }, ...saved },
+                  note: 'Recorded for the owner, beside the exception on the Tagging page. It is NOT a ruling: only the owner keeps a tag on a page or allows it everywhere; nothing changes until then.',
+                  cost: 'none',
+                },
+                () => ({ suggestedRuling: saved.id }),
+              );
+            }
             if (args.suggest) {
               const rc = repoContext(pd);
               if (!rc.ok) return rc.result;

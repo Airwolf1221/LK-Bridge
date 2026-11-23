@@ -99,7 +99,9 @@ describe('retry matrix: decisions', () => {
           delays.push(d.delayMs);
           state = d.state;
         }
-        expect(delays).toEqual([187, 375, 750]); // 250 -> 500 -> 1000 with equal jitter at 0.5
+        // v3 F5a (ADR 0067, H11): a READ that times out is retried once, then reported (a timeout costs the whole
+        // request timer); every other transient failure, and a write's timeout, keeps three tries.
+        expect(delays).toEqual(method === 'GET' && error === timeout ? [187] : [187, 375, 750]); // 250 -> 500 -> 1000 with equal jitter at 0.5
         expect(state.ambiguousPrior).toBe(method !== 'GET');
       }
     },

@@ -24,6 +24,8 @@ export interface RetryState {
   readonly transientRetries: number;
   readonly inProgressRetries: number;
   readonly uploadBackoffs: number;
+  /** v3 F5a (H11): how many times a read was retried after a timeout (at most once). */
+  readonly timeoutRetries?: number;
   /** An earlier attempt failed in a way that may have applied the write (connection, timeout, 502-504). */
   readonly ambiguousPrior: boolean;
 }
@@ -76,7 +78,8 @@ export function backoffMs(
 }
 
 export function isTransient(error: BridgeLkError): boolean {
-  if (error.code === 'CONNECTION_ERROR' || error.code === 'TIMEOUT') return true;
+  if (error.code === 'CONNECTION_ERROR' || error.code === 'TIMEOUT' || error.code === 'RESPONSE_INTERRUPTED')
+    return true;
   return error.status !== undefined && TRANSIENT_STATUSES.has(error.status);
 }
 
@@ -84,7 +87,30 @@ export function decideRetry(input: RetryInput): RetryDecision {
   const { error, method, state, settings: s, nowMs } = input;
   const random = input.random ?? Math.random;
 
-  if (error.code === 'ABORTED' || error.classification === 'bridge') return { action: 'fail', error };
+  if (error.code === 'ABORTED' || error.classification === 'bridge' || error.classification === 'client')
+    return { action: 'fail', error };
+
+  // v3 F5a (ADR 0067, H10, H11): the reply broke off after the request was sent. A read is retried as any transient
+  // failure; a write is never sent again by the governor (it may have applied): it fails, ambiguous, and its outcome is
+  // reconciled by reading the target back.
+  if (error.code === 'RESPONSE_INTERRUPTED' && method !== undefined && method !== 'GET')
+    return { action: 'fail', error: error.with({ retryable: false, ambiguous: true }) };
+
+  // v3 F5a (H11): a read that timed out is retried once (a timeout costs the whole request timer), then reported as
+  // retryable.
+  if (error.code === 'TIMEOUT' && method === 'GET') {
+    if ((state.timeoutRetries ?? 0) >= 1) return { action: 'fail', error: error.with({ retryable: true }) };
+    return {
+      action: 'retry',
+      delayMs: backoffMs(state.transientRetries, s.backoffBaseMs, s.backoffCapMs, random),
+      reason: 'transient',
+      state: {
+        ...state,
+        transientRetries: state.transientRetries + 1,
+        timeoutRetries: (state.timeoutRetries ?? 0) + 1,
+      },
+    };
+  }
 
   // 429: the request was refused, not run, so a retry is safe for every method (PLAN keeps the same key).
   if (error.status === 429 || error.code === 'RATE_LIMITED' || error.code === 'UPLOAD_RATE_EXCEEDED') {
@@ -119,9 +145,10 @@ export function decideRetry(input: RetryInput): RetryDecision {
   }
 
   if (isTransient(error)) {
-    const mayHaveApplied = method !== undefined && method !== 'GET';
+    // v3 F5a (H10): a request that never left (a connection refused, never made) cannot have applied.
+    const mayHaveApplied = method !== undefined && method !== 'GET' && error.sent !== 'no';
     if (method === 'POST' && !input.hasIdempotencyKey) {
-      return { action: 'fail', error: error.with({ retryable: false, ambiguous: true }) };
+      return { action: 'fail', error: error.with({ retryable: false, ambiguous: mayHaveApplied }) };
     }
     if (state.transientRetries < s.maxTransientRetries) {
       const hinted =

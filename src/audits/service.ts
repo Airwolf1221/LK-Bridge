@@ -57,6 +57,8 @@ import { classifyName } from '../tree/classify.js';
 import { AuditStore, evidenceHashOf, fingerprintOf, type FindingFilter, type StoredDraft } from './store.js';
 import { consistencyCheck } from './checks/consistency.js';
 import { narrativeCheck } from './checks/narrative.js';
+import { writesCheck } from './checks/writes.js';
+import type { UnknownWriteItem } from '../jobs/reconcile.js';
 import type { ConsistencyAuditItem } from './context.js';
 import {
   CODES,
@@ -85,6 +87,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'consistency', run: consistencyCheck },
   // v3 F4c (ADR 0065): Narratives' layout, numbering, plans and chapters, datelines (report only; mechanical fixes).
   { id: 'narrative', run: narrativeCheck },
+  // v3 F5a (ADR 0067, H10): the bridge's own writes whose outcome is still unknown (report only).
+  { id: 'writes', run: writesCheck },
 ];
 
 /**
@@ -136,6 +140,8 @@ export interface AuditDeps {
    * apply here). Free: the consistency service's facts index over the same snapshots.
    */
   readonly consistency?: (projectId: string) => Promise<readonly ConsistencyAuditItem[] | null>;
+  /** v3 F5a (ADR 0067, H10): the writes whose outcome the reconciler could not settle (the `writes` category). */
+  readonly unknownWrites?: (projectId: string) => readonly UnknownWriteItem[];
   /**
    * v3 F4c (ADR 0065): the narrative rules of the project's approved pack and the chronology's calendar (null: no
    * narrative audit; Narratives is then ordinary content).
@@ -817,6 +823,13 @@ export class Audits {
           return null;
         }
       },
+      unknownWrites: (() => {
+        try {
+          return this.d.unknownWrites?.(projectId) ?? [];
+        } catch {
+          return [];
+        }
+      })(),
       knownTemplateIds: new Set(registry.templates().templates.map((t) => t.id)),
       templateNames: [
         ...registry.templates().templates.map((t) => t.name),
