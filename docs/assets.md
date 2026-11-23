@@ -86,6 +86,13 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- set tes
 `npm run projects -- set test assetRefreshEnabled -` restores the default (on). A refresh started with **Refresh now**
 or **Run now** on the Maintenance Jobs page runs even while it is switched off.
 
+- **Read live before a decision (v3 F7, ADR 0070, G9).** `refreshFolder` reads one folder and its subfolders (to a
+  depth) live, at the caller's priority: every item listed is applied, and an item the tree held under a listed folder
+  that the listing no longer shows is confirmed with `getAsset` (a 404 removes it). The art tool reads a character's
+  folders this way before it places anything, the owner's seeding before it lists outfits, and `browse_asset_tree
+{ refresh: true }` on request. `checkUrls` answers whether image URLs are this project's assets, with one live look-up
+  (the asset the URL names) for those the tree lacks; Markdown writers use it before refusing an image (G11).
+
 ## Cost
 
 - **First build:** one request per folder (the root included), plus one for every further 100 items in a folder. The

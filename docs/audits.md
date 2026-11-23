@@ -129,6 +129,28 @@ An asset whose name the earliest folder already holds is moved anyway, never del
 duplicate that would still hold something (a subfolder with no match) is never deleted. Pre-images are journalled as for
 any move and delete (a deleted folder's bytes are kept).
 
+## The art layout (`art_layout`: six codes, category Asset library; v3 F7)
+
+[ADR 0070](adr/0070-v3-f7-guided-character-art.md) decision 7 (design G7). Read-only, from the bridge's asset tree and
+the snapshots (no request), per character folder (a folder under the library's top-level Characters folder that holds a
+Wardrobe, a Forms, Outfits or Details folder, or an asset named after it), against the layout: design pieces in the
+character's folder (`<Character> - <Label>`), single-piece outfits loose in `Wardrobe`, outfits of two or more pieces in
+`Wardrobe / <Outfit>` (`<Character> - <Outfit> - <Label>`).
+
+| Code                             | Finding                                                                                                                       | Propose a fix (`art_layout`, ONE proposal)                                                                      |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `art_outfit_folder_single`       | an outfit folder with one piece                                                                                               | move the piece into Wardrobe, then delete the folder (only if empty then)                                       |
+| `art_loose_outfit_pieces`        | two or more loose Wardrobe pieces of one outfit (the outfit record, else names)                                               | find or make `Wardrobe / <Outfit>`, move them in                                                                |
+| `art_legacy_folder_empty`        | an empty Forms, Outfits or Details folder                                                                                     | delete it, its empty folders first (each only if empty when the job runs)                                       |
+| `art_legacy_folder_holds_assets` | such a folder that still holds assets                                                                                         | none: where each image belongs is the owner's call                                                              |
+| `art_asset_name`                 | a name that breaks the naming rule (a loose `<Character> - <Outfit>` is valid)                                                | the rename, when certain (an extension dropped; an outfit folder's piece given its outfit); else listed         |
+| `art_stale_folder_ref`           | a line on a character's Art page naming a folder under the character's folder that no longer exists, or a deleted folder's id | the line updated (`replaceBlock` at the version read live), when the folder's new place is certain; else listed |
+
+Every fix reads its targets live first (`FIX_STALE` when they changed) and is a proposal: the bridge never moves,
+renames or deletes an asset on its own initiative. The five codes with a fix are proposal-only in the automation (Off or
+Propose, never Apply; Propose by default): see [ADR 0070](adr/0070-v3-f7-guided-character-art.md) and the Automation
+section of [dashboard.md](dashboard.md).
+
 ## Chronology: an event in a tie (`chronology_event_in_tie`; v3 F2.1)
 
 ADR 0048's F2.1 amendments. An unpaired timeline event that unpaired rows of its age's table could own (the same date, the

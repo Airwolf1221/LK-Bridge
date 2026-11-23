@@ -281,10 +281,13 @@ skips the first page's children. Cost: none.
 { "path": "Foxians", "depth": 2 }
 ```
 
-**`browse_asset_tree`** `{ folder?, depth?, includeAssets?, assetsPerFolder?, limit? }`: the same for asset folders:
+**`browse_asset_tree`** `{ folder?, depth?, includeAssets?, assetsPerFolder?, limit?, refresh? }`: the same for asset folders:
 each folder's `folderCount` and `assetCount`, subfolders to `depth`, and with `includeAssets: true` up to
 `assetsPerFolder` (20) assets per folder (name, type, dimensions, size where LegendKeeper says). `folder` is an id, a name
 or a path (`"Characters / Beastkin / Qishen"`); a name shared by several folders is `AMBIGUOUS` with their paths. Cost: none.
+**Since v3 F7** (ADR 0070, G9) `refresh: true` (needs `folder`: `REFRESH_NEEDS_FOLDER`) reads that folder and the levels
+shown LIVE first (one listing per folder; an item gone since confirmed with a `getAsset`), and the answer says so
+(`refreshed: { live, requests }`); a read that fails is `REFRESH_FAILED`.
 
 **`search`** `{ query, content?, include?, limit?, offset? }`. Syntax: words (all must match), `"quoted phrases"`, `OR`, `NOT` or a
 leading `-`, `( )`, and the filters `name:` `tag:` `type:` (Reference Type, whole words) `kind:` (`index` / `bsrc` /
@@ -1467,19 +1470,31 @@ page), and the character tool's refusals for the host (`TARGET_ARCHIVED`, a Work
 partner's index) and for the page. **Warning**: `PARTNER_LINK_DEFERRED` (a Working relationship is linked from a canon
 character only after promotion). **In the job**: `RELATIONSHIP_EXISTS`.
 
-**`arkona_add_character_art`** `{ character, images: [{ staged_id? | upload_id?, label, interpretation, subfolder? }], file?, scope?, markdown?, status?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
-reference images for an existing character. Each is placed in the character's asset folder (`Characters / <race path>
-/ <name>`, with `Forms / <form>`, `Outfits / <outfit>` or `Details` subfolders, found or created when the job runs) as
-`{name} - {label}` (no extension; numbered when taken), and on its Art page with its label and interpretation: the Art
-page (AI Character Art) is made when missing, or extended under "Reference Images" by a filler that appends to the page
-as it is inside the job's lock (nothing else on it changes; `unsupported` blocks stay). Sources: `staged_id`, `upload_id`
-(`prepare_image_upload`) or ChatGPT's attached `file` (`_meta["openai/fileParams"]: ["file"]`, for one image); an upload
-or file is staged on the bridge's server first, even on a dry run, and its `staged_id` returned. **Refusals**:
-`IMAGES_REQUIRED`, `IMAGE_SOURCE_INVALID`, `BARE_IMAGE`, `IMAGE_LABEL_INVALID`, `SUBFOLDER_INVALID`,
-`STAGED_IMAGE_NOT_FOUND`, `STAGED_IMAGE_BUSY`, `STAGED_IMAGE_TWICE`, `IMAGE_NAME_TWICE`, `IMAGE_ALREADY_IN_LIBRARY`,
-`UPLOAD_ID_UNKNOWN`, `UPLOAD_ID_USED`, `UPLOAD_NOT_RECEIVED`, `UPLOAD_EXPIRED`, `FILE_URL_EXPIRED`, `CHARACTER_NOT_FOUND`,
+**`arkona_add_character_art`** `{ character, outfit?, newOutfit?, images: [{ staged_id? | upload_id?, label, interpretation }], file?, scope?, markdown?, status?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
+reference images for an existing character. **Since v3 F7** ([ADR 0070](adr/0070-v3-f7-guided-character-art.md)): ONE
+call, ONE target. Without `outfit` (or null) the images are design pieces, in the character's own folder (`Characters /
+<race path> / <name>`), named `<name> - <label>`. With `outfit` they are that outfit's pieces, named `<name> - <outfit> -
+<label>`, and the bridge decides the folder: the character's folders are read LIVE first (one listing per folder, plus a
+`getAsset` for an item gone since; a failed read refuses with `ART_FOLDERS_UNREADABLE`), then the outfit's pieces now
+(its record, else its folder or the loose pieces named for it) plus those arriving make its total: an outfit with its
+folder takes them there; a total of 1 goes loose in `Wardrobe`; 2 or more go in `Wardrobe / <outfit>`, found or made when
+the job runs, with the loose piece moved into it in the same job (`updateAsset`, read live again before any write:
+`ART_LAYOUT_CHANGED` otherwise). The outfit is matched by its name or an owner's alias (case and spacing ignored); a close
+name is refused (`OUTFIT_NEAR_MATCH`, with the candidates) unless `newOutfit: true`. The job records the outfit (its
+pieces and folder) in the bridge's outfit record. On the Art page (AI Character Art, made when missing): design pieces
+under "Reference Images"; an outfit's under a heading naming it anywhere on the page, else a new heading under the page's
+first heading holding "Wardrobe", else a new "Wardrobe" section, placed by a filler on the page as it is inside the job's
+lock (nothing else changes; `unsupported` blocks stay); a line naming a moved piece and its old folder's path is updated
+in the same write (one naming it otherwise is listed for the owner in the step's note). Sources: `staged_id`, `upload_id`
+(`prepare_image_upload`) or ChatGPT's attached `file` (`_meta["openai/fileParams"]: ["file"]`, for ONE image: several
+images from ChatGPT are staged one by one with `upload_image { stage: true }`, then named in one call); an upload or file
+is staged on the bridge's server first, even on a dry run, and its `staged_id` returned. **Refusals**: `IMAGES_REQUIRED`,
+`IMAGE_SOURCE_INVALID`, `BARE_IMAGE`, `IMAGE_LABEL_INVALID`, `OUTFIT_NAME_INVALID` (Wardrobe, Forms, Outfits, Details, a
+"/" or a " - "), `OUTFIT_NEAR_MATCH`, `ART_FOLDERS_UNREADABLE`, `LEGACY_ART_FOLDER`, `STAGED_IMAGE_NOT_FOUND`,
+`STAGED_IMAGE_BUSY`, `STAGED_IMAGE_TWICE`, `IMAGE_NAME_TWICE`, `IMAGE_ALREADY_IN_LIBRARY`, `UPLOAD_ID_UNKNOWN`,
+`UPLOAD_ID_USED`, `UPLOAD_NOT_RECEIVED`, `UPLOAD_EXPIRED`, `FILE_URL_EXPIRED`, `CHARACTER_NOT_FOUND`,
 `CHARACTER_AMBIGUOUS`, `TARGET_ARCHIVED`, `ART_PAGE_UNREADABLE`. **In the job**: `STAGED_IMAGE_BUSY` (an image no longer
-the package's to place).
+the package's to place), `ART_LAYOUT_CHANGED`.
 
 **`arkona_character_brief`** `{ character, live?, project }` (read): who a character is, from the bridge's own tree,
 snapshots and audits, with no LegendKeeper read: the six identity fields (from the identity page's sidebar as the tree
