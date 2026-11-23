@@ -318,7 +318,7 @@ export class Audits {
   private characterPageIds(projectId: string): Set<string> {
     const out = new Set<string>();
     const q = this.d.tree.queries;
-    let lib: AssetLibrary | null = null;
+    let lib: AssetLibrary | null;
     try {
       lib = this.d.assetLibrary?.(projectId) ?? null;
     } catch {

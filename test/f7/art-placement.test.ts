@@ -109,8 +109,8 @@ describe('G1/G2: one call, one target, the bridge decides the folder', () => {
     // G5: a line on another of Nadira's pages (her Core, under her index) names the loose piece's location.
     const loose = 'Nadira al-Khalid - Silk Robe - Outfit Reference - Front';
     const coreDoc = w.repo.liveDocs(w.repo.res.get(C.nadira)!).find((d) => d.name === 'Main')!;
-    if (!w.repo.blocks.get(coreDoc.id)) w.repo.blocks.set(coreDoc.id, { version: 1, blocks: [] } as never);
-    const coreBlocks = w.repo.blocks.get(coreDoc.id)!.blocks as unknown[];
+    if (!w.repo.blocks.get(coreDoc.id)) w.repo.blocks.set(coreDoc.id, { version: 1, blocks: [] });
+    const coreBlocks = w.repo.blocks.get(coreDoc.id)!.blocks;
     coreBlocks.push({
       id: 'f7line01',
       kind: 'paragraph',

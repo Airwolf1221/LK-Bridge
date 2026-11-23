@@ -165,7 +165,7 @@ describe('G7: audit → automation → proposals (mock LegendKeeper)', () => {
         },
         { id: 'f7stale2', kind: 'paragraph', content: [{ text: 'Older art sat in folder afqishe1.' }] },
       ],
-    } as never);
+    });
     // A complete snapshot first (the audit's pages); the art below is added after it (the mock serves no bytes for
     // it), and the audit reads the asset library from the asset tree, not the snapshot.
     await w.stack.runtime.snapshots.full(PROJECT, 'manual');

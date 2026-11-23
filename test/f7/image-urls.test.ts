@@ -36,7 +36,8 @@ const expireThrottle = () =>
     PROJECT,
     Date.now() - URL_REFRESH_MS - 1,
   );
-const codeOf = (r: { body: Record<string, any> }) => r.body.error?.code ?? r.body.code;
+const codeOf = (r: { body: Record<string, unknown> }): unknown =>
+  (r.body.error as { code?: unknown } | undefined)?.code ?? r.body.code;
 
 describe('G11: the image URL check', () => {
   it('the Markdown image syntax', () => {
