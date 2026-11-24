@@ -76,6 +76,18 @@ const ROUTES: Record<string, Route> = {
   'PUT /api/admin/settings/contact-email': { kind: 'asks', body: { value: null, confirm: true } },
   'PUT /api/admin/settings/journal-retention': { kind: 'asks', body: { value: null, confirm: true } },
   'PUT /api/admin/settings/tier-limits': { kind: 'asks', body: { value: null, confirm: true } },
+  // v3 F8 (ADR 0073): every registry setting's edit and reset, and "Restart the bridge", ask (as F7's settings do).
+  'PUT /api/admin/settings/config/:key': {
+    kind: 'asks',
+    params: { key: 'IMAGE_MAX_PIXELS' },
+    body: { value: 2000, confirm: true },
+  },
+  'POST /api/admin/settings/config/:key/reset': {
+    kind: 'asks',
+    params: { key: 'IMAGE_MAX_PIXELS' },
+    body: { confirm: true },
+  },
+  'POST /api/admin/bridge/restart': { kind: 'asks', body: { confirm: true } },
   // ---- maintenance
   'POST /api/admin/maintenance/assign-block-ids-sweep/dry-run': { kind: 'one-click' },
   'PUT /api/admin/maintenance/assign-block-ids-sweep/override': { kind: 'conditional' },

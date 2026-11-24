@@ -500,6 +500,25 @@ delivery. **What to look for:**
 Clean-up: the throwaway asset folder and page, in the check's `finally` and the test file's `afterAll`. On the mock:
 `test/sandbox-mock/f7b-art.test.ts`.
 
+## The Compact Reference becomes the Character Core (v3 F7.1)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7-1-core` (`f7-1-core.ts`; ADR 0072).
+WRITES, then cleans up (about 22 writes and 45 reads). C0 the Arkona pack attached, the asset tree built, and **the pack's
+governance current in the temporary database**: on the server the pack reads its six governance sources from project
+`arkona`, which a sandbox runtime never registers (it holds the sandbox project's key only), so the check points them at
+a throwaway governance page `lk-bridge f7.1 governance Probe <Letters>` under the AI REPOSITORY, in the TEMPORARY
+database only, and approves the pack there, as `identity-f5c`'s I1 does (`governance.ts`, `ensureSandboxGovernance`).
+C0's line says which happened. Without this, C1 failed PACK_NOT_CURRENT ("project arkona is not registered", the live
+run of 23 November 2026). C1 a throwaway Working compact character; C2 one art piece; C3 read back live and printed as
+`F7.1 CORE …`. Clean-up: the throwaway index (or Reference), the character's asset folder and the governance page. On the
+mock: `test/sandbox-mock/f7-1-core.test.ts`, and `test/sandbox-mock/pack-governance.test.ts` with the governance in
+`arkona`, as on the server.
+
+**Any check that runs a pack's tag-computing tools** (`arkona_create_*`, `arkona_identity_reconcile`, `arkona_rename`,
+`arkona_split_owner`, `arkona_retag_apply`) on a copy of the bridge's state must opt in the same way, or point the
+governance itself; `copyBridgeState`'s report lists, in `governanceMissing`, each pack whose sources are in a project
+this runtime does not register, and `pack-governance.test.ts` fails a check that opts in to neither.
+
 ## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
 
 Each check's steps are an exported runner beside its thin `.test.ts` wrapper (the wrapper is the real run, unchanged in
@@ -524,6 +543,7 @@ always skips it and the run asserts its reason (the smoke's (c)).
 | snapshots                      | `test/snapshots/sandbox-dryrun.test.ts`                     |
 | split-ids, assign-block-ids    | `test/sandbox-mock/split-ids.test.ts`, `…assign-block-ids…` |
 | f7-art                         | `test/sandbox-mock/f7-art.test.ts`                          |
+| f7-1-core                      | `test/sandbox-mock/f7-1-core.test.ts`, `…/pack-governance…` |
 
 The mock answers as LegendKeeper does only with its **faithful** setting on (`test/sandbox-mock/faithful.ts`, which
 these runs turn on and nothing else does): each behaviour there names the owner's run or the part of the spec it comes

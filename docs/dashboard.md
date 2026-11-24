@@ -351,7 +351,7 @@ every route that changes a setting, a scope or a key, and of approving a proposa
 | Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk` (`action`: `approve`, `reject`, or `approve-as-canon` with `{ confirm: true }`; at most 1,000 ids since v3 F5a; a proposal whose job is running is passed over, `PROPOSAL_RUNNING`), v3 F5a: the list's `tool` and `olderThanHours` filters and `total`, `POST /proposals/bulk-matching` (`{ action: approve or reject, filter, expect, confirm: true }`: every proposal the filter matches, refused with `PROPOSALS_CHANGED` when the count changed) |
 | Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/profiles/:id/rails` (`{ rails, confirm: true }`, v3 F3.4) ‡, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /settings/config`, `PUT /settings/config/:key`, `POST /settings/config/:key/reset`, `POST /bridge/restart`, `GET /audit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Maintenance | `GET /maintenance` (v2 E5.1: per-project jobs with `projects` and `runningProjectId`), `GET /maintenance/:id` (with history; `?project=` narrows it), `POST /maintenance/:id/enable\|disable\|run` (`run` takes an optional `project`, v2 E5.1), `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md)); v3 F3.5: `GET /maintenance/assign-block-ids-sweep/card`, `POST …/dry-run`, `PUT …/override` (on: re-authentication), `PUT …/limit`                                                                                                                                                                                                                                                                                                                                                   |
 | Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md))                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Registry †  | `GET /registry`, `POST /registry/types\|seed-character\|templates/refresh`, `GET\|PUT /registry/types/:id`, `POST /registry/types/:id/delete`, `GET /registry/types/:id/taxonomy`, `POST /registry/types/:id/taxonomy/seed\|add-missing`, `PUT /registry/taxonomy/:id`, `POST /registry/taxonomy/:id/delete`, `GET /registry/drift`, `POST /registry/drift/run`, `GET /registry/try/resolve\|placement\|ordering`, `GET /registry/out-of-order` (v2 A3, [docs/registry.md](registry.md))                                                                                                                                                                                                                                                                                                                                |
@@ -1138,17 +1138,59 @@ data is `{ "at": <ms>, "data": … }`.
 
 ## Settings and when they apply
 
+Since v3 F8 ([ADR 0073](adr/0073-v3-f8-every-setting-on-the-dashboard.md)) the Settings page lists **every setting the
+bridge reads**, from the settings registry (`src/config/registry.ts`), one section per group (General; Images and
+uploads; Art; Jobs and engine; Governor and budgets; Proposals and policy; Audits and automation; Snapshots, backups and
+the journal; MCP and tools; Dashboard and auth; Per-project settings; Server (bootstrap); Secrets), with a search box
+over labels and variable names. Each setting shows its label and variable, a description, its effective value in its
+display unit (bytes as MB or GB, milliseconds as seconds, counts as they are), where that value comes from (default,
+environment, or _saved here_), its range and default, and how a change applies:
+
+- **Precedence**: a value saved here wins over the environment's, which wins over the default. It is applied where
+  the configuration is loaded (`src/config/effective.ts`, at start), so every component sees the effective value.
+- **Applies at once** (`now`): read on each use, so a change works immediately: read-only mode, writer slots, reserve
+  floors, the contact email (as before F8), and the image limits and timeouts, the staging and snapshot retention and
+  free-disk floors, and the largest inline tool result (the tool settings' getters, `src/config/live.ts`).
+- **Applies at the next restart** (`next_start`): built into a component at start; shown _pending restart_ with the
+  value running now until then.
+- **Changed on the server** (bootstrap): could stop the bridge starting, or is fixed by systemd, the filesystem or the
+  reverse proxy, or is read before the database opens (the list and the reasons are in ADR 0073). Shown with its value
+  and "Change on the server: the env file, via env-sync"; the API refuses an edit (`SETTING_BOOTSTRAP`).
+- **Secrets** (keys, tokens, signing keys, password and authenticator material): the name and _set_ or _not set_ only,
+  with a link to where each is managed (the Projects page, the Account page, or env-sync). No route returns a value.
+- **Per project** (the Projects page's settings, such as `imageStagingMaxDays`): listed with their defaults and a link.
+
+**Edit** (validated against the registry: range, whole numbers, choices, and every loader that reads the setting, so a
+rule between two settings is checked too; an amount in the display unit must convert exactly) and **Reset** (back to
+the environment's value, or the default) ask for confirmation and the step-up. Every change is in **Recent changes**
+with its old and new value and source (`settings.config`, `settings.config_reset`; the settings that existed before F8
+keep their own audit lines).
+
+The settings that existed before F8 keep their stored keys (`dash.expose_per_op_tools`, `dash.allow_member_admin`,
+`dash.journal_retention`, `dash.tier_limits`, `dash.contact_email`, `dash.reserve_floors`, and the engine's
+`jobs.read_only_override` and `jobs.writers_max`), their routes and their behaviour; the read-only card (switching it on
+is one click) and the tier limit table stay as they were. Every other value is stored as `dash.cfg.<KEY>`. A stored
+value that no longer loads with the environment is left out at start and named at the top of the page.
+
 | Setting                                                                                     | Applies                                                            |
 | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Read-only mode (follow environment, on, off)                                                | At once (the engine's own override)                                |
 | `WRITERS_MAX`, pause, drain                                                                 | At once                                                            |
 | Reserve floors                                                                              | At once (`governor.setReserveFloors`); also applied at every start |
+| The registry's `now` settings (above)                                                       | At once (read on each use)                                         |
 | Per-operation tool exposure, member administration, journal retention, tier limit overrides | **At the next start.**                                             |
+| Every other editable setting                                                                | **At the next start.**                                             |
 
-The last group is built into components when the bridge starts (the tool list, the policy gate, the governor's windows).
-They are stored in `runtime_settings` (`dash.*` keys) and applied by `applyStoredSettings` when the runtime is built; the
-Settings page shows _pending restart_ until they match what is running. Clearing a stored value goes back to the
-environment's. A stored value that no longer validates is ignored.
+### Restart the bridge
+
+The **Restart the bridge** card says how many settings are pending a restart. Its button (confirmation and the step-up)
+runs the SIGTERM stop the bridge already has: no new tool calls or requests (answered 503 `BRIDGE_RESTARTING`), each
+running job parked at its next step boundary, waits ended, HTTP and the database closed; then the process exits with
+code **75**, which systemd restarts (`Restart=on-failure`; 75 is not a clean exit). The log says "restart requested by
+the owner" before the exit, and the next start records `bridge.restarted` ("restarted at the owner's request"), which
+the card shows. Outside systemd (no `INVOCATION_ID` in the bridge's environment) the button is disabled and says why.
+Optionally, `RestartForceExitStatus=75` in the unit's `[Service]` section restarts it whatever `Restart=` says
+(docs/runbook-deploy.md); the button works without it.
 
 ## Request Budgets: learned operation limits (v2 E5.5)
 

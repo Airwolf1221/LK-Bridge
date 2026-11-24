@@ -1,76 +1,112 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { Badge, Button, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
-import { fmtTime, fmtBytes } from '../format';
+import { fmtTime } from '../format';
 import { useApi, useReloadOn } from '../hooks';
 import { Link } from '../router';
-import type { AuditEntry, SettingsView } from '../types';
+import type { AuditEntry, ConfigEntry, ConfigView, SettingsView } from '../types';
 
 type Tri = 'env' | 'on' | 'off';
 const toTri = (v: boolean | null): Tri => (v === null ? 'env' : v ? 'on' : 'off');
 const fromTri = (t: Tri): boolean | null => (t === 'env' ? null : t === 'on');
 
-/** Every change here asks for confirmation, is sent with `confirm: true`, and is written to the audit log. */
+const DOCS = 'https://github.com/Airwolf1221/LK-Bridge/blob/main';
+
+/**
+ * v3 F8 (ADR 0073): every setting the bridge reads, by group, from the settings registry. Each shows its effective
+ * value, where it comes from, its range and unit and how a change applies. Edit and Reset ask for confirmation and the
+ * step-up, and every change is in Recent changes with its old and new value. Bootstrap settings are shown read-only;
+ * secrets only as set or not set.
+ */
 export function SettingsPage() {
   const s = useApi<{ settings: SettingsView }>('/settings');
+  const c = useApi<ConfigView>('/settings/config');
   const audit = useApi<{ entries: AuditEntry[] }>('/audit?limit=15');
+  const [query, setQuery] = useState('');
   useReloadOn(
     ['policy'],
     () => {
       s.reload();
+      c.reload();
       audit.reload();
     },
     300,
   );
-  if (s.error) return <ErrorNote error={s.error} onRetry={s.reload} />;
-  if (!s.data) return <Loading />;
-  const v = s.data.settings;
   const saved = () => {
     s.reload();
+    c.reload();
     audit.reload();
   };
+  const q = query.trim().toLowerCase();
+  const shown = useMemo(
+    () =>
+      (c.data?.entries ?? []).filter(
+        (e) => q === '' || e.key.toLowerCase().includes(q) || e.label.toLowerCase().includes(q),
+      ),
+    [c.data, q],
+  );
+  if (s.error) return <ErrorNote error={s.error} onRetry={s.reload} />;
+  if (c.error) return <ErrorNote error={c.error} onRetry={c.reload} />;
+  if (!s.data || !c.data) return <Loading />;
+  const v = s.data.settings;
+  const cfg = c.data;
   return (
     <>
       <PageHeader title="Settings" />
       <p className="muted">
-        Changes are saved in the bridge’s database and audited. Some apply at once; others are built into the
-        bridge when it starts, so they show as <em>pending</em> until the next restart.
+        Every setting the bridge reads. A value saved here wins over the environment’s, which wins over the
+        default. Some apply at once; others are built into the bridge when it starts, so they show as{' '}
+        <em>pending</em> until the next restart. Bootstrap settings and secrets are changed on the server.
       </p>
+      <RestartCard cfg={cfg} onSaved={saved} />
       <ReadOnlyCard v={v} onSaved={saved} />
-      <BoolCard
-        id="per-op"
-        title="Per-operation tools"
-        path="/settings/expose-per-op-tools"
-        d={v.exposePerOpTools}
-        onSaved={saved}
-        help="Also expose one MCP tool per LegendKeeper operation (89 more). Off keeps the tool list short for claude.ai."
-        confirmText={(on) =>
-          on === null
-            ? 'Go back to the environment’s value?'
-            : on
-              ? 'Expose all 89 operations as separate tools after the next restart?'
-              : 'Hide the per-operation tools after the next restart?'
-        }
-      />
-      <BoolCard
-        id="member-admin"
-        title="Member administration"
-        path="/settings/member-admin"
-        d={v.memberAdmin}
-        onSaved={saved}
-        danger
-        help="Allows inviting and removing project members and revoking invites. Off, those operations are refused for every agent."
-        confirmText={(on) =>
-          on === null
-            ? 'Go back to the environment’s value?'
-            : on
-              ? 'Allow member and invite administration after the next restart? Agents at the “write” scope could then remove people from your project.'
-              : 'Refuse member and invite administration after the next restart?'
-        }
-      />
-      <JournalCard v={v} onSaved={saved} />
-      <ContactCard v={v} onSaved={saved} />
-      <TierCard v={v} onSaved={saved} />
+      <div className="row mt">
+        <label htmlFor="settings-search">Search settings</label>
+        <input
+          id="settings-search"
+          type="search"
+          placeholder="A name or a variable, e.g. upload or IMAGE_MAX"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {q !== '' && <span className="muted small-text">{shown.length} found</span>}
+      </div>
+      {cfg.dropped.length > 0 && (
+        <p className="note note-bad" role="alert">
+          Saved here but left out at this start (they no longer load with the environment):{' '}
+          {cfg.dropped.join(', ')}.
+        </p>
+      )}
+      {cfg.groups.map((g) => {
+        const entries = shown.filter((e) => e.group === g.id);
+        if (entries.length === 0) return null;
+        return (
+          <section key={g.id} className="card" aria-labelledby={`grp-${g.id}-h`}>
+            <h2 id={`grp-${g.id}-h`}>{g.label}</h2>
+            {g.id === 'server' && (
+              <p className="muted small-text">
+                These could stop the bridge starting, or are fixed by systemd, the filesystem or the reverse
+                proxy. Change on the server: the env file, via env-sync.
+              </p>
+            )}
+            {g.id === 'projects' && (
+              <p className="muted small-text">
+                Set for each project on the <Link to="/projects">Projects</Link> page. The defaults are shown
+                here.
+              </p>
+            )}
+            <ul className="plain config-list">
+              {entries.map((e) => (
+                <li key={e.key}>
+                  <SettingRow e={e} onSaved={saved} />
+                  {e.key === 'LK_TIER_LIMITS' && <TierCard v={v} onSaved={saved} />}
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
+      {shown.length === 0 && <p className="muted">No setting matches “{query}”.</p>}
       <section className="card" aria-labelledby="audit-h">
         <h2 id="audit-h">Recent changes</h2>
         {!audit.data ? (
@@ -85,7 +121,9 @@ export function SettingsPage() {
                   <th>When</th>
                   <th>Who</th>
                   <th>Action</th>
-                  <th>Target</th>
+                  <th>Setting</th>
+                  <th>Before</th>
+                  <th>After</th>
                 </tr>
               </thead>
               <tbody>
@@ -95,6 +133,8 @@ export function SettingsPage() {
                     <td>{e.actor}</td>
                     <td className="mono">{e.action}</td>
                     <td className="mono small-text">{e.target ?? '–'}</td>
+                    <td className="mono small-text">{brief(e.before)}</td>
+                    <td className="mono small-text">{brief(e.after)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -106,8 +146,341 @@ export function SettingsPage() {
   );
 }
 
-function PendingBadge({ pending }: { pending: boolean }) {
-  return pending ? <Badge tone="warn">pending restart</Badge> : null;
+/** An audit row's before or after, short. */
+function brief(v: unknown): string {
+  if (v === null || v === undefined) return '–';
+  if (typeof v === 'object' && v !== null && 'value' in v) {
+    const o = v as { value: unknown; source?: unknown };
+    return `${JSON.stringify(o.value)}${typeof o.source === 'string' ? ` (${o.source})` : ''}`;
+  }
+  const t = JSON.stringify(v);
+  return t.length > 120 ? `${t.slice(0, 119)}…` : t;
+}
+
+const APPLIES: Record<ConfigEntry['applies'], string> = {
+  now: 'Applies at once',
+  next_start: 'Applies at the next restart',
+  bootstrap: 'Changed on the server',
+};
+
+const SOURCE: Record<NonNullable<ConfigEntry['source']>, string> = {
+  default: 'default',
+  environment: 'environment',
+  dashboard: 'saved here',
+};
+
+/** A value in the entry's display unit, for showing. */
+function shownValue(e: ConfigEntry, value: unknown): string {
+  if (value === null || value === undefined || value === '') return 'not set';
+  if (typeof value === 'boolean') return value ? 'on' : 'off';
+  if (typeof value === 'number' && e.unit) {
+    const n = Math.round((value / e.unit.factor) * 1e6) / 1e6;
+    return `${n.toLocaleString('en-GB', { maximumFractionDigits: 6 })}${e.unit.display ? ` ${e.unit.display}` : ''}`;
+  }
+  if (typeof value === 'number') return value.toLocaleString('en-GB');
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
+}
+
+function rangeText(e: ConfigEntry): string | null {
+  if (e.enum) return e.enum.join(', ');
+  if (e.min === null && e.max === null) return null;
+  const u = e.unit;
+  const f = (n: number) =>
+    (u ? Math.round((n / u.factor) * 1e6) / 1e6 : n).toLocaleString('en-GB', { maximumFractionDigits: 6 });
+  const unit = u?.display ? ` ${u.display}` : '';
+  if (e.max === null) return `at least ${f(e.min!)}${unit}`;
+  if (e.min === null) return `at most ${f(e.max)}${unit}`;
+  return `${f(e.min)} to ${f(e.max)}${unit}`;
+}
+
+function ManagedLink({ m }: { m: NonNullable<ConfigEntry['managedAt']> }) {
+  return m.href.startsWith('/ui/') ? (
+    <Link to={m.href.slice(3)}>{m.label}</Link>
+  ) : (
+    <a href={`${DOCS}/${m.href}`} target="_blank" rel="noreferrer">
+      {m.label}
+    </a>
+  );
+}
+
+function SettingRow({ e, onSaved }: { e: ConfigEntry; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const id = `set-${e.key}`;
+  return (
+    <div className="setting" role="group" aria-labelledby={`${id}-label`}>
+      <div className="row row-between">
+        <div>
+          <strong id={`${id}-label`}>{e.label}</strong> <code className="small-text">{e.key}</code>
+        </div>
+        <span className="row">
+          {e.secret ? (
+            <Badge tone={e.isSet ? 'ok' : 'neutral'}>{e.isSet ? 'set' : 'not set'}</Badge>
+          ) : (
+            <>
+              <span className="mono" aria-label={`${e.label}: value`}>
+                {shownValue(e, e.value)}
+              </span>
+              {e.source && (
+                <Badge tone={e.source === 'dashboard' ? 'info' : 'neutral'}>{SOURCE[e.source]}</Badge>
+              )}
+            </>
+          )}
+          {e.pendingRestart && <Badge tone="warn">pending restart</Badge>}
+        </span>
+      </div>
+      <p className="muted small-text">{e.description}</p>
+      <p className="muted small-text">
+        {rangeText(e) && <>Range: {rangeText(e)}. </>}
+        {!e.secret && e.default !== null && e.default !== undefined && (
+          <>Default: {shownValue(e, e.default)}. </>
+        )}
+        {APPLIES[e.applies]}.
+        {e.pendingRestart && e.running !== undefined && <> Running now: {shownValue(e, e.running)}.</>}
+        {e.projectSetting && e.editedOn === 'settings' && (
+          <>
+            {' '}
+            Each project can set its own on the <Link to="/projects">Projects</Link> page.
+          </>
+        )}
+      </p>
+      {e.secret ? (
+        <p className="small-text">
+          Secret: never shown here.{e.setIn ? ` Set in the ${e.setIn}.` : ''} Managed on{' '}
+          {e.managedAt && <ManagedLink m={e.managedAt} />}.
+        </p>
+      ) : e.editedOn === 'server' ? (
+        <p className="small-text">
+          Change on the server: the env file, via env-sync.
+          {e.bootstrapReason && <span className="muted"> Why: {e.bootstrapReason}</span>}
+          {e.managedAt && e.managedAt.href.startsWith('/ui/') && (
+            <>
+              {' '}
+              See <ManagedLink m={e.managedAt} />.
+            </>
+          )}
+        </p>
+      ) : e.editedOn === 'projects' ? (
+        <p className="small-text">
+          Set per project on <Link to="/projects">the Projects page</Link>.
+        </p>
+      ) : e.key === 'LK_READ_ONLY' ? (
+        <p className="small-text">Changed with the Read-only mode card at the top of this page.</p>
+      ) : e.key === 'LK_TIER_LIMITS' ? null : editing ? (
+        <EditForm e={e} onDone={() => setEditing(false)} onSaved={onSaved} />
+      ) : (
+        <div className="row">
+          <Button className="small" onClick={() => setEditing(true)} aria-label={`Edit ${e.label}`}>
+            Edit
+          </Button>
+          {e.source === 'dashboard' && <ResetButton e={e} onSaved={onSaved} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResetButton({ e, onSaved }: { e: ConfigEntry; onSaved: () => void }) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const back = e.environment !== null && e.environment !== undefined ? e.environment : e.default;
+  return (
+    <Button
+      className="small"
+      busy={busy}
+      aria-label={`Reset ${e.label}`}
+      onClick={() => {
+        void confirm({
+          title: `Reset “${e.label}”?`,
+          message: (
+            <p>
+              Back to the{' '}
+              {e.environment !== null && e.environment !== undefined ? 'environment’s value' : 'default'}:{' '}
+              {shownValue(e, back)}. {APPLIES[e.applies]}.
+            </p>
+          ),
+          confirmLabel: 'Reset',
+        }).then((ok) => {
+          if (ok)
+            void run(
+              () => api.post(`/settings/config/${e.key}/reset`, { confirm: true }),
+              `${e.label} reset.`,
+            ).then(onSaved);
+        });
+      }}
+    >
+      Reset
+    </Button>
+  );
+}
+
+/** The value as typed into the form, in the display unit. */
+function initialText(e: ConfigEntry): string {
+  const v = e.value;
+  if (typeof v === 'number' && e.unit) return String(Math.round((v / e.unit.factor) * 1e6) / 1e6);
+  if (v === null || v === undefined) return '';
+  return typeof v === 'string' ? v : JSON.stringify(v);
+}
+
+function EditForm({ e, onDone, onSaved }: { e: ConfigEntry; onDone: () => void; onSaved: () => void }) {
+  const [text, setText] = useState(initialText(e));
+  const [flag, setFlag] = useState(e.value === true);
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const id = `edit-${e.key}`;
+  const numeric = e.type === 'integer' || e.type === 'number';
+  const amount = Number(text);
+  const problem = (() => {
+    if (!numeric) return e.type === 'boolean' || text.trim() !== '' ? null : 'Enter a value, or use Reset.';
+    if (text.trim() === '' || !Number.isFinite(amount)) return 'Enter a number.';
+    const base = e.unit ? amount * e.unit.factor : amount;
+    if (e.min !== null && base < e.min - 1e-9) return `At least ${rangeText(e)}.`;
+    if (e.max !== null && base > e.max + 1e-9) return `Within ${rangeText(e)}.`;
+    if (e.integer && Math.abs(base - Math.round(base)) > 1e-6 * Math.max(1, Math.abs(base)))
+      return `Must come to a whole number of ${e.unit?.base ?? 'units'}.`;
+    return null;
+  })();
+  const body = (): Record<string, unknown> =>
+    e.type === 'boolean'
+      ? { value: flag }
+      : numeric
+        ? e.unit
+          ? { amount, unit: e.unit.display }
+          : { value: amount }
+        : { value: text.trim() };
+  const shown =
+    e.type === 'boolean'
+      ? flag
+        ? 'on'
+        : 'off'
+      : numeric
+        ? `${text}${e.unit?.display ? ` ${e.unit.display}` : ''}`
+        : text.trim();
+  return (
+    <form
+      className="field-row"
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        if (problem) return;
+        void confirm({
+          title: `Change “${e.label}”?`,
+          message: (
+            <p>
+              Set {e.key} to {shown}. {APPLIES[e.applies]}
+              {e.applies === 'next_start' ? ': it shows as pending until then' : ''}.
+            </p>
+          ),
+          confirmLabel: 'Save',
+        }).then((ok) => {
+          if (ok)
+            void run(
+              () => api.put(`/settings/config/${e.key}`, { ...body(), confirm: true }),
+              `${e.label} saved.`,
+            ).then((r) => {
+              if (r !== undefined) {
+                onDone();
+                onSaved();
+              }
+            });
+        });
+      }}
+    >
+      {e.type === 'boolean' ? (
+        <label className="inline" htmlFor={id}>
+          <input id={id} type="checkbox" checked={flag} onChange={(ev) => setFlag(ev.target.checked)} /> On
+        </label>
+      ) : e.enum ? (
+        <div>
+          <label htmlFor={id}>New value</label>
+          <select id={id} value={text} onChange={(ev) => setText(ev.target.value)}>
+            {e.enum.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : (
+        <div>
+          <label htmlFor={id}>New value{e.unit?.display ? ` (${e.unit.display})` : ''}</label>
+          <input
+            id={id}
+            inputMode={numeric ? 'decimal' : 'text'}
+            size={numeric ? 10 : 40}
+            value={text}
+            onChange={(ev) => setText(ev.target.value)}
+          />
+        </div>
+      )}
+      <Button variant="primary" busy={busy} disabled={problem !== null} type="submit">
+        Save
+      </Button>
+      <Button onClick={onDone}>Cancel</Button>
+      {problem && text.trim() !== '' && (
+        <p className="note note-bad small-text" role="alert">
+          {problem}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/** S7: "N settings pending a restart", and the button (step-up, confirmation, then the bridge drains and exits 75). */
+function RestartCard({ cfg, onSaved }: { cfg: ConfigView; onSaved: () => void }) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const r = cfg.restart;
+  const n = cfg.pendingRestart;
+  return (
+    <section className="card" aria-labelledby="restart-h">
+      <div className="row row-between">
+        <h2 id="restart-h">Restart the bridge</h2>
+        <Badge tone={n > 0 ? 'warn' : 'ok'}>
+          {n === 1 ? '1 setting pending a restart' : `${n} settings pending a restart`}
+        </Badge>
+      </div>
+      <p className="muted small-text">
+        The bridge stops taking new tool calls, lets running job steps finish or parks them for the next
+        start, saves everything, then exits for systemd to start it again (about 10 seconds). Agents are told
+        to try again in a minute.
+      </p>
+      {r.last && (
+        <p className="small-text">
+          Last restarted at the owner’s request: {fmtTime(r.last.requestedAt)}
+          {r.last.backAt ? `, back at ${fmtTime(r.last.backAt)}` : ''}.
+        </p>
+      )}
+      <Button
+        variant="primary"
+        busy={busy}
+        disabled={!r.available}
+        onClick={() => {
+          void confirm({
+            title: 'Restart the bridge?',
+            message: (
+              <p>
+                {n > 0
+                  ? `${n === 1 ? 'The pending setting applies' : `The ${n} pending settings apply`} when it is back. `
+                  : ''}
+                Running work is kept and continues by itself.
+              </p>
+            ),
+            confirmLabel: 'Restart',
+            danger: true,
+          }).then((ok) => {
+            if (ok)
+              void run(
+                () => api.post('/bridge/restart', { confirm: true }),
+                'The bridge is restarting. This page reconnects when it is back.',
+              ).then(onSaved);
+          });
+        }}
+      >
+        Restart the bridge
+      </Button>
+      {!r.available && r.reason && <p className="muted small-text">{r.reason}</p>}
+    </section>
+  );
 }
 
 function ReadOnlyCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
@@ -177,181 +550,6 @@ function ReadOnlyCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) 
   );
 }
 
-function BoolCard({
-  id,
-  title,
-  path,
-  d,
-  help,
-  confirmText,
-  onSaved,
-  danger,
-}: {
-  id: string;
-  title: string;
-  path: string;
-  d: SettingsView['exposePerOpTools'];
-  help: ReactNode;
-  confirmText: (value: boolean | null) => string;
-  onSaved: () => void;
-  danger?: boolean;
-}) {
-  const { run, busy } = useAction();
-  const confirm = useConfirm();
-  const wanted = d.stored ?? d.environment;
-  const save = (value: boolean | null) =>
-    void confirm({
-      title: `Change “${title}”?`,
-      message: <p>{confirmText(value)}</p>,
-      confirmLabel: 'Save',
-      danger: danger === true && value === true,
-    }).then((ok) => {
-      if (ok) void run(() => api.put(path, { value, confirm: true }), `${title} saved.`).then(onSaved);
-    });
-  return (
-    <section className="card" aria-labelledby={`${id}-h`}>
-      <div className="row row-between">
-        <h2 id={`${id}-h`}>{title}</h2>
-        <span className="row">
-          <Badge tone={d.running ? 'ok' : 'neutral'}>{d.running ? 'on now' : 'off now'}</Badge>
-          <PendingBadge pending={d.pendingRestart} />
-        </span>
-      </div>
-      <p className="muted small-text">{help}</p>
-      <div className="row">
-        <label className="inline" htmlFor={`${id}-toggle`}>
-          <input
-            id={`${id}-toggle`}
-            type="checkbox"
-            checked={wanted}
-            disabled={busy}
-            onChange={(e) => save(e.target.checked)}
-          />{' '}
-          Enabled
-        </label>
-        <span className="muted small-text">
-          environment: {d.environment ? 'on' : 'off'}
-          {d.stored !== null ? ' · saved in the dashboard' : ''}
-        </span>
-        {d.stored !== null && (
-          <Button className="small" busy={busy} onClick={() => save(null)}>
-            Use the environment’s value
-          </Button>
-        )}
-      </div>
-      <p className="muted small-text">Applies at the next restart.</p>
-    </section>
-  );
-}
-
-function JournalCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
-  const d = v.journalRetention;
-  const cur = d.stored ?? d.environment;
-  const gb = (b: number) => String(Math.round((b / 1024 ** 3) * 100) / 100);
-  const [days, setDays] = useState(String(cur.retentionDays));
-  const [size, setSize] = useState(gb(cur.maxBytes));
-  // Follow the saved values when they change (after a save, or another tab's), but not on the first render: the state
-  // already holds them, and a late first sync would overwrite whatever the owner typed before effects ran.
-  const synced = useRef({ days: cur.retentionDays, bytes: cur.maxBytes });
-  useEffect(() => {
-    if (synced.current.days === cur.retentionDays && synced.current.bytes === cur.maxBytes) return;
-    synced.current = { days: cur.retentionDays, bytes: cur.maxBytes };
-    setDays(String(cur.retentionDays));
-    setSize(gb(cur.maxBytes));
-  }, [cur.retentionDays, cur.maxBytes]);
-  const { run, busy } = useAction();
-  const confirm = useConfirm();
-  const value = { retentionDays: Number(days), maxBytes: Math.round(Number(size) * 1024 ** 3) };
-  const valid =
-    Number.isInteger(value.retentionDays) &&
-    value.retentionDays >= 1 &&
-    value.retentionDays <= 3650 &&
-    value.maxBytes >= 1024 ** 2;
-  return (
-    <section className="card" aria-labelledby="jr-h">
-      <div className="row row-between">
-        <h2 id="jr-h">Journal retention</h2>
-        <PendingBadge pending={d.pendingRestart} />
-      </div>
-      <p className="muted small-text">
-        How long the write journal is kept, and its size cap. Running now: {d.running.retentionDays} days or{' '}
-        {fmtBytes(d.running.maxBytes)}. Applies at the next restart.
-      </p>
-      <div className="field-row">
-        <div>
-          <label htmlFor="jr-days">Keep for (days)</label>
-          <input
-            id="jr-days"
-            inputMode="numeric"
-            size={6}
-            value={days}
-            onChange={(e) => setDays(e.target.value)}
-          />
-        </div>
-        <div>
-          <label htmlFor="jr-size">Size cap (GB)</label>
-          <input
-            id="jr-size"
-            inputMode="decimal"
-            size={6}
-            value={size}
-            onChange={(e) => setSize(e.target.value)}
-          />
-        </div>
-        <Button
-          variant="primary"
-          busy={busy}
-          disabled={!valid}
-          onClick={() => {
-            void confirm({
-              title: 'Change journal retention?',
-              message: (
-                <p>
-                  Keep {value.retentionDays} days or {fmtBytes(value.maxBytes)}, whichever comes first, after
-                  the next restart. Shorter retention deletes older undo information.
-                </p>
-              ),
-              confirmLabel: 'Save',
-            }).then((ok) => {
-              if (ok)
-                void run(
-                  () => api.put('/settings/journal-retention', { value, confirm: true }),
-                  'Journal retention saved.',
-                ).then(onSaved);
-            });
-          }}
-        >
-          Save
-        </Button>
-        {d.stored && (
-          <Button
-            busy={busy}
-            onClick={() => {
-              void confirm({
-                title: 'Use the environment’s retention?',
-                message: (
-                  <p>
-                    {d.environment.retentionDays} days or {fmtBytes(d.environment.maxBytes)}.
-                  </p>
-                ),
-                confirmLabel: 'Reset',
-              }).then((ok) => {
-                if (ok)
-                  void run(
-                    () => api.put('/settings/journal-retention', { value: null, confirm: true }),
-                    'Journal retention reset.',
-                  ).then(onSaved);
-              });
-            }}
-          >
-            Reset
-          </Button>
-        )}
-      </div>
-    </section>
-  );
-}
-
 function TierCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
   const t = v.tierLimits;
   const fromStored = () =>
@@ -375,13 +573,12 @@ function TierCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
   );
   const valid = Object.values(overrides).every((n) => Number.isInteger(n) && n > 0);
   return (
-    <section className="card" aria-labelledby="tl-h">
+    <div className="subcard" role="region" aria-labelledby="tl-h">
       <div className="row row-between">
-        <h2 id="tl-h">Tier limit overrides</h2>
-        <PendingBadge pending={t.pendingRestart} />
+        <h3 id="tl-h">Tier limit overrides</h3>
+        {t.pendingRestart && <Badge tone="warn">pending restart</Badge>}
       </div>
       <p className="muted small-text">
-        The bridge assumes LegendKeeper’s published limits. Override one here if LegendKeeper changes it.
         Leave a box empty to use the environment’s or published value. The server’s own reports always win at
         run time. Applies at the next restart.
       </p>
@@ -454,70 +651,9 @@ function TierCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
             });
           }}
         >
-          Save
+          Save tier limits
         </Button>
       </div>
-    </section>
-  );
-}
-
-/** The contact line on the public /privacy page. Applies at once; empty means the page omits the line. */
-function ContactCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
-  const stored = v.contactEmail.stored;
-  const [email, setEmail] = useState(stored ?? '');
-  const synced = useRef(stored);
-  useEffect(() => {
-    if (synced.current === stored) return;
-    synced.current = stored;
-    setEmail(stored ?? '');
-  }, [stored]);
-  const { run, busy } = useAction();
-  const confirm = useConfirm();
-  const save = (value: string | null) =>
-    void confirm({
-      title: 'Change the contact email?',
-      message: (
-        <p>
-          {value === null
-            ? 'Remove the contact line from the public privacy page?'
-            : `Show ${value} on the public privacy page?`}
-        </p>
-      ),
-      confirmLabel: 'Save',
-    }).then((ok) => {
-      if (ok)
-        void run(
-          () => api.put('/settings/contact-email', { value, confirm: true }),
-          'Contact email saved.',
-        ).then(onSaved);
-    });
-  const trimmed = email.trim();
-  return (
-    <section className="card" aria-labelledby="contact-h">
-      <div className="row row-between">
-        <h2 id="contact-h">Contact email</h2>
-        <Badge tone={stored ? 'ok' : 'neutral'}>{stored ? 'shown' : 'not shown'}</Badge>
-      </div>
-      <p className="muted small-text">
-        Shown on the public privacy page (<code>/privacy</code>) as a contact line. There is no default: left
-        empty, the page has no contact line. Applies at once.
-      </p>
-      <label htmlFor="contact-email">Email address</label>
-      <input
-        id="contact-email"
-        type="email"
-        autoComplete="off"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-      />
-      <div className="row">
-        <Button disabled={busy || trimmed === '' || trimmed === stored} onClick={() => save(trimmed)}>
-          Save
-        </Button>
-        <Button disabled={busy || stored === null} onClick={() => save(null)}>
-          Remove
-        </Button>
-      </div>
-    </section>
+    </div>
   );
 }

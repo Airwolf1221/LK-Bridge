@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased: v3 F8, every setting on the dashboard (24 November 2026)
+
+[ADR 0073](adr/0073-v3-f8-every-setting-on-the-dashboard.md). No migration. Nothing was run against a live system: the
+mock only.
+
+- **The settings registry** (`src/config/registry.ts`): one entry per configuration key (112: 81 environment variables,
+  the contact email, 30 per-project settings), each with its group, label, description, display unit, how a change
+  applies, and whether it is secret or bootstrap; type, default and range read from the zod schemas (now exported and
+  written with the shared helpers of `src/config/schema-helpers.ts`; no default or range changed).
+- **Precedence** (the owner's): dashboard value → environment → default, applied where the configuration is loaded
+  (`src/config/effective.ts`, at start). Dashboard values are stored as `dash.cfg.<KEY>`; a value that no longer loads
+  is left out at start and named. The six settings that existed before keep their keys, routes and behaviour.
+- **At once**: 17 more settings apply without a restart (image limits and timeouts, staging and snapshot retention and
+  free-disk floors, the largest inline tool result), read on each use (`src/config/live.ts`).
+- **The Settings page**: a section per group, a search box, each setting's value, source, range, unit and apply mode;
+  Edit (validated, display units converted exactly) and Reset, both with the step-up; Recent changes with old and new
+  values; bootstrap settings read-only ("Change on the server: the env file, via env-sync"); secrets as set or not set,
+  linked to where they are managed; per-project settings linked to the Projects page.
+- **Restart the bridge**: "N settings pending a restart" and a button that drains and exits 75 for systemd to restart
+  it, logged as the owner's request and recorded when it is back; disabled outside systemd. Optional unit line
+  `RestartForceExitStatus=75` (runbook, section 8); `deploy/lk-bridge.service` unchanged.
+- **Kept complete**: `test/unit/config-registry.test.ts` (S5); `.env.example` gained the image and snapshot variables
+  it lacked; CLAUDE.md's new standing instruction.
+- **API**: `GET /api/admin/settings/config`, `PUT /api/admin/settings/config/:key`,
+  `POST /api/admin/settings/config/:key/reset`, `POST /api/admin/bridge/restart` (each change asks for the step-up).
+
+## Unreleased: sandbox harness fix, f7-1-core's governance (24 November 2026)
+
+Harness only (test/sandbox, test/sandbox-mock); no product code. Nothing run against a live system: the mock only.
+
+- **The bug** (the owner's live run of f7-1-core, 23 November 2026 23:51): C1 failed PACK_NOT_CURRENT. The Arkona pack
+  attached to `test` reads its six governance sources from project `arkona`; a sandbox runtime registers only the
+  sandbox project, so every source read "project arkona is not registered". The mock's owners world keeps its
+  governance in `test`, which hid it.
+- **The fix**: `ensureSandboxGovernance` (test/sandbox/governance.ts), an opt-in for any pack check: when a source's
+  project is not registered, one throwaway governance page in the sandbox project, the sources pointed at it and the
+  pack approved, in the TEMPORARY database only (what identity-f5c's I1 already did). The `arkona` project is never
+  registered, read or keyed, and the bridge's database is never written. f7-1-core opts in at C0 and deletes the page
+  at clean-up. `copyBridgeState` now reports `governanceMissing`.
+- **The guard**: `test/sandbox-mock/pack-governance.test.ts` runs f7-1-core with the governance in `arkona`, as on the
+  server (without the opt-in C0 fails naming the project, before any write; with it every item passes), and fails any
+  sandbox check that runs a tag-computing pack tool on a copy of the bridge's state without opting in.
+
 ## Unreleased: v3 F7.1, the Character Core rule (23 November 2026)
 
 [ADR 0072](adr/0072-v3-f7-1-the-character-core-rule.md). No migration, no new pack seed. Nothing was run against a live

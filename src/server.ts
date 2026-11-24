@@ -37,6 +37,8 @@ import {
   runMigrations,
 } from './db/migrate.js';
 import { InstanceLockError } from './projects/index.js';
+import { RESTART_EXIT_CODE } from './admin/restart.js';
+import { loadEffectiveConfiguration } from './config/effective.js';
 import { type Db, openDatabase } from './db/open.js';
 import {
   type BridgeInfo,
@@ -325,6 +327,15 @@ export interface CreateBridgeOptions {
    * from the moment its own check passes.
    */
   readonly awaitProjects?: boolean;
+  /**
+   * v3 F8 (ADR 0073): the process environment the configuration was loaded from (default `process.env`): the Settings
+   * page's "environment" column, the `now` settings, and `INVOCATION_ID` for the restart button.
+   */
+  readonly settingsEnv?: Readonly<Record<string, string | undefined>>;
+  /** v3 F8: dashboard values `main` left out because they no longer loaded (names only). */
+  readonly droppedSettings?: readonly string[];
+  /** v3 F8: how "Restart the bridge" ends the process (default `process.exit`); tests pass a fake. */
+  readonly exit?: (code: number) => void;
 }
 
 /**
@@ -347,6 +358,8 @@ export async function createBridge(
     ...(o.googleOAuth ? { googleOAuth: o.googleOAuth } : {}),
     ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
     ...(o.projectRetryMs ? { projectRetryMs: o.projectRetryMs } : {}),
+    ...(o.settingsEnv ? { settingsEnv: o.settingsEnv } : {}),
+    ...(o.droppedSettings ? { droppedSettings: o.droppedSettings } : {}),
     // The runtime logs (project checks, start-up warnings) go where the server's do.
     ...(o.logLevel ? { logLevel: o.logLevel } : {}),
     ...(o.logStream ? { logStream: o.logStream } : {}),
@@ -374,6 +387,40 @@ export async function createBridge(
       ...(o.uiDir ? { uiDir: o.uiDir } : {}),
       version: o.version ?? BRIDGE_VERSION,
     },
+  });
+  // v3 F8 (ADR 0073 decision 7): "Restart the bridge": the SIGTERM stop, then exit 75 for systemd to start it again.
+  const exit = o.exit ?? ((code: number) => process.exit(code));
+  runtime.configSettings.restart.attach(async () => {
+    const watchdog = setTimeout(() => {
+      app.log.error(
+        { afterMs: SHUTDOWN_WATCHDOG_MS },
+        'the restart’s stop did not finish in time: exiting now',
+      );
+      exit(RESTART_EXIT_CODE);
+    }, SHUTDOWN_WATCHDOG_MS);
+    watchdog.unref();
+    try {
+      const r = await stopBridgeForRestart({ app, runtime, db: o.db });
+      app.log.info(
+        {
+          exitCode: RESTART_EXIT_CODE,
+          ms: r.ms,
+          parked: r.parked.length,
+          stillRunning: r.stillRunning,
+          ...(r.overran.length > 0 ? { overran: r.overran } : {}),
+        },
+        'restart requested by the owner: stopped, exiting for systemd to start the bridge again',
+      );
+    } catch (err) {
+      app.log.error({ err }, 'the restart’s stop failed; exiting for systemd to start the bridge again');
+      try {
+        o.db.close();
+      } catch {
+        // already closed
+      }
+    }
+    clearTimeout(watchdog);
+    exit(RESTART_EXIT_CODE);
   });
   return { app, services, runtime };
 }
@@ -449,10 +496,23 @@ async function main(): Promise<void> {
   }
   const db = openDatabase(config.server.dbPath);
   let created;
+  let dropped: readonly string[];
   try {
     // v2 A1: migration 0600 assigns rows written before multi-project support to the single-project form's project.
     // (LK_PROJECT_ID and LK_PROJECT_NAME, the same values `npm run db:migrate` and deploy.sh use; not secrets.)
     runMigrations(db, defaultMigrationsDir(), { context: migrationContextFromEnv(process.env) });
+    // v3 F8 (ADR 0073): the Settings page's values on top of the environment (dashboard → environment → default).
+    // Bootstrap settings and secrets are never stored there, so DB_PATH, the listen address and the keys are the
+    // environment's alone. A stored value that no longer loads is left out (named, never its value).
+    const effective = loadEffectiveConfiguration(process.env, db);
+    ({ config, authConfig, policySettings, toolsSettings, adminSettings, maintenanceSettings } =
+      effective.bundle);
+    dropped = effective.dropped;
+    if (dropped.length > 0) {
+      process.stderr.write(
+        `Settings saved on the dashboard were left out because they no longer load with this environment: ${dropped.join(', ')}\n`,
+      );
+    }
     // Project registry and one governor per project, policy layer, job engine (its startup recovery runs here, before
     // /mcp accepts anything) and tools, in dependency order; then the HTTP server with the same policy layer. Each
     // project's key is checked in the background; a project is served once its check passes.
@@ -465,6 +525,8 @@ async function main(): Promise<void> {
       maintenanceSettings,
       db,
       awaitProjects: false,
+      settingsEnv: process.env,
+      droppedSettings: dropped,
     });
   } catch (err) {
     if (err instanceof MigrationError || err instanceof InstanceLockError) {
@@ -481,7 +543,8 @@ async function main(): Promise<void> {
   // makes sure of the exit whatever happens.
   let stopping = false;
   const shutdown = (signal: string) => {
-    if (stopping) return;
+    // v3 F8: a restart the owner asked for is already stopping the bridge (it exits 75 itself).
+    if (stopping || runtime.restarting) return;
     stopping = true;
     app.log.info({ signal }, 'shutting down');
     const watchdog = setTimeout(() => {

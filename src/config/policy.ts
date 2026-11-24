@@ -3,6 +3,7 @@
  * Parsed on their own, like the auth settings, so `loadConfig()` keeps its required variables unchanged.
  */
 import * as z from 'zod';
+import { intFrom } from './schema-helpers.js';
 
 export interface PolicySettings {
   /** A pending proposal expires after this long. Default 14 days. */
@@ -40,15 +41,16 @@ export class PolicyConfigError extends Error {
   }
 }
 
-const schema = z.object({
-  POLICY_PROPOSAL_EXPIRY_DAYS: z.coerce.number().int().min(1).max(365).default(14),
-  POLICY_EXPIRY_SWEEP_SECONDS: z.coerce.number().int().min(10).max(86_400).default(300),
-  POLICY_PROPOSAL_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+/** Exported for the settings registry (v3 F8, ADR 0073). */
+export const POLICY_ENV_SCHEMA = z.object({
+  POLICY_PROPOSAL_EXPIRY_DAYS: intFrom(14, 1, 365),
+  POLICY_EXPIRY_SWEEP_SECONDS: intFrom(300, 10, 86_400),
+  POLICY_PROPOSAL_RETENTION_DAYS: intFrom(90, 1, 3650),
 });
 
 /** Reads POLICY_* from the environment (names in .env.example). Never echoes values. */
 export function loadPolicyConfig(env: NodeJS.ProcessEnv = process.env): PolicySettings {
-  const parsed = schema.safeParse(env);
+  const parsed = POLICY_ENV_SCHEMA.safeParse(env);
   if (!parsed.success) {
     throw new PolicyConfigError(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`));
   }

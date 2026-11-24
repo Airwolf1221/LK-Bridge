@@ -11,7 +11,11 @@
  * MCP server calls them, for a temporary write-scope principal; a proposal is approved as the owner in the temporary
  * database. Each step prints PASS or FAIL:
  *
- * - **C0** the Arkona pack attached here, the asset tree built, [INDEX] Working confirmed;
+ * - **C0** the Arkona pack attached here, the asset tree built, [INDEX] Working confirmed; the pack's governance current
+ *   in the temporary database. On the server the pack reads its governance from project `arkona`, which a sandbox
+ *   runtime never registers, so (opted in, as identity-f5c's I1) its sources are pointed at a throwaway governance page
+ *   in this project, in the temporary database only, and the pack approved there (test/sandbox/governance.ts). Without
+ *   that, C1 failed PACK_NOT_CURRENT (the live run of 23 November 2026);
  * - **C1** a throwaway Working compact character `Probe <Letters>` (`arkona_create_character`, depth compact, status
  *   working), its text saying "The compact reference for …";
  * - **C2** one art piece added (`upload_image { stage: true }`, then `arkona_add_character_art`), its proposal approved,
@@ -21,8 +25,8 @@
  *   Reference Type `Character Core`, its text saying "Character Core", no longer "compact reference") and
  *   `[BWRK] Probe <Letters> - Character Art` under the index with its image.
  *
- * Clean-up: the throwaway index with everything under it (or the Reference, if no index was made) and the character's
- * asset folder, even after a failure (test/sandbox/steps.ts). Cost: about 20 writes and 40 reads.
+ * Clean-up: the throwaway index with everything under it (or the Reference, if no index was made), the character's
+ * asset folder and the throwaway governance page, even after a failure (test/sandbox/steps.ts). Cost: about 20 writes and 40 reads.
  */
 import { readFileSync } from 'node:fs';
 import { pino } from 'pino';
@@ -31,6 +35,7 @@ import { AuthStore } from '../../src/auth/store.js';
 import type { Principal } from '../../src/jobs/index.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
 import type { RawLk } from './f4b-probe.js';
+import { ensureSandboxGovernance, governanceMissingMessage, governanceReach } from './governance.js';
 import type { SoakRuntime } from './soak.js';
 import { sandboxRun, type SandboxRun } from './steps.js';
 import { waitForJob, type WaitOptions } from './wait.js';
@@ -65,7 +70,17 @@ export async function runCoreUpgradeCheck(
   sb: SoakRuntime,
   raw: RawLk,
   name: string,
-  o: { readonly bridgeDbPath: string; readonly run?: SandboxRun; readonly wait?: WaitOptions },
+  o: {
+    readonly bridgeDbPath: string;
+    readonly run?: SandboxRun;
+    readonly wait?: WaitOptions;
+    /**
+     * `throwaway` (the default, and what the owner's run uses): a governance source in a project this runtime does not
+     * register is pointed at a throwaway page here (test/sandbox/governance.ts). `as-copied`: the sources are left as
+     * copied, and C0 fails, naming the project, when one cannot be read (the mock suite proves the guard with it).
+     */
+    readonly governance?: 'throwaway' | 'as-copied';
+  },
 ): Promise<CoreCheckItem[]> {
   const steps = o.run ?? sandboxRun({ name: 'f7-1-core', out: () => undefined });
   const rt = sb.runtime;
@@ -148,7 +163,11 @@ export async function runCoreUpgradeCheck(
   };
 
   const subject = `Probe ${letters()}`;
-  const made: { identity: string | null; index: string | null } = { identity: null, index: null };
+  const made: { identity: string | null; index: string | null; governance: string | null } = {
+    identity: null,
+    index: null,
+    governance: null,
+  };
   steps.defer('the throwaway character and its asset folder deleted', async () => {
     const left: string[] = [];
     const del = async (what: string, path: string) => {
@@ -161,6 +180,8 @@ export async function runCoreUpgradeCheck(
     };
     if (made.index) await del(`index ${made.index}`, `/resources/${made.index}?cascade=true`);
     else if (made.identity) await del(`page ${made.identity}`, `/resources/${made.identity}?cascade=true`);
+    if (made.governance)
+      await del(`governance page ${made.governance}`, `/resources/${made.governance}?cascade=true`);
     for (const f of rt.assets.queries.findFoldersByName(pid, subject).data) {
       try {
         await raw.request('deleteAsset', 'DELETE', `/assets/${f.id}`);
@@ -171,23 +192,50 @@ export async function runCoreUpgradeCheck(
     }
     items.push({
       id: 'cleanup',
-      title: 'the throwaway character and its asset folder deleted (404 counts as cleaned)',
+      title:
+        'the throwaway character, its asset folder and the throwaway governance deleted (404 counts as cleaned)',
       verdict: left.length === 0 ? 'pass' : 'fail',
       detail: left.length === 0 ? 'nothing left' : `left behind: ${left.join('; ')}. Delete by hand.`,
     });
   });
 
   try {
-    const c0 = await check('C0', 'the Arkona pack attached here; the asset tree built', async () => {
-      if (!copied.packs.includes('arkona'))
-        throw new Error(`packs attached: ${copied.packs.join(', ') || 'none'}; deploy F7.1 first`);
-      if (rt.assets.meta(pid).status === 'not_built') {
-        rt.assets.prepareBuild(pid, { trigger: 'sandbox-f7-1', autoConfirm: true });
-        for (let i = 0; i < 600 && rt.assets.store.activePass(pid); i++)
-          await new Promise((r) => setTimeout(r, 500));
-      }
-      return `asset tree ${rt.assets.meta(pid).status}; packs attached: ${copied.packs.join(', ')}`;
-    });
+    const c0 = await check(
+      'C0',
+      'the Arkona pack attached here; the asset tree built; its governance current',
+      async () => {
+        if (!copied.packs.includes('arkona'))
+          throw new Error(`packs attached: ${copied.packs.join(', ') || 'none'}; deploy F7.1 first`);
+        if (rt.assets.meta(pid).status === 'not_built') {
+          rt.assets.prepareBuild(pid, { trigger: 'sandbox-f7-1', autoConfirm: true });
+          for (let i = 0; i < 600 && rt.assets.store.activePass(pid); i++)
+            await new Promise((r) => setTimeout(r, 500));
+        }
+        const reach = governanceReach(rt, 'arkona');
+        let governance: string;
+        if ((o.governance ?? 'throwaway') === 'as-copied') {
+          if (reach.missing.length > 0)
+            throw new Error(`PACK_NOT_CURRENT: ${governanceMissingMessage(reach)}`);
+          governance = `governance read from ${reach.projects.join(', ')}`;
+        } else {
+          const root = rt.projects.list().find((p) => p.id === pid)?.settings.aiRepositoryRootId;
+          governance = (
+            await ensureSandboxGovernance({
+              rt,
+              raw,
+              projectName: name,
+              packId: 'arkona',
+              ...(root ? { parentId: root } : {}),
+              label: `lk-bridge f7.1 governance ${subject}`,
+              made: (id) => {
+                made.governance = id;
+              },
+            })
+          ).detail;
+        }
+        return `asset tree ${rt.assets.meta(pid).status}; packs attached: ${copied.packs.join(', ')}; ${governance}`;
+      },
+    );
     if (!c0) return items;
     const c1 = await check('C1', `a throwaway Working compact character (${subject})`, async () => {
       const gap = { value: 'Unestablished', reason: 'a sandbox probe, deleted when the check ends' };

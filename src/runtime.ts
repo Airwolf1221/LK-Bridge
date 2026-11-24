@@ -32,6 +32,9 @@ import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyStoredSettings } from './admin/index.js';
+import type { ConfigSettingsRuntime } from './admin/config-settings.js';
+import { createRestartControl } from './admin/restart.js';
+import { createLiveOverrides, liveToolsSettings } from './config/live.js';
 import {
   DEFAULT_IMAGE_SETTINGS,
   defaultMaintenanceSettings,
@@ -228,6 +231,8 @@ export interface Runtime {
   readonly config: Config;
   /** The environment's values alone (what clearing a dashboard setting falls back to). */
   readonly envConfig: Config;
+  /** v3 F8 (ADR 0073): the Settings page's dashboard values, the environment they sit on, and the restart control. */
+  readonly configSettings: ConfigSettingsRuntime;
   /** Drain (bounded), stop the engine, close the governor. Does not close the database. */
   shutdown(drainTimeoutMs?: number): Promise<void>;
   /**
@@ -297,6 +302,13 @@ export interface RuntimeOptions {
    * expected there and is logged at debug instead of as a warning. Default `required` (the bridge).
    */
   readonly secretStore?: 'required' | 'unused';
+  /**
+   * v3 F8 (ADR 0073): the process environment the configuration was loaded from (default `process.env`). The Settings
+   * page reads registry names from it (never a secret's value), and the `now` settings are worked out from it.
+   */
+  readonly settingsEnv?: Readonly<Record<string, string | undefined>>;
+  /** v3 F8: dashboard values left out at this start because they no longer loaded (names only; from server.ts). */
+  readonly droppedSettings?: readonly string[];
   /** The runtime's log level and destination (default: LOG_LEVEL, to stdout). `createBridge` passes the server's. */
   readonly logLevel?: string;
   readonly logStream?: Writable;
@@ -309,6 +321,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // reserve floors) are applied here, on top of the environment. `envConfig` is kept for "reset to default".
   const envConfig = o.config;
   const config = applyStoredSettings(envConfig, o.db);
+  // v3 F8 (ADR 0073): the Settings page's dashboard values (`dash.cfg.<KEY>`). The tool settings read the `now` ones on
+  // each use, through getters (src/config/live.ts); the rest were applied where the configuration was loaded.
+  const settingsEnv = o.settingsEnv ?? process.env;
+  const configLive = createLiveOverrides(o.db);
+  const toolsSettings = liveToolsSettings(o.toolsSettings, configLive, settingsEnv);
   const logOptions = { level: o.logLevel ?? config.logLevel, base: { component: 'engine' } };
   const log = o.logStream ? pino(logOptions, o.logStream) : pino(logOptions);
   // CR-2026-11-R3 (R3-65): what background tasks log their start and finish with (task-log.ts).
@@ -318,10 +335,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // The SSRF guard for every non-LegendKeeper fetch of the tool layer (the signed-URL PUT and an image source URL):
   // port 443 only unless OUTBOUND_EXTRA_PORTS_ALLOWLIST lists host:port (v1.0.1). Test seams may add to it.
   const uploadGuard: GuardOptions = {
-    allowedPorts: o.toolsSettings.outboundExtraPorts ?? new Set<string>(),
+    allowedPorts: toolsSettings.outboundExtraPorts ?? new Set<string>(),
     ...(o.uploadGuard ?? {}),
   };
-  const imageSettings = o.toolsSettings.images ?? DEFAULT_IMAGE_SETTINGS;
+  const imageSettings = toolsSettings.images ?? DEFAULT_IMAGE_SETTINGS;
   const transport = createUploadTransport({
     lkOrigin: new URL(config.lk.baseUrl).origin,
     lk: o.lkTransport ?? defaultTransport,
@@ -391,6 +408,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     proposalTools: { selector, footer },
     ...(o.clock ? { clock: o.clock } : {}),
   });
+  // v3 F8 (ADR 0073 decision 7): "Restart the bridge". createBridge attaches the stop-and-exit; this start records a
+  // restart the owner asked for before the last exit.
+  const restart = createRestartControl({
+    db: o.db,
+    env: settingsEnv,
+    now: () => (o.clock ? o.clock.now() : Date.now()),
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    log,
+  });
   const engine = createJobEngine({
     db: o.db,
     projects,
@@ -403,7 +429,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     etagVersions: (projectId) => projectStore.byId(projectId)?.settings?.useEtagVersions !== false,
     customSteps: {
       [UPLOAD_PUT_STEP]: createUploadPutHandler({
-        putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,
+        // v3 F8: read on each PUT (UPLOAD_PUT_TIMEOUT_MS applies at once).
+        get putTimeoutMs() {
+          return toolsSettings.upload.putTimeoutMs;
+        },
         guard: uploadGuard,
         // v3 F2 (ADR 0049 decision 10): a staged image's bytes, from the image service (created below).
         stagedBytes: (sha) => images.stagedBytes.get(sha),
@@ -829,7 +858,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   // v3 F7b (ADR 0071, D6): the derivatives arkona_get_art delivers inline, bounded, on the bridge's disk.
-  const artCacheSettings = o.toolsSettings.artCache ?? DEFAULT_ART_CACHE_SETTINGS;
+  const artCacheSettings = toolsSettings.artCache ?? DEFAULT_ART_CACHE_SETTINGS;
   const artCache = new ArtCache(
     artCacheDir(artCacheSettings.dir, runtimeDbPath),
     artCacheSettings.maxBytes,
@@ -840,7 +869,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine,
     projects,
     tree,
-    settings: o.toolsSettings.snapshots ?? DEFAULT_SNAPSHOT_SETTINGS,
+    settings: toolsSettings.snapshots ?? DEFAULT_SNAPSHOT_SETTINGS,
     assetHosts: imageSettings.assetHosts,
     dbPath: runtimeDbPath,
     imageDir: imageDataDir(imageSettings, runtimeDbPath),
@@ -1083,7 +1112,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     assets,
     registry,
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
-    upload: o.toolsSettings.upload,
+    upload: toolsSettings.upload,
     images: imageSettings,
     // The database this runtime was GIVEN, never the config's default path (relative to the working directory): the
     // owner's sandbox run of 12 November 2026 resolved `images/` from `./data/bridge.db` in the read-only app folder.
@@ -1435,7 +1464,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine,
     projects,
     selector,
-    settings: o.toolsSettings,
+    settings: toolsSettings,
     version: o.version,
     principalNames: (ids) => policy.store.describePrincipals(ids),
     configuredReadOnly: config.lk.readOnly,
@@ -1631,6 +1660,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     instructions: BRIDGE_INSTRUCTIONS,
     config,
     envConfig,
+    configSettings: { live: configLive, env: settingsEnv, restart, dropped: o.droppedSettings ?? [] },
     get restarting() {
       return restarting;
     },

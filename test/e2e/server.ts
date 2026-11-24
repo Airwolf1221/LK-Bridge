@@ -121,6 +121,9 @@ const { app, runtime } = await createBridge({
   version: 'e2e',
   logLevel: 'silent',
   pruneIntervalMs: 0,
+  // v3 F8: the Settings page reads this environment (not the shell's: no INVOCATION_ID, so the restart is disabled).
+  settingsEnv: { BRIDGE_PUBLIC_URL: publicUrl, LK_READ_ONLY: 'false', DB_PATH: join(dir, 'bridge.db') },
+  exit: () => undefined,
   adminSettings: defaultAdminSettings({ budgetPushMs: 1000 }),
   lkTransport: async (input, init) => {
     if ((init?.method ?? 'GET').toUpperCase() !== 'GET') await new Promise((r) => setTimeout(r, delay));

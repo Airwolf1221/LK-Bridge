@@ -10,6 +10,8 @@ import {
   tierLimitsSchema,
   type StoredSettings,
 } from '../runtime-settings.js';
+import { createConfigSettings, type ConfigSettings } from '../config-settings.js';
+import { RestartUnavailableError } from '../restart.js';
 import { idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const confirm = z.literal(true);
@@ -70,6 +72,71 @@ export const registerSettings: Register = (api, ctx) => {
   };
 
   api.get('/settings', () => ({ settings: view() }));
+
+  // ------------------------------------------------------------------ v3 F8 (ADR 0073): every setting, by group
+
+  const cfg = ctx.deps.runtime.configSettings;
+  const { credentials } = ctx.deps.services;
+  const model: ConfigSettings | null = cfg
+    ? createConfigSettings({
+        runtime: ctx.deps.runtime,
+        cfg,
+        actions,
+        db,
+        now: ctx.now,
+        ownerStored: () => {
+          const pw = credentials.password();
+          return { password: pw.ok && pw.source === 'store', totp: credentials.totp().state === 'on' };
+        },
+      })
+    : null;
+  const need = (): ConfigSettings => {
+    if (!model)
+      throw new AdminHttpError(503, 'SETTINGS_UNAVAILABLE', 'This runtime has no settings registry.');
+    return model;
+  };
+  const keyParam = z.object({
+    key: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z][A-Za-z0-9_]*$/),
+  });
+  const setBody = z.union([
+    z.object({ value: z.union([z.number(), z.boolean(), z.string().max(4096)]), confirm }),
+    z.object({ amount: z.number(), unit: z.string().max(16), confirm }),
+  ]);
+
+  /** Every registry entry with its value and source; secrets as "set" or "not set" only. */
+  api.get('/settings/config', () => need().list());
+  api.put('/settings/config/:key', (req) => {
+    const { key } = parseInput(keyParam, req.params);
+    const b = parseInput(setBody, req.body);
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
+    return {
+      entry: need().set(key, 'amount' in b ? { amount: b.amount, unit: b.unit } : { value: b.value }),
+    };
+  });
+  api.post('/settings/config/:key/reset', (req) => {
+    const { key } = parseInput(keyParam, req.params);
+    parseInput(z.object({ confirm }), req.body);
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
+    return { entry: need().reset(key) };
+  });
+  /** S7: drains, flushes and exits 75; systemd starts the bridge again. Under systemd only. */
+  api.post('/bridge/restart', (req, reply) => {
+    parseInput(z.object({ confirm }), req.body);
+    requireReauth(ctx.deps.services, req); // ADR 0062: as sensitive as any setting
+    if (!cfg) throw new AdminHttpError(503, 'RESTART_UNAVAILABLE', 'This runtime cannot restart.');
+    try {
+      cfg.restart.request('owner');
+    } catch (e) {
+      if (e instanceof RestartUnavailableError)
+        throw new AdminHttpError(409, 'RESTART_UNAVAILABLE', e.message);
+      throw e;
+    }
+    return reply.code(202).send({ restarting: true, restart: cfg.restart.status() });
+  });
 
   api.put('/settings/read-only', (req) => {
     const b = parseInput(nullableBool, req.body);

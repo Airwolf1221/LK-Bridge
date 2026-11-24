@@ -35,6 +35,7 @@ import type { RetagService } from '../packs/retag/service.js';
 import type { AutomationService } from '../automation/service.js';
 import type { WorkstreamReports } from '../workstreams/report.js';
 import type { OutcomeReconciler } from '../jobs/reconcile.js';
+import type { ConfigSettingsRuntime } from './config-settings.js';
 
 export interface AdminRuntime {
   readonly engine: JobEngine;
@@ -99,6 +100,8 @@ export interface AdminRuntime {
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */
   readonly envConfig: Config;
+  /** v3 F8 (ADR 0073): the Settings page's dashboard values and the restart control; optional for tests' runtimes. */
+  readonly configSettings?: ConfigSettingsRuntime;
 }
 
 export interface AdminDeps {

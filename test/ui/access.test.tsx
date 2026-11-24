@@ -4,6 +4,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { baseRoutes, connections, installApi, renderApp, useDom } from './helpers';
+import { configView, settingsView } from './settings-fixtures';
 
 useDom();
 
@@ -200,42 +201,13 @@ describe('personal access tokens', () => {
 
 describe('settings ask for confirmation', () => {
   const settings = () => ({
+    ...settingsView(),
     readOnly: { effective: false, override: null, environment: false, appliesAt: 'immediately' },
-    exposePerOpTools: {
-      running: false,
-      stored: null,
-      environment: false,
-      pendingRestart: false,
-      appliesAt: 'restart',
-    },
-    memberAdmin: {
-      running: false,
-      stored: null,
-      environment: false,
-      pendingRestart: false,
-      appliesAt: 'restart',
-    },
-    journalRetention: {
-      running: { retentionDays: 30, maxBytes: 2 * 1024 ** 3 },
-      stored: null,
-      environment: { retentionDays: 30, maxBytes: 2 * 1024 ** 3 },
-      pendingRestart: false,
-      appliesAt: 'restart',
-    },
-    tierLimits: {
-      running: { 'write-min': 120 },
-      stored: null,
-      environment: { 'write-min': 120 },
-      pendingRestart: false,
-      tiers: ['write-min'],
-      appliesAt: 'restart',
-    },
-    contactEmail: { stored: null, appliesAt: 'immediately' },
-    writersMax: 2,
   });
   const routes = () => ({
     ...baseRoutes(),
     'GET /settings': { settings: settings() },
+    'GET /settings/config': configView(),
     'GET /audit': { entries: [] },
   });
 
@@ -253,41 +225,48 @@ describe('settings ask for confirmation', () => {
     expect(api.find('PUT', '/settings/read-only')[0]!.body).toEqual({ value: true, confirm: true });
   });
 
-  it('sends nothing when the owner cancels', async () => {
+  it('sends nothing when the owner cancels (v3 F8: a registry setting’s edit)', async () => {
     const api = installApi(routes());
     const user = userEvent.setup();
     renderApp('/ui/settings');
-    const card = await screen.findByRole('region', { name: 'Member administration' });
-    await user.click(within(card).getByLabelText('Enabled'));
+    const row = await screen.findByRole('group', { name: 'Most frames in an animation' });
+    await user.click(within(row).getByRole('button', { name: 'Edit Most frames in an animation' }));
+    const input = within(row).getByLabelText('New value (frames)');
+    await user.clear(input);
+    await user.type(input, '50');
+    await user.click(within(row).getByRole('button', { name: 'Save' }));
     const dialog = screen.getByRole('alertdialog');
-    expect(dialog).toHaveTextContent(/could then remove people from your project/);
+    expect(dialog).toHaveTextContent('Set IMAGE_MAX_FRAMES to 50 frames. Applies at once');
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-    expect(api.calls.filter((c) => c.method === 'PUT')).toEqual([]);
+    expect(api.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });
 
-  it('asks before saving journal retention and tier limits', async () => {
+  it('asks before saving a registry setting and the tier limits', async () => {
     const api = installApi({
       ...routes(),
-      'PUT /settings/journal-retention': { settings: settings() },
+      'PUT /settings/config/IMAGE_MAX_FRAMES': { entry: {} },
       'PUT /settings/tier-limits': { settings: settings() },
     });
     const user = userEvent.setup();
     renderApp('/ui/settings');
-    const journal = await screen.findByRole('region', { name: 'Journal retention' });
-    const days = within(journal).getByLabelText('Keep for (days)');
-    await user.clear(days);
-    await user.type(days, '7');
-    await user.click(within(journal).getByRole('button', { name: 'Save' }));
+    const row = await screen.findByRole('group', { name: 'Most frames in an animation' });
+    await user.click(within(row).getByRole('button', { name: 'Edit Most frames in an animation' }));
+    const input = within(row).getByLabelText('New value (frames)');
+    await user.clear(input);
+    await user.type(input, '7');
+    await user.click(within(row).getByRole('button', { name: 'Save' }));
+    expect(api.find('PUT', '/settings/config/IMAGE_MAX_FRAMES')).toHaveLength(0);
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(api.find('PUT', '/settings/journal-retention')).toHaveLength(1));
-    expect(api.find('PUT', '/settings/journal-retention')[0]!.body).toEqual({
-      value: { retentionDays: 7, maxBytes: 2 * 1024 ** 3 },
+    await waitFor(() => expect(api.find('PUT', '/settings/config/IMAGE_MAX_FRAMES')).toHaveLength(1));
+    expect(api.find('PUT', '/settings/config/IMAGE_MAX_FRAMES')[0]!.body).toEqual({
+      amount: 7,
+      unit: 'frames',
       confirm: true,
     });
 
     const tiers = screen.getByRole('region', { name: 'Tier limit overrides' });
     await user.type(within(tiers).getByLabelText('Override for write-min'), '60');
-    await user.click(within(tiers).getByRole('button', { name: 'Save' }));
+    await user.click(within(tiers).getByRole('button', { name: 'Save tier limits' }));
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.find('PUT', '/settings/tier-limits')).toHaveLength(1));
     expect(api.find('PUT', '/settings/tier-limits')[0]!.body).toEqual({

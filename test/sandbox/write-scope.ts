@@ -74,6 +74,14 @@ export interface CopyReport {
    * narrative-f4c check's N3 was refused CALENDAR_UNAVAILABLE although the bridge itself had the calendar cached.
    */
   readonly calendars: number;
+  /**
+   * For each copied pack whose governance sources are read from a project this runtime does not register (on the
+   * server the Arkona pack reads `arkona`; a sandbox runtime registers the sandbox project only): the pack and those
+   * projects. Its governance is then not current here, and every tag computation fails PACK_NOT_CURRENT, unless the
+   * check opts in to a throwaway governance page (test/sandbox/governance.ts, `ensureSandboxGovernance`). Empty when
+   * every source is reachable.
+   */
+  readonly governanceMissing: readonly { readonly pack: string; readonly projects: readonly string[] }[];
 }
 
 /** The repository tree's tables, parents first (the names and links hang on the nodes). */
@@ -161,7 +169,31 @@ export function copyBridgeState(o: {
     })();
     o.runtime.projects.refresh();
     const settings = Object.keys(JSON.parse(project.settings ?? '{}') as Obj).sort();
-    return { settings, treeNodes, packs: packIds, calendars };
+    const registered = new Set(
+      o.runtime.projects
+        .list()
+        .filter((p) => p.status !== 'archived')
+        .map((p) => p.name.toLowerCase()),
+    );
+    const governanceMissing = packIds.flatMap((id) => {
+      const row = o.target.prepare('SELECT governance FROM packs WHERE id = ?').get(id) as
+        { governance?: string | null } | undefined;
+      let sources: unknown;
+      try {
+        sources = JSON.parse(row?.governance ?? '[]');
+      } catch {
+        sources = [];
+      }
+      const projects = [
+        ...new Set(
+          (Array.isArray(sources) ? (sources as Obj[]) : [])
+            .map((g) => (typeof g.project === 'string' ? g.project.toLowerCase() : ''))
+            .filter((n) => n !== '' && !registered.has(n)),
+        ),
+      ];
+      return projects.length > 0 ? [{ pack: id, projects }] : [];
+    });
+    return { settings, treeNodes, packs: packIds, calendars, governanceMissing };
   } finally {
     src.close();
   }
