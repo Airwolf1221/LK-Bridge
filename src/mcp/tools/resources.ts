@@ -75,6 +75,8 @@ import { errorResult, projectArg, render, withProject, type ProjectDeps, type To
 import { runWriteJob } from './write-job.js';
 import { sidebarFrom } from '../../facts/sidebar.js';
 import { subjectRenameRefusal } from '../../packs/rename/guard.js';
+import { creationCheck } from '../../packs/reftypes/service.js';
+import { categoryFromTags, vocabularyOf } from '../../packs/retag/engine.js';
 
 export const CREATE_ANNOTATIONS = {
   readOnlyHint: false,
@@ -314,6 +316,26 @@ export async function finishCreate(
     preview,
   });
   return { kind: 'job', head, labels: job.labels, ...out };
+}
+
+/**
+ * v3 F6a (ADR 0076): a new page's Reference Type (from `facts`) against the approved pack vocabulary of the project, in
+ * the category its tags give (null: no vocabulary approved here, or no Reference Type given).
+ */
+function referenceTypeCheck(
+  pd: ProjectDeps,
+  projectId: string,
+  facts: Readonly<Record<string, FactInput>> | undefined,
+  tags: readonly string[],
+): ReturnType<typeof creationCheck> | null {
+  if (!facts) return null;
+  const entry = Object.entries(facts).find(([k]) => k.trim().toLowerCase() === 'reference type');
+  const value = entry && typeof entry[1] === 'string' ? entry[1].trim() : '';
+  if (value === '') return null;
+  const rules = pd.services?.referenceTypes?.packFor(projectId)?.approved ?? null;
+  if (!rules?.referenceTypes) return null;
+  const c = categoryFromTags(tags, vocabularyOf(rules));
+  return creationCheck(rules, value, 'primary' in c ? c.primary : null);
 }
 
 const refusal = (pd: ProjectDeps, code: string, message: string, more: Obj = {}): CreateOutcome => ({
@@ -643,10 +665,31 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
             status,
             parent.value,
           );
+          // v3 F6a (ADR 0076): a Reference Type on a pack project is checked against the approved vocabulary: refused
+          // once it is published (the nearest canonical value named; an approved specialist type accepted), a warning
+          // while it is a draft.
+          const rtCheck = referenceTypeCheck(pd, ctx.projectId, args.facts, tags);
+          if (rtCheck?.verdict === 'refuse')
+            return refusal(pd, 'REFERENCE_TYPE_NOT_IN_VOCABULARY', rtCheck.message ?? '', {
+              ...(rtCheck.nearest ? { nearest: rtCheck.nearest } : {}),
+            });
           return finishCreate(cc, [{ ...page, facts: facts.value, tags }], {
             batch: false,
             dryRun: args.dryRun === true,
-            extraHead: { lifecycleStatus: status },
+            extraHead: {
+              lifecycleStatus: status,
+              ...(rtCheck?.verdict === 'warn'
+                ? {
+                    warnings: [
+                      {
+                        code: 'REFERENCE_TYPE_NOT_IN_VOCABULARY',
+                        message: rtCheck.message,
+                        ...(rtCheck.nearest ? { nearest: rtCheck.nearest } : {}),
+                      },
+                    ],
+                  }
+                : {}),
+            },
             summary: `create_resource: ${page.rawName} under ${parent.value.rawName}`,
           });
         });

@@ -2446,7 +2446,8 @@ export interface PackSourceStatus {
   sections?: {
     heading: string;
     found: string | null;
-    state: 'same' | 'changed' | 'missing' | 'unapproved';
+    /** v3 F6a: `unpublished`: the Reference Type Vocabulary's section while the vocabulary is a draft. */
+    state: 'same' | 'changed' | 'missing' | 'unapproved' | 'ambiguous' | 'unpublished';
   }[];
   /** ADR 0052 amendment: the page's headings in order, with their levels, when a pinned section is missing. */
   outline?: { heading: string; level: number }[];

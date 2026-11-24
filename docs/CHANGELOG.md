@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased: v3 F6a, the Reference Type vocabulary (24 November 2026)
+
+[ADR 0076](adr/0076-v3-f6a-reference-type-vocabulary.md). Migration `4500_reference_types.sql`. Pack seed
+`arkona-2026-11-24-f6a`. Nothing was run against a live system: the mock only (the sandbox check `f6a-reftypes` is the
+owner's to run). No new setting.
+
+- **The vocabulary** (`rules.referenceTypes`, a draft): the design's T1 table, a closed list of Reference Types per
+  primary category, each with its role word for F6d's templated names; the pack's character types as they stand; the rules' words (synonyms, time
+  words, scope adjectives) as pack data.
+- **`arkona_reference_types`** (read-only, free): every value in use across the AI REPOSITORY (the Legacy Canon Archive,
+  Design References, Working, Archived and Narratives pages left out and counted), one row per value and primary
+  category, with its count, pages, the rule-based suggestion and reason (or "no confident suggestion" with candidates)
+  and its status; filters, paging and the stored sidebars' coverage.
+- **The Reference Types page** (Setup): accept, edit (a picker by category, or a new canonical value with its role
+  word), reject, keep as specialist (the pages listed, or any page of the category), accept all confident suggestions,
+  undo before applied; the step-up, the audit log; "Publish vocabulary" with the exact text first.
+- **Publishing**: Source Formatting's "Reference Type Vocabulary" under "Sidebar Metadata", replaced in place when
+  published again; pinned (shown "unpublished" until then); read at each governance check and offered as a new pack
+  version (the section the authority); a hand edit wins and the conflicting decisions are marked.
+- **Audits** (`taxonomy`): `reference_type_noncanonical` (with the owner's mapping, a fix through the facts path:
+  one field, If-Match, journalled, verified; registered with the automation, default Off, Apply allowed) and
+  `reference_type_category_mismatch` (a judgement).
+- **Guards**: `arkona_create_owner`, `arkona_create_character` and `create_resource` refuse a Reference Type outside the
+  published vocabulary (the nearest named; an approved specialist type accepted), a warning while a draft;
+  `promote_page`'s preview warns.
+- **Guide**: a "How to decide" row (its cap unchanged) and the section "Arkona Reference Types".
+- **F7's titled-block defaults completed**: meter (`title="Meter"`, shown).
+- **Sandbox**: `f6a-reftypes` (F0 to F6), and its run on the mock; the other checks' throwaway governance pages leave
+  the draft vocabulary's section out.
+
 ## Unreleased: v3 F7.1a, only self-references; proposals show the words they change (24 November 2026)
 
 [ADR 0072, amendment 1](adr/0072-v3-f7-1-the-character-core-rule.md). No migration. Nothing was run against a live

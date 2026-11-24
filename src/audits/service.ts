@@ -60,6 +60,8 @@ import { AuditStore, evidenceHashOf, fingerprintOf, type FindingFilter, type Sto
 import { consistencyCheck } from './checks/consistency.js';
 import { narrativeCheck } from './checks/narrative.js';
 import { writesCheck } from './checks/writes.js';
+import { referenceTypesCheck } from './checks/reference-types.js';
+import type { ReferenceTypeAuditInput } from '../packs/reftypes/service.js';
 import type { UnknownWriteItem } from '../jobs/reconcile.js';
 import type { ConsistencyAuditItem } from './context.js';
 import {
@@ -81,6 +83,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'unclassified', run: unclassifiedCheck },
   { id: 'ordering', run: orderingCheck },
   { id: 'taxonomy', run: taxonomyCheck },
+  // v3 F6a (ADR 0076): the Reference Type vocabulary (category taxonomy; the noncanonical fix is the owner's mapping).
+  { id: 'reference-types', run: referenceTypesCheck },
   { id: 'facts', run: factsCheck },
   { id: 'lifecycle', run: lifecycleCheck },
   { id: 'keep-regions', run: keepRegionsCheck },
@@ -162,6 +166,13 @@ export interface AuditDeps {
    * narrative audit; Narratives is then ordinary content).
    */
   readonly narrative?: (projectId: string) => NarrativeAuditInput | null;
+  /** v3 F6a (ADR 0076): the Reference Type vocabulary and the owner's decisions for a project (null: none approved). */
+  readonly referenceTypes?: (projectId: string) => ReferenceTypeAuditInput | null;
+  /** v3 F6a: a decision as it stands now, for the `reference_type` fix (null: undone). */
+  readonly referenceTypeDecision?: (
+    projectId: string,
+    id: string,
+  ) => { readonly action: string; readonly target: string | null; readonly conflict: string | null } | null;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -557,6 +568,7 @@ export class Audits {
           ...(opts.origin ? { origin: opts.origin } : {}),
           ...(this.coreUpgrader ? { coreUpgrade: this.coreUpgrader } : {}),
           ...(opts.direct === true ? { direct: true } : {}),
+          ...(this.d.referenceTypeDecision ? { referenceTypeDecision: this.d.referenceTypeDecision } : {}),
           narrativeOrder: (() => {
             const n = this.narrativeInput(projectId);
             return n ? narrativeCompare(n.rules) : null;
@@ -951,6 +963,17 @@ export class Audits {
       },
       ...(governance ? { governance } : {}),
       ...(consistency ? { consistency } : {}),
+      ...(this.d.referenceTypes
+        ? {
+            referenceTypes: (() => {
+              try {
+                return this.d.referenceTypes(projectId);
+              } catch {
+                return null;
+              }
+            })(),
+          }
+        : {}),
     });
   }
 

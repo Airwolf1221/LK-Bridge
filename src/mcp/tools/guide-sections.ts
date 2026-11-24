@@ -192,6 +192,15 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'image archive',
       'zip',
     ],
+    // v3 F6a (ADR 0076): the Reference Type vocabulary.
+    'Arkona Reference Types': [
+      'Choose or check a Reference Type',
+      'arkona_reference_types',
+      'Reference Type',
+      'Reference Types',
+      'reference type vocabulary',
+      'vocabulary',
+    ],
     // v3 F4a (ADR 0063): the topic brief (the first step for any subject) and the name check.
     'Arkona briefs and names': [
       'Brief on any Arkona subject (or a character)',

@@ -1191,6 +1191,204 @@ const rules: PackRules = packRulesSchema.parse({
     },
     textChars: 1200,
   },
+  // v3 F6a (ADR 0076; design T1, T13): the Reference Type vocabulary, a DRAFT: what the report suggests against until the
+  // owner publishes the real one to Source Formatting's "Reference Type Vocabulary" (then that section is the authority
+  // and this list is ignored). Each canonical type carries its role word for F6d's templated names; the character types
+  // are the pack's own as they stand. The rules' words (synonyms, time words, scope adjectives) are pack data too.
+  referenceTypes: {
+    source: 'source-formatting',
+    section: 'Reference Type Vocabulary',
+    under: 'Sidebar Metadata',
+    status: 'draft',
+    rule: 'A Reference Type names the page’s role, from a closed list per primary category. Time goes in Temporal Scope, geography in placement, and detail in Scope. A specialist source that needs a unique type keeps it only as an approved specialist type listed below. Never invent a Reference Type.',
+    // The design's T1 table (the owner, 24 November 2026), in its order; the types the first draft had besides T1's
+    // follow them (Character; Military, Education and Ceremony; Magic Reference; Law Reference). Programme Reference is
+    // the Programme category's (the owner's ruling of 24 November 2026, correcting T1, which listed it under Technology).
+    categories: [
+      {
+        category: 'Character',
+        types: [
+          { name: 'Character Core', role: 'Character Core' },
+          { name: 'Compact Character Reference', role: 'Character Reference' },
+          { name: 'Character Art', role: 'Character Art' },
+          { name: 'Joint Character Relationship Reference', role: 'Relationship' },
+          { name: 'Character Biography', role: 'Biography' },
+          { name: 'Character Personality & Lifestyle Reference', role: 'Personality & Lifestyle' },
+          { name: 'Character Physical & Visual Reference', role: 'Physical & Visual Reference' },
+          {
+            name: 'Character Wardrobe & Personal Presentation Reference',
+            role: 'Wardrobe & Personal Presentation',
+          },
+          { name: 'Character Powers & Mechanics Reference', role: 'Powers & Mechanics' },
+        ],
+      },
+      {
+        category: 'Polity',
+        types: [
+          { name: 'Polity Reference', role: 'Polity' },
+          { name: 'Polity Constitution Reference', role: 'Constitution' },
+          { name: 'Polity History Reference', role: 'History' },
+          { name: 'Polity Directory', role: 'Directory' },
+        ],
+      },
+      {
+        category: 'Institution',
+        types: [
+          { name: 'Institution Reference', role: 'Institution' },
+          { name: 'Religious Institution Reference', role: 'Religious Institution' },
+          { name: 'Military Institution Reference', role: 'Military Institution' },
+        ],
+      },
+      {
+        category: 'Military',
+        types: [{ name: 'Military Reference', role: 'Military' }],
+      },
+      {
+        category: 'Culture',
+        types: [
+          { name: 'Culture Reference', role: 'Culture' },
+          { name: 'Culture Foundations Reference', role: 'Culture Foundations' },
+          { name: 'Language & Naming Reference', role: 'Language & Naming' },
+          { name: 'Lexicon Reference', role: 'Lexicon' },
+        ],
+      },
+      {
+        category: 'Religion',
+        types: [
+          { name: 'Religion Reference', role: 'Religion' },
+          { name: 'Religious Practice Reference', role: 'Religious Practice' },
+        ],
+      },
+      {
+        category: 'Event',
+        types: [
+          { name: 'Event Reference', role: 'Event' },
+          { name: 'Conflict Reference', role: 'Conflict' },
+          { name: 'Period Reference', role: 'Period' },
+          { name: 'Chronology Reference', role: 'Chronology' },
+        ],
+      },
+      {
+        category: 'Place',
+        types: [
+          { name: 'World Reference', role: 'World' },
+          { name: 'Continent Reference', role: 'Continent' },
+          { name: 'Realmship Reference', role: 'Realmship' },
+          { name: 'Region Reference', role: 'Region' },
+          { name: 'Settlement Reference', role: 'Settlement' },
+          { name: 'Place Reference', role: 'Place' },
+          { name: 'Divine Realm Reference', role: 'Divine Realm' },
+        ],
+      },
+      {
+        category: 'Magic',
+        types: [
+          { name: 'Magic Foundation Reference', role: 'Magic Foundation' },
+          { name: 'Magical Tradition Reference', role: 'Magical Tradition' },
+          { name: 'Magic Overview', role: 'Magic Overview' },
+          { name: 'Magic Reference', role: 'Magic' },
+        ],
+      },
+      {
+        category: 'Technology',
+        types: [{ name: 'Technology Reference', role: 'Technology' }],
+      },
+      // The owner's ruling (24 November 2026): Programme Reference belongs to the Programme primary category.
+      { category: 'Programme', types: [{ name: 'Programme Reference', role: 'Programme' }] },
+      {
+        category: 'Equipment',
+        types: [
+          { name: 'Equipment Reference', role: 'Equipment' },
+          { name: 'Equipment Tradition Reference', role: 'Equipment Tradition' },
+        ],
+      },
+      {
+        category: 'Material',
+        types: [{ name: 'Material Reference', role: 'Material' }],
+      },
+      {
+        category: 'Law',
+        types: [
+          { name: 'Foundation Reference', role: 'Foundation' },
+          { name: 'Legal Reference', role: 'Legal' },
+          { name: 'Agreement Reference', role: 'Agreement' },
+          { name: 'Law Reference', role: 'Law' },
+        ],
+      },
+      {
+        category: 'Species',
+        types: [
+          { name: 'Racial Foundation', role: 'Racial Foundation' },
+          { name: 'Racial Group Reference', role: 'Racial Group' },
+          { name: 'Race Core Reference', role: 'Race' },
+          { name: 'Subrace Reference', role: 'Subrace' },
+          { name: 'Species Reference', role: 'Species' },
+        ],
+      },
+      {
+        category: 'Creature',
+        types: [{ name: 'Creature Reference', role: 'Creature' }],
+      },
+      {
+        category: 'Condition',
+        types: [{ name: 'Condition Reference', role: 'Condition' }],
+      },
+      {
+        category: 'Relationship',
+        types: [
+          { name: 'Relationship Reference', role: 'Relationship' },
+          { name: 'Political Relationship Reference', role: 'Political Relationship' },
+        ],
+      },
+      {
+        category: 'Education',
+        types: [{ name: 'Education Reference', role: 'Education' }],
+      },
+      {
+        category: 'Ceremony',
+        types: [{ name: 'Ceremony Reference', role: 'Ceremony' }],
+      },
+    ],
+    specialist: [],
+    normalise: {
+      synonyms: {
+        Cultural: 'Culture',
+        Religious: 'Religion',
+        Legal: 'Law',
+        Magical: 'Magic',
+        Technological: 'Technology',
+        Educational: 'Education',
+        Ceremonial: 'Ceremony',
+        Institutional: 'Institution',
+        Biographical: 'Biography',
+        // A scope adjective read as its noun only when nothing else names the role (“Historical Regional Reference”).
+        Regional: 'Region',
+        Continental: 'Continent',
+      },
+      timeWords: ['Historical', 'Historic', 'Contemporary', 'Present-Day'],
+      scopeWords: [
+        'Regional',
+        'Shared',
+        'National',
+        'Cross-National',
+        'Cross-Jurisdictional',
+        'Civilisation',
+        'Civilisational',
+        'Civilization',
+        'Civilizational',
+        'Continental',
+        'Local',
+        'International',
+        'Transnational',
+        'Multinational',
+        'Supranational',
+        'Pan-Continental',
+        'Global',
+        'General',
+        'Overall',
+      ],
+    },
+  },
   rulings: [
     {
       key: 'au-status-tag',
@@ -1233,8 +1431,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // pinned.
   // `-f5c` (ADR 0069, 23 November 2026; session F5c): `arkona_identity_reconcile`'s switch (follows the agent's scope).
   // `-f7b` (ADR 0071, 23 November 2026; session F7b): `artView`, where `arkona_get_art` reads an image's authority.
-  seed: 'arkona-2026-11-23-f7b',
+  // `-f6a` (ADR 0076, 24 November 2026; session F6a): the Reference Type vocabulary (`referenceTypes`, a draft) and
+  // Source Formatting's "Reference Type Vocabulary" pinned (not there until the owner publishes it: shown as
+  // unpublished, never refusing the approval while the vocabulary is a draft).
+  seed: 'arkona-2026-11-24-f6a',
   supersedes: [
+    'arkona-2026-11-23-f7b',
     'arkona-2026-11-23-f5c',
     'arkona-2026-11-23-f5b',
     'arkona-2026-11-23-f5a',
@@ -1274,6 +1476,8 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
         'Nation-Centred Territorial Navigation',
         'Approved Hierarchy and Standardised Navigation',
         'Active Template Suite and Sidebar Collections',
+        // v3 F6a (ADR 0076): the Reference Type vocabulary, once the owner publishes it under "Sidebar Metadata".
+        'Reference Type Vocabulary',
       ],
     },
     {

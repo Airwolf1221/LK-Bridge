@@ -36,28 +36,29 @@ export const VERIFY_IGNORED_FIELDS: readonly string[] = [
   'runs normalised as LegendKeeper does on write (empty text runs dropped, neighbouring runs with the same marks merged)',
   'the id LegendKeeper gives a block sent without one',
   'the document’s own version, text and schema (only the blocks are compared)',
-  'a titled block’s title and isTitleHidden when the bridge sent neither and LegendKeeper stored its kind’s confirmed default (image “Image” and embed “Embed”, hidden; keyValue “Stats”, resourceCollection “Collection”, resourceLink “Links”, map “Map”, textField “Text”, shown; meter not yet confirmed); a value the bridge sent, or any other stored value, is compared',
+  'a titled block’s title and isTitleHidden when the bridge sent neither and LegendKeeper stored its kind’s confirmed default (image “Image” and embed “Embed”, hidden; keyValue “Stats”, resourceCollection “Collection”, resourceLink “Links”, map “Map”, textField “Text” and meter “Meter”, shown); a value the bridge sent, or any other stored value, is compared',
 ];
 
 /**
  * v3 F7 (ADR 0070, G10): the `title` and `isTitleHidden` LegendKeeper gives a block of each titled kind written without
  * them. ONLY kinds confirmed against LegendKeeper are listed: `image` (jobs j3u162l831nskgsl and others, 23 November
  * 2026), and, since v3 F7b, embed, keyValue, resourceCollection, resourceLink, map and textField (the sandbox probe B3,
- * `test/sandbox/f7-art.ts`, run live on 23 November 2026). `meter` is added once the probe has printed it (its first
- * minimal block was refused); until then a difference on it is still reported.
+ * `test/sandbox/f7-art.ts`, run live on 23 November 2026), and, since v3 F6a (ADR 0076), `meter`: the probe printed
+ * `title="Meter" isTitleHidden=false` on 23 November 2026. Every titled kind of the spec is now confirmed.
  */
 export const TITLED_BLOCK_DEFAULTS: Readonly<
   Record<string, { readonly title: string; readonly isTitleHidden: boolean }>
 > = {
   image: { title: 'Image', isTitleHidden: true },
-  // v3 F7b (ADR 0071 decision 9): F7's probe B3, run live on 23 November 2026. `meter` is left out: the probe's minimal
-  // block was refused (no item `icon`), so its default is not confirmed and a difference on it is still reported.
+  // v3 F7b (ADR 0071 decision 9): F7's probe B3, run live on 23 November 2026.
   embed: { title: 'Embed', isTitleHidden: true },
   keyValue: { title: 'Stats', isTitleHidden: false },
   resourceCollection: { title: 'Collection', isTitleHidden: false },
   resourceLink: { title: 'Links', isTitleHidden: false },
   map: { title: 'Map', isTitleHidden: false },
   textField: { title: 'Text', isTitleHidden: false },
+  // v3 F6a (ADR 0076): the probe printed meter on 23 November 2026: `title="Meter" isTitleHidden=false`.
+  meter: { title: 'Meter', isTitleHidden: false },
 };
 
 /** Every block kind the spec gives `title` and `isTitleHidden` (the probe's list). */

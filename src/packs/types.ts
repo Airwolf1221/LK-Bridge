@@ -796,6 +796,99 @@ export const rulingSchema = z
   .strict();
 export type Ruling = z.infer<typeof rulingSchema>;
 
+// ============================================================================================ v3 F6a: Reference Types
+
+/** A Reference Type's name or role word: no `;`, `(`, `)` or `:` (the published section's own separators). */
+const referenceTypeName = text(200).refine((s) => !/[;():]/.test(s) && !/,\s*also\b/i.test(s), {
+  message: 'a Reference Type or role word may not hold ; ( ) : or “, also”',
+});
+
+/**
+ * v3 F6a (ADR 0076; design T1, T13): the Reference Type vocabulary. A Reference Type names the page's ROLE, from a closed
+ * list per primary category; time goes in Temporal Scope, geography in placement, detail in Scope. Each canonical type
+ * carries its role word, the word templated names will use (F6d; nothing renames pages in F6a).
+ *
+ * `status: 'draft'`: the seed's own list, offered until the owner publishes the vocabulary to governance (Source
+ * Formatting's "Reference Type Vocabulary", under "Sidebar Metadata"). `published`: the list as that section states it,
+ * parsed at each governance check exactly as F5a parses the Approved Supplementary Tags; the section is then the
+ * authority and the draft is ignored.
+ */
+export const referenceTypesRulesSchema = z
+  .object({
+    /** The governance source holding the section (its key). */
+    source: z.string().regex(/^[a-z][a-z0-9-]{0,59}$/),
+    /** The section's heading, as pinned. */
+    section: text(200),
+    /** The section it is written under (a heading of the same source). */
+    under: text(200),
+    status: z.enum(['draft', 'published']),
+    /** The rule, one paragraph (the section's first). */
+    rule: text(2000),
+    categories: z
+      .array(
+        z
+          .object({
+            /** A primary category tag (`Polity`, `Character`…). */
+            category: text(100),
+            types: z
+              .array(
+                z
+                  .object({
+                    name: referenceTypeName,
+                    /** The role word templated names use (`Polity`, `Constitution`, `Language & Naming`). */
+                    role: referenceTypeName,
+                    /** Variants the vocabulary itself says mean this type (a confident suggestion). */
+                    aliases: z.array(referenceTypeName).max(20).optional(),
+                  })
+                  .strict(),
+              )
+              .max(100),
+          })
+          .strict(),
+      )
+      .max(60),
+    /** Approved additional types (T13's Specialist exemption): kept as they are, never suggested away. */
+    specialist: z
+      .array(
+        z
+          .object({
+            type: referenceTypeName,
+            category: text(100),
+            /** The pages it is approved for; null: any page in this category. */
+            pages: z
+              .array(z.object({ id: z.string().min(1).max(64), name: text(500) }).strict())
+              .max(200)
+              .nullable(),
+          })
+          .strict(),
+      )
+      .max(500),
+    /** The rules' own words (pack data, edited as a new version): synonyms, time words, scope adjectives. */
+    normalise: z
+      .object({
+        /** A word → the word it means (`Cultural` → `Culture`). */
+        synonyms: z.record(text(100), text(100)),
+        /** Words that carry time (they belong in Temporal Scope). */
+        timeWords: z.array(text(100)).max(60),
+        /** Scope adjectives (geography belongs in placement, detail in Scope). */
+        scopeWords: z.array(text(100)).max(100),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((r, ctx) => {
+    const seen = new Map<string, string>();
+    for (const c of r.categories)
+      for (const t of c.types) {
+        const k = t.name.toLowerCase();
+        const had = seen.get(k);
+        if (had !== undefined && had !== c.category.toLowerCase())
+          ctx.addIssue({ code: 'custom', message: `${t.name} is canonical in two categories` });
+        seen.set(k, c.category.toLowerCase());
+      }
+  });
+export type ReferenceTypeRules = z.infer<typeof referenceTypesRulesSchema>;
+
 export const packRulesSchema = z
   .object({
     schema: z.literal(1),
@@ -912,6 +1005,11 @@ export const packRulesSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * v3 F6a (ADR 0076): the Reference Type vocabulary (absent: no vocabulary; the report, the two checks and the
+     * creation tools' guard do nothing).
+     */
+    referenceTypes: referenceTypesRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {

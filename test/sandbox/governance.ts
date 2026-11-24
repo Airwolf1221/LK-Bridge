@@ -78,12 +78,17 @@ export async function ensureSandboxGovernance(o: {
   readonly parentId?: string;
   readonly label: string;
   readonly made?: (resourceId: string) => void;
+  /**
+   * v3 F6a: make the throwaway page even when every source is reachable, so a check that WRITES to governance
+   * (f6a-reftypes publishes the vocabulary) never writes to the project's real governance pages.
+   */
+  readonly always?: boolean;
 }): Promise<SandboxGovernance> {
   const { rt, raw, packId } = o;
   const pack = rt.packs.get(packId);
   if (!pack) throw new Error(`the ${packId} pack is not in this runtime`);
   const reach = governanceReach(rt, packId);
-  if (reach.missing.length === 0) {
+  if (reach.missing.length === 0 && o.always !== true) {
     const g = await rt.packs.governance(packId);
     if (g.state !== 'current') throw new Error(`the ${packId} pack is ${g.state}: ${g.message}`);
     return {
@@ -105,7 +110,13 @@ export async function ensureSandboxGovernance(o: {
   if (documentId === '') throw new Error(`the governance page ${resourceId} came back with no document`);
   const code = packId === ARKONA_PACK.id ? ARKONA_PACK.governance : [];
   const sources = [...pack.governance, ...code.filter((g) => !pack.governance.some((x) => x.key === g.key))];
-  const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))];
+  // v3 F6a (ADR 0076): the Reference Type Vocabulary's section is left out while the vocabulary is a draft: it is
+  // "unpublished" (never refusing the approval) until a check publishes it (a placeholder sentence would not parse).
+  const vocabulary = pack.rules.referenceTypes?.status === 'draft' ? pack.rules.referenceTypes.section : null;
+  const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))].filter((h) => h !== vocabulary);
+  // The section the vocabulary is published under (f6a-reftypes publishes it there).
+  if (vocabulary && pack.rules.referenceTypes && !headings.includes(pack.rules.referenceTypes.under))
+    headings.push(pack.rules.referenceTypes.under);
   const supplementary = pack.rules.retag?.supplementary?.section;
   const sweep = pack.rules.automation?.section ?? ARKONA_PACK.rules.automation?.section;
   const blocks: Obj[] = [{ kind: 'heading', level: 1, content: [{ text: o.label }] }];
@@ -142,7 +153,7 @@ export async function ensureSandboxGovernance(o: {
     resourceId,
     documentId,
     detail:
-      `governance (read from ${reach.missing.join(', ')}, not registered here) pointed at the throwaway page ` +
+      `governance (read from ${reach.missing.length > 0 ? `${reach.missing.join(', ')}, not registered here` : `${reach.projects.join(', ')}, left untouched`}) pointed at the throwaway page ` +
       `${resourceId}, ${headings.length} pinned headings; pack version ${rt.packs.get(packId)!.approved!.version} ` +
       'approved (temporary database only)',
   };

@@ -31,6 +31,7 @@ import type { RevertService } from '../review/revert.js';
  */
 import type { ResumeService } from '../resume/service.js';
 import type { SplitService } from '../packs/split/service.js';
+import type { ReferenceTypeService } from '../packs/reftypes/service.js';
 import type { RetagService } from '../packs/retag/service.js';
 import type { AutomationService } from '../automation/service.js';
 import type { WorkstreamReports } from '../workstreams/report.js';
@@ -90,6 +91,8 @@ export interface AdminRuntime {
   readonly splits?: Pick<SplitService, 'byJob'>;
   /** v3 F3f (ADR 0060): the retag audit, holds, batches and reconciliations (the Tagging page); optional for tests. */
   readonly retag?: RetagService;
+  /** v3 F6a (ADR 0076): the Reference Types page (the report, decisions, publish); optional for tests. */
+  readonly referenceTypes?: ReferenceTypeService;
   /** v3 F5b (ADR 0068): automatic actions for audits (the Automation page, the Overview's tile); optional for tests. */
   readonly automation?: AutomationService;
   /** v3 F5c (ADR 0069, H8): the workstreams and their reports (the Workstreams page); optional for tests. */

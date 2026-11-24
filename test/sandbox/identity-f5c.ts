@@ -196,7 +196,10 @@ export async function runIdentityCheck(
           ...pack.governance,
           ...ARKONA_PACK.governance.filter((g) => !pack.governance.some((x) => x.key === g.key)),
         ];
-        const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))];
+        const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))].filter(
+          // v3 F6a (ADR 0076): the draft vocabulary's section stays unpublished (a placeholder would not parse).
+          (h) => !(pack.rules.referenceTypes?.status === 'draft' && h === pack.rules.referenceTypes.section),
+        );
         const blocks: Obj[] = [
           { kind: 'heading', level: 1, content: [{ text: 'lk-bridge f5c governance' }] },
         ];

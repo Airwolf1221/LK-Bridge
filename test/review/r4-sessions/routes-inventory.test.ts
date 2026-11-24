@@ -278,6 +278,17 @@ const ROUTES: Record<string, Route> = {
     params: { id: 'rtr_0123456789abcdef' },
     body: { confirm: true },
   },
+  // v3 F6a (ADR 0076): every Reference Type decision asks; publishing asks except as a preview (a dry run).
+  'POST /api/admin/reference-types/decide': {
+    kind: 'asks',
+    body: { value: 'Cultural Reference', category: 'Culture', action: 'accept', confirm: true },
+  },
+  'POST /api/admin/reference-types/bulk-accept': { kind: 'asks', body: { confirm: true } },
+  'POST /api/admin/reference-types/undo': {
+    kind: 'asks',
+    body: { id: 'rtd_0123456789abcdef', confirm: true },
+  },
+  'POST /api/admin/reference-types/publish': { kind: 'conditional' }, // a preview is one click; the write asks
   // ---- review
   'POST /api/admin/review/mark': { kind: 'outside' },
   'POST /api/admin/review/mark-all': { kind: 'outside' },

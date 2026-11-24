@@ -27,6 +27,7 @@ import { auditTools } from './audits.js';
 import { appraisalTools } from './appraisal.js';
 import { retagTools } from './retag.js';
 import { arkonaReadTools } from './arkona-reads.js';
+import { referenceTypesTool } from './reference-types.js';
 import { consistencyTools } from './consistency.js';
 import { narrativeTools } from './narrative.js';
 import { narrativeReadTools } from './narrative-read.js';
@@ -94,6 +95,8 @@ function createTools(
     identityReconcileTool(deps),
     // v3 F4a (ADR 0063): the Arkona pack's name check and topic brief (read-only, free).
     ...arkonaReadTools(deps),
+    // v3 F6a (ADR 0076): the Reference Type values in use, with suggestions (read-only, free).
+    referenceTypesTool(deps),
     ...consistencyTools(deps),
     // v3 F4c (ADR 0065): the Arkona pack's narrative tools (writing at the agent's scope; reading free).
     ...narrativeTools(deps),

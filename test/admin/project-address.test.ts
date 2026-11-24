@@ -53,7 +53,10 @@ beforeAll(async () => {
   // Arkona's governance page: every pinned heading, the Approved Supplementary Tags sentence as the Standard has it.
   const { ARKONA_PACK } = await import('../../src/packs/arkona.js');
   // "Approved Narrow Automations" last: this mock appends an inserted block at the end of the page.
-  const all = [...new Set(ARKONA_PACK.governance.flatMap((g) => g.sections ?? []))];
+  // v3 F6a (ADR 0076): the Reference Type Vocabulary is not there until the owner publishes it (it reads "unpublished").
+  const all = [...new Set(ARKONA_PACK.governance.flatMap((g) => g.sections ?? []))].filter(
+    (h) => h !== ARKONA_PACK.rules.referenceTypes?.section,
+  );
   const headings = [...all.filter((h) => h !== 'Approved Narrow Automations'), 'Approved Narrow Automations'];
   models.arkona.seedResource(GOV.resourceId, {
     name: 'Governance',

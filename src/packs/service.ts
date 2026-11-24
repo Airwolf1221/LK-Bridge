@@ -29,6 +29,7 @@ import {
   sectionBlocksOf,
 } from './sections.js';
 import { PackStore } from './store.js';
+import { parseSection, sameVocabulary, type VocabularyLists } from './reftypes/vocabulary.js';
 import {
   PackError,
   packRulesSchema,
@@ -92,8 +93,12 @@ export interface SourceStatus {
   readonly sections?: readonly {
     readonly heading: string;
     readonly found: string | null;
-    /** CR-2026-11-R2 (R2-33): `ambiguous`: two or more headings of the page match the pin (no section is chosen). */
-    readonly state: 'same' | 'changed' | 'missing' | 'unapproved' | 'ambiguous';
+    /**
+     * CR-2026-11-R2 (R2-33): `ambiguous`: two or more headings of the page match the pin (no section is chosen). v3 F6a
+     * (ADR 0076): `unpublished`: the Reference Type Vocabulary's section, not written yet while the vocabulary is a draft
+     * (it never refuses the approval).
+     */
+    readonly state: 'same' | 'changed' | 'missing' | 'unapproved' | 'ambiguous' | 'unpublished';
   }[];
   /**
    * ADR 0052 amendment (16 November 2026): the document's headings in order, with their levels, when a pinned section
@@ -120,6 +125,40 @@ export interface GovernanceStatus {
     readonly tags: readonly string[];
     readonly reason?: string;
   };
+  /**
+   * v3 F6a (ADR 0076): the Reference Type Vocabulary as its section reads now: `draft` (not published: the version's
+   * draft stands), `same`, `offered` (the section differs from this version's vocabulary: a new version was made for the
+   * owner's approval, the section as the authority), `unreadable` (the section cannot be read exactly: the approval is
+   * refused). Absent when the version has no vocabulary.
+   */
+  readonly referenceTypes?: {
+    readonly state: 'draft' | 'same' | 'offered' | 'unreadable';
+    readonly reason?: string;
+  };
+}
+
+/**
+ * v3 F6a (ADR 0076): the version's Reference Type vocabulary against its section as read now. Null when the version has
+ * none, or its source could not be read (the source's own state says so), or the source does not pin the section.
+ */
+function deriveReferenceTypes(
+  pack: Pack,
+  blocks: ReadonlyMap<string, unknown>,
+): { state: 'draft' | 'same' | 'differs' | 'unreadable'; lists?: VocabularyLists; reason?: string } | null {
+  const rt = pack.rules.referenceTypes;
+  if (!rt || !blocks.has(rt.source)) return null;
+  const src = pack.governance.find((g) => g.key === rt.source);
+  if (!(src?.sections ?? []).some((h) => headingKey(h) === headingKey(rt.section))) return null;
+  const section = sectionBlocksOf(blocks.get(rt.source), rt.section);
+  if (!section) {
+    // Not there: a draft stands; a published vocabulary whose section is gone is the pin's own drift (missing).
+    return rt.status === 'draft' ? { state: 'draft' } : null;
+  }
+  const parsed = parseSection(section);
+  if (!parsed.ok) return { state: 'unreadable', reason: parsed.reason };
+  const mine: VocabularyLists = { rule: rt.rule, categories: rt.categories, specialist: rt.specialist };
+  if (rt.status === 'published' && sameVocabulary(mine, parsed.vocabulary)) return { state: 'same' };
+  return { state: 'differs', lists: parsed.vocabulary };
 }
 
 /**
@@ -403,6 +442,10 @@ export function createPacks(d: PacksDeps): Packs {
         const rules = packRulesSchema.parse({
           ...s.rules,
           tags: { ...s.rules.tags, race: stored.rules.tags.race, culture: stored.rules.tags.culture },
+          // v3 F6a (ADR 0076): a published vocabulary is the governance section's, never a later seed's draft.
+          ...(stored.rules.referenceTypes?.status === 'published'
+            ? { referenceTypes: stored.rules.referenceTypes }
+            : {}),
         });
         const governance = mergeGovernance(stored.governance, s.governance);
         const after = store.upgrade(
@@ -586,6 +629,11 @@ export function createPacks(d: PacksDeps): Packs {
               : 'changed';
       // v3 F3b (ADR 0052): each pinned section against the digest the approval recorded. The document's version alone
       // decides the source's state (fail closed, as F3a); this says which pinned part moved.
+      // v3 F6a (ADR 0076): the vocabulary's own section, while the version's vocabulary is a draft.
+      const draftVocabulary =
+        pack.rules.referenceTypes?.status === 'draft' && pack.rules.referenceTypes.source === src.key
+          ? headingKey(pack.rules.referenceTypes.section)
+          : null;
       const sections =
         (src.sections ?? []).length === 0 || read.version === null
           ? undefined
@@ -597,13 +645,15 @@ export function createPacks(d: PacksDeps): Packs {
                 state:
                   s.matches > 1
                     ? ('ambiguous' as const)
-                    : s.digest === null
-                      ? ('missing' as const)
-                      : had === null
-                        ? ('unapproved' as const)
-                        : had === s.digest
-                          ? ('same' as const)
-                          : ('changed' as const),
+                    : s.digest === null && draftVocabulary === headingKey(s.heading)
+                      ? ('unpublished' as const)
+                      : s.digest === null
+                        ? ('missing' as const)
+                        : had === null
+                          ? ('unapproved' as const)
+                          : had === s.digest
+                            ? ('same' as const)
+                            : ('changed' as const),
               };
             });
       sources.push({
@@ -665,10 +715,47 @@ export function createPacks(d: PacksDeps): Packs {
       );
       changed();
     }
+    // v3 F6a (ADR 0076): the Reference Type Vocabulary, parsed from its section as it reads now. A section that differs
+    // from this version's vocabulary (the bridge's publication, or the owner's own edit) is offered as a NEW version with
+    // the section as the authority (`published`), never applied until the owner approves it.
+    const referenceTypes = deriveReferenceTypes(pack, blocksBySource);
+    if (referenceTypes?.state === 'differs' && referenceTypes.lists) {
+      const before = pack.rules.referenceTypes!;
+      const rules = packRulesSchema.parse({
+        ...pack.rules,
+        referenceTypes: { ...before, status: 'published', ...referenceTypes.lists },
+      });
+      pack = store.newVersion(
+        pack.id,
+        rules,
+        `${before.section} in ${pack.governance.find((g) => g.key === before.source)?.name ?? before.source} now states the vocabulary (the section is its authority)`,
+      );
+      d.audit(
+        'system',
+        'pack.derive_reference_types',
+        pack.id,
+        { status: before.status, categories: before.categories.length, specialist: before.specialist.length },
+        {
+          version: pack.version,
+          categories: referenceTypes.lists.categories.length,
+          types: referenceTypes.lists.categories.reduce((n, c) => n + c.types.length, 0),
+          specialist: referenceTypes.lists.specialist.length,
+        },
+      );
+      changed();
+    }
     const base = {
       sources,
       version: pack.version,
       approvedVersion: approved?.version ?? null,
+      ...(referenceTypes
+        ? {
+            referenceTypes: {
+              state: referenceTypes.state === 'differs' ? ('offered' as const) : referenceTypes.state,
+              ...(referenceTypes.reason ? { reason: referenceTypes.reason } : {}),
+            },
+          }
+        : {}),
       ...(supplementary
         ? {
             supplementary: {
@@ -848,6 +935,15 @@ export function createPacks(d: PacksDeps): Packs {
           const approvedDigest = had.sections?.find((x) => x.heading === h)?.digest ?? null;
           const before = was.find((x) => x.heading === h)?.digest ?? null;
           const after = now.find((x) => x.heading === h)?.digest ?? null;
+          // v3 F6a (ADR 0076): the draft vocabulary's section, absent before and after (unpublished), carries as it is.
+          if (
+            approvedDigest === null &&
+            before === null &&
+            after === null &&
+            pack.rules.referenceTypes?.status === 'draft' &&
+            headingKey(h) === headingKey(pack.rules.referenceTypes.section)
+          )
+            continue;
           if (approvedDigest === null || before !== approvedDigest || after === null) return false;
           if (headingKey(h) !== headingKey(o.section) && after !== approvedDigest) return false;
         }
@@ -856,7 +952,9 @@ export function createPacks(d: PacksDeps): Packs {
           version: o.after.version,
           ...(headings.length > 0
             ? {
-                sections: now.map((x) => ({ heading: x.heading, digest: x.digest! })),
+                sections: now
+                  .filter((x) => x.digest !== null)
+                  .map((x) => ({ heading: x.heading, digest: x.digest! })),
               }
             : {}),
         });
@@ -944,13 +1042,19 @@ export function createPacks(d: PacksDeps): Packs {
         if (fresh.version !== pack.version)
           throw new PackError(
             'NEW_VERSION_OFFERED',
-            `The governance check just offered version ${fresh.version} (${status.supplementary?.state === 'offered' ? `the Approved Supplementary Tags now read ${status.supplementary.tags.join(', ')}` : 'the rules changed'}): look at it, then approve that version.`,
+            `The governance check just offered version ${fresh.version} (${status.supplementary?.state === 'offered' ? `the Approved Supplementary Tags now read ${status.supplementary.tags.join(', ')}` : status.referenceTypes?.state === 'offered' ? 'the Reference Type Vocabulary section now states the vocabulary' : 'the rules changed'}): look at it, then approve that version.`,
             { version: fresh.version, governance: status },
           );
         if (status.supplementary?.state === 'unreadable')
           throw new PackError(
             'GOVERNANCE_SECTION_UNPARSABLE',
             `The pack cannot be approved: the Tagging Standard's Approved Supplementary Tags cannot be read exactly (${status.supplementary.reason ?? 'unreadable'}). Restore the sentence's form (“… permitted supplementary tags …: A, B and C.”) on the page.`,
+            { governance: status },
+          );
+        if (status.referenceTypes?.state === 'unreadable')
+          throw new PackError(
+            'GOVERNANCE_SECTION_UNPARSABLE',
+            `The pack cannot be approved: the Reference Type Vocabulary section cannot be read exactly (${status.referenceTypes.reason ?? 'unreadable'}). Publish the vocabulary again from the Reference Types page, or restore the section's form on the page.`,
             { governance: status },
           );
         const unreadable = status.sources.filter((s) => s.current === null);

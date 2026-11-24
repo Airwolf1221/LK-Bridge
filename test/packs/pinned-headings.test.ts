@@ -54,6 +54,8 @@ describe('the six exact headings', () => {
       'Nation-Centred Territorial Navigation',
       'Approved Hierarchy and Standardised Navigation',
       'Active Template Suite and Sidebar Collections',
+      // v3 F6a (ADR 0076): unpublished while the vocabulary is a draft (never refusing the approval).
+      'Reference Type Vocabulary',
     ]);
     expect(seeded('tagging-standard')).toEqual([
       'Exact Tag Grammar',
@@ -63,7 +65,7 @@ describe('the six exact headings', () => {
       // v3 F5a (ADR 0067, H1): the Approved Supplementary Tags.
       'Approved Supplementary Tags',
     ]);
-    expect(seeded('source-formatting')).toEqual([...PINNED.formatting]);
+    expect(seeded('source-formatting')).toEqual([...PINNED.formatting, 'Reference Type Vocabulary']);
     expect(seeded('tagging-standard')).toEqual([...PINNED.tagging]);
     await packs().commands.approve('owner', 'arkona');
     const status = await packs().governance('arkona');
@@ -120,6 +122,7 @@ describe('the six exact headings', () => {
     expect(after.seed).toBe(ARKONA_PACK.seed);
     expect(after.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([
       ...PINNED.formatting,
+      'Reference Type Vocabulary',
     ]);
     expect(after.governance.find((g) => g.key === 'tagging-standard')!.sections).toEqual([...PINNED.tagging]);
     expect(after.rules.owners?.tags.working).toEqual(['$status', '$primary', '$specialist']);

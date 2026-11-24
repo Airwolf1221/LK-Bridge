@@ -23,6 +23,7 @@
  * from the page as it is now and the record's target, and does only what is left (a new proposal, every guard and
  * precondition checked again). Nothing is ever replayed.
  */
+import { promotionWarning } from '../../packs/reftypes/service.js';
 import {
   inNarratives,
   NARRATIVE_NO_LIFECYCLE,
@@ -1894,6 +1895,15 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
                 ...(suggested && suggested.id !== dest.id
                   ? [`goes under ${dest.rawName}; it was under ${suggested.name} before move_to_working`]
                   : []),
+                // v3 F6a (ADR 0076): a Working page is checked against the Reference Type vocabulary when promoted.
+                ...[
+                  promotionWarning(
+                    pd.services?.referenceTypes?.packFor(ctx.projectId)?.approved ?? null,
+                    { name: page.name, tags: page.tags },
+                    page.sidebar,
+                    o.propertyTitle,
+                  ),
+                ].filter((x): x is string => x !== null),
               ],
             };
           }),

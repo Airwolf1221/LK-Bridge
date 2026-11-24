@@ -58,8 +58,8 @@ describe('G10: titled block defaults', () => {
     expect(shown.ok).toBe(false);
   });
 
-  it('a kind not yet confirmed (meter) still reports the difference', () => {
-    expect(TITLED_BLOCK_DEFAULTS.meter).toBeUndefined();
+  it('meter, confirmed by the probe since v3 F6a (ADR 0076): its default verifies, another value still reports', () => {
+    expect(TITLED_BLOCK_DEFAULTS.meter).toEqual({ title: 'Meter', isTitleHidden: false });
     const meter = {
       id: 'm1',
       kind: 'meter',
@@ -67,8 +67,10 @@ describe('G10: titled block defaults', () => {
       items: [{ name: 'Probe', icon: 'heart', current: 1, max: 2 }],
     };
     const r = compareStoredBlocks([meter], [{ ...meter, title: 'Meter', isTitleHidden: false }]);
-    expect(r.ok).toBe(false);
-    expect(r.count).toBe(2);
+    expect(r).toMatchObject({ ok: true, count: 0 });
+    const hidden = compareStoredBlocks([meter], [{ ...meter, title: 'Meter', isTitleHidden: true }]);
+    expect(hidden.ok).toBe(false);
+    expect(hidden.count).toBe(1);
   });
 
   it('the defaults table holds only titled kinds, and the rule is listed among the ignored fields', () => {
