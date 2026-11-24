@@ -33,6 +33,7 @@ import {
   readStoredSettings,
   reserveFloorsSchema,
   tierLimitsSchema,
+  type ReserveFloors,
 } from './runtime-settings.js';
 import type { AdminRuntime } from './types.js';
 
@@ -139,12 +140,16 @@ export function createConfigSettings(d: {
 
   const runningFloors = () => {
     const g = runtime.projects.clients()[0]?.client.governor.settings.reserveFloors;
-    return g ? { interactive: g.P1, job: g.P2, maintenance: g.P3 } : { ...config.governor.reserveFloors };
+    return g
+      ? { interactive: g.P1, job: g.P2, maintenance: g.P3, bulk: g.P4 }
+      : { ...config.governor.reserveFloors };
   };
-  const FLOOR_PART: Record<string, 'interactive' | 'job' | 'maintenance'> = {
+  const FLOOR_PART: Record<string, 'interactive' | 'job' | 'maintenance' | 'bulk'> = {
     RESERVE_FLOOR_INTERACTIVE: 'interactive',
     RESERVE_FLOOR_JOB: 'job',
     RESERVE_FLOOR_MAINTENANCE: 'maintenance',
+    // v3 F9 (ADR 0074): stored only when the owner sets it; otherwise the environment's, or the default raised to P3.
+    RESERVE_FLOOR_BULK: 'bulk',
   };
   const JOURNAL_PART: Record<string, 'retentionDays' | 'maxBytes'> = {
     JOURNAL_RETENTION_DAYS: 'retentionDays',
@@ -282,7 +287,9 @@ export function createConfigSettings(d: {
           : env[e.key] !== undefined && env[e.key] !== ''
             ? 'environment'
             : 'default';
-      const value = dashboard ?? environment ?? e.default;
+      // v3 F9 (ADR 0074): a bulk floor set nowhere follows the maintenance floor up: shown as it runs.
+      const derived = e.key === 'RESERVE_FLOOR_BULK' && source === 'default';
+      const value = derived ? l.running : (dashboard ?? environment ?? e.default);
       return {
         ...base,
         value,
@@ -407,12 +414,26 @@ export function createConfigSettings(d: {
         return;
       case 'reserveFloors': {
         const part = FLOOR_PART[e.key]!;
-        const from = stored.reserveFloors ?? runningFloors();
-        const next = { ...from, [part]: v === null ? envConfig.governor.reserveFloors[part] : number(e, v) };
+        // v3 F9: the bulk floor is carried only when it was saved; the three others as they run.
+        const run = runningFloors();
+        const from: ReserveFloors = stored.reserveFloors ?? {
+          interactive: run.interactive,
+          job: run.job,
+          maintenance: run.maintenance,
+        };
+        let next: ReserveFloors;
+        if (part === 'bulk') {
+          const { bulk: _bulk, ...rest } = from;
+          next = v === null ? rest : { ...rest, bulk: number(e, v) };
+        } else next = { ...from, [part]: v === null ? envConfig.governor.reserveFloors[part] : number(e, v) };
         const ok = reserveFloorsSchema.safeParse(next);
         if (!ok.success)
           throw new AdminHttpError(400, 'INVALID_INPUT', ok.error.issues.map((i) => i.message).join('; '));
-        actions.setReserveFloors(same(next, envConfig.governor.reserveFloors) ? null : next);
+        const env = envConfig.governor.reserveFloors;
+        const asEnv =
+          next.bulk === undefined &&
+          same([next.interactive, next.job, next.maintenance], [env.interactive, env.job, env.maintenance]);
+        actions.setReserveFloors(asEnv ? null : next);
         return;
       }
       case 'exposePerOpTools':

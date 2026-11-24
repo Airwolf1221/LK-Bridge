@@ -131,6 +131,8 @@ describe('Overview', () => {
     expect(within(budget).getByText('Writes per minute')).toBeInTheDocument();
     expect(within(budget).getByText('12 / 120')).toBeInTheDocument();
     expect(within(budget).getAllByRole('img', { name: /per cent used/ })).toHaveLength(4);
+    // v3 F9 (ADR 0074): the bulk class's queue beside the others.
+    expect(budget).toHaveTextContent('maintenance 0 · bulk 3 · dashboard 0');
     // v2 A1: which project this is, and no warning while every project is active.
     expect(screen.getByTestId('page-project')).toHaveTextContent('Project: baisheng');
     expect(screen.queryByRole('region', { name: /need(s)? attention/ })).toBeNull();
@@ -372,9 +374,10 @@ describe('Request Budgets', () => {
       'upload',
     ],
     reserveFloors: {
-      current: { interactive: 0.1, job: 0.25, maintenance: 0.5 },
-      environment: { interactive: 0.1, job: 0.25, maintenance: 0.5 },
-      stored: null,
+      current: { interactive: 0.1, job: 0.25, maintenance: 0.5, bulk: 0.7 },
+      environment: { interactive: 0.1, job: 0.25, maintenance: 0.5, bulk: 0.7 },
+      stored: null as null | Record<string, number>,
+      bulkExplicit: false,
     },
     projectDrift: { atMs: Date.now(), observedUsed: 2600, modelledUsed: 2000, delta: 600 },
     samples: {
@@ -420,6 +423,41 @@ describe('Request Budgets', () => {
     expect(queues).toHaveTextContent('P1 · interactive (agents)');
     expect(within(queues).getByText('14')).toBeInTheDocument();
     expect(screen.getByLabelText('Jobs (P2)')).toHaveValue('25');
+    // v3 F9 (ADR 0074): the bulk class's queue and its floor.
+    expect(queues).toHaveTextContent('P4 · bulk passes');
+    expect(within(queues).getByText('3')).toBeInTheDocument();
+    expect(screen.getByLabelText('Bulk (P4)')).toHaveValue('70');
+    expect(screen.getByRole('region', { name: 'Reserve floors' })).toHaveTextContent(
+      'The bulk floor follows its default (70%, or the maintenance floor if that is higher).',
+    );
+  });
+
+  it('v3 F9: sends the bulk floor only when it is changed, and refuses one below maintenance', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /budgets': budgets(),
+      'PUT /budgets/reserve-floors': { reserveFloors: {} },
+    });
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    renderApp('/ui/budgets');
+    const bulk = await screen.findByLabelText('Bulk (P4)');
+    await user.clear(bulk);
+    await user.type(bulk, '40'); // below maintenance (50): invalid
+    expect(screen.getByRole('alert')).toHaveTextContent(/maintenance ≤ bulk/);
+    expect(screen.getByRole('button', { name: 'Save floors' })).toBeDisabled();
+    await user.clear(bulk);
+    await user.type(bulk, '80');
+    await user.click(screen.getByRole('button', { name: 'Save floors' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save floors' }));
+    await waitFor(() => expect(api.find('PUT', '/budgets/reserve-floors')).toHaveLength(1));
+    expect(api.find('PUT', '/budgets/reserve-floors')[0]!.body).toEqual({
+      interactive: 0.1,
+      job: 0.25,
+      maintenance: 0.5,
+      bulk: 0.8,
+      confirm: true,
+    });
   });
 
   it('E5.5: lists the learned operation limits: group, operations seen, limit, window, remaining, last seen, expiry', async () => {

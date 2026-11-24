@@ -2,8 +2,8 @@
  * The compact budget footer appended to every MCP tool result (PLAN §5.4), e.g.
  * `budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/60k·d | project 9.8k/12k·h | queue P1:0 P2:14`
  *
- * Numbers for tiers whose limit is 10,000 or more are shortened to `k` (one decimal below 10k). P0 and P3 queue
- * depths are only shown when non-zero. When LK is refusing a tier (429), ` | blocked <tier> <seconds>s` is
+ * Numbers for tiers whose limit is 10,000 or more are shortened to `k` (one decimal below 10k). P0, P3 and P4 (bulk,
+ * v3 F9) queue depths are only shown when non-zero. When LK is refusing a tier (429), ` | blocked <tier> <seconds>s` is
  * appended so an agent knows not to retry before then. v2 E5.5: a learned operation group LK is refusing is named the
  * same way (` | blocked assets 12s`); learned limits are otherwise not in the line (the Budgets page lists them).
  */
@@ -43,6 +43,7 @@ export function formatBudgetFooter(snapshot: BudgetSnapshot, project?: string): 
     `P1:${q.P1}`,
     `P2:${q.P2}`,
     ...(q.P3 > 0 ? [`P3:${q.P3}`] : []),
+    ...(q.P4 > 0 ? [`P4:${q.P4}`] : []),
   ].join(' ');
   const parts = [
     `budget${project ? ` (${project})` : ''}: writes ${pair(snapshot, 'write-min', 'min')} ${pair(snapshot, 'write-hour', 'h')}`,

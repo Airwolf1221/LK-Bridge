@@ -17,7 +17,8 @@ describe('loadConfig', () => {
     expect(c.lk.allowMemberAdmin).toBe(false);
     expect(c.writers.max).toBe(2);
     expect(c.mcp.exposePerOpTools).toBe(false);
-    expect(c.governor.reserveFloors).toEqual({ interactive: 0.1, job: 0.25, maintenance: 0.5 });
+    expect(c.governor.reserveFloors).toEqual({ interactive: 0.1, job: 0.25, maintenance: 0.5, bulk: 0.7 });
+    expect(c.governor.bulkFloorSet).toBeNull();
     expect(c.governor).toMatchObject({ writeSpacingMs: 500, writeSpacingStretchedMs: 1200 });
     expect(c.lk.tierLimits).toEqual(DEFAULT_TIER_LIMITS);
     expect(c.journal.retentionDays).toBe(30);
@@ -45,5 +46,31 @@ describe('loadConfig', () => {
     } catch (e) {
       expect((e as Error).message).not.toContain('secret-short');
     }
+  });
+
+  // v3 F9 (ADR 0074): the bulk floor at load.
+  describe('the bulk floor (RESERVE_FLOOR_BULK)', () => {
+    it('is used as set, and must be at least the maintenance floor (the message names both)', () => {
+      const c = loadConfig({ ...base, RESERVE_FLOOR_BULK: '0.8' });
+      expect(c.governor.reserveFloors.bulk).toBe(0.8);
+      expect(c.governor.bulkFloorSet).toBe(0.8);
+      expect(() =>
+        loadConfig({ ...base, RESERVE_FLOOR_MAINTENANCE: '0.6', RESERVE_FLOOR_BULK: '0.55' }),
+      ).toThrow(/RESERVE_FLOOR_BULK \(0\.55\) is below RESERVE_FLOOR_MAINTENANCE \(0\.6\)/);
+      expect(() => loadConfig({ ...base, RESERVE_FLOOR_BULK: '1.5' })).toThrow(/RESERVE_FLOOR_BULK/);
+    });
+
+    it('unset, follows an owner-raised maintenance floor instead of failing the start', () => {
+      const c = loadConfig({ ...base, RESERVE_FLOOR_MAINTENANCE: '0.8' });
+      expect(c.governor.reserveFloors).toMatchObject({ maintenance: 0.8, bulk: 0.8 });
+      expect(c.governor.bulkFloorSet).toBeNull();
+      expect(loadConfig({ ...base, RESERVE_FLOOR_BULK: '' }).governor.reserveFloors.bulk).toBe(0.7);
+    });
+
+    it('reaches the governor settings as P4', async () => {
+      const { governorSettingsFrom } = await import('../../src/config/lk.js');
+      const c = loadConfig({ ...base, RESERVE_FLOOR_MAINTENANCE: '0.75' });
+      expect(governorSettingsFrom(c).reserveFloors).toEqual({ P0: 0, P1: 0.1, P2: 0.25, P3: 0.75, P4: 0.75 });
+    });
   });
 });

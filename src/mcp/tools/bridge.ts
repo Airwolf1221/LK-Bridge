@@ -280,7 +280,10 @@ export function budgetBody(s: BudgetSnapshot) {
     writeSpacingMs: s.writeSpacingMs,
     nextWriteInSeconds:
       s.nextWriteAtMs === null ? 0 : Math.max(0, Math.ceil((s.nextWriteAtMs - s.atMs) / 1000)),
-    note: 'Interactive calls (P1) may use down to the interactive reserve; jobs (P2) leave more headroom.',
+    note:
+      'Interactive calls (P1) may use down to the interactive reserve; jobs (P2) leave more headroom; maintenance (P3) ' +
+      'more again, and bulk passes (P4: the nightly full snapshot, full tree and asset walks) the most. P3 and P4 wait ' +
+      'while P1 or P2 work is queued, and P4 also gives way to ready P3 work.',
   };
 }
 
@@ -663,9 +666,9 @@ function otherTools(deps: ToolDeps) {
           .optional()
           .describe('Items created through createManyResources.'),
         priority: z
-          .enum(['P1', 'P2', 'P3'])
+          .enum(['P1', 'P2', 'P3', 'P4'])
           .optional()
-          .describe('P1 interactive, P2 job (default), P3 maintenance.'),
+          .describe('P1 interactive, P2 job (default), P3 maintenance, P4 bulk (whole-repository passes).'),
         project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,

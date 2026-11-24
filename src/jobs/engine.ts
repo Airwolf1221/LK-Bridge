@@ -911,7 +911,7 @@ export class JobEngine {
     try {
       const value = await callOp(this.clientOf(project), def, params, {
         priority: opts.priority,
-        jobId: opts.jobId,
+        jobId: opts.jobId ?? opts.lane,
         signal: opts.signal,
         requestIdPrefix: `lkb.t${randomBytes(6).toString('hex')}`,
         onError: (err) => {

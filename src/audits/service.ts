@@ -347,6 +347,11 @@ export class Audits {
     return out;
   }
 
+  /** v3 F9 (ADR 0074, B5): whether an audit of the project is running now. */
+  isRunning(projectId: string): boolean {
+    return this.running.has(projectId);
+  }
+
   /** Waits for the audits started after full snapshots (tests, shutdown). */
   async settled(): Promise<void> {
     while (this.background.size > 0) await Promise.allSettled([...this.background]);

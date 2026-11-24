@@ -6,7 +6,7 @@ import { ALL_PROJECTS } from '../../projects/index.js';
 import { redactDeep } from '../redact.js';
 import { AdminHttpError } from '../http.js';
 import { budgetPayload } from '../stream.js';
-import { reserveFloorsSchema } from '../runtime-settings.js';
+import { reserveFloorsShape } from '../runtime-settings.js';
 import { confirmBody, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 interface Point {
@@ -52,7 +52,7 @@ export const registerBudgets: Register = (api, ctx) => {
     const g = projects.clients()[0]?.client.governor;
     if (!g) return envConfig.governor.reserveFloors;
     const f = g.settings.reserveFloors;
-    return { interactive: f.P1, job: f.P2, maintenance: f.P3 };
+    return { interactive: f.P1, job: f.P2, maintenance: f.P3, bulk: f.P4 };
   };
   const budgetQuery = z.object({
     hours: z.coerce.number().min(1).max(48).default(24),
@@ -77,6 +77,10 @@ export const registerBudgets: Register = (api, ctx) => {
         current: floorsNow(),
         environment: envConfig.governor.reserveFloors,
         stored: actions.storedSettings().reserveFloors,
+        // v3 F9 (ADR 0074): whether the bulk floor is set (saved here, or RESERVE_FLOOR_BULK) or follows the default.
+        bulkExplicit:
+          actions.storedSettings().reserveFloors?.bulk !== undefined ||
+          envConfig.governor.bulkFloorSet !== null,
       },
       // Observed (LegendKeeper's own count) against modelled (ours) for the tier other keys also draw on.
       projectDrift: project.drift,
@@ -110,7 +114,8 @@ export const registerBudgets: Register = (api, ctx) => {
     const body = parseInput(
       z.union([
         z.object({ reset: z.literal(true), confirm: z.literal(true) }),
-        reserveFloorsSchema.and(confirmBody),
+        // The order (and the refusal naming both floors) is checked by the action, so its message reaches the page.
+        reserveFloorsShape.and(confirmBody),
       ]),
       req.body,
     );

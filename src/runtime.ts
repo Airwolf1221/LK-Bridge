@@ -1409,7 +1409,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     links: lifecycle,
     chronology,
     snapshots,
-    audits: { run: (projectId, trigger) => audits.run(projectId, trigger) },
+    audits: {
+      run: (projectId, trigger) => audits.run(projectId, trigger),
+      running: (projectId) => audits.isRunning(projectId),
+    },
     blockIds,
     automation: {
       run: async (projectId, trigger) => {

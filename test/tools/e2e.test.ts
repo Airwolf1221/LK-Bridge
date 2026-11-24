@@ -302,6 +302,8 @@ describe('the MCP surface with the official client', () => {
     expect(info.body.caller.kind).toBe('pat');
     const budget = await stack.call(client, 'bridge_budget');
     expect((budget.body.tiers as { tier: string }[]).map((t) => t.tier)).toContain('write-min');
+    // v3 F9 (ADR 0074): the bulk class's queue is in the output.
+    expect(budget.body.queues).toEqual({ P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 });
     const est = await stack.call(client, 'bridge_estimate', { reads: 3500, writes: 800 });
     expect(est.body).toHaveProperty('tightestTier');
     expect(est.body.fitsToday).toBe(true);

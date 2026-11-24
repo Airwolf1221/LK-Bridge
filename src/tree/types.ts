@@ -163,7 +163,7 @@ export interface PassView {
   readonly finishedAt: number | null;
 }
 
-/** The estimate shown before a build starts reading (bridge_estimate's arithmetic, at P3). */
+/** The estimate shown before a build starts reading (bridge_estimate's arithmetic, at P4: v3 F9). */
 export interface BuildEstimate {
   readonly listed: number;
   readonly subtree: number;

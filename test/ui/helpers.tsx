@@ -280,7 +280,7 @@ export const snapshot = (over: Record<string, Record<string, unknown>> = {}) => 
       tier(id as string, used as number, limit as number | null, over[id as string] ?? {}),
     ]),
   ),
-  queues: { P0: 0, P1: 1, P2: 14, P3: 0 },
+  queues: { P0: 0, P1: 1, P2: 14, P3: 0, P4: 3 },
   inFlight: 2,
   writeSpacingMs: 500,
   nextWriteAtMs: null,

@@ -10,7 +10,7 @@ import { BridgeLkError, BudgetWaitError } from '../lk/errors.js';
 import type { VerifyResult } from '../lk/governor/types.js';
 import type { OperationDef } from '../lk/registry-types.js';
 import { InvalidParamsError } from './errors.js';
-import type { OpParams, PriorityClass } from './types.js';
+import type { GovernorPriorityClass, OpParams } from './types.js';
 
 const LOCAL_CODES = new Set([
   'GOVERNOR_BYPASS',
@@ -35,7 +35,7 @@ export function newCallStats(): CallStats {
 }
 
 export interface CallOptions {
-  readonly priority: PriorityClass;
+  readonly priority: GovernorPriorityClass;
   readonly jobId?: string | undefined;
   readonly idempotencyKey?: string | null | undefined;
   readonly ifMatch?: string | null | undefined;

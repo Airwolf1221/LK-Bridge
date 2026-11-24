@@ -135,8 +135,9 @@ export interface Lifecycle {
   /** The pages that link to a page, from the link index (pages still in the tree only). */
   related(projectId: string, pageId: string): Related;
   /**
-   * The link sweep of one project: paced (P3 reads that wait out an exhausted budget, and wait while agents' P1 or P2
-   * work is queued), resumable (a pass that stops is continued by the next run).
+   * The link sweep of one project: paced (bulk P4 reads, v3 F9 / ADR 0074: it reads every page; they wait out an
+   * exhausted budget, give way to routine P3 work and wait while agents' P1 or P2 work is queued), resumable (a pass
+   * that stops is continued by the next run).
    */
   sweep(projectId: string): Promise<{
     readonly summary: string;
@@ -146,6 +147,9 @@ export interface Lifecycle {
   /** Stops a sweep in flight (shutdown): it stops after its current read, to be continued by the next run. */
   stop(): void;
 }
+
+/** v3 F9 (ADR 0074): the link sweep reads every page of the AI REPOSITORY: bulk. */
+export const LINK_SWEEP_PRIORITY = 'P4' as const;
 
 const nodeView = (n: TreeNode) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') });
 
@@ -506,15 +510,19 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
   // ------------------------------------------------------------------------------------------ the sweep
 
   const stopper = new AbortController();
-  /** One P3 read of the sweep: a gone page is undefined; an exhausted budget is waited out on the clock. */
+  /**
+   * One read of the sweep, at LINK_SWEEP_PRIORITY (bulk, P4) in its own fair-share lane: a gone page is undefined; an
+   * exhausted budget is waited out on the clock.
+   */
   const read = async (projectId: string, op: string, params: OpParams): Promise<unknown> => {
     for (;;) {
       if (stopper.signal.aborted) throw new Error('the bridge is stopping');
       try {
         return await d.engine.internalRead(projectId, op, params, {
-          priority: 'P3',
+          priority: LINK_SWEEP_PRIORITY,
           notFoundIsAnswer: true,
           signal: stopper.signal,
+          lane: 'link-sweep',
         });
       } catch (e) {
         if (e instanceof LkOperationError && (e.lk.status === 404 || e.lkCode === 'NOT_FOUND'))

@@ -312,7 +312,7 @@ function BuildCard({ data, now, onChanged }: { data: TreeOverview; now: number; 
           <p>
             <strong>{fmtInt(pass.estimate.subtree)}</strong> pages are under the root (of{' '}
             {fmtInt(pass.estimate.listed)} listed with {fmtInt(pass.estimate.listingRequests)} requests).
-            Reading each one costs <strong>{fmtInt(pass.estimate.reads)}</strong> requests at P3: about{' '}
+            Reading each one costs <strong>{fmtInt(pass.estimate.reads)}</strong> requests at P4 (bulk): about{' '}
             <strong>{fmtDuration(pass.estimate.wallClockMs)}</strong> at the current budget
             {pass.estimate.tightestTier ? ` (limited by ${pass.estimate.tightestTier})` : ''}.{' '}
             {pass.estimate.fitsInDailyBudget

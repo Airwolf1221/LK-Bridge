@@ -12,7 +12,8 @@ export type TierId =
   | 'items-min'
   | 'items-hour'
   | 'upload';
-export type PriorityClass = 'P0' | 'P1' | 'P2' | 'P3';
+/** v3 F9 (ADR 0074): P4 is bulk (the whole-repository passes). */
+export type PriorityClass = 'P0' | 'P1' | 'P2' | 'P3' | 'P4';
 export type JobStatus =
   'queued' | 'running' | 'waiting_budget' | 'waiting_lock' | 'paused' | 'succeeded' | 'failed' | 'cancelled';
 export type StepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'uncertain' | 'cancelled';
@@ -423,9 +424,12 @@ export interface BudgetsResponse extends BudgetPayload {
   project?: ProjectRef;
   tierOrder: TierId[];
   reserveFloors: {
-    current: { interactive: number; job: number; maintenance: number };
-    environment: { interactive: number; job: number; maintenance: number };
-    stored: { interactive: number; job: number; maintenance: number } | null;
+    current: { interactive: number; job: number; maintenance: number; bulk: number };
+    environment: { interactive: number; job: number; maintenance: number; bulk: number };
+    /** `bulk` only when the owner saved one (v3 F9). */
+    stored: { interactive: number; job: number; maintenance: number; bulk?: number } | null;
+    /** v3 F9: the bulk floor is set (saved here or in the environment) rather than following the default. */
+    bulkExplicit: boolean;
   };
   projectDrift: TierSnapshot['drift'];
   samples: BudgetSamples;

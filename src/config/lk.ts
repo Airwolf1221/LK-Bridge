@@ -7,9 +7,20 @@
  * module and the two form an import cycle.
  */
 import type { TierId } from '../lk/registry-types.js';
+import { effectiveBulkFloor } from './floors.js';
 import { DEFAULT_TIER_LIMITS, TIER_WINDOW_SECONDS, type Config } from './index.js';
 
-export type PriorityClass = 'P0' | 'P1' | 'P2' | 'P3';
+export { bulkOrderMessage, DEFAULT_BULK_FLOOR, effectiveBulkFloor } from './floors.js';
+
+/**
+ * The governor's request classes (PLAN §5.2). P4 (bulk, v3 F9, ADR 0074) is the whole-repository and whole-library
+ * walks: the nightly full snapshot, the full tree and asset passes. It is a request class only: a job row is never P4
+ * (`src/jobs/types.ts` `PriorityClass` is P0 to P3).
+ */
+export type PriorityClass = 'P0' | 'P1' | 'P2' | 'P3' | 'P4';
+
+/** The reserve floors given to `defaultGovernorSettings`: P4 may be left out (`effectiveBulkFloor` decides it). */
+export type ReserveFloorsInput = Readonly<Omit<Record<PriorityClass, number>, 'P4'> & { P4?: number }>;
 
 export interface RetrySettings {
   /** A 429 whose wait is at most this long is waited out and retried; longer waits surface `BudgetWaitError`. */
@@ -59,7 +70,11 @@ export interface LkSettings {
 }
 
 /** Defaults straight from PLAN §1.2, §5.2 and §5.3. */
-export function defaultGovernorSettings(overrides: Partial<GovernorSettings> = {}): GovernorSettings {
+export function defaultGovernorSettings(
+  overrides: Partial<Omit<GovernorSettings, 'reserveFloors'>> & {
+    readonly reserveFloors?: ReserveFloorsInput;
+  } = {},
+): GovernorSettings {
   const tierLimits = { ...DEFAULT_TIER_LIMITS, ...overrides.tierLimits };
   const tierWindowsMs = Object.fromEntries(
     Object.entries(TIER_WINDOW_SECONDS).map(([tier, s]) => [tier, s === null ? null : s * 1000]),
@@ -67,7 +82,7 @@ export function defaultGovernorSettings(overrides: Partial<GovernorSettings> = {
   return {
     tierLimits,
     tierWindowsMs: { ...tierWindowsMs, ...overrides.tierWindowsMs },
-    reserveFloors: { P0: 0, P1: 0.1, P2: 0.25, P3: 0.5, ...overrides.reserveFloors },
+    reserveFloors: floorsWithBulk({ P0: 0, P1: 0.1, P2: 0.25, P3: 0.5, ...overrides.reserveFloors }),
     writeSpacingMs: overrides.writeSpacingMs ?? 500,
     writeSpacingStretchedMs: overrides.writeSpacingStretchedMs ?? 1200,
     stretchHourlyWrites: overrides.stretchHourlyWrites ?? tierLimits['write-hour'] ?? 3000,
@@ -89,12 +104,16 @@ export function defaultGovernorSettings(overrides: Partial<GovernorSettings> = {
   };
 }
 
+function floorsWithBulk(f: ReserveFloorsInput): Readonly<Record<PriorityClass, number>> {
+  return { P0: f.P0, P1: f.P1, P2: f.P2, P3: f.P3, P4: effectiveBulkFloor(f.P3, f.P4) };
+}
+
 /** The governor settings every project's governor is built with (each project has its own governor, v2 A1). */
 export function governorSettingsFrom(config: Config): GovernorSettings {
   const floors = config.governor.reserveFloors;
   return defaultGovernorSettings({
     tierLimits: config.lk.tierLimits,
-    reserveFloors: { P0: 0, P1: floors.interactive, P2: floors.job, P3: floors.maintenance },
+    reserveFloors: { P0: 0, P1: floors.interactive, P2: floors.job, P3: floors.maintenance, P4: floors.bulk },
     writeSpacingMs: config.governor.writeSpacingMs,
     writeSpacingStretchedMs: config.governor.writeSpacingStretchedMs,
   });

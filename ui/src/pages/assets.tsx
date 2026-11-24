@@ -229,7 +229,8 @@ function BuildCard({ data, now, onChanged }: { data: AssetOverview; now: number;
                 <strong>{fmtInt(pass.estimate.likelyRequestsRemaining)}</strong>
               </>
             ) : null}
-            , at P3: about <strong>{fmtDuration(pass.estimate.wallClockMs)}</strong> at the current budget
+            , at P4 (bulk): about <strong>{fmtDuration(pass.estimate.wallClockMs)}</strong> at the current
+            budget
             {pass.estimate.tightestTier ? ` (limited by ${pass.estimate.tightestTier})` : ''}.{' '}
             {pass.estimate.fitsInDailyBudget
               ? 'It fits in what is left of today’s budget.'

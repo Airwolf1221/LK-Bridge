@@ -1,4 +1,4 @@
-import { defaultGovernorSettings, type GovernorSettings } from '../../src/config/lk.js';
+import { defaultGovernorSettings } from '../../src/config/lk.js';
 import { FakeClock } from '../../src/lk/governor/clock.js';
 import { Governor, type GovernorOptions } from '../../src/lk/governor/governor.js';
 import type { CostSpec, ExecuteRequest, PriorityClass } from '../../src/lk/governor/types.js';
@@ -48,7 +48,7 @@ export function rate(limit: number, remaining: number, resetAtMs: number): Recor
  * passes v2 E5.5's options (the measured write duration, the info log).
  */
 export function setup(
-  overrides: Partial<GovernorSettings> = {},
+  overrides: Parameters<typeof defaultGovernorSettings>[0] = {},
   responder?: Responder,
   extra: Pick<GovernorOptions, 'writeDuration' | 'log'> = {},
 ) {

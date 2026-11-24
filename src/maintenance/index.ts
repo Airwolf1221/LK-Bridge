@@ -18,6 +18,7 @@ import { createMaintenanceCommands, type MaintenanceCommands } from './commands.
 import type { AssetMaintenance } from './asset-jobs.js';
 import {
   builtinJobs,
+  nightChainBusy,
   type AuditMaintenance,
   type ChronologyMaintenance,
   type SnapshotMaintenance,
@@ -72,11 +73,15 @@ export interface CreateMaintenanceOptions {
   readonly blockIds?: BlockIdSweep;
   /** v3 F5b (ADR 0068): the automation framework, for `automation-run`. */
   readonly automation?: AutomationMaintenance;
+  /** v3 F9 test seam: the night chain's poll interval and longest wait (default 30 s and 6 hours). */
+  readonly chainWait?: { readonly pollMs?: number; readonly maxWaitMs?: number };
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
 
 export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
+  // v3 F9 (ADR 0074, B5): ends the waits of scheduled runs for the night's chain when the bridge stops.
+  const chainStop = new AbortController();
   const scheduler = new MaintenanceScheduler({
     db: o.db,
     engine: o.engine,
@@ -108,6 +113,12 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
             }
           : {}),
         ...(o.automation ? { automation: o.automation } : {}),
+        chain: {
+          busy: nightChainBusy(o.snapshots, o.audits),
+          clock: o.clock,
+          signal: chainStop.signal,
+          ...(o.chainWait ?? {}),
+        },
       }),
       ...(o.extraJobs ?? []),
     ],
@@ -137,6 +148,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
     start: () => scheduler.start(),
     stop: async (waitMs?: number) => {
       offStop?.();
+      chainStop.abort();
       await scheduler.stop(waitMs);
     },
   };

@@ -43,6 +43,7 @@ export default defineConfig({
       'test/f7/**/*.test.ts', // v3 F7: guided character art (ADR 0070)
       'test/f7b/**/*.test.ts', // v3 F7b: seeing character art, arkona_get_art (ADR 0071)
       'test/f7_1/**/*.test.ts', // v3 F7.1: a Compact Reference becomes the Character Core (ADR 0072)
+      'test/f9/**/*.test.ts', // v3 F9: the bulk class P4 and its callers (ADR 0074)
       'test/sandbox-mock/**/*.test.ts', // CR-2026-11-R4 (S): every sandbox check, run against the mock in the ordinary suite
       'test/ui/**/*.test.{ts,tsx}',
     ],

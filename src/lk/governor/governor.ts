@@ -7,6 +7,7 @@
  * tiers exhausted on 429. Failures go through the retry matrix (`retry.ts`).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { bulkOrderMessage, effectiveBulkFloor } from '../../config/floors.js';
 import type { GovernorSettings, PriorityClass } from '../../config/lk.js';
 import {
   BridgeLkError,
@@ -211,6 +212,11 @@ function windowName(ms: number): string {
   return ms <= 60_000 ? 'minute' : ms <= 3_600_000 ? 'hour' : 'day';
 }
 
+/** CR-2026-11-R3 (R3-62) `patient`; v3 F9 (ADR 0074): every bulk (P4) call is patient. */
+function isPatient(req: ExecuteRequest<unknown>): boolean {
+  return req.patient === true || req.priority === 'P4';
+}
+
 function weightFor(tier: TierId, costs: CostSpec): number {
   return ITEM_TIERS.has(tier) ? (costs.items ?? 1) : 1;
 }
@@ -257,6 +263,7 @@ export class Governor {
     P1: new Map(),
     P2: new Map(),
     P3: new Map(),
+    P4: new Map(),
   };
   private readonly listeners = new Map<keyof GovernorEvents, Set<(e: never) => void>>();
   private inFlight = 0;
@@ -320,18 +327,21 @@ export class Governor {
   /**
    * Chunk 5 (dashboard, "Request Budgets" page): changes the reserve floors live. Floors are read at every admission
    * and by `estimate`, so the next call sees the new values. P0 is always 0; the rest are fractions 0-1 and must keep
-   * the order P1 <= P2 <= P3 (as the configuration requires at start-up). Throws `RangeError` otherwise.
+   * the order P1 <= P2 <= P3 <= P4 (as the configuration requires at start-up). Throws `RangeError` otherwise.
+   * v3 F9 (ADR 0074): without P4, the bulk floor is the default, raised to P3 when P3 is above it (`effectiveBulkFloor`).
    */
-  setReserveFloors(floors: Readonly<Record<'P1' | 'P2' | 'P3', number>>): void {
+  setReserveFloors(floors: Readonly<Record<'P1' | 'P2' | 'P3', number> & { P4?: number }>): void {
     const { P1, P2, P3 } = floors;
-    for (const v of [P1, P2, P3]) {
+    for (const v of [P1, P2, P3, ...(floors.P4 === undefined ? [] : [floors.P4])]) {
       if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
         throw new RangeError('Reserve floors must be fractions between 0 and 1');
       }
     }
     if (!(P1 <= P2 && P2 <= P3))
-      throw new RangeError('Reserve floors must satisfy interactive <= job <= maintenance');
-    this.current = { ...this.current, reserveFloors: { P0: 0, P1, P2, P3 } };
+      throw new RangeError('Reserve floors must satisfy interactive <= job <= maintenance <= bulk');
+    const P4 = effectiveBulkFloor(P3, floors.P4);
+    if (P4 < P3) throw new RangeError(bulkOrderMessage(P3, P4));
+    this.current = { ...this.current, reserveFloors: { P0: 0, P1, P2, P3, P4 } };
     this.pump(); // queued calls are re-evaluated against the new floors
   }
 
@@ -804,14 +814,25 @@ export class Governor {
     }
   }
 
+  /**
+   * One scan, highest class first, dispatching every call that may go now (PLAN §5.2; v3 F9, ADR 0074):
+   * - P3 (routine maintenance) and P4 (bulk) are skipped while P1 or P2 work is queued;
+   * - P4 is NOT skipped for queued P3 work: P3's lanes are scanned first, so a ready P3 call always goes first, and a
+   *   P4 call goes only when no P3 call is ready (one waiting for its tier or the write gap does not hold bulk up, so
+   *   a trickle of routine work never starves a bulk pass);
+   * - each class uses a tier only down to its own floor, so bulk never eats the headroom P3 relies on;
+   * - within a class, lanes (job ids) take turns: the lane just served goes to the back (`dispatch`);
+   * - a P4 call is always patient: it waits in its queue however long, never a `BudgetWaitError` from the queue.
+   */
   private pumpOnce(): void {
     const now = this.clock.now();
     let earliest: number;
     for (;;) {
       let progressed = false;
       earliest = Number.POSITIVE_INFINITY;
+      const agentsQueued = this.queueDepth('P1') + this.queueDepth('P2') > 0;
       scan: for (const cls of PRIORITY_CLASSES) {
-        if (cls === 'P3' && this.queueDepth('P1') + this.queueDepth('P2') > 0) continue;
+        if ((cls === 'P3' || cls === 'P4') && agentsQueued) continue;
         for (const [key, lane] of this.lanes[cls]) {
           if (this.inFlight >= this.settings.maxInFlight) break scan;
           const head = lane[0];
@@ -826,7 +847,7 @@ export class Governor {
             at - now > this.settings.maxQueueWaitMs &&
             tier !== null &&
             tier !== 'pacing' &&
-            head.req.patient !== true
+            !isPatient(head.req)
           ) {
             lane.shift();
             if (lane.length === 0) this.lanes[cls].delete(key);
