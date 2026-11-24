@@ -264,6 +264,14 @@ panel that shows where a character's images would go. Its routes and behaviour a
 
 ### Outfits (v3 F7)
 
+On the Asset Tree page, the **Image archives** card (v3 F7c, [ADR 0075](adr/0075-v3-f7c-image-archives.md)) lists the
+project's image archives (zips uploaded with `upload_image_archive`): each with its entries by status, whether an art job
+waits for it and whether its server copy is kept; open one for its rows (format, size, status, the expected time of a
+held entry, a refusal's reason). The card shows the three limits apart: holding (the staging capacity), processing
+(conversions at once) and the hourly brake. **Discard** (it asks you to confirm it is you) removes the server copy and
+discards the entries not yet staged; an art job waiting for one leaves that image out; staged images stay on the
+Staging page.
+
 On the Asset Tree page, the **Outfits** panel holds each character's outfit record ([ADR 0070](adr/0070-v3-f7-guided-character-art.md)
 decisions 3 and 4): the characters with outfits, each outfit's pieces, folder (or "loose in Wardrobe") and aliases.
 **Seed (read live)** reads one character's folders live (by the folder's name) and lists the outfits it found (a

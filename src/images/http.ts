@@ -8,7 +8,9 @@
  *   which); a connection whose scope has dropped to `read` or that was removed; a declared Content-Length over the
  *   prepared length (before reading anything); a body longer than the prepared length (reading stops at length + 1);
  *   a different SHA-256 or a different magic-byte type; a body too slow (idle and total time limits).
- * - Rate limits: per client address (every request, refused ones too) and per principal (accepted uploads).
+ * - Rate limits: per client address, counting only requests that fail authentication or are refused before it (v3 F7c,
+ *   ADR 0075, Z3: an authenticated request is never counted, so a batch of uploads cannot lock out its own address), and
+ *   per principal (accepted uploads; a runaway brake).
  * - It answers only "received", with the hash. The upload into LegendKeeper happens when `upload_image` is called with
  *   the `upload_id`.
  */
@@ -63,18 +65,20 @@ export function uploadsPlugin(app: FastifyInstance, o: UploadsPluginOptions): Pr
         true,
       );
     }
-    svc.rate.ip.hit(ip);
 
     let slot;
     try {
       slot = svc.slots.claim(req.params.id, req.headers.authorization);
     } catch (e) {
       if (e instanceof ReceiveError) {
+        // v3 F7c (Z3): a request that fails authentication counts against its address.
+        svc.rate.ip.hit(ip);
         return send(reply, 403, { error: 'upload_refused', message: e.message }, true);
       }
       throw e;
     }
     const generic = () => {
+      svc.rate.ip.hit(ip);
       svc.store.transitionSlot(slot.id, 'receiving', 'expired');
       return send(
         reply,

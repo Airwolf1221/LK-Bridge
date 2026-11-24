@@ -342,6 +342,8 @@ interface StoredJobOptions {
   readonly resumable?: ResumableShape;
   /** v3 F3d (ADR 0058): assets the approved job holds the locks of (a rename's art). */
   readonly holdAssets?: readonly string[];
+  /** v3 F7c (ADR 0075): the approved job waits until its archive entries are staged (`waiting_staging`). */
+  readonly waitFor?: WaitForShape;
 }
 
 /**
@@ -734,11 +736,16 @@ export class ProposalService implements ProposalSink {
           meta.jobOptions.internal ||
           meta.jobOptions.lifecycle ||
           meta.jobOptions.resumable ||
+          meta.jobOptions.waitFor?.kind === 'archive_staging' ||
           (meta.jobOptions.holdAssets?.length ?? 0) > 0 ||
           (meta.jobOptions.holdDocuments?.length ?? 0) > 0)) ||
       pageScope
         ? {
             ...(meta.jobOptions?.resumable ? { resumable: meta.jobOptions.resumable } : {}),
+            // v3 F7c (ADR 0075): bridge code only (an art package placing archive entries not staged yet).
+            ...(meta.jobOptions?.waitFor?.kind === 'archive_staging'
+              ? { waitFor: meta.jobOptions.waitFor }
+              : {}),
             ...(meta.jobOptions?.holdAssets && meta.jobOptions.holdAssets.length > 0
               ? { holdAssets: meta.jobOptions.holdAssets.filter((a) => typeof a === 'string') }
               : {}),
@@ -1357,7 +1364,8 @@ export class ProposalService implements ProposalSink {
     const jobOptions = this.jobOptionsOf(id);
     // v3 F3d (ADR 0058): what may act before the approved work is submitted (a rename's new token map becomes a pack
     // version, and its job waits for the owner to approve it). A hook that refuses leaves the proposal pending.
-    let waitFor: WaitForShape | undefined;
+    // v3 F7c (ADR 0075): what the proposal itself waits for (its archive entries), unless a hook says otherwise.
+    let waitFor: WaitForShape | undefined = jobOptions?.waitFor;
     for (const h of this.hooks) {
       if (!h.beforeSubmit) continue;
       try {
@@ -2143,6 +2151,7 @@ export class ProposalService implements ProposalSink {
           : {}),
         ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
         ...(jobOptions?.resumable ? { resumable: jobOptions.resumable } : {}),
+        ...(jobOptions?.waitFor ? { waitFor: jobOptions.waitFor } : {}),
         proposal: {
           ...(operation ? { operation: { ...operation, reproposalOf: id } } : {}),
           ...(operations ? { operations } : {}),
@@ -2425,6 +2434,8 @@ function stepOptions(o: StepOptions): StepOptions {
     // v3 F3a (ADR 0050): a new page's image blocks name the assets the same approved job uploads, and its text is
     // fitted into the template copy's content inside the lock (keeping only what Markdown cannot express there).
     ...(o.bindAssetUrls ? { bindAssetUrls: o.bindAssetUrls } : {}),
+    // v3 F7c (ADR 0075): an archive entry's staged image, bound (or withdrawn) when the approved job runs.
+    ...(o.bindStaged ? { bindStaged: o.bindStaged } : {}),
     ...(o.fill ? { fill: o.fill } : {}),
     // v3 F3d (ADR 0058): the items each step belongs to, for the owner's selection (left out when the job runs).
     ...(o.items && o.items.length > 0 ? { items: o.items } : {}),

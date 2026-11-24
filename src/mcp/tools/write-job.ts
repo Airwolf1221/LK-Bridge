@@ -50,6 +50,8 @@ export interface WriteJobSpec {
   readonly lastMajorRevision?: LmrMode | undefined;
   /** v3 F3d (ADR 0058): the job can be resumed after it stops part-way (a package, a rename). */
   readonly resumable?: BatchSubmit['resumable'];
+  /** v3 F7c (ADR 0075): the job waits until its archive entries are staged (`waiting_staging`). */
+  readonly waitFor?: BatchSubmit['waitFor'];
   /** v3 F3d (ADR 0058): assets the job holds the locks of from start to end (a rename's art). */
   readonly holdAssets?: readonly string[];
   /** The plan, as every answer shows it. */
@@ -119,6 +121,7 @@ export async function runWriteJob(
       ...(spec.stagedPlacement ? { stagedPlacement: true } : {}),
       ...(spec.lastMajorRevision ? { lastMajorRevision: spec.lastMajorRevision } : {}),
       ...(spec.resumable ? { resumable: spec.resumable } : {}),
+      ...(spec.waitFor ? { waitFor: spec.waitFor } : {}),
       ...(spec.holdAssets && spec.holdAssets.length > 0 ? { holdAssets: spec.holdAssets } : {}),
       internal: true,
       proposal: spec.proposal,

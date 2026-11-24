@@ -6,6 +6,7 @@ import { useNow } from '../hooks';
 import { useProject, useProjectApi, useScopedApi } from '../project';
 import { Link } from '../router';
 import { OutfitsCard } from './outfits';
+import { ArchivesCard } from './archives';
 import type {
   AssetChildren,
   AssetCorrection,
@@ -110,6 +111,7 @@ export function AssetsPage() {
       {data.counts.folders + data.counts.assets > 0 && <FolderBrowser />}
       {built && <TryIt />}
       {built && <OutfitsCard />}
+      <ArchivesCard />
     </>
   );
 }

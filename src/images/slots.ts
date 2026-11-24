@@ -20,6 +20,8 @@ import { detectImageType, ImageError, normaliseContentType } from './convert.js'
 import type { ImageStore, UploadSlotRow } from './store.js';
 
 export const CAPABILITY_TTL_MS = 5 * 60_000;
+/** v3 F7c (ADR 0075): the content type of a slot prepared for an image archive. */
+export const ZIP_CONTENT_TYPE = 'application/zip';
 export const UNUSED_UPLOAD_TTL_MS = 15 * 60_000;
 /** The header the capability travels in: `Authorization: Upload <token>`. */
 export const CAPABILITY_SCHEME = 'Upload';
@@ -301,14 +303,27 @@ export class UploadSlots {
       return fail(new ReceiveError('hash_mismatch', 'The body’s SHA-256 is not the one declared.'));
     }
     let detected: string;
-    try {
-      detected = detectImageType(Buffer.concat(head)).contentType;
-    } catch (e) {
-      return fail(
-        new ReceiveError('type_mismatch', e instanceof ImageError ? e.message : 'The body is not an image.'),
-      );
-    }
-    if (detected !== normaliseContentType(slot.contentType)) {
+    // v3 F7c (ADR 0075): a slot prepared for an image archive takes a zip (its local-file or empty-archive signature).
+    if (slot.contentType === ZIP_CONTENT_TYPE) {
+      const h = Buffer.concat(head);
+      const zip = h.length >= 4 && h[0] === 0x50 && h[1] === 0x4b && (h[2] === 0x03 || h[2] === 0x05);
+      if (!zip)
+        return fail(
+          new ReceiveError('type_mismatch', 'The body is not a zip by its first bytes; a zip was declared.'),
+        );
+      detected = ZIP_CONTENT_TYPE;
+    } else
+      try {
+        detected = detectImageType(Buffer.concat(head)).contentType;
+      } catch (e) {
+        return fail(
+          new ReceiveError(
+            'type_mismatch',
+            e instanceof ImageError ? e.message : 'The body is not an image.',
+          ),
+        );
+      }
+    if (detected !== ZIP_CONTENT_TYPE && detected !== normaliseContentType(slot.contentType)) {
       return fail(
         new ReceiveError(
           'type_mismatch',
@@ -342,6 +357,12 @@ export class UploadSlots {
     const s = this.store.slot(uploadId);
     if (!s || s.projectId !== projectId || s.principalId !== principalId) return null;
     return s;
+  }
+
+  /** v3 F7c: the path of a received file (an archive is read from disk, never into memory whole), or null. */
+  receivedPath(slot: UploadSlotRow): string | null {
+    if (slot.state !== 'received' || !slot.fileName || slot.expiresAt <= this.store.now()) return null;
+    return join(this.dir, slot.fileName);
   }
 
   /** Reads a received file (checking its hash again). Does not consume it. */

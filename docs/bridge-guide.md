@@ -836,8 +836,21 @@ holding "Wardrobe", else a new "Wardrobe" section; the Art page is made when it 
 Every image needs its `interpretation`, what it establishes (`BARE_IMAGE` otherwise). Up to 30 images a call. Sources:
 `staged_id` (staged with no destination), `upload_id` (from `prepare_image_upload`), or in ChatGPT the attached `file`
 for one image; an upload or file is staged first, even on a dry run, and its `staged_id` is in the answer. **Several
-images from ChatGPT:** stage each one first (`upload_image` with `stage: true` and the attached `file`, no destination:
-nothing is proposed), then make ONE `arkona_add_character_art` call naming every `staged_id`.
+images: use an archive** (a zip), below.
+
+**Many images: an archive (`upload_image_archive`).** In ChatGPT: attach the zip to `upload_image_archive` (as `file`);
+open the same zip in your own code tool to look at each image and write its interpretation; then call the art tool with
+images given as `{ "archive": { "id": "<archive_id>", "entry": "<entry>" }, "label": "…", "interpretation": "…" }`.
+Elsewhere: `prepare_image_upload` with the zip (`content_type` `application/zip`), run its script, then
+`upload_image_archive { "upload_id": "…" }`. Every entry is listed at once (its `entry`, `path`, `folder`,
+`suggestedOutfit`, format, size and SHA-256); only the entries an art call uses are converted (or all, with
+`stageAll: true`). One archive can feed several calls, and one call can draw from several archives. The folder is a
+suggestion: look at the images; use `suggestedOutfit` when it fits; for each top-level image decide yourself whether it is
+a design piece or a single-piece outfit; if you are unsure, ask the owner. `character` checks each folder against that
+character's outfits (`outfitMatch`: exact, near with its candidates, or new). An entry past the hourly brake or the staging
+capacity is `held` and finishes on its own: never upload it again; follow `bridge_archive_status` (free; `retry` converts
+failed entries again). An art call naming an entry not staged yet is planned from its header and its job waits
+(`waiting_staging`); an entry refused or discarded is left out with its reason, never the others.
 
 **Recall who a character is: `arkona_character_brief`.** `{ "character": "…" }` answers from the bridge's own records,
 free: the six identity fields, every page of their set with its Reference Type and Scope, their relationships, their Art

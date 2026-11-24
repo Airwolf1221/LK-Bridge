@@ -340,8 +340,9 @@ const SPECS: readonly Spec[] = [
     key: 'IMAGE_UPLOAD_RATE_PER_PRINCIPAL',
     schema: 'tools',
     group: 'images',
-    label: 'Uploads per connection per hour',
-    description: 'Accepted binary uploads, and prepare_image_upload calls, per connection per hour.',
+    label: 'Uploads per connection per hour (runaway brake)',
+    description:
+      'A runaway brake only: images staged by one connection per hour, and likewise accepted binary uploads and prepare_image_upload calls. An archive entry past it waits (held) and is staged when the hour moves on; a single upload past it is refused. The real limit is the staging capacity.',
     unit: UNITS.count,
     applies: 'next_start',
   },
@@ -349,8 +350,9 @@ const SPECS: readonly Spec[] = [
     key: 'IMAGE_UPLOAD_RATE_PER_IP',
     schema: 'tools',
     group: 'images',
-    label: 'Upload requests per address per hour',
-    description: 'Requests to the binary upload endpoint per client address per hour, refused ones included.',
+    label: 'Refused upload requests per address per hour',
+    description:
+      'Requests to the binary upload endpoint per client address per hour that fail authentication or are refused before it. Authenticated requests are not counted.',
     unit: UNITS.count,
     applies: 'next_start',
   },
@@ -400,6 +402,36 @@ const SPECS: readonly Spec[] = [
     label: 'Free disk kept by the image store',
     description: 'A new staging upload is refused when less than this much disk would be left free.',
     unit: UNITS.gigabytes,
+    applies: 'now',
+  },
+  {
+    key: 'IMAGE_STAGED_MAX_BYTES',
+    schema: 'tools',
+    group: 'images',
+    label: 'Staging capacity',
+    description:
+      'The total size of the images staged on the bridge’s server. An archive entry that would pass it waits (held) until space frees; a single upload that would pass it is refused.',
+    unit: UNITS.bytesAsMb,
+    applies: 'now',
+  },
+  {
+    key: 'IMAGE_ARCHIVE_MAX_ENTRIES',
+    schema: 'tools',
+    group: 'images',
+    label: 'Entries per image archive',
+    description:
+      'The most entries an image archive (a zip) may hold, folders and skipped files included. A larger archive is refused whole.',
+    unit: UNITS.count,
+    applies: 'now',
+  },
+  {
+    key: 'IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES',
+    schema: 'tools',
+    group: 'images',
+    label: 'Image archive size',
+    description:
+      'The most an image archive may unpack to, every entry together; also the largest archive file accepted. A larger archive is refused whole.',
+    unit: UNITS.bytesAsMb,
     applies: 'now',
   },
   {

@@ -48,6 +48,11 @@ export interface PackEngineDeps {
    * v3 F3b (ADR 0052): a staged image as the image service has it now (settled), for the job's check that every image
    * it places is still staged, still on the bridge's server and placed by nothing else.
    */
+  /**
+   * v3 F7c (ADR 0075, Z4): why a reserved staged id of an archive entry was withdrawn (refused or discarded before it
+   * was staged), or null: such an image is left out by the job, never a reason to stop it.
+   */
+  readonly archiveWithdrawn?: (projectId: string, stagedId: string) => string | null;
   readonly stagedImage?: (
     projectId: string,
     stagedId: string,
@@ -258,6 +263,8 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
   // v3 F3b (design section 6): every staged image the job places is still staged, on the server, placed by nothing else.
   for (const id of input.images ?? []) {
     const row = d.stagedImage?.(ctx.projectId, id);
+    // v3 F7c (ADR 0075): an archive entry withdrawn before it was staged: its steps leave it out, the rest goes ahead.
+    if (!row && d.archiveWithdrawn?.(ctx.projectId, id)) continue;
     // v3 F3d (ADR 0058): placed already by this very job (a package resumed after it stopped part-way).
     if (row && !row.staged && row.placementJobId === ctx.jobId) continue;
     // CR-2026-11-R2 (R2-34): the image's own placement proposal this package takes over, still waiting (no job), is this

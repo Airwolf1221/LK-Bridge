@@ -42,10 +42,24 @@ export const TOOLS_ENV_SCHEMA = z.object({
    * before an asset is deleted (`kept-bytes/`). Default: `images/` next to the database (DB_PATH's directory).
    */
   IMAGE_DATA_DIR: z.string().min(1).optional(),
-  /** Accepted binary uploads per connection (principal) per hour, and `prepare_image_upload` calls likewise. */
-  IMAGE_UPLOAD_RATE_PER_PRINCIPAL: intFrom(30, 1, 10_000),
-  /** Requests to the binary endpoint per client address per hour, refused ones included. */
+  /**
+   * v3 F7c (ADR 0075, Z3): a runaway brake only, per connection (principal) per hour: images staged on the server,
+   * accepted binary uploads and `prepare_image_upload` calls (each counted on its own). The real limit is
+   * IMAGE_STAGED_MAX_BYTES.
+   */
+  IMAGE_UPLOAD_RATE_PER_PRINCIPAL: intFrom(1000, 1, 100_000),
+  /**
+   * v3 F7c (Z3): requests to the binary endpoint per client address per hour that fail authentication or are refused
+   * before it; an authenticated request is not counted.
+   */
   IMAGE_UPLOAD_RATE_PER_IP: intFrom(60, 1, 100_000),
+  // ---- v3 F7c (ADR 0075, Z2, Z3): image archives
+  /** Most entries an image archive may hold (its central directory's count, folders and skipped files included). */
+  IMAGE_ARCHIVE_MAX_ENTRIES: intFrom(300, 1, 10_000),
+  /** Most bytes an image archive may unpack to, every entry together (also the largest archive file accepted). */
+  IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES: intFrom(2 * 1024 ** 3, 1024 * 1024, 20 * 1024 ** 3),
+  /** The total size of the images staged on the bridge's server: a staging past it is held (an archive) or refused. */
+  IMAGE_STAGED_MAX_BYTES: intFrom(5 * 1024 ** 3, 1024 * 1024, 1024 ** 4),
   /** Deadline for receiving a whole upload body, and the longest silence within it (slow-loris). */
   IMAGE_UPLOAD_BODY_TIMEOUT_MS: intFrom(120_000, 5_000, 1_800_000),
   IMAGE_UPLOAD_IDLE_TIMEOUT_MS: intFrom(15_000, 1_000, 300_000),
@@ -162,6 +176,12 @@ export interface ImageSettings {
   /** v3 F2: IMAGE_STAGING_MIN_FREE_GB in bytes: the free disk a new staging upload needs. */
   readonly stagingMinFreeBytes: number;
   readonly keptBytesRetentionDays: number;
+  /** v3 F7c (ADR 0075): IMAGE_ARCHIVE_MAX_ENTRIES. */
+  readonly archiveMaxEntries: number;
+  /** v3 F7c: IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES (also the largest archive file). */
+  readonly archiveMaxUncompressedBytes: number;
+  /** v3 F7c: IMAGE_STAGED_MAX_BYTES, the staging capacity. */
+  readonly stagedMaxBytes: number;
   /** Lowercase host names asset files are downloaded from. */
   readonly assetHosts: readonly string[];
 }
@@ -172,7 +192,7 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   convertTimeoutMs: 60_000,
   convertConcurrency: 1,
   dataDir: null,
-  ratePerPrincipalPerHour: 30,
+  ratePerPrincipalPerHour: 1000,
   ratePerIpPerHour: 60,
   bodyTimeoutMs: 120_000,
   idleTimeoutMs: 15_000,
@@ -180,6 +200,9 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   stagingMaxDays: 90,
   stagingMinFreeBytes: 5 * 1_073_741_824,
   keptBytesRetentionDays: 90,
+  archiveMaxEntries: 300,
+  archiveMaxUncompressedBytes: 2 * 1024 ** 3,
+  stagedMaxBytes: 5 * 1024 ** 3,
   assetHosts: [...DEFAULT_LK_ASSET_HOSTS],
 };
 
@@ -228,6 +251,9 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       stagingMaxDays: e.IMAGE_STAGING_MAX_DAYS,
       stagingMinFreeBytes: Math.round(e.IMAGE_STAGING_MIN_FREE_GB * GIB),
       keptBytesRetentionDays: e.ASSET_BYTES_RETENTION_DAYS,
+      archiveMaxEntries: e.IMAGE_ARCHIVE_MAX_ENTRIES,
+      archiveMaxUncompressedBytes: e.IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES,
+      stagedMaxBytes: e.IMAGE_STAGED_MAX_BYTES,
       assetHosts: parseHosts(e.LK_ASSET_HOSTS),
     },
     snapshots: {

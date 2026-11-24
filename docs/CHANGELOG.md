@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased: v3 F7c, image archives (24 November 2026)
+
+[ADR 0075](adr/0075-v3-f7c-image-archives.md). Migration `4400_image_archives.sql`. Nothing was run against a live
+system: the mock only (the sandbox check `f7c-archive` is the owner's to run).
+
+- **`upload_image_archive`** (ChatGPT's `file`, or `upload_id` from `prepare_image_upload` with `application/zip`):
+  every entry listed at once (entry, path, folder, suggestedOutfit, format, size, SHA-256); nothing converted until an
+  art call uses it, or `stageAll`; the same zip again is the same archive; `character` checks each folder against the
+  character's outfits (exact, near, new). Staging only: nothing proposed, nothing sent to LegendKeeper.
+- **Safe unpacking** with yauzl 3.4.0, read from disk one entry at a time: unsafe paths, encrypted entries, nested
+  archives, non-images (by their bytes), oversize entries and ratio bombs refused alone; an unreadable zip or one past
+  the entry, size or ratio caps refused whole; `__MACOSX/` and hidden files skipped; duplicates staged once; no path from
+  a zip is ever written.
+- **Limits** (Z3): `IMAGE_STAGED_MAX_BYTES` (new, 5 GiB) is the real limit; `IMAGE_UPLOAD_RATE_PER_PRINCIPAL` is a
+  runaway brake (30 → 1,000 an hour); `IMAGE_UPLOAD_RATE_PER_IP` counts only requests refused before or at
+  authentication. Archive entries past a limit are held and staged by a background worker (in the database: a restart
+  resumes it); single uploads are still refused, naming the cap. New: `IMAGE_ARCHIVE_MAX_ENTRIES` (300),
+  `IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES` (2 GiB).
+- **`bridge_archive_status`** (free): an archive's rows, or this connection's recent archives; the three limits apart;
+  `retry` for failed entries (one automatic retry first).
+- **The art tools** take `{ archive: { id, entry } }`: a staged entry is its staged image; one not staged yet is
+  planned from its header and the job waits (`waiting_staging`, then runs); one refused or discarded is left out alone
+  (withdrawn, its blocks left off the Art page).
+- **LegendKeeper limits mid-job** (Z5): tested; an upload URL that expired while the job waited is now made again by the
+  PUT step. The mock LegendKeeper no longer stores a 429 for idempotent replay (as LegendKeeper).
+- **Dashboard**: the Asset Tree page's "Image archives" card (rows, statuses, expected times, the three limits, Discard
+  with the step-up); the Jobs page says when a job waits for archive entries.
+- **Sandbox**: `f7c-archive` (C0 to C4), and its run on the mock.
+
 ## Unreleased: v3 F8, every setting on the dashboard (24 November 2026)
 
 [ADR 0073](adr/0073-v3-f8-every-setting-on-the-dashboard.md). No migration. Nothing was run against a live system: the

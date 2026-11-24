@@ -44,7 +44,7 @@ import {
   type ExistingEdit,
   type LmrDecision,
 } from './lmr.js';
-import type { PackPlan, PlannedPage } from './plan.js';
+import type { PackPlan, PlannedImage, PlannedPage } from './plan.js';
 import { CORE_TEXT_FILLER, coreTextWords, type CoreTextInput } from './core.js';
 import { mapArtRecordSteps } from '../../jobs/items.js';
 import type { PlanEnv } from './plan.js';
@@ -448,9 +448,13 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     const lastFolder = im.creates.length > 0 ? steps.length : 0;
     folderOf.set(im.stagedId, { step: lastFolder, id: im.folderId, first });
     const contentHash = im.row.webp.sha256;
+    // v3 F7c (ADR 0075, Z4): an archive entry not staged when planned: its file's length and hash are bound when the
+    // job runs (after it waited for the entry), or the image is withdrawn (its entry refused or discarded meanwhile).
+    const bindStaged = im.pending ? { bindStaged: { stagedId: im.stagedId } } : {};
     steps.push({
       op: 'createImageUpload',
       params: { body: { contentType: 'image/webp', contentLength: im.row.webp.bytes, contentHash } },
+      ...bindStaged,
     });
     labels.push(`upload ${im.name}`);
     steps.push({
@@ -463,6 +467,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
           stagedSha256: im.row.serverSha256!,
         },
       },
+      ...bindStaged,
     });
     labels.push(`send ${im.name} (from the bridge’s server)`);
     const assetStep = steps.length + 1;
@@ -477,11 +482,13 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       },
       ...(lastFolder > 0 ? { bindFrom: { step: lastFolder, to: 'body.folderId' as const } } : {}),
       journalOperation: { ...journal(null, `image “${im.name}”`), stagedId: im.stagedId },
+      ...bindStaged,
     });
     labels.push(`image ${im.name} in ${im.path.join(' / ')}`);
     steps.push({
       op: 'upload_image.verify',
       params: { body: { assetStep, contentLength: im.row.webp.bytes, contentHash } },
+      ...bindStaged,
     });
     labels.push(`verify the stored file of ${im.name}`);
     assetSteps.set(im.stagedId, assetStep);
@@ -569,7 +576,11 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     bodyStep(imagePage, {
       bindAssetUrls: plan.images
         .filter((im) => assetSteps.has(im.stagedId))
-        .map((im) => ({ step: assetSteps.get(im.stagedId)!, placeholder: im.placeholder })),
+        .map((im) => ({
+          step: assetSteps.get(im.stagedId)!,
+          placeholder: im.placeholder,
+          ...dropOf(im, imagePage.blocks ?? []),
+        })),
     });
   }
   // v3 F3b (ADR 0052): new images on an existing Art page, appended under its images section inside the lock.
@@ -591,7 +602,11 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       verifyAfterWrite: true,
       bindAssetUrls: c.images
         .filter((im) => assetSteps.has(im.stagedId))
-        .map((im) => ({ step: assetSteps.get(im.stagedId)!, placeholder: im.placeholder })),
+        .map((im) => ({
+          step: assetSteps.get(im.stagedId)!,
+          placeholder: im.placeholder,
+          ...dropOf(im, c.blocks),
+        })),
       journalOperation: journal(
         { id: c.page.id, name: c.page.rawName },
         `${c.section}: ${c.images.length} image(s) added`,
@@ -1021,4 +1036,24 @@ export function coreTextStep(
     verifyAfterWrite: true,
     journalOperation,
   };
+}
+
+/**
+ * v3 F7c (ADR 0075, Z4): the blocks that show a not-yet-staged archive image (its label heading, its image block and its
+ * interpretation, as `withImages` lays them out), left out of the page if the image is withdrawn when the job runs.
+ */
+function dropOf(im: PlannedImage, blocks: readonly LkBlock[]): { drop?: string[] } {
+  if (!im.pending) return {};
+  const all = blocks as readonly { id?: unknown; kind?: unknown; url?: unknown }[];
+  const at = all.findIndex((b) => b.kind === 'image' && b.url === im.placeholder);
+  if (at < 0) return {};
+  const ids: string[] = [];
+  const add = (b: { id?: unknown } | undefined) => {
+    if (b && typeof b.id === 'string') ids.push(b.id);
+  };
+  if (all[at - 1]?.kind === 'heading') add(all[at - 1]);
+  add(all[at]);
+  for (let k = at + 1; k < all.length && all[k]!.kind !== 'heading' && all[k]!.kind !== 'image'; k++)
+    add(all[k]);
+  return ids.length > 0 ? { drop: ids } : {};
 }

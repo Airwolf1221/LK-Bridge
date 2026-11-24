@@ -185,6 +185,12 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'arkona_character_brief',
       'character brief',
       'character art',
+      // v3 F7c (ADR 0075): image archives feed the art tools.
+      'Stage many images from a zip',
+      'upload_image_archive',
+      'bridge_archive_status',
+      'image archive',
+      'zip',
     ],
     // v3 F4a (ADR 0063): the topic brief (the first step for any subject) and the name check.
     'Arkona briefs and names': [

@@ -15,7 +15,9 @@ export type UploadSource =
   /** v3 F2 (ADR 0049 decision 11): a ChatGPT conversation attachment (`file`), downloaded by the bridge. */
   | 'chatgpt_file'
   /** v3 F2 (ADR 0049 decision 10): an image migrate-staging brought from the old LegendKeeper staging folder. */
-  | 'migrated';
+  | 'migrated'
+  /** v3 F7c (ADR 0075): an entry of an image archive. */
+  | 'archive';
 
 export interface ImageUploadRow {
   readonly projectId: string;
@@ -385,6 +387,21 @@ export class ImageStore {
     const row = this.upload(u.projectId, u.id)!;
     this.notify(row, undefined);
     return row;
+  }
+
+  /**
+   * v3 F7c (ADR 0075, Z3): the bytes staged on the bridge's server now, every project together (one disk): each server
+   * file once, whichever staged records name it.
+   */
+  stagedServerBytes(): number {
+    const r = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(b), 0) AS n FROM (
+           SELECT MAX(webp_bytes) AS b FROM image_uploads
+           WHERE staged = 1 AND state = 'uploaded' AND server_sha256 IS NOT NULL GROUP BY server_sha256)`,
+      )
+      .get() as { n: number };
+    return r.n;
   }
 
   /** v3 F2: the record of an upload by its asset (the newest), or undefined. */

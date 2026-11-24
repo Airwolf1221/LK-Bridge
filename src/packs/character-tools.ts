@@ -18,7 +18,7 @@ import type { FromMarkdownContext, LkBlock } from '../markdown/index.js';
 import { pageConverterContext } from '../pages/index.js';
 import { cleanPrefixes, key as nameKey, subjectOf } from '../registry/names.js';
 import type { TreeNode } from '../tree/index.js';
-import { stageForPack, type ChatGptFile } from './intake.js';
+import { resolveArchiveImages, stageForPack, type ArchiveImageRef, type ChatGptFile } from './intake.js';
 import {
   findCharacters,
   planImages,
@@ -32,7 +32,9 @@ import {
 import { textKey } from './engine/text.js';
 import type { LmrMode } from '../jobs/lmr-hook.js';
 import { characterEnv, finishPackage, packBasis } from './run.js';
-import { placeArt, type ArtPlace } from './art-place.js';
+import { liveArtFolder, placeArt, type ArtPlace } from './art-place.js';
+import { knownOutfits } from '../art/placement.js';
+import { matchOutfit } from '../art/names.js';
 import type { ArtLine, ArtPlan, ImagePlacement } from './engine/plan.js';
 import { linesNaming } from '../art/lines.js';
 import { liveRead } from '../mcp/tools/repo.js';
@@ -221,6 +223,8 @@ export async function runRelationship(
 export interface ArtImageInput {
   readonly staged_id?: string | undefined;
   readonly upload_id?: string | undefined;
+  /** v3 F7c (ADR 0075, Z4): an entry of an image archive (upload_image_archive). */
+  readonly archive?: ArchiveImageRef | undefined;
   readonly label: string;
   readonly interpretation?: string | undefined;
 }
@@ -258,8 +262,32 @@ export async function runArt(
   if (!ch.ok) return ch.result;
   if (o.input.images.length === 0)
     return errorResult({ code: 'IMAGES_REQUIRED', message: 'Give at least one image.' }, pd);
+  const twoSources = o.input.images.find(
+    (im) => im.archive !== undefined && (im.staged_id !== undefined || im.upload_id !== undefined),
+  );
+  if (twoSources)
+    return errorResult(
+      {
+        code: 'IMAGE_SOURCE_INVALID',
+        message: `${twoSources.label}: give archive, staged_id or upload_id, not two of them.`,
+      },
+      pd,
+    );
+  // v3 F7c (ADR 0075, Z4): archive entries first: a staged entry is its staged image; one not staged yet is planned
+  // from its header (the job waits for it); one that cannot be used is left out with its reason, never the others.
+  const fromArchives = resolveArchiveImages(pd, o.input.images);
+  if (fromArchives.images.length === 0)
+    return errorResult(
+      {
+        code: 'ARCHIVE_ENTRIES_UNAVAILABLE',
+        message: `None of the images can be used: ${fromArchives.notUsed.map((n) => `${n.label} (${n.code}: ${n.reason})`).join('; ')}`,
+        notUsed: fromArchives.notUsed,
+      },
+      pd,
+    );
+  const inputImages = fromArchives.images;
   // 1. Each image's source: a staged image, or an upload or ChatGPT file staged now on the bridge's server.
-  const unsourced = o.input.images.filter((im) => im.staged_id === undefined && im.upload_id === undefined);
+  const unsourced = inputImages.filter((im) => im.staged_id === undefined && im.upload_id === undefined);
   if (
     unsourced.length > 1 ||
     (unsourced.length === 1 && !o.input.file) ||
@@ -275,7 +303,7 @@ export async function runArt(
     );
   const staged: { from: string; staged_id: string; deduplicated: boolean }[] = [];
   const images: PackageImage[] = [];
-  for (const im of o.input.images) {
+  for (const im of inputImages) {
     if (im.staged_id !== undefined && im.upload_id !== undefined)
       return errorResult(
         { code: 'IMAGE_SOURCE_INVALID', message: `${im.label}: give staged_id or upload_id, not both.` },
@@ -299,16 +327,32 @@ export async function runArt(
       staged_id: id,
       label: im.label,
       ...(im.interpretation !== undefined ? { interpretation: im.interpretation } : {}),
+      ...(im.pending ? { pending: im.pending } : {}),
     });
   }
-  const stagedNote =
-    staged.length > 0
+  const pendingCount = images.filter((i) => i.pending).length;
+  const stagedNote = {
+    ...(staged.length > 0
       ? {
           stagedNow: staged,
           stagedNote:
             'These images were staged on the bridge’s server for this package (nothing is in LegendKeeper until the owner approves it). Calling again, give their staged_id.',
         }
-      : {};
+      : {}),
+    ...(fromArchives.fromArchives.length > 0 ? { fromArchives: fromArchives.fromArchives } : {}),
+  };
+  // v3 F7c (ADR 0075, Z4): what the answer says of archive entries (its notes and warnings).
+  const archiveNotes =
+    pendingCount > 0
+      ? [
+          `${pendingCount} archive entr${pendingCount === 1 ? 'y is' : 'ies are'} not staged yet: planned from ${pendingCount === 1 ? 'its' : 'their'} header; the approved job waits for ${pendingCount === 1 ? 'it' : 'them'} (waiting_staging) and runs once staged. Never upload ${pendingCount === 1 ? 'it' : 'them'} again; follow bridge_archive_status.`,
+        ]
+      : [];
+  const archiveWarnings = fromArchives.notUsed.map((n) => ({
+    code: 'IMAGE_NOT_USED',
+    message: `${n.label} was left out (${n.code}): ${n.reason} The other images go ahead.`,
+    archive: n.archive,
+  }));
   // 2. The character's Art page: extended when it has one, else made.
   const subject = nameOf(env, ch.hit);
   const index = indexOf(env, ch.hit);
@@ -373,10 +417,11 @@ export async function runArt(
       plan.notes.push(
         'The Art page’s Purpose is drafted (shown in the preview); give markdown for your own.',
       );
+    plan.warnings.push(...archiveWarnings);
     return finishPackage(pd, mctx, o, env, {
       ...plan,
       art: artPlan,
-      notes: [...plan.notes, ...artNotes(place), ...lineNotes],
+      notes: [...plan.notes, ...artNotes(place), ...lineNotes, ...archiveNotes],
       extra: {
         ...(plan.extra ?? {}),
         artPage: { create: plan.pages.find((p) => p.role === type.assets.role)?.rawName ?? null },
@@ -394,10 +439,11 @@ export async function runArt(
       code: 'CORE_MISSING',
       message: `${ch.hit.identity.rawName} is still a Compact Character Reference at the head of ${index.rawName}, which has several owners: a character with an index and several owners has a Character Core. Upgrade it with arkona_create_character (target “${ch.hit.identity.rawName}”, upgradeToCore: true), or ask the owner to approve the audit's character_core_missing proposal.`,
     });
+  plan.warnings.push(...archiveWarnings);
   return finishPackage(pd, mctx, o, env, {
     ...plan,
     art: artPlan,
-    notes: [...plan.notes, ...artNotes(place), ...lineNotes],
+    notes: [...plan.notes, ...artNotes(place), ...lineNotes, ...archiveNotes],
     extra: {
       ...(plan.extra ?? {}),
       placement: placementSummary(place),
@@ -622,5 +668,91 @@ function planArtExtension(
             .map((i) => ({ stagedId: i.stagedId, proposalId: i.takeover! })),
         }
       : {}),
+  };
+}
+
+// ============================================================================================ archive hints (v3 F7c)
+
+/** v3 F7c (ADR 0075, Z10): what one folder of an archive is to a character's outfits (F7's matcher). */
+export type FolderOutfitMatch =
+  | { readonly outfitMatch: 'exact'; readonly outfit: string; readonly via: string }
+  | {
+      readonly outfitMatch: 'near';
+      readonly candidates: readonly { readonly name: string; readonly via: string; readonly why: string }[];
+    }
+  | { readonly outfitMatch: 'new' };
+
+/**
+ * v3 F7c (ADR 0075, Z10): each distinct folder of an archive checked against a character's outfits (its outfit record
+ * and the outfits its folders show, read live as an art call reads them), by the folder's raw name and its display
+ * form. A suggestion only: the bridge never places by folder. A character that does not resolve is reported, not an
+ * error.
+ */
+export async function archiveOutfitHints(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  tool: string,
+  character: string,
+  folders: readonly { readonly raw: string; readonly display: string | null }[],
+): Promise<
+  | {
+      readonly resolved: true;
+      readonly character: { readonly id: string; readonly name: string };
+      readonly folders: ReadonlyMap<string, FolderOutfitMatch>;
+      readonly liveReads: number;
+    }
+  | { readonly resolved: false; readonly reason: string }
+> {
+  const b = await packBasis(pd, mctx, 'arkona', tool);
+  if (!b.ok) return { resolved: false, reason: 'the Arkona pack is not attached to this project' };
+  const e = characterEnv(pd, mctx, tool, b.value, 'Character');
+  if (!e.ok) return { resolved: false, reason: 'the Arkona pack has no Character type here' };
+  const env = e.env;
+  const ch = oneCharacter(pd, env, character, 'character');
+  if (!ch.ok) {
+    const body = JSON.parse((ch.result.content[0] as { text: string }).text.split('\n')[0]!) as {
+      error?: { code?: string; message?: string };
+    };
+    return {
+      resolved: false,
+      reason: `${body.error?.code ?? 'CHARACTER_NOT_FOUND'}: ${body.error?.message ?? ''}`,
+    };
+  }
+  const subject = nameOf(env, ch.hit);
+  const folder = await liveArtFolder(env, ch.hit, subject);
+  if (!folder.ok)
+    return {
+      resolved: false,
+      reason: 'the character’s asset folders could not be read live now; try again shortly',
+    };
+  const { characterFolderId, layout } = folder.value;
+  const records =
+    characterFolderId && pd.services?.outfits
+      ? pd.services.outfits.forCharacter(pd.project.id, characterFolderId)
+      : [];
+  const known = knownOutfits(layout, records, subject);
+  const out = new Map<string, FolderOutfitMatch>();
+  for (const f of folders) {
+    const tries = [f.raw.split('/').filter(Boolean).pop() ?? f.raw, ...(f.display ? [f.display] : [])];
+    let best: FolderOutfitMatch = { outfitMatch: 'new' };
+    for (const t of tries) {
+      const m = matchOutfit(t, known);
+      if (m.kind === 'same') {
+        best = { outfitMatch: 'exact', outfit: m.outfit.name, via: m.via };
+        break;
+      }
+      if (m.kind === 'near' && best.outfitMatch === 'new')
+        best = {
+          outfitMatch: 'near',
+          candidates: m.candidates.map((c) => ({ name: c.outfit.name, via: c.via, why: c.why })),
+        };
+    }
+    out.set(f.raw, best);
+  }
+  return {
+    resolved: true,
+    character: { id: ch.hit.identity.id, name: subject },
+    folders: out,
+    liveReads: folder.value.live.requests,
   };
 }

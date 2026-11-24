@@ -581,8 +581,15 @@ function JobDetailView({ id }: { id: string }) {
               </div>
             </dl>
             {job.waitReason && (
-              <p className="note note-warn">
-                Waiting: <span className="mono">{JSON.stringify(job.waitReason)}</span>
+              <p className="note note-warn" data-testid="job-wait">
+                {/* v3 F7c (ADR 0075): a job waiting for archive entries to be staged says so in words. */}
+                {job.waitReason.held === 'waiting_staging' && typeof job.waitReason.message === 'string' ? (
+                  <>Waiting for archive entries to be staged: {job.waitReason.message}</>
+                ) : (
+                  <>
+                    Waiting: <span className="mono">{JSON.stringify(job.waitReason)}</span>
+                  </>
+                )}
                 {job.resumeAt && job.resumeAt > now ? ` · resumes in ${fmtDuration(job.resumeAt - now)}` : ''}
               </p>
             )}

@@ -26,6 +26,20 @@ export class SlidingWindowLimiter {
     return Math.max(1, (list[list.length - this.limit] ?? 0) + this.windowMs - this.now());
   }
 
+  /**
+   * v3 F7c (ADR 0075): when the `k`-th further hit (0: the next one) may be counted, if every further hit waits its turn:
+   * now while there is room; then as the window moves past the hits counted (a later cycle a whole window on). An
+   * estimate for display (an expected time), never a promise.
+   */
+  availableAt(key: string, k = 0): number {
+    const list = this.recent(key);
+    const idx = list.length - this.limit + k;
+    if (idx < 0) return this.now();
+    if (list.length === 0) return this.now() + this.windowMs * Math.floor(k / this.limit);
+    const cycle = Math.floor(idx / list.length);
+    return list[idx % list.length]! + this.windowMs * (cycle + 1);
+  }
+
   /** Counts one hit now and returns its timestamp, so that a reservation can be given back with {@link release}. */
   hit(key: string): number {
     const list = this.recent(key);

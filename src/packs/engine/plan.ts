@@ -92,6 +92,71 @@ export interface PackageImage {
   readonly staged_id: string;
   readonly label: string;
   readonly interpretation?: string | undefined;
+  /**
+   * v3 F7c (ADR 0075, Z4): an archive entry not staged yet: `staged_id` is the id reserved for it, and the plan is made
+   * from its header (its proposal and job name that id; the job waits until it is staged). Bridge code only.
+   */
+  readonly pending?: PendingArchiveImage;
+}
+
+/** v3 F7c: what an archive entry's header says, for planning before it is staged. */
+export interface PendingArchiveImage {
+  readonly archiveId: string;
+  readonly path: string;
+  readonly format: string;
+  readonly width: number;
+  readonly height: number;
+  readonly frames: number;
+  readonly bytes: number;
+  readonly sha256: string;
+  readonly principalId: string;
+}
+
+/** v3 F7c: the placeholder SHA-256 a not-yet-staged entry's upload steps carry until the job binds the real one. */
+export const PENDING_SHA256 = '0'.repeat(64);
+
+/** v3 F7c: an image record for planning, from a not-yet-staged archive entry's header (never stored). */
+function pendingRow(projectId: string, stagedId: string, p: PendingArchiveImage): ImageUploadRow {
+  return {
+    projectId,
+    id: stagedId,
+    state: 'uploaded',
+    jobId: null,
+    assetId: null,
+    name: p.path.slice(p.path.lastIndexOf('/') + 1),
+    description: null,
+    folderId: null,
+    folderPath: null,
+    staged: true,
+    intended: { archive: { id: p.archiveId, entry: p.path } },
+    source: 'archive',
+    principalId: p.principalId,
+    original: { format: p.format, sha256: p.sha256, bytes: p.bytes, orientation: null },
+    webp: { sha256: PENDING_SHA256, bytes: Math.max(1, p.bytes) },
+    width: p.width,
+    height: p.height,
+    frames: p.frames,
+    hasAlpha: false,
+    conversionMode: 'converted',
+    quality: null,
+    convertMs: null,
+    storedVerified: null,
+    storedSha256: null,
+    verifyReason: null,
+    error: null,
+    placedAt: null,
+    placedBy: null,
+    placementJobId: null,
+    placementProposalId: null,
+    discardJobId: null,
+    discardedAt: null,
+    discardedBy: null,
+    createdAt: 0,
+    updatedAt: 0,
+    serverSha256: PENDING_SHA256,
+    expiryWarnedAt: null,
+    legacyAssetId: null,
+  };
 }
 
 /**
@@ -214,6 +279,8 @@ export interface PlannedImage {
    * `propose`), which the package takes over: withdrawn, "superseded by package prop_…", when the package is proposed.
    */
   readonly takeover?: string | null;
+  /** v3 F7c (ADR 0075): an archive entry not staged yet (planned from its header; the job binds and waits). */
+  readonly pending?: PendingArchiveImage;
 }
 
 export interface PlannedPage extends NewPage {
@@ -2164,7 +2231,10 @@ export function planImages(
       );
       continue;
     }
-    const row = images.staged(ctx.projectId, im.staged_id);
+    const stagedNow = images.staged(ctx.projectId, im.staged_id);
+    // v3 F7c (ADR 0075, Z4): an archive entry not staged yet is planned from its header (staged meanwhile: as it is).
+    const pending = !stagedNow && im.pending ? im.pending : undefined;
+    const row = pending ? pendingRow(ctx.projectId, im.staged_id, pending) : stagedNow;
     if (!row || !row.staged) {
       o.refuse(
         'STAGED_IMAGE_NOT_FOUND',
@@ -2254,6 +2324,7 @@ export function planImages(
       placeholder: `https://lk-bridge.invalid/staged/${im.staged_id}`,
       subfolder: sub.join(' / ') || null,
       takeover,
+      ...(pending ? { pending } : {}),
     });
   }
   return out;

@@ -13,7 +13,8 @@ import type { AssetPlan } from '../../assets/plan.js';
 import { ImageError, displayNameOf, type ConvertedImage } from '../../images/convert.js';
 import type { DestinationInput } from '../../images/destination.js';
 import { ImageServiceError, type ImageService } from '../../images/service.js';
-import { CAPABILITY_SCHEME } from '../../images/slots.js';
+import { CAPABILITY_SCHEME, ZIP_CONTENT_TYPE } from '../../images/slots.js';
+import { DEFAULT_IMAGE_SETTINGS } from '../../config/tools.js';
 import type { ImageUploadRow, UploadSource } from '../../images/store.js';
 import type { JobView } from '../../jobs/index.js';
 import { readOnlyReason } from '../../policy/gate.js';
@@ -466,6 +467,11 @@ async function uploadBytes(
           `No upload ${args.upload_id} was prepared by this connection in this project. Call prepare_image_upload first.`,
         );
       }
+      if (slot.contentType === ZIP_CONTENT_TYPE)
+        return fail(
+          'UPLOAD_IS_ARCHIVE',
+          `Upload ${slot.id} is a zip: give it to upload_image_archive { "upload_id": "${slot.id}" }.`,
+        );
       if (slot.state === 'prepared' || slot.state === 'receiving') {
         return fail(
           'UPLOAD_NOT_RECEIVED',
@@ -916,21 +922,32 @@ function scripts(o: { url: string; token: string; sha256: string; length: number
 
 function prepareTool(deps: ToolDeps): McpToolProvider {
   const max = deps.settings.upload.maxBytes;
+  // v3 F7c (ADR 0075): a zip of images may be as large as IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES (checked per call).
+  const archiveMax = () => (deps.settings.images ?? DEFAULT_IMAGE_SETTINGS).archiveMaxUncompressedBytes;
   return defineTool({
     name: 'prepare_image_upload',
     title: 'Prepare a binary image upload',
     access: 'write',
     description:
-      'For agents with a shell or sandbox (Claude Code, scripts), so they need not paste megabytes of base64: give the file’s sha256 (lowercase hex), byte_length, content_type and name; you get an upload_id (a single-use capability: it works ONCE, for 5 minutes, for that file only) and ready-made Python and curl scripts. Run one with the file’s path, then call upload_image with the upload_id within 15 minutes. Never put the capability in a URL. Not for ChatGPT or any assistant whose code environment cannot reach the bridge: ChatGPT uses upload_image’s `file`. Cost: nothing in LegendKeeper until upload_image.',
+      'For agents with a shell or sandbox (Claude Code, scripts), so they need not paste megabytes of base64: give the file’s sha256 (lowercase hex), byte_length, content_type and name; you get an upload_id (a single-use capability: it works ONCE, for 5 minutes, for that file only) and ready-made Python and curl scripts. Run one with the file’s path, then call upload_image with the upload_id within 15 minutes. A zip of images (content_type application/zip) goes to upload_image_archive { upload_id } instead. Never put the capability in a URL. Not for ChatGPT or any assistant whose code environment cannot reach the bridge: ChatGPT uses upload_image’s (or upload_image_archive’s) `file`. Cost: nothing in LegendKeeper until upload_image.',
     inputSchema: z.object({
       sha256: z
         .string()
         .regex(/^[0-9a-fA-F]{64}$/, '64 hex characters')
         .describe('The file’s SHA-256, hex.'),
-      byte_length: z.number().int().min(1).max(max).describe(`The file’s size in bytes (at most ${max}).`),
+      byte_length: z
+        .number()
+        .int()
+        .min(1)
+        .max(Math.max(max, 20 * 1024 ** 3))
+        .describe(
+          `The file’s size in bytes (an image at most ${max}; a zip at most IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES).`,
+        ),
       content_type: z
-        .enum(['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'])
-        .describe('Checked against the file’s first bytes when it arrives.'),
+        .enum(['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', ZIP_CONTENT_TYPE])
+        .describe(
+          'Checked against the file’s first bytes when it arrives. application/zip: an image archive.',
+        ),
       name: name200.describe('The asset name to use (a file extension is dropped).'),
       project: projectArg,
     }),
@@ -968,6 +985,18 @@ function prepareTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         }
+        const zip = args.content_type === ZIP_CONTENT_TYPE;
+        const cap = zip ? archiveMax() : max;
+        if (args.byte_length > cap)
+          return errorResult(
+            {
+              code: 'UPLOAD_TOO_LARGE',
+              message: zip
+                ? `The zip is larger than IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES (${cap} bytes): split it.`
+                : `The image is larger than UPLOAD_MAX_BYTES (${cap} bytes).`,
+            },
+            pd,
+          );
         svc.rate.prepare.hit(principal);
         const contentType = args.content_type === 'image/jpg' ? 'image/jpeg' : args.content_type;
         const prepared = svc.slots.prepare({
@@ -995,7 +1024,9 @@ function prepareTool(deps: ToolDeps): McpToolProvider {
             fileExpiresAt: new Date(prepared.expiresAt).toISOString(),
             bound: { sha256: args.sha256.toLowerCase(), byteLength: args.byte_length, contentType },
             scripts: s,
-            next: `Run a script with the file's path (e.g. python3 upload.py ./image.png). It answers "received". Then call upload_image { "upload_id": "${prepared.uploadId}", "destination": { … } } within 15 minutes.`,
+            next: zip
+              ? `Run a script with the zip's path (e.g. python3 upload.py ./art.zip). It answers "received". Then call upload_image_archive { "upload_id": "${prepared.uploadId}" } within 15 minutes.`
+              : `Run a script with the file's path (e.g. python3 upload.py ./image.png). It answers "received". Then call upload_image { "upload_id": "${prepared.uploadId}", "destination": { … } } within 15 minutes.`,
             note: 'The capability works once, for 5 minutes, only for this file in this project and this connection. Keep it out of URLs and logs.',
           },
           pd,
