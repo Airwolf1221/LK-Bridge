@@ -497,3 +497,90 @@ describe('Try it', () => {
     expect(err).toHaveTextContent('"candidates"');
   });
 });
+
+describe('Asset Tree page: image archives (v3 F7c, ADR 0075)', () => {
+  const archives = {
+    project: { id: PROJECT_ID, name: 'baisheng' },
+    archives: [
+      {
+        archive_id: 'arc_AAAAAAAAAAAAAAAA',
+        fileName: 'Ishikawa_Rei.zip',
+        state: 'open',
+        bytes: 45_000_000,
+        sha256: 'a'.repeat(64),
+        entries: 3,
+        counts: { staged: 1, held: 1, refused: 1 },
+        serverCopy: true,
+        createdAt: new Date(now - 60_000).toISOString(),
+        lastActivityAt: new Date(now - 30_000).toISOString(),
+        referenced: true,
+        principalId: 'pat_x',
+        source: 'chatgpt_file',
+        rows: [
+          {
+            entry: 'Rei - Portrait.webp',
+            path: 'Rei - Portrait.webp',
+            folder: null,
+            suggestedOutfit: null,
+            size: 1000,
+            format: 'webp',
+            width: 640,
+            height: 960,
+            status: 'staged',
+            staged_id: 'img_xxxxxxxxxxxx',
+          },
+          {
+            entry: 'Rei - Lingerie 1.webp',
+            path: 'Lingerie/Rei - Lingerie 1.webp',
+            folder: 'Lingerie',
+            suggestedOutfit: 'Lingerie',
+            size: 1000,
+            status: 'held',
+            heldBy: 'storage',
+          },
+          {
+            entry: 'notes.txt',
+            path: 'notes.txt',
+            folder: null,
+            suggestedOutfit: null,
+            size: 10,
+            status: 'refused',
+            reason: 'NOT_AN_IMAGE: not a PNG, JPEG, GIF or WebP image',
+          },
+        ],
+      },
+    ],
+    limits: {
+      holding: { stagedBytes: 1_000_000, capBytes: 5_368_709_120, freeBytes: 5_367_709_120 },
+      processing: { converting: 0, waitingInQueue: 0, concurrency: 1 },
+      brake: { perHour: 1000 },
+    },
+    now,
+  };
+
+  it('lists the archives with their rows and the three limits; Discard posts after confirming', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /asset-tree': overview(),
+      'GET /asset-tree/corrections': corrections,
+      'GET /asset-tree/children': children,
+      'GET /archives': archives,
+      'POST /archives/arc_AAAAAAAAAAAAAAAA/discard': { discarded: 1 },
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/assets');
+    const card = await screen.findByTestId('assets-archives');
+    expect(await within(card).findByRole('button', { name: 'Ishikawa_Rei.zip' })).toBeInTheDocument();
+    expect(within(card).getByText(/Staged 1/)).toBeInTheDocument();
+    expect(within(card).getByText(/an art job waits for it/)).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('archive-limits')).getByText(/1,000 images per connection per hour/),
+    ).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: 'Ishikawa_Rei.zip' }));
+    expect(within(card).getByText('waiting for space')).toBeInTheDocument();
+    expect(within(card).getByText(/NOT_AN_IMAGE/)).toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: 'Discard' }));
+    await user.click(await screen.findByRole('button', { name: 'Discard the archive' }));
+    await waitFor(() => expect(api.find('POST', '/archives/arc_AAAAAAAAAAAAAAAA/discard')).toHaveLength(1));
+  });
+});

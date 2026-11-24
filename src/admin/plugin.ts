@@ -22,6 +22,7 @@ import { registerSecurity } from './routes/security.js';
 import { registerSettings } from './routes/settings.js';
 import { registerStaging } from './routes/staging.js';
 import { registerAssets } from './routes/assets.js';
+import { registerArchives } from './routes/archives.js';
 import { registerTree } from './routes/tree.js';
 import { registerRegistry } from './routes/registry.js';
 import { registerLifecycle } from './routes/lifecycle.js';
@@ -117,6 +118,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerChronology(api, ctx); // v2 D1
       registerAssets(api, ctx); // v2 A4
       registerStaging(api, ctx); // v2 D3
+      registerArchives(api, ctx); // v3 F7c (ADR 0075)
       registerSnapshots(api, ctx); // v2 E1a
       registerOffsite(api, ctx); // v2 E1b
       registerAudits(api, ctx); // v2 E2

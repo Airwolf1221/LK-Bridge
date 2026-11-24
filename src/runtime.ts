@@ -525,6 +525,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     // v3 F3b (ADR 0052): the job's check that each staged image it places is still its to place (read when jobs run,
     // after the image service below exists).
     stagedImage: (projectId, stagedId) => images.staged(projectId, stagedId),
+    // v3 F7c (ADR 0075): an archive entry withdrawn before it was staged is left out, not a reason to stop.
+    archiveWithdrawn: (projectId, stagedId) => {
+      const b = images.archives.binding(projectId, stagedId);
+      return b.kind === 'withdrawn' ? b.reason : null;
+    },
     proposalJob: (proposalId) => policy.proposals.get(proposalId)?.jobId ?? null,
     addTaxonomyEntry: (projectId, r, actor) =>
       addPackTaxonomyEntry(

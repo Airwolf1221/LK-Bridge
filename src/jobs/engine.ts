@@ -112,6 +112,7 @@ import {
   type StepOptions,
   type StepSpec,
   type StepView,
+  type StagedBinding,
   type WaitForShape,
   type SubmitRequest,
   type SubmitResult,
@@ -274,8 +275,10 @@ export class JobEngine {
   private readonly rebasers = new Map<string, Rebaser>();
   /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
   private writeGuard: WriteGuard | undefined;
-  /** v3 F3d (ADR 0058): judges a job's `waitFor` (`setWaitForCheck`). */
-  private waitForCheck: ((w: WaitForShape) => string | null) | undefined;
+  /** v3 F3d (ADR 0058): judges a job's `waitFor` (`setWaitForCheck`); v3 F7c: one check per kind. */
+  private readonly waitForChecks = new Map<WaitForShape['kind'], (w: WaitForShape) => string | null>();
+  /** v3 F7c (ADR 0075): what a staged id is now, for `StepOptions.bindStaged` (`setStagedResolver`). */
+  private stagedResolver: ((projectId: string, stagedId: string) => StagedBinding) | undefined;
   /** v3 F2: the Last Major Revision planner (src/lmr/), asked about every caller's write request. */
   private lmrPlanner: LmrPlanner | undefined;
   private assetDeleteKeeper: AssetDeleteKeeper | undefined;
@@ -811,10 +814,24 @@ export class JobEngine {
    * v3 F3d (ADR 0058): judges a job's `waitFor` (null: it may start now; else what it still waits for, in words). The
    * setting packs register it; without it, a job with a `waitFor` waits. `poke` asks again.
    */
-  setWaitForCheck(check: (w: WaitForShape) => string | null): () => void {
-    this.waitForCheck = check;
+  setWaitForCheck(
+    check: (w: WaitForShape) => string | null,
+    kind: WaitForShape['kind'] = 'pack_version',
+  ): () => void {
+    this.waitForChecks.set(kind, check);
     return () => {
-      if (this.waitForCheck === check) this.waitForCheck = undefined;
+      if (this.waitForChecks.get(kind) === check) this.waitForChecks.delete(kind);
+    };
+  }
+
+  /**
+   * v3 F7c (ADR 0075, Z4): registers what a staged id is now (the image service's archives), for the steps that bind an
+   * archive entry's staged image (`StepOptions.bindStaged`). Without it such a step fails before anything is sent.
+   */
+  setStagedResolver(resolve: (projectId: string, stagedId: string) => StagedBinding): () => void {
+    this.stagedResolver = resolve;
+    return () => {
+      if (this.stagedResolver === resolve) this.stagedResolver = undefined;
     };
   }
 
@@ -1456,7 +1473,20 @@ export class JobEngine {
     // v3 F2: outside an upload job, only a batch that made its own upload binds its key (a raw createImageAsset keeps
     // the key it was given).
     if (!first && this.repo.job(jobId)?.kind !== 'upload_image') return false;
-    const created = first ? (this.repo.stepResult(first) as { uploadKey?: unknown } | null) : null;
+    // v3 F7c (ADR 0075, Z5): a PUT between them that made the upload again (its signed URL had expired while the job
+    // waited) gives the key to use.
+    const renewed = first
+      ? this.repo
+          .steps(jobId)
+          .filter((s) => s.opId === UPLOAD_PUT_STEP && s.stepNo > first.stepNo && s.stepNo < step.stepNo)
+          .map((s) => this.repo.stepResult(s) as { uploadKey?: unknown } | null)
+          .find((r) => typeof r?.uploadKey === 'string' && r.uploadKey.length > 0)
+      : undefined;
+    const created =
+      renewed ??
+      (first ? (this.repo.stepResult(first) as { uploadKey?: unknown; withdrawn?: unknown } | null) : null);
+    // v3 F7c (ADR 0075): an image withdrawn before it was uploaded: this step is withdrawn too (bindStaged), not bound.
+    if (step.options.bindStaged && (created as { withdrawn?: unknown } | null)?.withdrawn) return false;
     if (typeof created?.uploadKey !== 'string' || created.uploadKey.length === 0) {
       throw new JobsError('BRIDGE_ERROR', 'createImageUpload returned no uploadKey', {
         jobId,
@@ -1674,12 +1704,18 @@ export class JobEngine {
     if (step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
     const ref = { jobId: job.id, stepNo: step.stepNo };
     const urls = new Map<string, string>();
+    /** v3 F7c (ADR 0075): blocks of images that were withdrawn (left out). */
+    const dropped = new Set<string>();
     for (const b of binds) {
       const source = b.step < step.stepNo ? this.repo.step(job.id, b.step) : undefined;
       const made =
         source?.status === 'succeeded'
-          ? (this.repo.stepResult(source) as { url?: unknown; id?: unknown } | null)
+          ? (this.repo.stepResult(source) as { url?: unknown; id?: unknown; withdrawn?: unknown } | null)
           : null;
+      if (made?.withdrawn && b.drop) {
+        for (const id of b.drop) dropped.add(id);
+        continue;
+      }
       const value = b.field === 'id' ? made?.id : made?.url;
       if (typeof value !== 'string' || value.length === 0) {
         return new JobsError(
@@ -1691,11 +1727,13 @@ export class JobEngine {
       urls.set(b.placeholder, value);
     }
     const params = this.repo.stepParams(step);
+    const kept = (x: unknown) =>
+      !(x !== null && typeof x === 'object' && dropped.has((x as { id?: unknown }).id as string));
     const swap = (v: unknown): unknown =>
       typeof v === 'string'
         ? (urls.get(v) ?? v)
         : Array.isArray(v)
-          ? v.map(swap)
+          ? (dropped.size > 0 ? v.filter(kept) : v).map(swap)
           : v !== null && typeof v === 'object'
             ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, swap(x)]))
             : v;
@@ -1706,6 +1744,63 @@ export class JobEngine {
       if (e instanceof JobsError) return e;
       throw e;
     }
+    if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
+    return null;
+  }
+
+  /**
+   * v3 F7c (ADR 0075, Z4): binds the staged image of `options.bindStaged` (an archive entry that was not staged when the
+   * job was planned): its WebP's length and SHA-256, and its server file, replace the body's `contentLength`,
+   * `contentHash` and `stagedSha256` where the body has them. An entry refused, failed for good or discarded withdraws
+   * the step: recorded as succeeded with `{ skipped, withdrawn }`, nothing sent (`'withdrawn'`). A step that may already
+   * have been sent keeps what it was sent with.
+   */
+  private bindStaged(job: JobView, step: StepView): JobsError | 'withdrawn' | null {
+    const want = step.options.bindStaged;
+    if (!want) return null;
+    if (step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const got: StagedBinding = this.stagedResolver
+      ? this.stagedResolver(job.projectId, want.stagedId)
+      : { kind: 'pending', reason: 'the bridge cannot look up archive entries now' };
+    if (got.kind === 'pending')
+      return new JobsError(
+        'ARCHIVE_ENTRY_NOT_STAGED',
+        `${step.opId}: the archive entry of ${want.stagedId} is not staged (${got.reason}); nothing was sent`,
+        ref,
+      );
+    if (got.kind === 'withdrawn') {
+      const now = this.clock.now();
+      this.repo.updateStep(job.id, step.stepNo, {
+        status: 'succeeded',
+        resultSummary: {
+          skipped: `not placed: ${got.reason}`,
+          withdrawn: { stagedId: want.stagedId, reason: got.reason },
+        },
+        startedAt: step.startedAt ?? now,
+        finishedAt: now,
+      });
+      return 'withdrawn';
+    }
+    const params = this.repo.stepParams(step);
+    const body = (params.body ?? {}) as Record<string, unknown>;
+    const next: OpParams = {
+      ...params,
+      body: {
+        ...body,
+        ...('contentLength' in body ? { contentLength: got.contentLength } : {}),
+        ...('contentHash' in body ? { contentHash: got.contentHash } : {}),
+        ...('stagedSha256' in body ? { stagedSha256: got.stagedSha256 } : {}),
+      },
+    };
+    // The bridge's own steps (the signed PUT, the stored-file check) have no registry schema.
+    if (getOperation(step.opId))
+      try {
+        this.validate(step.opId, next);
+      } catch (e) {
+        if (e instanceof JobsError) return e;
+        throw e;
+      }
     if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
     return null;
   }
@@ -2449,15 +2544,18 @@ export class JobEngine {
       // the pack version holding its new token map). Asked again each time the scheduler runs (`poke` wakes it).
       const waiting = step ? this.waitingFor(job.id) : null;
       if (waiting) {
-        if (job.waitReason?.held !== 'waiting_for' || job.waitReason.message !== waiting.message) {
+        // v3 F7c (ADR 0075): a job waiting for archive entries to be staged says so (`waiting_staging`).
+        const held = waiting.waitFor.kind === 'archive_staging' ? 'waiting_staging' : 'waiting_for';
+        if (job.waitReason?.held !== held || job.waitReason.message !== waiting.message) {
           this.repo.updateJob(job.id, {
-            waitReason: { held: 'waiting_for', message: waiting.message, waitFor: waiting.waitFor },
+            waitReason: { held, message: waiting.message, waitFor: waiting.waitFor },
           });
           this.emitJob(job.id, 'updated');
         }
         continue;
       }
-      if (job.waitReason?.held === 'waiting_for') this.repo.updateJob(job.id, { waitReason: null });
+      if (job.waitReason?.held === 'waiting_for' || job.waitReason?.held === 'waiting_staging')
+        this.repo.updateJob(job.id, { waitReason: null });
       this.launch(job.id);
       capacity--;
     }
@@ -2469,7 +2567,8 @@ export class JobEngine {
     if (!w) return null;
     let still: string | null;
     try {
-      still = this.waitForCheck ? this.waitForCheck(w) : `waits for ${w.reason || w.kind}`;
+      const check = this.waitForChecks.get(w.kind);
+      still = check ? check(w) : `waits for ${w.reason || w.kind}`;
     } catch (e) {
       still = `the wait could not be judged (${e instanceof Error ? e.message : String(e)})`;
     }
@@ -2713,6 +2812,18 @@ export class JobEngine {
       if (!bound) {
         step = this.repo.step(jobId, step.stepNo) ?? step;
         bound = this.bindAssetUrls(job, step);
+      }
+      // v3 F7c (ADR 0075): an archive entry's staged image, bound now (or the step is withdrawn: not sent).
+      if (!bound) {
+        step = this.repo.step(jobId, step.stepNo) ?? step;
+        const staged = this.bindStaged(job, step);
+        if (staged === 'withdrawn') {
+          this.emitStep(job, step.stepNo);
+          this.refreshProgress(jobId);
+          this.emitJob(jobId, 'updated');
+          continue;
+        }
+        bound = staged;
       }
       if (!bound) {
         step = this.repo.step(jobId, step.stepNo) ?? step;
@@ -3810,7 +3921,20 @@ function resumableOf(r: BatchSubmit['resumable']): ResumableShape | undefined {
 
 /** v3 F3d (ADR 0058): `BatchSubmit.waitFor` as stored (bridge code only). */
 function waitForOf(w: BatchSubmit['waitFor']): WaitForShape | undefined {
-  if (!w || w.kind !== 'pack_version' || typeof w.packId !== 'string' || !Number.isInteger(w.version))
+  if (!w) return undefined;
+  // v3 F7c (ADR 0075): a job placing archive entries that were not staged yet.
+  if (w.kind === 'archive_staging') {
+    if (typeof w.projectId !== 'string' || !Array.isArray(w.stagedIds)) return undefined;
+    const ids = w.stagedIds.filter((x): x is string => typeof x === 'string').slice(0, 500);
+    if (ids.length === 0) return undefined;
+    return {
+      kind: w.kind,
+      projectId: w.projectId,
+      stagedIds: ids,
+      reason: String(w.reason ?? '').slice(0, 500),
+    };
+  }
+  if (w.kind !== 'pack_version' || typeof w.packId !== 'string' || !Number.isInteger(w.version))
     return undefined;
   return { kind: w.kind, packId: w.packId, version: w.version, reason: String(w.reason ?? '').slice(0, 500) };
 }
@@ -3895,8 +4019,16 @@ function stepOptions(o: StepOptions): StepOptions {
             step: b.step,
             placeholder: b.placeholder,
             ...(b.field === 'id' ? { field: 'id' as const } : {}),
+            // v3 F7c (ADR 0075): the blocks left out when the image was withdrawn.
+            ...(Array.isArray(b.drop) && b.drop.every((x) => typeof x === 'string')
+              ? { drop: [...b.drop] }
+              : {}),
           })),
         }
+      : {}),
+    // v3 F7c (ADR 0075): set by bridge code only.
+    ...(o.bindStaged && typeof o.bindStaged.stagedId === 'string'
+      ? { bindStaged: { stagedId: o.bindStaged.stagedId } }
       : {}),
     ...(o.fill && typeof o.fill.filler === 'string'
       ? { fill: { filler: o.fill.filler, ...(o.fill.input !== undefined ? { input: o.fill.input } : {}) } }

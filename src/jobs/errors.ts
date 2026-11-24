@@ -30,6 +30,8 @@ export type JobsErrorCode =
   | 'CANONICAL_APPROVAL_REQUIRED'
   /** v2 D3 (ADR 0041): an asset delete refused because its bytes could not be kept first. */
   | 'ASSET_BYTES_NOT_KEPT'
+  /** v3 F7c (ADR 0075): a step bound to an archive entry whose staged image does not exist yet. */
+  | 'ARCHIVE_ENTRY_NOT_STAGED'
   | 'BRIDGE_ERROR';
 
 export interface JobRef {

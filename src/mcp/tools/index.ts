@@ -31,6 +31,7 @@ import { consistencyTools } from './consistency.js';
 import { narrativeTools } from './narrative.js';
 import { narrativeReadTools } from './narrative-read.js';
 import { withWorkstreamArg } from './workstream-arg.js';
+import { archiveTools } from './archives.js';
 import { workstreamTools } from './workstreams.js';
 import { queryFactsTool } from './query-facts.js';
 import { identityReconcileTool } from './identity-reconcile.js';
@@ -113,6 +114,8 @@ function createTools(
     ...uploadTools(deps),
     // v2 D3 (ADR 0041): the image pipeline.
     ...imageTools(deps),
+    // v3 F7c (ADR 0075): image archives (zips), staged entry by entry.
+    ...archiveTools(deps),
     ...(opts.exposePerOpTools ? perOpTools(deps) : []),
   ];
 }

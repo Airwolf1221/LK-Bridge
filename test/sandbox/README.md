@@ -478,6 +478,26 @@ mode: "bar", items: [{ name: "Probe", icon: "heart", current: 1, max: 2 }] }` (`
 Clean-up: the throwaway asset folder (with everything in it) and the probe page, in the check's `finally` and the test
 file's `afterAll`. On the mock: `test/sandbox-mock/f7-art.test.ts`.
 
+## Image archives (v3 F7c)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7c-archive` (`f7c-archive.ts`; ADR
+0075). WRITES, then cleans up (about 7 writes, 10 reads and one download from the asset host). C0 the asset tree built;
+C1 a small zip of 3 images (`alpha.png`, `Probe Outfit/orientation-6.jpg`, `already.webp`) taken in as an image archive:
+listed at once, nothing converted, nothing sent to LegendKeeper; C2 ONE entry asked for as an art call asks: converted
+and staged by the archive worker, the other two still listed; C3 that entry placed as an outfit piece by the art job's
+own steps (createImageUpload, the signed PUT, createImageAsset, the stored-file check, the read back) into a throwaway
+character folder's Wardrobe (`lk-bridge f7c check <time> / F7c Probe / Wardrobe`), read live; C4 the archive discarded:
+its server copy removed, the two listed entries discarded. **What to look for:**
+
+- **C1**: three `F7C ROW` lines, e.g. `F7C ROW orientation-6.jpg folder="Probe Outfit" suggestedOutfit="Probe Outfit"
+jpeg <w>×<h> listed` and `F7C ROW alpha.png folder=null suggestedOutfit=null png … listed`.
+- **C3**: `F7C PLACED F7c Probe - Probe Outfit - Outfit Reference - Front in lk-bridge f7c check … / F7c Probe /
+Wardrobe (asset …); storedBytesVerified=true`.
+- **cleanup**: `nothing left`.
+
+Clean-up: the throwaway asset folder (with everything in it) and the archive, in the check's `finally` and the test
+file's `afterAll`. On the mock: `test/sandbox-mock/f7c-archive.test.ts`.
+
 ## Seeing character art (v3 F7b)
 
 `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7b-art` (`f7b-art.ts`; ADR 0071). WRITES,
@@ -563,6 +583,7 @@ always skips it and the run asserts its reason (the smoke's (c)).
 | snapshots                      | `test/snapshots/sandbox-dryrun.test.ts`                     |
 | split-ids, assign-block-ids    | `test/sandbox-mock/split-ids.test.ts`, `…assign-block-ids…` |
 | f7-art                         | `test/sandbox-mock/f7-art.test.ts`                          |
+| f7c-archive                    | `test/sandbox-mock/f7c-archive.test.ts`                     |
 | f7-1-core                      | `test/sandbox-mock/f7-1-core.test.ts`, `…/pack-governance…` |
 
 The mock answers as LegendKeeper does only with its **faithful** setting on (`test/sandbox-mock/faithful.ts`, which

@@ -501,8 +501,9 @@ export class MockLk {
             ? { data: [{ id: 'r1' }], hasMore: false, nextCursor: null }
             : { id: `id${call.n}`, name: 'mock', ok: true };
     if (modelled && modelled.status >= 400) call.outcome = `status-${modelled.status}`;
-    // LK does not store 400/401/403/404 or 5xx responses for idempotency replay.
-    const storable = status < 500 && ![400, 401, 403, 404].includes(status);
+    // LK does not store 400/401/403/404, 429 or 5xx responses for idempotency replay (PLAN §1.1; v3 F7c: a modelled
+    // 429 is not stored either, so a retry with the same key is answered afresh).
+    const storable = status < 500 && ![400, 401, 403, 404, 429].includes(status);
     if (key !== undefined && storable)
       this.idem.set(key, { status, body, request: JSON.stringify(req.body ?? null) });
     if (action?.kind === 'drop-after-commit') {

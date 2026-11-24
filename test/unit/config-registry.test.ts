@@ -156,7 +156,8 @@ describe('the registry agrees with the schemas', () => {
       IMAGE_MAX_FRAMES: [300, 1, 10000],
       IMAGE_CONVERT_TIMEOUT_MS: [60000, 1000, 600000],
       IMAGE_CONVERT_CONCURRENCY: [1, 1, 4],
-      IMAGE_UPLOAD_RATE_PER_PRINCIPAL: [30, 1, 10000],
+      // v3 F7c (ADR 0075, Z3): a runaway brake now (30 → 1,000 an hour; the range up to 100,000).
+      IMAGE_UPLOAD_RATE_PER_PRINCIPAL: [1000, 1, 100000],
       IMAGE_UPLOAD_RATE_PER_IP: [60, 1, 100000],
       IMAGE_UPLOAD_BODY_TIMEOUT_MS: [120000, 5000, 1800000],
       IMAGE_UPLOAD_IDLE_TIMEOUT_MS: [15000, 1000, 300000],
@@ -164,6 +165,10 @@ describe('the registry agrees with the schemas', () => {
       IMAGE_STAGING_MAX_DAYS: [90, 1, 3650],
       IMAGE_STAGING_MIN_FREE_GB: [5, 0, 100000],
       ASSET_BYTES_RETENTION_DAYS: [90, 1, 3650],
+      // v3 F7c (ADR 0075): image archives and the staging capacity.
+      IMAGE_ARCHIVE_MAX_ENTRIES: [300, 1, 10000],
+      IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES: [2147483648, 1048576, 21474836480],
+      IMAGE_STAGED_MAX_BYTES: [5368709120, 1048576, 1099511627776],
       ART_CACHE_MAX_MB: [500, 1, 1000000],
       WRITERS_MAX: [2, 1, 8],
       RESERVE_FLOOR_INTERACTIVE: [0.1, 0, 1],

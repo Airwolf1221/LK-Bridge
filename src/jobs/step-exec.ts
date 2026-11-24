@@ -1432,7 +1432,12 @@ export class StepExecutor {
           let assetId = t.assetId;
           if (t.assetFrom) {
             const src = this.d.repo.step(job.id, t.assetFrom.step);
-            const made = src ? (this.d.repo.stepResult(src) as { id?: unknown } | null) : null;
+            const made = src
+              ? (this.d.repo.stepResult(src) as { id?: unknown; withdrawn?: unknown } | null)
+              : null;
+            // v3 F7c (ADR 0075): an image withdrawn before it was uploaded (its archive entry refused or discarded) has
+            // nothing to read back: the image is left out, never the others.
+            if (made?.withdrawn) continue;
             assetId = typeof made?.id === 'string' ? made.id : undefined;
           }
           const r = assetId

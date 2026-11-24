@@ -215,7 +215,22 @@ export interface StepOptions {
     readonly placeholder: string;
     /** v3 F3c (ADR 0051 decision 3): `id` puts the asset's id in place of the placeholder (a map image); default `url`. */
     readonly field?: 'url' | 'id';
+    /**
+     * v3 F7c (ADR 0075, Z4): the blocks (by id) that show this image (its heading, image block and interpretation):
+     * when the named step was withdrawn (its archive entry was refused or discarded, so the image was never uploaded),
+     * these blocks are left out instead of failing the step, and the other images go ahead.
+     */
+    readonly drop?: readonly string[];
   }[];
+  /**
+   * v3 F7c (ADR 0075, Z4), set by bridge code only, on the steps that upload one staged image (createImageUpload, the
+   * signed PUT, createImageAsset, the stored-file check): the image is an archive entry that was not staged yet when the
+   * job was planned. Just before the step runs, the staged image of that id is looked up (the registered resolver) and
+   * its WebP's length and SHA-256 (and server file) are bound into the body; when its entry was refused, failed for good
+   * or discarded meanwhile, the step is not sent: it is recorded as succeeded with `{ skipped, withdrawn }`, so only
+   * that image is left out. Bound once, before anything is sent.
+   */
+  readonly bindStaged?: { readonly stagedId: string };
   /**
    * v3 F3a (ADR 0050), set by bridge code only, on a `replaceDocumentBlocks` of a page the same job made from a template
    * (whose copy already holds the template's content): inside the lock, after the read that gives the If-Match, the
@@ -338,14 +353,36 @@ export interface ResumableShape {
  * `waitReason.held` naming it). A culture or race rename waits for the owner to approve the pack version holding its new
  * token map.
  */
-export interface WaitForShape {
-  readonly kind: 'pack_version';
-  readonly packId: string;
-  /** The version the job waits for the owner to approve (or a later one). */
-  readonly version: number;
-  /** Shown to the owner while the job waits. */
-  readonly reason: string;
-}
+export type WaitForShape =
+  | {
+      readonly kind: 'pack_version';
+      readonly packId: string;
+      /** The version the job waits for the owner to approve (or a later one). */
+      readonly version: number;
+      /** Shown to the owner while the job waits. */
+      readonly reason: string;
+    }
+  | {
+      /**
+       * v3 F7c (ADR 0075, Z4): the job places archive entries that were not staged yet: it waits (`waiting_staging`)
+       * until every one is staged, or refused or discarded (that image is then left out, never the others).
+       */
+      readonly kind: 'archive_staging';
+      readonly projectId: string;
+      readonly stagedIds: readonly string[];
+      readonly reason: string;
+    };
+
+/** v3 F7c: what the staged-image resolver says of a staged id (`StepOptions.bindStaged`). */
+export type StagedBinding =
+  | {
+      readonly kind: 'staged';
+      readonly contentLength: number;
+      readonly contentHash: string;
+      readonly stagedSha256: string;
+    }
+  | { readonly kind: 'withdrawn'; readonly reason: string }
+  | { readonly kind: 'pending'; readonly reason: string };
 
 export interface StepSpec extends StepOptions {
   readonly op: string;

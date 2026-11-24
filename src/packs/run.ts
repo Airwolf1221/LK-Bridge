@@ -42,6 +42,8 @@ export interface RunPackageOptions {
   readonly args: Obj;
   /** v3 F3b with ADR 0051: the caller's override for the existing pages the package changes (default `auto`). */
   readonly lastMajorRevision?: LmrMode | undefined;
+  /** v3 F7c (ADR 0075, Z4): images left out before planning (an archive entry that cannot be used), with why. */
+  readonly notUsed?: readonly { readonly label: string; readonly code: string; readonly reason: string }[];
 }
 
 /** What every pack tool needs before it plans: the pack, its attachment, the tree, the settings, the governance. */
@@ -180,6 +182,13 @@ export async function runPackage(
   const e = characterEnv(pd, mctx, o.tool, b.value, o.type, o.lastMajorRevision);
   if (!e.ok) return e.result;
   const plan = await planPackage(e.env, o.input);
+  if (o.notUsed && o.notUsed.length > 0) {
+    for (const n of o.notUsed)
+      plan.warnings.push({
+        code: 'IMAGE_NOT_USED',
+        message: `${n.label} was left out (${n.code}): ${n.reason} The other images go ahead.`,
+      });
+  }
   return finishPackage(pd, mctx, o, e.env, plan);
 }
 
@@ -380,6 +389,17 @@ export async function finishPackage(
         title: j.summary,
         // v3 F3d: a package that stops part-way can be resumed: its own check (governance, nothing duplicated) first.
         resumable: { kind: 'package', recheck: [1] },
+        // v3 F7c (ADR 0075, Z4): archive entries not staged yet: the job waits for them (`waiting_staging`).
+        ...(plan.images.some((i) => i.pending)
+          ? {
+              waitFor: {
+                kind: 'archive_staging' as const,
+                projectId: pd.project.id,
+                stagedIds: plan.images.filter((i) => i.pending).map((i) => i.stagedId),
+                reason: `${plan.images.filter((i) => i.pending).length} archive entr${plan.images.filter((i) => i.pending).length === 1 ? 'y' : 'ies'} to be staged first`,
+              },
+            }
+          : {}),
         ...(j.marker ? { lifecycle: j.marker } : {}),
         // v3 F3.4 (ADR 0055 decision D): the tool's switch: always a proposal, or the agent's scope.
         forceProposal: packToolMode(pack.rules, o.tool) === 'propose',
@@ -463,6 +483,15 @@ export async function finishPackage(
           const assetStep = j.assetSteps.get(im.stagedId);
           if (!assetStep) continue;
           const now = images.store.upload(pd.project.id, im.stagedId);
+          // v3 F7c (ADR 0075, Z4): an archive entry not staged yet: the placement waits on its entry (pinned), and is
+          // put on the image's record when the worker stages it.
+          if (!now && im.pending) {
+            images.archives.link(pd.project.id, im.stagedId, {
+              ...(out.jobId ? { jobId: out.jobId } : { proposalId: out.proposalId! }),
+              placing: { name: im.name, path: im.path, folderId: im.folderId, assetStep },
+            });
+            continue;
+          }
           const free = (x: string | null | undefined) => !x || ours.has(x);
           if (now && !(free(now.placementProposalId) && free(now.placementJobId) && !now.discardJobId))
             continue;

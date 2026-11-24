@@ -114,6 +114,8 @@ export const SUB_PAGES: { module: string; parent: string }[] = [
   { module: 'registry', parent: '/mappings' },
   // v3 F7 (ADR 0070, G3): the Outfits panel of the Asset Tree page.
   { module: 'outfits', parent: '/assets' },
+  // v3 F7c (ADR 0075, Z6): the Image archives card of the Asset Tree page.
+  { module: 'archives', parent: '/assets' },
 ];
 
 /** The router's table: a path, whether its sub-paths (`/jobs/abc`) are served too, and the page. */

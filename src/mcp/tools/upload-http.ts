@@ -20,6 +20,7 @@
  * outside the governor (ADR 0003).
  */
 import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
+import { closeSync, openSync, rmSync, writeSync } from 'node:fs';
 import { request } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
 import { isPublicAddress } from '../../auth/ip.js';
@@ -159,6 +160,11 @@ export interface RawRequest extends GuardOptions {
   readonly timeoutMs: number;
   /** The response body is cut off with `too_large` above this many bytes. */
   readonly maxResponseBytes: number;
+  /**
+   * v3 F7c (ADR 0075): when set, a 200 answer's body goes here chunk by chunk (an archive written straight to disk)
+   * instead of being kept in memory; the answer's `body` is then empty. Still capped by `maxResponseBytes`.
+   */
+  readonly onChunk?: (chunk: Buffer) => void;
   /** When set, a response is refused before its body is read unless this accepts its status and headers. */
   readonly accept?: (
     status: number,
@@ -240,13 +246,20 @@ export function guardedRequest(r: RawRequest): Promise<RawResponse> {
       }
       const chunks: Buffer[] = [];
       let size = 0;
+      const sink = status === 200 ? r.onChunk : undefined;
       res.on('data', (chunk: Buffer) => {
         size += chunk.length;
         if (size > r.maxResponseBytes) {
           fail(new UploadHttpError('too_large', `The response is larger than ${r.maxResponseBytes} bytes`));
           return;
         }
-        chunks.push(chunk);
+        if (sink) {
+          try {
+            sink(chunk);
+          } catch {
+            fail(new UploadHttpError('network', 'The download could not be written'));
+          }
+        } else chunks.push(chunk);
       });
       res.on('error', () => fail(new UploadHttpError('network', 'The response failed')));
       res.on('end', () => done(() => resolvePromise({ status, headers: seen, body: Buffer.concat(chunks) })));
@@ -527,5 +540,62 @@ export async function fetchImage(
         'The downloaded bytes are not a PNG, JPEG, GIF or WebP image',
       );
     return { bytes: new Uint8Array(res.body), contentType: sniffed };
+  }
+}
+
+/**
+ * v3 F7c (ADR 0075): downloads a file (ChatGPT's zip attachment) to `path` on disk, streamed, never held in memory:
+ * every hop passes the address policy (as `fetchImage`), any declared content type is accepted, the size is capped while
+ * streaming. The caller checks what the bytes are.
+ */
+export async function fetchToFile(
+  rawUrl: string,
+  path: string,
+  o: Omit<FetchImageOptions, 'anyContentType'>,
+): Promise<{ readonly bytes: number }> {
+  let url = checkTargetUrl(rawUrl, o);
+  const deadline = Date.now() + o.timeoutMs;
+  for (let hop = 0; ; hop++) {
+    const fd = openSync(path, 'w', 0o600);
+    let written = 0;
+    let res: RawResponse;
+    try {
+      res = await guardedRequest({
+        ...o,
+        url,
+        method: 'GET',
+        headers: { accept: '*/*', 'user-agent': 'LK-Bridge archive fetcher' },
+        timeoutMs: Math.max(1, deadline - Date.now()),
+        maxResponseBytes: o.maxBytes,
+        signal: o.signal,
+        onChunk: (c) => {
+          writeSync(fd, c);
+          written += c.length;
+        },
+        accept: (status) =>
+          (status >= 300 && status < 400) || status === 200
+            ? null
+            : new UploadHttpError('bad_status', `The file host answered HTTP ${status}`, status),
+      });
+    } catch (e) {
+      closeSync(fd);
+      rmSync(path, { force: true });
+      throw e;
+    }
+    closeSync(fd);
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.location;
+      if (!location || hop >= (o.maxRedirects ?? 3))
+        throw new UploadHttpError('redirect', 'Too many redirects, or a redirect without a location');
+      try {
+        url = checkTargetUrl(new URL(location, url).toString(), o);
+      } catch (e) {
+        throw e instanceof UploadHttpError
+          ? e
+          : new UploadHttpError('redirect', 'A redirect led to a bad URL');
+      }
+      continue;
+    }
+    return { bytes: written };
   }
 }

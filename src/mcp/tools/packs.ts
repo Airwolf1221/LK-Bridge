@@ -13,7 +13,9 @@ import { runArt, runRelationship } from '../../packs/character-tools.js';
 import { runOwner, runPackage } from '../../packs/run.js';
 import { renameReport, runRename } from '../../packs/rename/run.js';
 import { runSplit, splitReport } from '../../packs/split/run.js';
-import type { PackageInput } from '../../packs/engine/plan.js';
+import type { PackageInput, PackagePage } from '../../packs/engine/plan.js';
+import { resolveArchiveImages } from '../../packs/intake.js';
+import type { ProjectDeps } from './shape.js';
 import type { McpToolProvider } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
 import { lastMajorRevisionArg } from './schemas.js';
@@ -42,9 +44,30 @@ const identityValue = z.union([
     .strict(),
 ]);
 
+/** v3 F7c (ADR 0075, Z4): an entry of an image archive, as an art image's source. */
+const archiveRef = z
+  .object({
+    id: z.string().min(1).max(64).describe('The archive_id upload_image_archive gave.'),
+    entry: z
+      .string()
+      .min(1)
+      .max(1000)
+      .describe('The entry (its base name, or its path when two share a name).'),
+  })
+  .strict()
+  .describe(
+    'An entry of an image archive (upload_image_archive), instead of staged_id. A staged entry is used as its staged image; one not staged yet is planned from its header and the job waits for it.',
+  );
+
 const image = z
   .object({
-    staged_id: z.string().min(1).max(64).describe('A staged upload (upload_image with stage: true).'),
+    staged_id: z
+      .string()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe('A staged upload (upload_image with stage: true).'),
+    archive: archiveRef.optional(),
     label: z
       .string()
       .min(1)
@@ -171,6 +194,15 @@ export function genericPackTool(
               pd,
             );
           }
+          const resolved = resolvePages(pd, args.pages);
+          if (!resolved.ok)
+            return errorResult(
+              {
+                code: 'IMAGE_SOURCE_INVALID',
+                message: `${resolved.label}: give exactly one of staged_id or archive.`,
+              },
+              pd,
+            );
           return runPackage(pd, mctx, {
             packId,
             type,
@@ -179,10 +211,11 @@ export function genericPackTool(
               name: args.name,
               ...(args.status !== undefined ? { status: args.status } : {}),
               identity: args.identity,
-              pages: args.pages,
+              pages: resolved.pages,
               ...(args.index !== undefined ? { index: args.index } : {}),
               ...(args.target !== undefined ? { target: args.target } : {}),
             },
+            ...(resolved.notUsed.length > 0 ? { notUsed: resolved.notUsed } : {}),
             dryRun: args.dryRun === true || args.preview === true,
             operationId: args.operation_id,
             args: args,
@@ -230,6 +263,38 @@ const STAGE_HINT =
 
 const linkList = (what: string) =>
   z.array(z.string().max(500)).max(50).optional().describe(`${what} (names or ids).`);
+
+type PageArg = Omit<PackagePage, 'images'> & {
+  readonly images?: readonly z.infer<typeof image>[] | undefined;
+};
+
+/**
+ * v3 F7c (ADR 0075, Z4): a package's pages with their art images' archive entries resolved (an image with neither or
+ * both of staged_id and archive is refused; an entry that cannot be used is left out with its reason).
+ */
+function resolvePages(
+  pd: ProjectDeps,
+  pages: readonly PageArg[],
+):
+  | { ok: true; pages: PackagePage[]; notUsed: ReturnType<typeof resolveArchiveImages>['notUsed'] }
+  | { ok: false; label: string } {
+  const bad = pages.flatMap((p) =>
+    (p.images ?? []).filter((im) => (im.staged_id === undefined) === (im.archive === undefined)),
+  );
+  if (bad.length > 0) return { ok: false, label: bad[0]!.label };
+  const notUsed: ReturnType<typeof resolveArchiveImages>['notUsed'] = [];
+  const out = pages.map((p): PackagePage => {
+    const r = resolveArchiveImages(pd, p.images ?? []);
+    notUsed.push(...r.notUsed);
+    const { images: _images, ...rest } = p;
+    void _images;
+    return {
+      ...rest,
+      ...(p.images ? { images: r.images.map((im) => ({ ...im, staged_id: im.staged_id! })) } : {}),
+    } as PackagePage;
+  });
+  return { ok: true, pages: out, notUsed };
+}
 
 export function packTools(deps: ToolDeps): McpToolProvider[] {
   const packs = () => deps.services?.packs;
@@ -308,12 +373,23 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       listed: () => packs()?.toolListed('arkona') ?? false,
       handler: (args, mctx) =>
         withProject(deps, args.project, 'write', (pd) => {
+          // v3 F7c (ADR 0075, Z4): art images given as archive entries; each image has exactly one source.
+          const resolved = resolvePages(pd, args.pages);
+          if (!resolved.ok)
+            return errorResult(
+              {
+                code: 'IMAGE_SOURCE_INVALID',
+                message: `${resolved.label}: give exactly one of staged_id or archive.`,
+              },
+              pd,
+            );
+          const pages = resolved.pages;
           const input: PackageInput = {
             name: args.name,
             ...(args.depth !== undefined ? { depth: args.depth } : {}),
             ...(args.status !== undefined ? { status: args.status } : {}),
             identity: args.identity,
-            pages: args.pages,
+            pages,
             ...(args.index !== undefined ? { index: args.index } : {}),
             ...(args.target !== undefined ? { target: args.target } : {}),
             ...(args.upgradeToCore !== undefined ? { upgradeToCore: args.upgradeToCore } : {}),
@@ -328,6 +404,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             operationId: args.operation_id,
             args: args,
             lastMajorRevision: args.lastMajorRevision,
+            ...(resolved.notUsed.length > 0 ? { notUsed: resolved.notUsed } : {}),
           });
         }),
     }),
@@ -523,7 +600,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       access: 'write',
       description:
         'The Arkona pack: adds reference images to an EXISTING character (`character`: name, alias or id). ONE call, ONE target: `outfit` applies to every image. Without it (or null) they are DESIGN pieces, always in the character’s own folder (Characters / … / <Character>), named “<Character> - <Label>”. With `outfit` they are pieces of that outfit, named “<Character> - <Outfit> - <Label>”, and the BRIDGE decides the folder from the character’s folders read live and its outfit record: an outfit’s only piece goes loose in Wardrobe; two or more go in Wardrobe / <Outfit> (made when missing, the loose piece moved into it in the same job); an outfit that has its folder takes them there. You never name a folder (Forms, Outfits and Details are retired). An outfit is matched by its name or an alias (case and spacing ignored); a name CLOSE to an existing outfit’s (e.g. “Imperial Regalia” beside “Supreme Imperial Regalia”) is refused with OUTFIT_NEAR_MATCH listing the candidates: use the exact name, or newOutfit: true if it really is another outfit. Names use the character’s full canonical name, are numbered if taken, never carry a file extension. Each image is shown on the character’s Art page with its label and interpretation: design pieces under “Reference Images”; an outfit’s under a heading naming it (found anywhere on the page, else made under the page’s first heading holding “Wardrobe”, else in a new “Wardrobe” section); the Art page is made when missing. Each image needs `interpretation` (what it establishes); a bare image is refused. Up to 30 images. A Compact Reference becomes the Character Core automatically, in the same proposal, when its character gains an index with several owners. ' +
-        'Sources: `staged_id` (from upload_image { stage: true } with NO destination, which proposes nothing), `upload_id` (prepare_image_upload), or in ChatGPT the attached `file` (for the one image with neither). An upload or file is staged on the bridge’s server first, even on a dry run (its staged_id is in the answer). ' +
+        'Sources: `staged_id` (from upload_image { stage: true } with NO destination, which proposes nothing), `upload_id` (prepare_image_upload), `archive` { id, entry } (an entry of a zip from upload_image_archive: in ChatGPT attach the zip there, open it in your own code tool to look at each image and write its interpretation, then name the entries here; one call may draw from several archives), or in ChatGPT the attached `file` (for the one image with none of these). An upload or file is staged on the bridge’s server first, even on a dry run (its staged_id is in the answer). An archive entry not staged yet is planned from its header and the job waits for it (waiting_staging); one that cannot be used (refused, discarded, failed) is left out with its reason (`notUsed`) and the others go ahead. ' +
         'dryRun shows the preview; otherwise ONE proposal for the owner whatever your scope: nothing reaches LegendKeeper until the owner approves it. Never resubmit it. ' +
         'Cost: 4 to 7 reads to plan, plus the live read of the character’s folders (one listing per folder, usually 2 to 5 reads); the job about 11 reads and 3 writes for one image on an existing Art page, about 27 and 16 when it makes the Art page, and one more write for each loose piece moved.',
       inputSchema: z.object({
@@ -549,6 +626,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
               .object({
                 staged_id: z.string().min(1).max(64).optional().describe('A staged image.'),
                 upload_id: z.string().min(1).max(64).optional().describe('A prepared binary upload.'),
+                archive: archiveRef.optional(),
                 label: z
                   .string()
                   .min(1)

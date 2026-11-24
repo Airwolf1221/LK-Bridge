@@ -48,6 +48,7 @@ import {
   type DestinationInput,
   type DestinationResult,
 } from './destination.js';
+import { ArchiveService } from './archives.js';
 import { ByteStore, createAssetDeleteKeeper, type KeptByteStore } from './kept.js';
 import { UploadSlots } from './slots.js';
 import { ImageStore, type ImageUploadRow, type UploadSource } from './store.js';
@@ -146,7 +147,9 @@ export class ImageServiceError extends Error {
   }
 }
 
-const newId = () => `img_${randomBytes(12).toString('base64url')}`;
+/** A staged image's id (v3 F7c: an archive entry's is reserved with it, before it is staged). */
+export const newStagedId = (): string => `img_${randomBytes(12).toString('base64url')}`;
+const newId = newStagedId;
 
 export class ImageService {
   readonly store: ImageStore;
@@ -159,6 +162,8 @@ export class ImageService {
   readonly stagedBytes: ByteStore;
   readonly queue: ConversionQueue;
   readonly dir: string;
+  /** v3 F7c (ADR 0075): image archives (zips), staged entry by entry. */
+  readonly archives: ArchiveService;
   /**
    * In memory: `prepare_image_upload` calls per principal per hour, accepted binary uploads per principal per hour, and
    * requests to the binary endpoint per client address per hour (refused ones included).
@@ -208,6 +213,13 @@ export class ImageService {
       ip: new SlidingWindowLimiter(o.images.ratePerIpPerHour, hour, o.now),
       stage: new SlidingWindowLimiter(o.images.ratePerPrincipalPerHour, hour, o.now),
     };
+    this.archives = new ArchiveService(this, {
+      db: o.db,
+      now: o.now,
+      engine: o.engine,
+      ...(o.proposals ? { proposals: o.proposals } : {}),
+      ...(o.log ? { log: o.log } : {}),
+    });
   }
 
   // ============================================================================================ CR-2026-11-R2 guards
@@ -308,20 +320,46 @@ export class ImageService {
   }
 
   /**
-   * B11: an agent's connection stages at most IMAGE_UPLOAD_RATE_PER_PRINCIPAL images an hour on the bridge's server,
-   * whatever the source. The owner's dashboard (and the bridge itself) is not limited.
+   * B11, revised by v3 F7c (ADR 0075, Z3): an agent's connection stages at most IMAGE_UPLOAD_RATE_PER_PRINCIPAL images
+   * an hour on the bridge's server, whatever the source. Default 1,000: a runaway brake only (the real limit is the
+   * staging capacity, IMAGE_STAGED_MAX_BYTES). The owner's dashboard (and the bridge itself) is not limited. A single
+   * upload past it is refused; an archive entry past it is held (src/images/archives.ts).
    */
   private takeStagingAllowance(origin: JobOrigin): void {
     const principal = origin.principal?.principalId;
     if (origin.kind === 'ui' || !principal || principal === 'system' || principal === 'owner') return;
-    const wait = this.rate.stage.retryAfterMs(principal);
+    const wait = this.brakeWaitMs(principal);
     if (wait > 0)
       throw new ImageServiceError(
         'RATE_LIMITED',
-        `Too many images staged by this connection in the last hour (IMAGE_UPLOAD_RATE_PER_PRINCIPAL). Nothing was staged; try again in ${Math.ceil(wait / 60_000)} minute(s), or place or discard what is staged.`,
-        { retryAfterSeconds: Math.ceil(wait / 1000) },
+        `This connection reached the runaway brake on staging (IMAGE_UPLOAD_RATE_PER_PRINCIPAL, ${this.o.images.ratePerPrincipalPerHour} images an hour). Nothing was staged; try again in ${Math.ceil(wait / 60_000)} minute(s). An archive (upload_image_archive) waits for the hour instead of refusing.`,
+        { retryAfterSeconds: Math.ceil(wait / 1000), cap: 'IMAGE_UPLOAD_RATE_PER_PRINCIPAL' },
       );
     this.rate.stage.hit(principal);
+  }
+
+  /** v3 F7c: how long this principal waits for the staging brake (0: it may stage now; never for the owner). */
+  brakeWaitMs(principal: string): number {
+    if (principal === 'system' || principal === 'owner') return 0;
+    return this.rate.stage.retryAfterMs(principal);
+  }
+
+  /** v3 F7c (Z3): the staging capacity's room now (IMAGE_STAGED_MAX_BYTES less what is staged on the server). */
+  stagingRoom(): { readonly used: number; readonly cap: number; readonly free: number } {
+    const cap = this.o.images.stagedMaxBytes;
+    const used = this.store.stagedServerBytes();
+    return { used, cap, free: Math.max(0, cap - used) };
+  }
+
+  /** v3 F7c (Z3): refuses a staging that would pass the staging capacity (an archive holds the entry instead). */
+  private checkStagingCapacity(adding: number): void {
+    const room = this.stagingRoom();
+    if (adding > room.free)
+      throw new ImageServiceError(
+        'STAGING_FULL',
+        `Staging this image (${adding} bytes) would pass the staging capacity (IMAGE_STAGED_MAX_BYTES, ${room.cap} bytes; ${room.used} are staged now). Nothing was staged: place or discard staged images first. An archive (upload_image_archive) waits for space instead of refusing.`,
+        { cap: 'IMAGE_STAGED_MAX_BYTES', capBytes: room.cap, stagedBytes: room.used, adding },
+      );
   }
 
   get settings(): { readonly upload: ToolsSettings['upload']; readonly images: ImageSettings } {
@@ -370,6 +408,8 @@ export class ImageService {
       }),
     );
     for (const row of this.store.uploading()) this.settle(row);
+    // v3 F7c (ADR 0075): the archive worker (held and queued entries resume after a restart).
+    this.archives.start(this.o.timers !== false);
     if (this.o.timers !== false) {
       // CR-2026-11-R3 (R3-65): background work: its start and finish in the log, with the memory (the minute sweep
       // only when memory moved or it failed).
@@ -399,6 +439,7 @@ export class ImageService {
   }
 
   stop(): void {
+    this.archives.stop();
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     for (const d of this.detach.splice(0)) d();
@@ -412,6 +453,8 @@ export class ImageService {
     const n = await this.slots.sweep();
     await this.runMigrationRequests();
     await this.sweepStagedFiles();
+    // v3 F7c: archive copies that are settled or past their expiry; held entries tried again.
+    await this.archives.sweep();
     return n;
   }
 
@@ -764,9 +807,18 @@ export class ImageService {
    * (refused when the disk is below IMAGE_STAGING_MIN_FREE_GB), and recorded with its hashes, size, dimensions,
    * intended destination and extension-free name. Nothing is sent to LegendKeeper.
    */
-  async stageOnServer(p: Omit<StartUpload, 'plan' | 'staged'>): Promise<ImageUploadRow> {
+  async stageOnServer(
+    p: Omit<StartUpload, 'plan' | 'staged'> & {
+      /** v3 F7c (ADR 0075): the staged id to use (an archive entry's, reserved when an art call named it). */
+      readonly id?: string;
+      /** v3 F7c: the archive worker counted this staging against the brake when it admitted the entry. */
+      readonly allowanceTaken?: boolean;
+    },
+  ): Promise<ImageUploadRow> {
     const out = p.image.output;
-    this.takeStagingAllowance(p.origin);
+    // v3 F7c (Z3): the capacity first (nothing is counted against the brake for a staging that cannot happen).
+    this.checkStagingCapacity(out.bytes);
+    if (p.allowanceTaken !== true) this.takeStagingAllowance(p.origin);
     await this.checkStagingDisk(out.bytes);
     // CR-2026-11-R2 (R2-42): the file is held from before it is looked for until its record is in, so a removal of the
     // same bytes (a discard, the expiry, a placement settling) can never take it in between.
@@ -783,11 +835,14 @@ export class ImageService {
     }
   }
 
-  private insertStaged(p: Omit<StartUpload, 'plan' | 'staged'>, sha: string): ImageUploadRow {
+  private insertStaged(
+    p: Omit<StartUpload, 'plan' | 'staged'> & { readonly id?: string },
+    sha: string,
+  ): ImageUploadRow {
     const out = p.image.output;
     return this.store.insertUpload({
       projectId: p.projectId,
-      id: newId(),
+      id: p.id ?? newId(),
       jobId: null,
       serverSha256: sha,
       name: p.name,

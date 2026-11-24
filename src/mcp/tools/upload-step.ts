@@ -11,6 +11,8 @@ import { createHash } from 'node:crypto';
 import { UPLOAD_PUT_STEP, UPLOAD_VERIFY_STEP, type CustomStepHandler } from '../../jobs/index.js';
 import { AssetDownloadError, downloadAsset } from '../../images/download.js';
 import { BridgeLkError } from '../../lk/index.js';
+import { getOperation } from '../../lk/registry.js';
+import { callOp } from '../../jobs/lk-call.js';
 import { assertPublicTarget, UploadHttpError, type GuardOptions } from './upload-http.js';
 
 interface PutBody {
@@ -65,7 +67,39 @@ export function createUploadPutHandler(
       );
     }
     // v2 D3: folders may be created first; the upload is always the step just before this one.
-    const created = (ctx.resultOf(ctx.stepNo - 1) ?? {}) as CreatedUpload;
+    let created = (ctx.resultOf(ctx.stepNo - 1) ?? {}) as CreatedUpload;
+    /** v3 F7c (ADR 0075, Z5): the upload made again because its signed URL expired while the job waited. */
+    let renewedKey: string | null = null;
+    if (typeof created.expiresAt === 'string' && body.contentLength !== undefined) {
+      const at = Date.parse(created.expiresAt);
+      if (Number.isFinite(at) && at <= now()) {
+        // The job waited past the URL's life (a long Retry-After, a restart): the upload is made again, through the
+        // governor, with its own idempotency key, so the image is still sent once and the asset made once.
+        const op = getOperation('createImageUpload');
+        if (!op) throw fail('UPLOAD_URL_EXPIRED', 'The signed upload URL has expired.', 'bridge');
+        const again = (await callOp(
+          ctx.lk,
+          op,
+          {
+            body: {
+              contentType: body.contentType,
+              contentLength: body.contentLength,
+              ...(body.contentHash ? { contentHash: body.contentHash } : {}),
+            },
+          },
+          {
+            priority: ctx.priority,
+            jobId: ctx.jobId,
+            idempotencyKey: `lkb.${ctx.jobId}.${ctx.stepNo}.renew.${at}`.slice(0, 255),
+            requestIdPrefix: `lkb.${ctx.jobId}.${ctx.stepNo}.renew`,
+          },
+        )) as CreatedUpload & { uploadKey?: unknown };
+        if (typeof again.uploadKey !== 'string' || again.uploadKey.length === 0)
+          throw fail('UPLOAD_NO_URL', 'createImageUpload (made again) returned no upload key', 'bridge');
+        created = again;
+        renewedKey = again.uploadKey;
+      }
+    }
     const url = created.uploadUrl;
     if (typeof url !== 'string' || url.length === 0) {
       throw fail('UPLOAD_NO_URL', 'createImageUpload returned no upload URL', 'bridge');
@@ -123,7 +157,13 @@ export function createUploadPutHandler(
       ctx.replaceParams({
         body: { contentType: body.contentType, contentLength: body.contentLength, purged: true },
       });
-    return { uploaded: true, bytes: bytes.length, contentType: body.contentType };
+    // v3 F7c (Z5): createImageAsset binds the renewed upload's key (the engine prefers it to the expired one's).
+    return {
+      uploaded: true,
+      bytes: bytes.length,
+      contentType: body.contentType,
+      ...(renewedKey ? { uploadKey: renewedKey, renewed: true } : {}),
+    };
   };
 }
 
