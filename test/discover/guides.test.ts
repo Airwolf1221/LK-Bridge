@@ -59,6 +59,8 @@ describe('docs/bridge-guide.md', () => {
     }
     // v3 F5c (ADR 0069): one line more, for the orchestration tools (it was 8,999 before them).
     // v3 F7b (ADR 0071, D7): one table row more, `arkona_get_art` (166 characters: 9,282 before it), and nothing else.
+    // v3 F6a (ADR 0076): one row more, `arkona_reference_types`, paid for by trimming rules 1, 2 and 4, the split line
+    // and the scope paragraph (the cap unchanged).
     expect(decide.markdown.length).toBeLessThan(9450);
   });
   it('names only tools that exist', () => {

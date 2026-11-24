@@ -25,7 +25,7 @@ const EXPECTED: [string, string[]][] = [
   ['Monitoring', ['Errors', 'Journal', 'Tool calls', 'Workstreams']],
   ['Quality', ['Appraisal', 'Audits', 'Automation', 'Evaluation']],
   ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree', 'Tagging']],
-  ['Setup', ['Maintenance Jobs', 'Packs', 'Projects', 'Repository Mappings', 'Settings']],
+  ['Setup', ['Maintenance Jobs', 'Packs', 'Projects', 'Reference Types', 'Repository Mappings', 'Settings']],
 ];
 
 const main = () => screen.getByRole('navigation', { name: 'Main' });
@@ -95,6 +95,7 @@ describe('the sidebar', () => {
       'Maintenance Jobs',
       'Packs',
       'Projects',
+      'Reference Types',
       'Repository Mappings',
       'Settings',
     ]);

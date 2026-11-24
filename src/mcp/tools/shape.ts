@@ -54,6 +54,7 @@ import type { ProjectView } from '../../projects/types.js';
 import type { McpToolResult } from '../server.js';
 import { unknownOperationBody } from './discovery.js';
 import type { RenameService } from '../../packs/rename/service.js';
+import type { ReferenceTypeService } from '../../packs/reftypes/service.js';
 import type { RetagService } from '../../packs/retag/service.js';
 import type { SplitService } from '../../packs/split/service.js';
 import type { ResumeService } from '../../resume/service.js';
@@ -126,6 +127,8 @@ export interface DiscoverServices {
   readonly splits?: SplitService;
   /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
   readonly retag?: RetagService;
+  /** v3 F6a (ADR 0076): the Reference Type report (arkona_reference_types). */
+  readonly referenceTypes?: ReferenceTypeService;
   /** v3 F7 (ADR 0070, G3): each character's outfits (placement of outfit art, the art layout audit). */
   readonly outfits?: OutfitStore;
   /** v3 F5b (ADR 0068): which finding codes the automation runs (bridge_info only; agents cannot change a setting). */

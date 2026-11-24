@@ -26,6 +26,8 @@ import { coreNeed, coreTextWords, isOwnerRole, ownersInIndex } from './engine/co
 import { GENERIC_HOOK, hookFor } from './hooks.js';
 import type { GovernanceStatus } from './service.js';
 import { packToolMode, type Pack, type PackAttachment } from './types.js';
+import { creationCheck } from './reftypes/service.js';
+import { categoryFromTags, vocabularyOf } from './retag/engine.js';
 
 type Obj = Record<string, unknown>;
 
@@ -312,6 +314,25 @@ export async function finishPackage(
   plan: PackPlan,
 ): Promise<McpToolResult> {
   const { pack, ctx, type } = env;
+  // v3 F6a (ADR 0076; design T1 step 6): every new page's Reference Type against the vocabulary: refused once it is
+  // published (the nearest canonical value suggested; an approved specialist type accepted), a warning while a draft.
+  if (pack.rules.referenceTypes) {
+    const vocab = vocabularyOf(pack.rules);
+    for (const p of plan.pages) {
+      if (!p.referenceType) continue;
+      const c = categoryFromTags(p.tags ?? p.rule.tags.filter((t) => !t.startsWith('$')), vocab);
+      const check = creationCheck(pack.rules, p.referenceType, 'primary' in c ? c.primary : null);
+      if (check.verdict === 'ok') continue;
+      const issue = {
+        code: 'REFERENCE_TYPE_NOT_IN_VOCABULARY',
+        message: `${p.rawName}: ${check.message ?? ''}`,
+        referenceType: p.referenceType,
+        ...(check.nearest ? { nearest: check.nearest } : {}),
+      };
+      if (check.verdict === 'refuse') plan.refusals.push(issue);
+      else plan.warnings.push(issue);
+    }
+  }
   let job: PackJob | null = null;
   if (plan.refusals.length === 0) {
     const built = buildPackJob(env, plan);

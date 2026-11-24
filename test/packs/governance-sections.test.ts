@@ -86,8 +86,10 @@ describe('pinned sections', () => {
     const tagging = approved.sources.find((s) => s.key === 'tagging-standard')!;
     expect(tagging.sections?.map((s) => s.heading)).toEqual([...PINNED.tagging]);
     // The seed pins the same sections on Arkona's own documents.
+    // v3 F6a (ADR 0076): and the Reference Type Vocabulary (unpublished while the vocabulary is a draft).
     expect(ARKONA_PACK.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([
       ...PINNED.formatting,
+      'Reference Type Vocabulary',
     ]);
     expect(ARKONA_PACK.governance.find((g) => g.key === 'tagging-standard')!.sections).toEqual([
       ...PINNED.tagging,
@@ -229,6 +231,8 @@ describe('the new seed is offered to a pack stored from F3a’s seed', () => {
     ]);
     expect(after.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([
       ...PINNED.formatting,
+      // v3 F6a (ADR 0076).
+      'Reference Type Vocabulary',
     ]);
     expect((await p.governance('arkona')).state).toBe('rules_changed');
     expect(w.stack.runtime.policy.commands.listAudit('owner', { action: 'pack.seed_upgrade' })).toHaveLength(

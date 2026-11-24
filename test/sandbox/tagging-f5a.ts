@@ -140,7 +140,10 @@ export async function runTaggingCheck(
         const docs = (gov.documents ?? []) as Obj[];
         const docId = String((docs.find((d) => d.name === 'Main') ?? docs[0])?.id ?? '');
         if (docId === '') throw new Error(`the governance page ${govId} came back with no document`);
-        const headings = [...new Set(pack.governance.flatMap((g) => g.sections ?? []))];
+        const headings = [...new Set(pack.governance.flatMap((g) => g.sections ?? []))].filter(
+          // v3 F6a (ADR 0076): the draft vocabulary's section stays unpublished (a placeholder would not parse).
+          (h) => !(pack.rules.referenceTypes?.status === 'draft' && h === pack.rules.referenceTypes.section),
+        );
         const blocks: Obj[] = [
           { kind: 'heading', level: 1, content: [{ text: 'lk-bridge f5a governance' }] },
         ];

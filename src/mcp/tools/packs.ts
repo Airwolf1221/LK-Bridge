@@ -417,7 +417,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         'The Arkona pack: makes ONE non-character owner page by Arkona’s rules: a polity, institution, military, culture, event, place, technology, magic, material, equipment, species (a race, racial group or subrace with `kind`, or a Bestiary species), creature, religion, law, programme, education, ceremony, condition or inter-polity relationship (`type`). Its template, name “{name} - {descriptor}”, sidebar (template order), tags (COMPUTED: CANON, AU or Working, the primary, one optional specialist) and links follow the pack; the text starts with “## Purpose”. ' +
         '`home` is REQUIRED: the index it goes in (name, id or path), checked against the type’s allowed homes (HOME_NOT_ALLOWED lists suitable ones nearby; homeOverride { reason } only when the owner decided otherwise). A nation that is only a compact Reference needs its own index first: `nation` + `promoteNation: true` makes it in the same proposal; `createSubindex` names one national subindex to make. Reference Type, Scope and Temporal Scope are required: if one is unknown, ASK THE OWNER. A Compact Reference becomes the Character Core automatically, in the same proposal, when its character gains an index with several owners (a page homed in its index counts). ' +
         'dryRun shows the full preview and writes nothing; otherwise ONE proposal for the owner whatever your scope (canonical for status "authoritative" or a move of canon). Never resubmit it: follow it with bridge_proposal_status. ' +
-        'Example: { "type": "Polity", "name": "Sultanate of Tarim", "descriptor": "Historical Polity Reference", "home": "Salahad Polities", "referenceType": "Historical Polity Reference", "scope": "A coastal sultanate", "temporalScope": "4A 100 - 4A 400", "markdown": "## Purpose\n…", "dryRun": true, "project": "test" }. ' +
+        'Example: { "type": "Polity", "name": "Sultanate of Tarim", "descriptor": "Historical Polity Reference", "home": "Salahad Polities", "referenceType": "Polity Reference", "scope": "A coastal sultanate", "temporalScope": "4A 100 - 4A 400", "markdown": "## Purpose\n…", "dryRun": true, "project": "test" }. ' +
         'An Authoritative owner gets one routing line in its home index’s routing section (as characters do); with promoteNation the Polities index’s line for the nation is pointed to the new index. ' +
         'Cost: 4 reads to plan (5 for an Authoritative owner: the home’s routing text; 3 of them the pack’s governance); the job about 20 reads and 13 writes for one page (one write per sidebar row), one more write for a routing line; with promoteNation 8 reads to plan, the job about 31 and 16.',
       inputSchema: z.object({
@@ -483,7 +483,9 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .describe('A new race or racial group: also make its Characters navigation index.'),
         referenceType: identityValue
           .optional()
-          .describe('Required (free text, e.g. "Historical Polity Reference").'),
+          .describe(
+            'Required: from the vocabulary (arkona_reference_types), e.g. "Polity Reference"; never an invented type.',
+          ),
         scope: identityValue.optional().describe('Required: one line of what the page covers.'),
         temporalScope: identityValue.optional().describe('Required: the period it covers.'),
         supersedes: z.string().max(500).optional().describe('Default "None".'),

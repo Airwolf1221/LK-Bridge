@@ -254,6 +254,23 @@ Its admin API is `/api/admin/tagging` (`GET`), `/tagging/audit`, `/tagging/runs/
 (start, `/:id`, `/:id/resume`). The Packs page's token-map editor also takes the Excluded Routine Tags (one per line),
 which make a new version as the token maps do.
 
+## Reference Types (v3 F6a)
+
+In the Setup group, after Repository Mappings ([ADR 0076](adr/0076-v3-f6a-reference-type-vocabulary.md)). The
+vocabulary card says whether the vocabulary is a **draft** or **published** (the governance section then its
+authority), lists it, and holds **Publish vocabulary…**: a preview of the section's exact text and what happens next
+(the Packs page asks for the pack's approval again), then the step-up and ONE job writing "Reference Type Vocabulary"
+under "Sidebar Metadata" in Source Formatting (replaced in place when published again). The coverage line gives the
+stored sidebars' age, the pages never read and the areas left out.
+
+The table has one row per value in use and primary category, with its pages, status and suggestion. Filters: category,
+status (Open by default), minimum count, value text (a finding's link fills it). Per row: **Accept** (a confident
+suggestion), **Edit…** (a picker of the category's canonical values, or "A new canonical value…" with its role word),
+**Reject**, **Keep as specialist** (these pages, or any page of the category); **Undo** until the decision is applied
+or published. **Accept all confident suggestions in this filter** takes every open row that has one. Each decision asks
+for the step-up and is in the audit log (`reftypes.decide`, `reftypes.undo`, `reftypes.publish`). Decisions the
+published section contradicts are listed under "The published section and your decisions disagree": the section wins.
+
 ## Asset Tree (v2 A4)
 
 The **Asset Tree** page shows the selected project's asset library as the bridge knows it: status, counts, the build

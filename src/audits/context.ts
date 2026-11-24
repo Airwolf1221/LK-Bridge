@@ -23,6 +23,7 @@ import type { Calendar, DateTextStyle } from '../calendar/index.js';
 import { nkey, rootsOf, type NView } from '../narrative/layout.js';
 import { childrenByRank, SnapshotTree } from './snapshot-tree.js';
 import type { UnknownWriteItem } from '../jobs/reconcile.js';
+import type { ReferenceTypeAuditInput } from '../packs/reftypes/service.js';
 
 /** A lifecycle record or set record that stopped part-way (the audit reports it with its pages). */
 export interface IncompleteRecord {
@@ -113,6 +114,11 @@ export interface AuditContext {
    * journal; absent: none reported.
    */
   readonly unknownWrites?: readonly UnknownWriteItem[];
+  /**
+   * v3 F6a (ADR 0076): the Reference Type vocabulary in force and the owner's decisions (null or absent: no approved
+   * vocabulary, so the `reference_type_*` checks report nothing).
+   */
+  readonly referenceTypes?: ReferenceTypeAuditInput | null;
   /** v3 F4c: every page under Narratives (narrative pages: E2's exemptions), worked out by `makeContext`. */
   readonly narrativeIds?: ReadonlySet<string>;
 }

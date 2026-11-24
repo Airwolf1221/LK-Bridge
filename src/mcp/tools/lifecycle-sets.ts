@@ -21,6 +21,7 @@
  * - A part-way stop leaves an `incomplete` set record (and each page's record); calling the same tool again on the root
  *   resumes, planning only what is left from the pages as they are now. Nothing is replayed.
  */
+import { promotionWarning } from '../../packs/reftypes/service.js';
 import * as z from 'zod';
 import { listSubtree } from '../../facts/canonical.js';
 import {
@@ -703,6 +704,16 @@ async function planSet(
         target,
         detail: { set: true, root: { id: root.id, name: root.rawName } },
       };
+      // v3 F6a (ADR 0076): each page promoted is checked against the Reference Type vocabulary (a warning).
+      if (action === 'promote' && role === 'page') {
+        const w = promotionWarning(
+          pd.services?.referenceTypes?.packFor(pid)?.approved ?? null,
+          { name: p.name, tags: p.tags },
+          p.sidebar,
+          propertyTitle,
+        );
+        if (w) mflags.push(w);
+      }
       members.push({ page: p, role, isRoot, from: own, target, record, flags: mflags });
     }
     if (problems.length > 0) {

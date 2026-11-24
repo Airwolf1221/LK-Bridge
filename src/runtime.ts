@@ -71,6 +71,7 @@ import { registerSplitChecks } from './packs/split/checks.js';
 import { ROUTE_BACK_REBASER, routeBackRebaser } from './jobs/route-back.js';
 import { SplitService } from './packs/split/service.js';
 import { RetagService } from './packs/retag/service.js';
+import { ReferenceTypeService } from './packs/reftypes/service.js';
 import { OutcomeReconciler } from './jobs/reconcile.js';
 import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
@@ -213,6 +214,8 @@ export interface Runtime {
   readonly splits: SplitService;
   /** v3 F3f (ADR 0060): the retag audit, apply batches, the owner's classifications and reconciliations. */
   readonly retag: RetagService;
+  /** v3 F6a (ADR 0076): the Reference Type report, the owner's decisions and the vocabulary's publication. */
+  readonly referenceTypes: ReferenceTypeService;
   /** v3 F5a (ADR 0067, H10): the reconciliation of writes whose outcome is unknown. */
   readonly outcomes: OutcomeReconciler;
   /** v3 F5b (ADR 0068, H5): automatic actions for audits, one finding code at a time (the owner's settings). */
@@ -908,6 +911,20 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const toolsRef: { current: readonly McpToolProvider[] } = { current: [] };
   // v3 F4b (ADR 0064): the consistency check (made below, over the appraisal's overlay) feeds the audits' category.
   const consistencyRef: { current: Consistency | null } = { current: null };
+  // v3 F6a (ADR 0076): the Reference Type vocabulary: the report, the owner's decisions, the publication, and the two
+  // checks' input (from the approved pack and the decisions).
+  const referenceTypes = new ReferenceTypeService({
+    db: o.db,
+    packs,
+    tree,
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    engine,
+    projectName: (projectId) => projectStore.byId(projectId)?.name ?? null,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachReferenceTypes = referenceTypes.start();
   const audits: Audits = new Audits({
     db: o.db,
     snapshots,
@@ -937,6 +954,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       }),
     // v3 F5a (ADR 0067, H10): the writes whose outcome the reconciler could not settle.
     unknownWrites: (projectId) => outcomes.unresolved(projectId),
+    // v3 F6a (ADR 0076): the Reference Type vocabulary in force and the owner's decisions.
+    referenceTypes: (projectId) => referenceTypes.auditInput(projectId),
+    referenceTypeDecision: (projectId, id) => referenceTypes.decisionNow(projectId, id),
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
     consistency: async (projectId) =>
       consistencyRef.current ? consistencyRef.current.auditItems(projectId) : null,
@@ -1197,6 +1217,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       (retagRef.current?.isApplyJob(projectId, jobId) ?? false) ||
       // v3 F5a (ADR 0067, H2): the owner's "Allow this tag everywhere" edit of the Tagging Standard.
       (retagRef.current?.isSupplementaryEditJob(projectId, jobId) ?? false) ||
+      // v3 F6a (ADR 0076): the owner's publication of the Reference Type vocabulary.
+      referenceTypes.isPublishJob(jobId) ||
       consistency.isPickJob(projectId, jobId),
     // v3 F5b (ADR 0068): a governance amendment recording an automation switched off is not reverted.
     refuse: (projectId, jobId) => automationRef.current?.revertRefusal(projectId, jobId) ?? null,
@@ -1522,6 +1544,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       splits,
       // v3 F3f (ADR 0060): the retag audit and apply.
       retag,
+      // v3 F6a (ADR 0076): the Reference Type report and the creation tools' vocabulary check.
+      referenceTypes,
       // v3 F5b (ADR 0068): which codes the automation runs (bridge_info tells agents; they cannot change it).
       automation,
       // v3 F5c (ADR 0069, H8): workstream labels and their report.
@@ -1658,6 +1682,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     renames,
     splits,
     retag,
+    referenceTypes,
     outcomes,
     automation,
     workstreamReports,
@@ -1769,6 +1794,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     unregisterRouteBack();
     for (const f of unmarkRelock) f();
     detachRetag();
+    detachReferenceTypes();
     detachAutomation();
     detachOutcomes();
     unregisterRetagChecks();

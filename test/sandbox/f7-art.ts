@@ -58,7 +58,8 @@ export function probeBlock(kind: string, o: { imageUrl: string; pageId: string }
       return { kind, rows: [{ key: 'Probe', content: [{ text: 'value' }] }] };
     case 'meter':
       // v3 F7b: the spec's MeterBlock requires `mode` and each item's `name`, `icon`, `current` and `max`. The first live
-      // run (23 November 2026) sent no `icon` and was refused (Validation error), so meter's default is not confirmed.
+      // run (23 November 2026) sent no `icon` and was refused (Validation error); with `icon` the probe printed
+      // `title="Meter" isTitleHidden=false` the same day, recorded in TITLED_BLOCK_DEFAULTS by v3 F6a (ADR 0076).
       return { kind, mode: 'bar', items: [{ name: 'Probe', icon: 'heart', current: 1, max: 2 }] };
     case 'resourceCollection':
       return { kind };

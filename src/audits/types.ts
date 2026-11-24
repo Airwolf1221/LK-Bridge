@@ -100,6 +100,12 @@ export type FixKind =
    */
   | 'core_upgrade'
   /**
+   * v3 F6a (ADR 0076): one sidebar field, Reference Type, set to the owner's mapped value through the governed facts path
+   * (the check of the row, the If-Match chain, the journal, the read-back); a proposal, or a job when the automation's
+   * Apply asks (every guard judging it: the canon guard decides an Authoritative page's).
+   */
+  | 'reference_type'
+  /**
    * v3 F7.1 (ADR 0072): a Core's compact wording replaced by the upgrade's own rules (src/packs/engine/core.ts), on its
    * Art page first, then on the Core, inside the lock; both pages read live first (FIX_STALE when they changed).
    */
@@ -292,6 +298,18 @@ export const CODES = {
     severity: 'warning',
     title: 'A Character Core whose text still calls it a compact reference',
     fix: 'core_wording',
+  },
+  // v3 F6a (ADR 0076): the Reference Type vocabulary (design T3).
+  reference_type_noncanonical: {
+    category: 'taxonomy',
+    severity: 'info',
+    title: 'A page’s Reference Type is not in the vocabulary',
+    fix: 'reference_type',
+  },
+  reference_type_category_mismatch: {
+    category: 'taxonomy',
+    severity: 'info',
+    title: 'A page’s Reference Type belongs to another primary category than its tag',
   },
   race_index_mismatch: {
     category: 'taxonomy',

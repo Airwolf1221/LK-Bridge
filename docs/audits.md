@@ -343,3 +343,14 @@ it with what the job sent. One that still cannot be told is this finding (error)
 version it was based on, the high-level operation, the intended change and the pre-image. Report only, from the bridge's
 own journal (no LegendKeeper read, no fix): compare the page with both, and restore from the pre-image by hand if
 needed. It goes when the entry is settled (the job's own recovery, a Resume, or the reconciler's next start-up sweep).
+
+## Reference Types (v3 F6a)
+
+Category `taxonomy`, from the snapshots ([ADR 0076](adr/0076-v3-f6a-reference-type-vocabulary.md)); the Legacy Canon
+Archive, Design References, Working, Archived and Narratives pages are out of scope.
+
+- `reference_type_noncanonical` (info): the Reference Type is not in the vocabulary in force. With the owner's mapping
+  (the Reference Types page) the fix `reference_type` sets that one field through set_facts' path; without one it is a
+  judgement linked to the value's row; rejected values and approved specialist types give no finding. Automation:
+  proposal-only with Apply allowed, default Off.
+- `reference_type_category_mismatch` (info): the value is another primary category's type; no fix.

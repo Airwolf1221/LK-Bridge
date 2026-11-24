@@ -202,8 +202,8 @@ describe('the tool list', () => {
     // arkona_brief, and v3 F4b's arkona_consistency, arkona_as_of, arkona_as_of_coverage and arkona_consistency_suggest,
     // and v3 F4c's five narrative writing tools, arkona_chapter_context, arkona_chapter_check and
     // arkona_promote_from_chapter, and v3 F5c's arkona_identity_reconcile, query_facts, bridge_workstream and
-    // bridge_workstream_report, and v3 F7b's arkona_get_art, and v3 F7c's upload_image_archive and bridge_archive_status.
-    expect(tools).toHaveLength(101);
+    // bridge_workstream_report, and v3 F7b's arkona_get_art, and v3 F7c's upload_image_archive and bridge_archive_status, and v3 F6a's arkona_reference_types.
+    expect(tools).toHaveLength(102);
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');

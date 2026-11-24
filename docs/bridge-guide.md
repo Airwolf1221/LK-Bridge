@@ -8,15 +8,14 @@ tasks come first and the reference after. The last section, **Operations**, list
 
 **Five rules**
 
-1. **Use the high-level tool, not `lk_api_*`.** Every common job has a tool that knows the repository (ordering, templates,
-   canon, lifecycle, versions). The `lk_api_*` tools are the fallback for the rare job none of them does ([When the
-   low-level tools are right](#when-the-low-level-tools-are-right)).
+1. **Use the high-level tool, not `lk_api_*`.** Every common job has a tool that knows the repository. The `lk_api_*`
+   tools are the fallback for the rare job none of them does ([When the low-level tools are right](#when-the-low-level-tools-are-right)).
 2. **Read, then write, and pass the version you read back.** `write_page` takes `baseVersion` (from `read_document`);
-   `set_facts` takes `baseFactsVersion` (from `get_resource`). A stale version writes nothing. Never write a page you have not read.
+   `set_facts` takes `baseFactsVersion` (from `get_resource`). A stale version writes nothing.
 3. **Never retry a write that came back `proposal_captured`, `queued` or `waiting_budget`.** It is not lost. Follow a job
    with `bridge_job_status`, a proposal with `bridge_proposal_status`. After a refusal, do the one step the message names, once.
 4. **Canon and lifecycle belong to the owner.** Making a page canon, archiving it, bringing it back or deleting an
-   Authoritative page is always a proposal only the owner can accept as canon, whatever your scope. New pages are
+   Authoritative page is always a proposal for the owner, whatever your scope. New pages are
    **Working** until the owner promotes them.
 5. **Do not invent.** Names and ids come from `search`, `browse_repository_tree` and `get_resource`; dates from
    `calendar_date`; operation ids from the Operations list. A name that matches several pages is never guessed: pass the id.
@@ -32,8 +31,7 @@ tasks come first and the reference after. The last section, **Operations**, list
 **Rename a subject → `arkona_rename` (never `update_resource`).** It renames a pack's character, culture, race or other
 subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 
-**Split an owner → `arkona_split_appraisal`, then `arkona_split_owner` (never by hand).** Only when the owner asks;
-`write_page` refuses moving a section's worth of text off a pack page (`USE_ARKONA_SPLIT`).
+**Split an owner → `arkona_split_appraisal`, then `arkona_split_owner` (never by hand).** Only when the owner asks (`write_page` refuses it: `USE_ARKONA_SPLIT`).
 
 **Many characters' identity facts → `arkona_identity_reconcile`, dry run first; one field of many pages →
 `query_facts`; label an objective's writes `workstream`, then `bridge_workstream_report`.**
@@ -56,6 +54,7 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 | See a character's art (before describing it)        | `arkona_get_art` (inline, or the url to browse)             | a web or image search; code on the url        |
 | Brief on any Arkona subject (or a character)        | `arkona_brief` (free; a character: delegated)               | many `get_resource` and `read_document` calls |
 | Check a character's name before an intake or rename | `arkona_name_check` (free; never infers)                    | guessing a culture from the name              |
+| Choose or check a Reference Type                    | `arkona_reference_types` (the vocabulary; free)             | inventing a type                              |
 | Rename an Arkona character or owner everywhere      | `arkona_rename` (one proposal, item by item)                | `update_resource`, `write_page` page by page  |
 | Split an Arkona owner into several owners           | `arkona_split_appraisal`, `arkona_split_owner`              | `write_page` and the create tools by hand     |
 | Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact`             | reading every page yourself                   |
@@ -74,9 +73,9 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 | Know what happened to a proposal or job             | `bridge_proposal_status`, `bridge_job_status`               | repeating the write                           |
 | Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations            |                                               |
 
-**What your scope means.** `read` shows read tools only. At `propose` a write becomes a **proposal** the owner approves
-or rejects on the dashboard; nothing is written. `write` writes directly, except rule 4's always-proposal changes and
-`restore_snapshot`. `bridge_info` says which you have. Every result names its project and ends with its budget line.
+**What your scope means.** `read` shows read tools only. At `propose` a write becomes a **proposal** the owner decides
+on the dashboard; nothing is written. `write` writes directly, except rule 4's always-proposal changes and
+`restore_snapshot`. `bridge_info` says which you have.
 
 **Sections to ask for** (`get_bridge_guide` with `section`; a near miss is matched loosely when the match is clear):
 
@@ -87,7 +86,7 @@ or rejects on the dashboard; nothing is written. `write` writes directly, except
 - `Create a page or a character (Working first)`
 - `Setting packs (Arkona)`, and under it `Arkona briefs and names`, `Arkona characters`, `Arkona owners`,
   `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`, `Arkona splits`, `Arkona retagging`,
-  `Arkona identity facts in bulk`, `Arkona fiction`; `Many pages at once: query_facts and workstreams`
+  `Arkona identity facts in bulk`, `Arkona Reference Types`, `Arkona fiction`; `Many pages at once: query_facts and workstreams`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -778,7 +777,7 @@ A compact polity in its continent's Polities index:
   "name": "Kingdom of Saba",
   "descriptor": "Historical Polity Reference",
   "home": "Salahad Polities",
-  "referenceType": "Historical Polity Reference",
+  "referenceType": "Polity Reference",
   "scope": "A highland kingdom of southern Salahad",
   "temporalScope": "3A 410 - 4A 12",
   "markdown": "## Purpose\n\nThe reference for the Kingdom of Saba, a compact polity of southern Salahad.\n\n## Government\n\nA hereditary queenship advised by a council of terrace-holders.\n\n## Source Boundaries\n\nThe polity only; its institutions have their own pages.\n\n## Unresolved Material\n\nThe date of its founding is not settled.\n",
@@ -1117,6 +1116,23 @@ and reads both back. Run it with `dryRun: true` first and show the person the pr
 
 The result lists each item: `done` (facts and tags read back), `partly_done`, `skipped`, `failed`, `refused` or
 `excluded`, with consistency follow-ups (another page restating the old value): bring those to the person.
+
+### Arkona Reference Types
+
+A **Reference Type** names the page's **role**, from a closed list per primary category (the vocabulary): "Polity
+Reference", "Language & Naming Reference", "Race Core Reference", "Character Biography". Time goes in **Temporal Scope**,
+geography in placement, detail in **Scope**: never in the Reference Type ("Historical Regional Polity Reference" is a
+Polity Reference with its time and region elsewhere).
+
+- **Use the vocabulary; never invent a type.** `arkona_reference_types` (read-only, free) lists every value in use, each
+  with its count, pages, the suggested canonical value and its status (canonical, mapped, specialist, rejected, open).
+  `status: "canonical"` and the categories show what to use.
+- **The creation tools check it.** `arkona_create_owner`, `arkona_create_character` and `create_resource` refuse a
+  Reference Type outside the published vocabulary (`REFERENCE_TYPE_NOT_IN_VOCABULARY`, naming the nearest canonical
+  value) and accept an approved specialist type; while the vocabulary is a draft it is a warning.
+- **The owner decides**: mapping a value, rejecting it or keeping it as a specialist type is the owner's, on the
+  dashboard's Reference Types page. You report what you see; you never retype pages yourself (`set_facts` on Reference
+  Type to "tidy" it is not yours to do). The audits' `reference_type_noncanonical` fix applies only the owner's mapping.
 
 ## Many pages at once: query_facts and workstreams
 

@@ -141,12 +141,17 @@ describe('G7: the findings', () => {
       // v3 F7.1 (ADR 0072): also Propose by default, and its Apply is the owner's switch (`applyDirect`).
       'character_core_missing',
       'core_compact_wording',
+      // v3 F6a (ADR 0076): Apply allowed, but default Off (no defaultMode).
+      'reference_type_noncanonical',
     ]);
     expect(PROPOSE_ONLY.filter((e) => e.applyDirect === true).map((e) => e.code)).toEqual([
       'character_core_missing',
       'core_compact_wording',
+      'reference_type_noncanonical',
     ]);
-    for (const e of PROPOSE_ONLY) expect(e).toMatchObject({ automatable: 'propose', defaultMode: 'propose' });
+    for (const e of PROPOSE_ONLY.filter((x) => x.code !== 'reference_type_noncanonical'))
+      expect(e).toMatchObject({ automatable: 'propose', defaultMode: 'propose' });
+    expect(entryOf('reference_type_noncanonical')?.defaultMode).toBeUndefined();
     expect(entryOf('art_legacy_folder_holds_assets')?.automatable).toBeUndefined();
   });
 });

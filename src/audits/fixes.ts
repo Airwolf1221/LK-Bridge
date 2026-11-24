@@ -74,6 +74,14 @@ export interface FixDeps {
    * canon guard keeps an Authoritative page's rename a canonical proposal) rather than forced into a proposal.
    */
   readonly direct?: boolean;
+  /**
+   * v3 F6a (ADR 0076): the owner's Reference Type decision as it stands now (null: undone), so a `reference_type` fix is
+   * planned only while its mapping holds.
+   */
+  readonly referenceTypeDecision?: (
+    projectId: string,
+    id: string,
+  ) => { readonly action: string; readonly target: string | null; readonly conflict: string | null } | null;
 }
 
 /** v3 F7.1 (ADR 0072): what plans and submits a `core_upgrade` fix. */
@@ -772,7 +780,126 @@ export async function proposeFix(
     }
     case 'core_wording':
       return fixCoreWording(d, projectId, f);
+    case 'reference_type':
+      return fixReferenceType(d, projectId, f, c.propertiesName);
   }
+}
+
+// ============================================================================================ v3 F6a: Reference Type
+
+/**
+ * v3 F6a (ADR 0076): the `reference_type_noncanonical` fix. The owner's mapping must still hold (undone or conflicting:
+ * FIX_STALE, nothing proposed); the page's Reference Type is read LIVE and must still be the value the finding saw. Then
+ * ONE field is set through the governed facts path (`planFacts` and `expandFacts`: the row checked inside the lock, the
+ * write's If-Match chained from that check, journalled with the decision, read back). A proposal; with the automation's
+ * Apply (`direct`), a job that every guard judges (the canon guard decides an Authoritative page's: never bypassed).
+ */
+async function fixReferenceType(
+  d: FixDeps,
+  projectId: string,
+  f: Finding,
+  propertiesName: string,
+): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const decisionId = String(a.decisionId);
+  const facts = a.facts as Record<string, string>;
+  const [key, target] = Object.entries(facts)[0]!;
+  const now = d.referenceTypeDecision?.(projectId, decisionId) ?? null;
+  if (!now || now.action !== 'map' || now.target !== target)
+    throw stale(
+      `The owner's mapping of “${String(a.value)}” to “${target}” no longer holds (undone or changed).`,
+    );
+  if (now.conflict)
+    throw stale(`The owner's mapping conflicts with the published vocabulary (${now.conflict}).`);
+  const pageId = String(a.pageId);
+  const expected = a.expectedCurrent as Record<string, string>;
+  const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+  if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+  const path = { resourceId: pageId };
+  const body = await read(d, projectId, 'listProperties', { path });
+  const sidebar = sidebarFrom(body);
+  const kv = sidebar.filter(
+    (p) => p.kind === 'keyValue' && p.title.trim().toLowerCase() === propertiesName.trim().toLowerCase(),
+  );
+  if (kv.length !== 1) throw stale(`The page does not have exactly one “${propertiesName}” property now.`);
+  const rows = (kv[0]!.rows ?? []).filter((r) => r.key.trim().toLowerCase() === key.trim().toLowerCase());
+  if (rows.length !== 1)
+    throw stale(`The row “${key}” is not there exactly once now.`, { rows: rows.length });
+  const live = runsText(rows[0]!.content);
+  if (live.trim() !== (expected[key] ?? '').trim())
+    throw stale(`“${key}” is now “${live}”, not “${expected[key]}”.`, { found: live });
+  const name = String(res.name);
+  let plan;
+  try {
+    plan = planFacts({
+      resourceId: pageId,
+      sidebar,
+      propertyTitle: kv[0]!.title,
+      facts: [{ key, value: rowTextRuns(target) }],
+      links: [],
+      templateKeys: null,
+    });
+  } catch (e) {
+    if (e instanceof FactsPlanError) throw new AuditError(e.code, e.message, e.details);
+    throw e;
+  }
+  if (plan.empty) return { status: 'nothing_to_do', message: `“${key}” already holds “${target}”.` };
+  const job = expandFacts(plan, { id: pageId, name }, sidebar, { facts, links: {} });
+  // Every write carries the decision, so the decision knows it has been applied (it then cannot be undone).
+  const steps = job.steps.map((st) =>
+    st.journalOperation
+      ? { ...st, journalOperation: { ...st.journalOperation, referenceTypeDecision: decisionId } }
+      : st,
+  );
+  const operation = {
+    ...job.operation,
+    fromAudit: f.code,
+    referenceTypeDecision: decisionId,
+    from: String(a.value),
+    to: target,
+  };
+  const title = `Reference Type of ${name}: “${String(a.value)}” → “${target}” (the owner’s mapping)`;
+  if (d.direct !== true)
+    return propose(d, projectId, {
+      steps,
+      title,
+      holdLock: { resourceId: pageId },
+      operation,
+      page: { id: pageId, name },
+      pageParts: ['sidebar', `${key}: changed`],
+      prefetched: [{ op: 'listProperties', path, body }],
+      fix: 'reference_type',
+    });
+  // The automation's Apply: a job, every guard judging it (the canon guard may still make it a proposal).
+  const r = await d.engine.submit({
+    kind: 'batch_ops',
+    project: projectId,
+    steps,
+    onError: 'stop',
+    priority: 'P1',
+    origin: d.origin ?? ORIGIN,
+    title: title.slice(0, 300),
+    holdLock: { resourceId: pageId },
+    internal: true,
+    proposal: {
+      operation,
+      operations: [
+        {
+          ...operation,
+          page: { id: pageId, name },
+          pageParts: ['sidebar', `${key}: changed`],
+          summaryLabel: title,
+        },
+      ],
+      summary: title,
+      prefetched: [{ op: 'listProperties', path, body }],
+    },
+  });
+  if (typeof r.proposalId === 'string')
+    return { status: 'proposal_captured', proposalId: r.proposalId, summary: title, fix: 'reference_type' };
+  if (typeof r.jobId === 'string')
+    return { status: 'job_submitted', jobId: r.jobId, summary: title, fix: 'reference_type' };
+  throw new AuditError('NOT_PROPOSED', 'The fix was neither proposed nor submitted; nothing was done.');
 }
 
 // ============================================================================================ v3 F7.1: Core wording

@@ -523,6 +523,21 @@ export const CATALOGUE: readonly CodeEntry[] = [
     defaultMode: 'propose',
     applyDirect: true,
   }),
+  // ======================================================================== v3 F6a (ADR 0076): default Off, Apply allowed
+  defineCode({
+    code: 'reference_type_noncanonical',
+    source: 'audit',
+    name: 'Reference Type outside the vocabulary (an approved mapping)',
+    example:
+      '“Historical Cultural Reference” on a Culture page, which the owner mapped to “Culture Reference”, becomes “Culture Reference”.',
+    transformation:
+      'ONE proposal per page: set_facts of one sidebar field, Reference Type, to the value the owner mapped it to on the Reference Types page (only findings with an approved mapping have a fix), the row read live first and checked in the lock, its write If-Match chained, journalled and read back. The order is the owner’s: approve mappings, then switch to Propose, then Apply. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s change is what the canon guard decides',
+    traits: ['fact', 'canon'],
+    target: 'resource',
+    changes: ['properties'],
+    automatable: 'propose',
+    applyDirect: true,
+  }),
   defineCode({
     code: 'scope_overload',
     source: 'appraisal',
