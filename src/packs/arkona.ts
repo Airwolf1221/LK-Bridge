@@ -1202,8 +1202,8 @@ const rules: PackRules = packRulesSchema.parse({
     status: 'draft',
     rule: 'A Reference Type names the page’s role, from a closed list per primary category. Time goes in Temporal Scope, geography in placement, and detail in Scope. A specialist source that needs a unique type keeps it only as an approved specialist type listed below. Never invent a Reference Type.',
     // The design's T1 table (the owner, 24 November 2026), in its order; the types the first draft had besides T1's
-    // follow them (Character; Military, Education and Ceremony; Magic Reference; Law Reference). T1 puts Programme
-    // Reference under Technology, so the Programme category lists none (a Reference Type is canonical in one category).
+    // follow them (Character; Military, Education and Ceremony; Magic Reference; Law Reference). Programme Reference is
+    // the Programme category's (the owner's ruling of 24 November 2026, correcting T1, which listed it under Technology).
     categories: [
       {
         category: 'Character',
@@ -1291,11 +1291,10 @@ const rules: PackRules = packRulesSchema.parse({
       },
       {
         category: 'Technology',
-        types: [
-          { name: 'Technology Reference', role: 'Technology' },
-          { name: 'Programme Reference', role: 'Programme' },
-        ],
+        types: [{ name: 'Technology Reference', role: 'Technology' }],
       },
+      // The owner's ruling (24 November 2026): Programme Reference belongs to the Programme primary category.
+      { category: 'Programme', types: [{ name: 'Programme Reference', role: 'Programme' }] },
       {
         category: 'Equipment',
         types: [

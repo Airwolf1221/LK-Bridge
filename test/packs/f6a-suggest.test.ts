@@ -164,6 +164,29 @@ describe('the suggestion rules', () => {
     });
   });
 
+  it('Programme Reference is the Programme category’s (the owner’s ruling), and Technology keeps Technology Reference only', () => {
+    const cat = (c: string) => RT.categories.find((x) => x.category === c)!.types;
+    expect(cat('Programme')).toEqual([{ name: 'Programme Reference', role: 'Programme' }]);
+    expect(cat('Technology')).toEqual([{ name: 'Technology Reference', role: 'Technology' }]);
+    expect(s('Programme Reference', 'Programme')).toMatchObject({
+      kind: 'canonical',
+      canonicalIn: 'Programme',
+    });
+    const hist = s('Historical Programme Reference', 'Programme');
+    expect(hist).toMatchObject({ kind: 'suggested', value: 'Programme Reference' });
+    expect(hist.moved.time).toEqual(['Historical']);
+    // On a Technology page it is another category's type: never suggested there, the owner rules.
+    expect(s('Programme Reference', 'Technology')).toMatchObject({
+      kind: 'canonical',
+      canonicalIn: 'Programme',
+    });
+    const tech = s('Historical Programme Reference', 'Technology');
+    expect(tech.kind).toBe('none');
+    expect(tech.candidates.map((c) => `${c.name} (${c.category})`)).toEqual([
+      'Programme Reference (Programme)',
+    ]);
+  });
+
   it('category scoping: the same word in two categories', () => {
     // “Relationship” is the role word of the Character category's joint relationship and of the Relationship category.
     expect(s('Relationship', 'Character')).toMatchObject({
@@ -219,6 +242,8 @@ describe('the published section', () => {
     expect(lines).toContain(
       'Culture: Culture Reference (Culture); Culture Foundations Reference (Culture Foundations); Language & Naming Reference (Language & Naming); Lexicon Reference (Lexicon).',
     );
+    expect(lines).toContain('Technology: Technology Reference (Technology).');
+    expect(lines).toContain('Programme: Programme Reference (Programme).');
     expect(lines).toContain(INTRO_SPECIALIST);
     expect(lines).toContain(
       'Specialist type: Arkonan Calendar Reference (Event), any page in this category.',

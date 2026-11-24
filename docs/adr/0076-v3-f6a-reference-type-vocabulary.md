@@ -36,9 +36,9 @@ normalise: { synonyms, timeWords, scopeWords } }`.
   Law, Species, Creature, Condition and Relationship; then the first draft's types T1 does not list are kept: Character
   (the pack's own Reference Types as they stand: Character Core, Compact Character Reference, Character Art, Joint
   Character Relationship Reference, Character Biography and the four specialist references), Military, Education and
-  Ceremony, Magic Reference and Law Reference. T1 lists Programme Reference under Technology; a type is canonical in
-  one category only, so the Programme category lists none (a Programme page using it is a category mismatch for the
-  owner to rule). It is marked draft; the owner's decisions and publication replace it.
+  Ceremony, Magic Reference and Law Reference. Programme Reference (role word "Programme") is the Programme primary
+  category's, not Technology's: the owner's ruling of 24 November 2026 corrects T1, which listed it under Technology;
+  Technology keeps Technology Reference only. It is marked draft; the owner's decisions and publication replace it.
 - **Names the section could not write back** are refused by the schema (`;`, `(`, `)`, `:`, ", also").
 - **`aliases`**: variants the vocabulary itself says mean a type ("Culture & Naming Reference" → Language & Naming
   Reference only if the vocabulary lists it). The draft lists none.
