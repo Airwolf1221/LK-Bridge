@@ -282,6 +282,11 @@ describe('every code on a fixture; the fixes are proposals and never the prose',
     const f = findings().find((x) => x.code === 'narrative_dateline_mismatch' && x.pageId === ids.c1)!;
     const r = await audits().proposeFix('owner', PROJECT, f.id);
     expect(r.status).toBe('proposal_captured');
+    // Amendment 1 to ADR 0072: the proposal shows the line it writes.
+    const detail = w.stack.runtime.policy.proposals.detail((r as { proposalId: string }).proposalId)!;
+    const tc = (detail.operations as any[]).flatMap((o) => o.textChanges ?? []);
+    expect(tc.map((c: any) => [c.what, c.before, c.after])).toEqual([['dateline', '', 'Camue 9th, 4A 400']]);
+    expect(detail.summary).toContain('“Camue 9th, 4A 400”');
     expect((w.repo.blocks.get(w.mainOf(ids.c1!))!.blocks as any[])[0].content[0].text).toBe('It was dark.');
     const done = await approve(w, (r as { proposalId: string }).proposalId);
     expect(done.state).toBe('executed');

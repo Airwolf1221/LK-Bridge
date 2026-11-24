@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
 /**
  * CR-2026-11-R3, R3-66 (the owner's split fix 1, found on the test world): a character with an index and several owners
  * has a Character Core (Character Architecture). Splitting Zahra al-Rashid's Compact Character Reference into several
@@ -16,6 +16,7 @@ import { C, PROJECT, S, splitWorld, type SplitWorld } from '../../packs/split-wo
 import { ANSWERED, zahraSplit } from '../../packs/split-inputs.js';
 import { approveSplit, named, recordOf, refusal, rowsOf, settle, split } from '../../packs/split-helpers.js';
 import { heading, para, propose, setBody } from './helpers.js';
+import type { Obj } from '../../packs/split-helpers.js';
 
 vi.setConfig({ testTimeout: 300_000, hookTimeout: 300_000 });
 
@@ -92,6 +93,50 @@ describe('R3-66: a Compact Character Reference split into several owners becomes
     expect(w.repo.live(S.zahra)!.name).toBe('[BSRC] Zahra al-Rashid - Character Reference');
     expect(rowsOf(w, S.zahra)['Reference Type']).toBe('Compact Character Reference');
     expect(w.stack.runtime.tree.queries.node(PROJECT, S.zahra).data?.templateId).toBe(TPL.compact);
+  });
+});
+
+// Amendment 1 to ADR 0072: the split's upgrade path follows the same self-reference rule as the package planner and
+// the audit fix: only the phrase that means the page itself is replaced; the one about another character's page is
+// listed and never edited.
+describe('amendment 1 to ADR 0072: the split’s upgrade replaces only self-references', () => {
+  let w: SplitWorld;
+  const OWN = "This compact character reference owns Zahra's identity.";
+  const OTHER = "Nadira's compact reference holds the rest of their story.";
+  beforeAll(async () => {
+    w = await splitWorld();
+    const doc = w.repo.blocks.get(w.mainOf(S.zahra))!;
+    doc.blocks = (doc.blocks as Obj[]).map((b) => (b.id === 'zq2' ? para('zq2', `${OWN} ${OTHER}`) : b));
+    doc.version += 1;
+    await w.snapshot();
+  });
+  afterAll(() => w?.close());
+
+  it('the proposal shows the one sentence it changes; approved, the other sentence is untouched', async () => {
+    const p = await propose(w, zahraSplit());
+    // The upgrade's item on the Proposals page: its wording change, sentence by sentence.
+    const up = w.stack.runtime.policy.proposals
+      .detail(p.proposalId)!
+      .itemPlan!.items.find((i) => i.id === `existing:${S.zahra}`) as any;
+    const wording = (up?.diff?.changes ?? []).filter((c: any) => c.what === 'wording');
+    expect(wording.map((c: any) => [c.before, c.after])).toEqual([
+      [OWN, "This Character Core owns Zahra's identity."],
+    ]);
+    expect(wording[0].before.slice(wording[0].removed.start, wording[0].removed.end)).toBe(
+      'compact character reference',
+    );
+    const prop = w.stack.runtime.policy.proposals.detail(p.proposalId)!;
+    expect((prop.operations as any[]).flatMap((o) => o.textChanges ?? []).map((c: any) => c.before)).toEqual([
+      OWN,
+    ]);
+    expect(prop.summary).toContain(`“${OWN}”`);
+    expect(JSON.stringify(p.r.body)).toContain(OTHER);
+    const done = await approveSplit(w, p.proposalId);
+    expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
+    const zq2 = (w.repo.blocks.get(w.mainOf(S.zahra))!.blocks as Obj[]).find((b) => b.id === 'zq2')!;
+    expect((zq2.content as Obj[]).map((r) => r.text).join('')).toBe(
+      `This Character Core owns Zahra's identity. ${OTHER}`,
+    );
   });
 });
 

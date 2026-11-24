@@ -45,7 +45,7 @@ import {
   type LmrDecision,
 } from './lmr.js';
 import type { PackPlan, PlannedImage, PlannedPage } from './plan.js';
-import { CORE_TEXT_FILLER, coreTextWords, type CoreTextInput } from './core.js';
+import { CORE_TEXT_FILLER, coreTextChanges, coreTextWords, type CoreTextInput } from './core.js';
 import { mapArtRecordSteps } from '../../jobs/items.js';
 import type { PlanEnv } from './plan.js';
 
@@ -657,7 +657,10 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       pageParts: [coreTextWords(c)],
       summaryLabel: `${c.page.rawName}: ${coreTextWords(c)}`,
       ...(c.replacements.length
-        ? { replacements: c.replacements.map((r) => ({ before: r.before, after: r.after })) }
+        ? {
+            replacements: c.replacements.map((r) => ({ before: r.before, after: r.after })),
+            textChanges: coreTextChanges(c),
+          }
         : {}),
     });
   }
@@ -1023,7 +1026,10 @@ export function coreTextStep(
   const input: CoreTextInput = {
     role: c.role,
     subject: c.subject,
+    ...(c.names ? { names: c.names } : {}),
+    ...(c.others ? { others: c.others } : {}),
     reword: [...new Set(c.replacements.map((r) => r.blockId))],
+    expect: c.replacements.map((r) => ({ blockId: r.blockId, before: r.before, after: r.after })),
     remove: c.remove,
     section: c.section,
     boundaries: c.boundaries,

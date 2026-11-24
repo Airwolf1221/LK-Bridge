@@ -27,6 +27,7 @@
  * - any other reference to a dropped step is a planning error (`ITEM_FILTER`): nothing is approved.
  */
 import { RECORD_STEP, LMR_STEP, VERIFY_STEP, EXPECT_STEP } from './internal-steps.js';
+import type { TextChange, TextSpan } from './text-change.js';
 import type { StepSpec } from './types.js';
 
 type Obj = Record<string, unknown>;
@@ -44,7 +45,24 @@ export interface ItemDiff {
     readonly what: string;
     readonly before: string | null;
     readonly after: string | null;
+    /**
+     * Amendment 1 to ADR 0072: for a change of words, the replaced words in `before` and the new ones in `after`
+     * (character offsets), so the Proposals page highlights them. `before` and `after` are then the sentence(s).
+     */
+    readonly removed?: TextSpan;
+    readonly added?: TextSpan;
   }[];
+}
+
+/** An item diff's change entry for a text change: its sentences and the replaced words marked. */
+export function textChangeEntry(c: TextChange): {
+  what: string;
+  before: string;
+  after: string;
+  removed: TextSpan;
+  added: TextSpan;
+} {
+  return { what: c.what ?? 'text', before: c.before, after: c.after, removed: c.removed, added: c.added };
 }
 
 /** One edit the owner can approve or leave out. */

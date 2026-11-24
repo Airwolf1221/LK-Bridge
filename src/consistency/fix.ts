@@ -33,6 +33,7 @@
  * approval, the rails ("bulk over 10 pages" asks for the step-up at approval) and Revert work as for any proposal; Last
  * Major Revision follows the owner's rule (the engine measures each page's change).
  */
+import { textChange } from '../jobs/text-change.js';
 import { createHash } from 'node:crypto';
 import { unwritableIds } from '../appraisal/fixes.js';
 import { labelContext, labelsOf, NON_CURRENT_AREAS } from '../appraisal/scope.js';
@@ -801,7 +802,19 @@ async function proposeEdits(
       group: 'Pages that disagree with the picked value',
       label: `${pageName}: ${labels.join('; ')}`,
       page: { id: pageId, name: pageName },
-      diff: { changes },
+      // Amendment 1 to ADR 0072: each change of words carries where its replaced words are (the Proposals page
+      // highlights them).
+      diff: {
+        changes: changes.map((c) => {
+          const t =
+            c.before !== null && c.after !== null
+              ? textChange({ page: pageName, before: c.before, after: c.after })
+              : null;
+          return t && t.before === c.before && t.after === c.after
+            ? { ...c, removed: t.removed, added: t.added }
+            : c;
+        }),
+      },
       dependsOn: [],
       selected: true,
     });
@@ -836,7 +849,27 @@ async function proposeEdits(
       operation: { ...o.operation, ...(notPlanned.length ? { notPlanned } : {}) },
       operations: plans.map(({ item, parts }) => {
         const it = items.find((i) => i.id === item)!;
-        return { tool: 'arkona_consistency', page: it.page, pageParts: parts, summaryLabel: it.label };
+        // Amendment 1 to ADR 0072: the words each page's edits change (the summary and the Review card show them).
+        const textChanges = (it.diff?.changes ?? [])
+          .map((c) =>
+            c.before !== null && c.after !== null
+              ? textChange({
+                  page: it.page?.name ?? '',
+                  ...(it.page?.id ? { pageId: it.page.id } : {}),
+                  what: c.what,
+                  before: c.before,
+                  after: c.after,
+                })
+              : null,
+          )
+          .filter((c) => c !== null);
+        return {
+          tool: 'arkona_consistency',
+          page: it.page,
+          pageParts: parts,
+          summaryLabel: it.label,
+          ...(textChanges.length > 0 ? { textChanges } : {}),
+        };
       }),
     },
   });

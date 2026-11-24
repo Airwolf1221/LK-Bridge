@@ -237,6 +237,42 @@ test('v2 C1: a write_page proposal shows its Markdown diff, keep regions as plac
   expect(problems).toEqual([]);
 });
 
+// Amendment 1 to ADR 0072: a proposal that changes words never hides them. A core_text proposal shows each sentence before
+// and after, the replaced words highlighted; the sentence about another character's page is not in it.
+test('F7.1a: a Core wording proposal shows the sentence before and after, the replaced words highlighted', async ({
+  page,
+  request,
+}) => {
+  const problems = watch(page);
+  const { proposalId } = (await (await request.get(`${CONTROL}/wording-proposal`)).json()) as {
+    proposalId: string;
+  };
+  expect(proposalId).toMatch(/^prop_/);
+  await signIn(page, '/ui/proposals');
+  // The list row's summary already holds the words.
+  const row = page.locator(`tr[data-proposal="${proposalId}"]`);
+  await expect(row).toContainText('“This compact character reference owns Akari');
+  await row.getByRole('button', { name: 'Review' }).click();
+  const words = page.getByRole('region', { name: 'Words that change' });
+  await expect(words).toContainText('Words that change (1)');
+  const change = words.getByTestId('text-change');
+  await expect(change).toHaveCount(1);
+  await expect(change).toContainText(
+    "Before: “This compact character reference owns Akari's individual identity, voice and history.”",
+  );
+  await expect(change).toContainText(
+    "After: “This Character Core owns Akari's individual identity, voice and history.”",
+  );
+  await expect(change.locator('del.tc-mark')).toHaveText('compact character reference');
+  await expect(change.locator('ins.tc-mark')).toHaveText('Character Core');
+  // Highlighted: the marks are styled as the diff's removed and added text.
+  const bg = await change.locator('ins.tc-mark').evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(bg).not.toBe('rgba(0, 0, 0, 0)');
+  // The sentence about another page is not a change.
+  await expect(words).not.toContainText('separate');
+  expect(problems).toEqual([]);
+});
+
 // v3 F3c (ADR 0051 decision 4): the proposal is promote_page's (Working → Authoritative), the only way the C2c
 // lifecycle guard lets a page become canon; the fixture used to write the Status row directly, which the guard refuses.
 test('v2 C2a: a proposal that touches protected canon is approved only with "Approve and accept as canon"', async ({

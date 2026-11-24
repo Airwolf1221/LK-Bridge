@@ -20,6 +20,7 @@ import { factKey, sidebarFrom, type SidebarProperty } from '../../facts/index.js
 import { FactsPlanError, planFacts, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
 import { rowTextRuns } from '../../facts/values.js';
 import { mintClientId } from '../../jobs/ids.js';
+import { textChange, textChangeWords } from '../../jobs/text-change.js';
 import type { LmrMode } from '../../jobs/lmr-hook.js';
 import type { LifecycleConfig } from '../../lifecycle/settings.js';
 import type { LmrConfig } from '../../lmr/index.js';
@@ -50,16 +51,18 @@ import type { TypeHook } from '../hooks.js';
 import type { Pack, RoleRule, TypeRules } from '../types.js';
 import { computeTags, type HeldSlot } from './tags.js';
 import {
-  compactSentences,
   coreNeed,
   imageKeys,
   isOwnerRole,
   ownersInIndex,
   planCoreImages,
   reword,
+  nameWord,
   visualTextWarning,
+  wordingLeft,
   type CompactLeft,
   type Replacement as CoreReplacement,
+  type WordingNames,
 } from './core.js';
 import {
   currentCharacters,
@@ -356,6 +359,9 @@ export type ExistingChange =
       readonly documentId: string;
       readonly role: 'core' | 'art';
       readonly subject: string;
+      /** Amendment 1 to ADR 0072: the names the self-reference test used (the filler applies the same ones). */
+      readonly names?: readonly string[];
+      readonly others?: readonly string[];
       readonly replacements: readonly CoreReplacement[];
       readonly remove: readonly { readonly blockId: string; readonly url: string }[];
       /** Art page: the moved images (label, image, interpretation), appended under `section`. */
@@ -2573,6 +2579,42 @@ function insertUnder(
 }
 
 /**
+ * Amendment 1 to ADR 0072: who the Core is about, for the self-reference test: its Subject and Canonical Display Name;
+ * and the other characters (every Character Core and Compact Character Reference the tree knows, by their names) whose
+ * names appear in the pages' text, so a sentence naming one of them is never edited. Kept with the plan, so the filler
+ * applies exactly the same test inside the lock.
+ */
+function wordingNames(
+  env: PlanEnv,
+  identityId: string,
+  subject: string,
+  texts: readonly (readonly LkBlock[])[],
+): { names?: string[]; others?: string[] } {
+  const { ctx } = env;
+  const me = ctx.tree.node(ctx.projectId, identityId).data;
+  const names = [...new Set([me?.canonicalDisplayName ?? '', subjectOf(me?.displayName ?? '', null)])]
+    .map((n) => n.trim())
+    .filter((n) => n !== '' && nameKey(n) !== nameKey(subject));
+  const text = texts.flatMap((bs) => bs.map((b) => JSON.stringify(b))).join(' ');
+  const others = new Set<string>();
+  for (const kind of ['bsrc', 'bwrk'] as const)
+    for (const n of ctx.tree.byKind(ctx.projectId, kind).data) {
+      if (n.id === identityId) continue;
+      const rt = textKey(n.referenceType ?? '');
+      if (rt !== textKey('Character Core') && rt !== textKey('Compact Character Reference')) continue;
+      const who = (n.canonicalDisplayName ?? subjectOf(n.displayName, null)).trim();
+      if (who === '') continue;
+      const words = [who, ...who.split(/\s+/).filter(nameWord)];
+      if (words.some((w) => text.includes(w))) others.add(who);
+    }
+  const out: WordingNames = {
+    ...(names.length > 0 ? { names } : {}),
+    ...(others.size > 0 ? { others: [...others].sort() } : {}),
+  };
+  return out as { names?: string[]; others?: string[] };
+}
+
+/**
  * v3 F7.1 (ADR 0072): the upgrade's text change, planned on the pages read live (the Core, and the character's Art
  * page when it exists; a new Art page of the same package is changed in its plan):
  *
@@ -2640,8 +2682,13 @@ async function coreTextChanges(
   const boundaries = ['Source Boundaries', 'Unresolved Material'];
   const section = type.assets.section;
 
-  // The wording, on the Core.
-  const cw = reword(core.blocks, 'core', a.subject);
+  // The wording, on the Core: only phrases that mean the page itself (amendment 1 to ADR 0072).
+  const wn = wordingNames(env, a.identity.id, a.subject, [
+    core.blocks,
+    art?.blocks ?? [],
+    newArt?.blocks ?? [],
+  ]);
+  const cw = reword(core.blocks, 'core', a.subject, undefined, wn);
   // The images.
   const artBlocks = art?.blocks ?? newArt?.blocks ?? null;
   let imgs = artBlocks
@@ -2662,17 +2709,19 @@ async function coreTextChanges(
       page: a.identity.rawName,
     });
   }
-  const after = reword(core.blocks, 'core', a.subject).blocks.filter(
-    (b) => !imgs.remove.some((r) => r.blockId === (b as unknown as Obj).id),
+  const after = cw.blocks.filter((b) => !imgs.remove.some((r) => r.blockId === (b as unknown as Obj).id));
+  const left: CompactLeft[] = wordingLeft(
+    after,
+    cw.skipped.filter((x) => !imgs.remove.some((r) => r.blockId === x.blockId)),
+    a.identity.rawName,
   );
-  const left: CompactLeft[] = compactSentences(after, a.identity.rawName);
 
   // The Art page: its wording, and the moved images.
   let artReplacements: CoreReplacement[] = [];
   if (art && artNode) {
-    const aw = reword(art.blocks, 'art', a.subject);
+    const aw = reword(art.blocks, 'art', a.subject, undefined, wn);
     artReplacements = aw.replacements;
-    left.push(...compactSentences(aw.blocks, artNode.rawName));
+    left.push(...wordingLeft(aw.blocks, aw.skipped, artNode.rawName));
     if (aw.replacements.length > 0 || imgs.append.length > 0)
       changes.push({
         kind: 'core_text',
@@ -2686,6 +2735,7 @@ async function coreTextChanges(
         documentId: art.documentId,
         role: 'art',
         subject: a.subject,
+        ...wn,
         replacements: aw.replacements,
         remove: [],
         append: imgs.append,
@@ -2693,7 +2743,7 @@ async function coreTextChanges(
         boundaries,
       });
   } else if (newArt && newArt.blocks) {
-    const aw = reword(newArt.blocks, 'art', a.subject);
+    const aw = reword(newArt.blocks, 'art', a.subject, undefined, wn);
     artReplacements = aw.replacements;
     const blocks =
       imgs.append.length > 0 ? insertUnder(aw.blocks, section, boundaries, imgs.append) : aw.blocks;
@@ -2719,7 +2769,7 @@ async function coreTextChanges(
         ],
       };
     }
-    left.push(...compactSentences(blocks, newArt.rawName));
+    left.push(...wordingLeft(blocks, aw.skipped, newArt.rawName));
   }
 
   // The Core: its wording, and its images removed (after the Art page has them).
@@ -2730,6 +2780,7 @@ async function coreTextChanges(
       documentId: core.documentId,
       role: 'core',
       subject: a.subject,
+      ...wn,
       replacements: cw.replacements,
       remove: imgs.remove.map((r) => ({ blockId: r.blockId, url: r.url })),
       append: [],
@@ -2740,9 +2791,12 @@ async function coreTextChanges(
   const all = [...cw.replacements, ...artReplacements];
   if (all.length > 0)
     notes.push(
-      `Wording: ${all.length} phrase${all.length === 1 ? '' : 's'} that called it compact now say Character Core (${all
+      `Wording: ${all.length} phrase${all.length === 1 ? '' : 's'} where the page calls itself compact now say Character Core (${all
         .slice(0, 6)
-        .map((r) => `“${r.before.slice(0, 120)}” → “${r.after.slice(0, 120)}”`)
+        .map((r) => {
+          const c = textChange({ page: '', before: r.before, after: r.after });
+          return c ? textChangeWords(c) : `“${r.before.slice(0, 120)}” → “${r.after.slice(0, 120)}”`;
+        })
         .join('; ')}${all.length > 6 ? `; and ${all.length - 6} more` : ''}).`,
     );
   const onArt = imgs.remove.filter((r) => r.onArt).length;

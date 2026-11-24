@@ -2,6 +2,7 @@
  * The job engine (PLAN §6): everything that talks to LegendKeeper runs as a persisted step, through the governor,
  * with writer slots, locks, guards and the write journal. See src/jobs/README.md for the interface.
  */
+import { textChangesOf } from './text-change.js';
 import { LABEL_SIZE_REFUSAL, LABEL_SIZE_UNSUPPORTED, LABEL_SIZE_WRITABLE } from '../maps/features.js';
 import { randomBytes } from 'node:crypto';
 import { WRITERS_LIMIT, WRITERS_MIN, type JobsSettings } from '../config/jobs.js';
@@ -3845,10 +3846,13 @@ function reviewNote(
     })
     .filter((x) => x !== null)
     .slice(0, 50);
+  // Amendment 1 to ADR 0072: the words the job changes, sentence by sentence (the Review card shows them).
+  const textChanges = textChangesOf(ops).slice(0, 50);
   return {
     ...(typeof extras?.summary === 'string' ? { summary: extras.summary.slice(0, 500) } : {}),
     ...(extras?.lmrNote ? { lmrNote: extras.lmrNote.slice(0, 500) } : {}),
     ...(pages.length > 0 ? { pages } : {}),
+    ...(textChanges.length > 0 ? { textChanges } : {}),
   };
 }
 

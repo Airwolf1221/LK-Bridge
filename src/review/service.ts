@@ -8,6 +8,7 @@
  * Recording: a listener on the engine's job events records a job when it is created by an agent principal without an
  * approval and holds a write step. Nothing here reads LegendKeeper.
  */
+import { isTextChange, type TextChange } from '../jobs/text-change.js';
 import { createHash } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { ChronologyStore } from '../chronology/store.js';
@@ -80,6 +81,11 @@ export interface ReviewItem {
   /** CR-2026-11-R2 (R2-06): the title the agent gave a low-level job, shown only as a secondary label. */
   readonly agentTitle?: string;
   readonly pages: readonly { readonly id: string; readonly name: string | null }[];
+  /**
+   * Amendment 1 to ADR 0072: the words the job changed, as its proposal would have shown them (each sentence before and
+   * after, the replaced words marked), when its tool gave them.
+   */
+  readonly textChanges?: readonly TextChange[];
   readonly reviewed: { readonly at: number; readonly by: string; readonly via: string } | null;
   readonly revert: RevertSummary | null;
 }
@@ -353,6 +359,9 @@ export class ReviewService {
       ? (this.optionsOf(row.projectId, row.jobId).review as Obj)
       : {};
     const notePages = Array.isArray(note.pages) ? (note.pages as Obj[]) : [];
+    const textChanges = Array.isArray(note.textChanges)
+      ? (note.textChanges as unknown[]).filter(isTextChange).slice(0, 50)
+      : [];
     const ids = [
       ...new Set([...notePages.map((p) => String(p.id)), ...this.journalPages(row.projectId, row.jobId)]),
     ].slice(0, 50);
@@ -376,6 +385,7 @@ export class ReviewService {
           (notePages.find((p) => p.id === id)?.name as string | undefined) ??
           null,
       })),
+      ...(textChanges.length > 0 ? { textChanges } : {}),
       reviewed:
         row.reviewedAt !== null
           ? { at: row.reviewedAt, by: row.reviewedBy ?? 'owner', via: row.reviewedVia ?? 'review' }

@@ -15,9 +15,9 @@
  * whole runs exactly the steps it always did. A package whose steps cannot all be placed in an item is not itemized
  * (approved whole, as before), never guessed.
  */
-import { coreTextWords } from './core.js';
+import { coreTextChanges, coreTextWords } from './core.js';
 import { EXPECT_STEP, LMR_STEP, RECORD_STEP, VERIFY_STEP } from '../../jobs/internal-steps.js';
-import { withStepDependencies, type PlanItem } from '../../jobs/items.js';
+import { textChangeEntry, withStepDependencies, type PlanItem } from '../../jobs/items.js';
 import type { StepSpec } from '../../jobs/index.js';
 import type { PackJob } from './job.js';
 import type { PackPlan } from './plan.js';
@@ -159,12 +159,7 @@ export function itemizePackage(
         c.lines.map((l) => ({ what: c.section, before: null, after: l })),
       );
     else if (c.kind === 'core_text')
-      note(
-        c.page.id,
-        c.page.rawName,
-        coreTextWords(c),
-        c.replacements.map((r) => ({ what: 'wording', before: r.before, after: r.after })),
-      );
+      note(c.page.id, c.page.rawName, coreTextWords(c), coreTextChanges(c).map(textChangeEntry));
     else if (c.kind === 'images')
       note(
         c.page.id,

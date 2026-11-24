@@ -16,6 +16,7 @@
  * with the proposer as principal, `approvedBy: 'owner'` and an approval token (approval.ts) so the gate does not turn
  * them into a new proposal. Every guard runs again at execution.
  */
+import { textChangesOf, textChangesSummary } from '../jobs/text-change.js';
 import { randomBytes } from 'node:crypto';
 import type { PolicySettings } from '../config/policy.js';
 import type { JobEngine } from '../jobs/engine.js';
@@ -715,10 +716,21 @@ export class ProposalService implements ProposalSink {
     const now = this.now();
     const note = meta.extras?.lmrNote ? ` ${meta.extras.lmrNote}` : '';
     const base = meta.extras?.summary ? meta.extras.summary : proposalSummary(own, names);
+    // Amendment 1 to ADR 0072: a proposal that changes words never hides them: the operations' text changes (their
+    // sentences, the replaced words) are part of the summary, after its first line, within its length.
+    const changed = textChangesOf(
+      meta.extras?.operations ?? (meta.extras?.operation ? [meta.extras.operation] : []),
+    );
+    const baseShown =
+      changed.length > 0 ? base.slice(0, Math.max(120, SUMMARY_MAX - note.length - 260)) : base;
+    const words =
+      changed.length > 0
+        ? `${/[.!?:;]\s*$/.test(baseShown) ? ' ' : '. '}${textChangesSummary(changed, SUMMARY_MAX - note.length - baseShown.length - 2)}`
+        : '';
     const summary =
-      note === ''
+      note === '' && words === ''
         ? base.slice(0, SUMMARY_MAX)
-        : `${base.slice(0, Math.max(0, SUMMARY_MAX - note.length))}${note}`;
+        : `${baseShown.slice(0, Math.max(0, SUMMARY_MAX - note.length - words.length))}${words}${note}`;
     const origin = sanitiseOrigin(meta.origin);
     const operation = meta.extras?.operation ? JSON.stringify(capOperation(meta.extras.operation)) : null;
     // v2 C2a: the list of high-level operations, the page-level summary, canonical approval and the job's shape.

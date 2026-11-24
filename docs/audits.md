@@ -92,8 +92,12 @@ A Character Core whose text still says it is a compact reference (a Core upgrade
 the upgrade's own deterministic rules (`src/packs/engine/core.ts`): “Compact Main CANON reference” → “Main CANON
 Character Core”; “Compact Character Reference”, “compact character reference”, “compact reference” → “Character Core”;
 the old page name “<Name> - Character Reference” → “<Name> - Character Core”; and on the character's Art page
-“character reference” where it means the identity page (after “her”, “his”, “their”, “its”, “the” or “<Name>'s”, not
-followed by “images”, “sheet”, “art”, “pages” or “folder”). One finding per character, only where a rule would replace
+“character reference” where it means the identity page (after “<Name>'s”, or after “her”, “his”, “their” or “its” when
+the paragraph names nobody else; not followed by “images”, “sheet”, “art”, “pages” or “folder”). Since amendment 1 to
+ADR 0072 (24 November 2026) a compact phrasing on the Core is replaced only when it means the page itself: after “this”,
+or as its Purpose paragraph's opener naming the page's own character (“Compact Main CANON reference for <Subject>…”);
+never in a sentence that names or mentions another character. Everything else is listed, never edited, and the
+proposal shows each sentence before and after with the replaced words highlighted. One finding per character, only where a rule would replace
 something; every other sentence still saying “compact” is listed in the finding, never edited. "Propose a fix" reads
 both pages live (`FIX_STALE` when the phrases to replace are not the ones the audit found), then makes ONE proposal:
 the Art page first, then the Core, each changed inside the lock on the named blocks only. In the automation: default

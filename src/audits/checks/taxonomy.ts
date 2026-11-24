@@ -20,7 +20,7 @@ import type { RegistryType, TaxonomyEntry } from '../../registry/index.js';
 import { contentPages, fact, factAmbiguous, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
 import type { FindingCode, FindingDraft } from '../types.js';
-import { compactSentences, coreNeed, reword } from '../../packs/engine/core.js';
+import { coreNeed, nameWord, reword, wordingLeft, type WordingNames } from '../../packs/engine/core.js';
 import type { LkBlock } from '../../markdown/index.js';
 
 const DRIFT_CODE: Record<DriftCode, FindingCode> = {
@@ -228,6 +228,15 @@ function coreWording(ctx: AuditContext): FindingDraft[] {
   if (!ctx.mainBlocks) return out;
   for (const type of ctx.types) {
     if (!type.placement) continue;
+    // Amendment 1 to ADR 0072: every character of this type, by its name (a sentence naming another is never edited).
+    const characters = new Map<string, string>();
+    for (const c of contentPages(ctx)) {
+      if (c.kind !== 'bsrc' && c.kind !== 'bwrk') continue;
+      if (characterRole(ctx, type, c) === null) continue;
+      const who =
+        fact(ctx, c, 'Canonical Display Name') || fact(ctx, c, 'Subject') || subjectOf(c.displayName, null);
+      if (who) characters.set(c.id, who);
+    }
     const artType = nkey('Character Art');
     for (const p of contentPages(ctx)) {
       if (p.kind !== 'bsrc' && p.kind !== 'bwrk') continue;
@@ -250,12 +259,21 @@ function coreWording(ctx: AuditContext): FindingDraft[] {
           : null;
       const artDoc = art ? ctx.mainBlocks(art.id) : null;
       const coreBlocks = core.blocks as LkBlock[];
-      const cw = reword(coreBlocks, 'core', subject);
-      const aw = artDoc ? reword(artDoc.blocks as LkBlock[], 'art', subject) : null;
+      const wn = wordingNamesOf(
+        ctx,
+        p,
+        subject,
+        [...characters].filter(([id]) => id !== p.id).map(([, n]) => n),
+        [coreBlocks, (artDoc?.blocks ?? []) as LkBlock[]],
+      );
+      const cw = reword(coreBlocks, 'core', subject, undefined, wn);
+      const aw = artDoc ? reword(artDoc.blocks as LkBlock[], 'art', subject, undefined, wn) : null;
+      // Only a phrase that means the page itself is the bridge's to fix: a Core whose compact phrasings all mean
+      // another page (or cannot be cleared) gives no finding; the text is the author's.
       if (cw.replacements.length === 0 && (aw?.replacements.length ?? 0) === 0) continue;
       const left = [
-        ...compactSentences(cw.blocks, p.rawName),
-        ...(aw && art ? compactSentences(aw.blocks, art.rawName) : []),
+        ...wordingLeft(cw.blocks, cw.skipped, p.rawName),
+        ...(aw && art ? wordingLeft(aw.blocks, aw.skipped, art.rawName) : []),
       ];
       const pick = (r: { blockId: string; before: string; after: string }) => ({
         blockId: r.blockId,
@@ -293,6 +311,7 @@ function coreWording(ctx: AuditContext): FindingDraft[] {
             pageId: p.id,
             name: p.rawName,
             subject,
+            ...wn,
             core: { documentId: core.documentId, replacements: cw.replacements.map(pick) },
             ...(art && artDoc && aw && aw.replacements.length > 0
               ? {
@@ -311,6 +330,35 @@ function coreWording(ctx: AuditContext): FindingDraft[] {
     }
   }
   return out;
+}
+
+/**
+ * Amendment 1 to ADR 0072: the Core's other names (its Subject and Canonical Display Name besides `subject`), and the
+ * other characters whose names appear in its text or its Art page's (the same test the upgrade's planner makes).
+ */
+function wordingNamesOf(
+  ctx: AuditContext,
+  p: AuditPage,
+  subject: string,
+  others: readonly string[],
+  texts: readonly (readonly LkBlock[])[],
+): { names?: string[]; others?: string[] } {
+  const names = [
+    ...new Set(
+      [fact(ctx, p, 'Canonical Display Name'), fact(ctx, p, 'Subject'), subjectOf(p.displayName, null)]
+        .map((n) => (n ?? '').trim())
+        .filter((n) => n !== '' && nkey(n) !== nkey(subject)),
+    ),
+  ];
+  const text = texts.flatMap((bs) => bs.map((b) => JSON.stringify(b))).join(' ');
+  const seen = [
+    ...new Set(others.filter((o) => [o, ...o.split(/\s+/).filter(nameWord)].some((w) => text.includes(w)))),
+  ].sort();
+  const out: WordingNames = {
+    ...(names.length > 0 ? { names } : {}),
+    ...(seen.length > 0 ? { others: seen } : {}),
+  };
+  return out as { names?: string[]; others?: string[] };
 }
 
 /**

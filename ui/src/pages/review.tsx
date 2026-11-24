@@ -35,6 +35,7 @@ import type {
   RevertTarget,
 } from '../types';
 import { MarkdownDiffView } from './proposals';
+import { TextChangesList } from '../text-change';
 
 const STATE_TEXT: Record<RevertTarget['state'], string> = {
   ready: 'will be put back',
@@ -337,6 +338,10 @@ function ItemRow({ item, onChanged }: { item: ReviewItem; onChanged: () => void 
           </p>
           {item.pages.length > 0 && (
             <p className="small-text">Pages: {item.pages.map((p) => p.name ?? p.id).join(', ')}</p>
+          )}
+          {/* Amendment 1 to ADR 0072: the words the job changed, the replaced words highlighted. */}
+          {item.textChanges && item.textChanges.length > 0 && (
+            <TextChangesList changes={item.textChanges} label="Words this job changed" max={10} />
           )}
         </div>
         <div className="row">

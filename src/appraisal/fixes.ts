@@ -25,6 +25,7 @@
  * read the fix made (a dash, a blank paragraph or a heading's link is punctuation or nothing: skipped; names, tags,
  * moves and Related Sources do not count).
  */
+import { blocksTextChanges, textChangeWords } from '../jobs/text-change.js';
 import { planFacts, FactsPlanError } from '../facts/plan.js';
 import { expandFacts } from '../facts/expand.js';
 import { sidebarFrom } from '../facts/index.js';
@@ -548,6 +549,10 @@ async function fixBody(
   if (plan.empty) return { status: 'nothing_to_do', message: 'Nothing to change.', reads: 1 };
   const name = d.node(pageId)?.rawName ?? f.page!.name;
   const page = { id: pageId, name };
+  const changes =
+    kind === 'blank_paragraphs'
+      ? []
+      : blocksTextChanges(before, after, page, kind === 'em_dash_text' ? 'dash' : 'heading link');
   const job = blockwiseJob({
     resourceId: pageId,
     documentId,
@@ -567,9 +572,14 @@ async function fixBody(
       document: documentId,
       blocks: plan.ops.map((o) => ({ op: o.op, id: o.id })),
       ...(skipped.length ? { leftAsTheyAre: skipped } : {}),
+      // Amendment 1 to ADR 0072: the words that change, sentence by sentence (none for blank paragraphs removed).
+      ...(changes.length > 0 ? { textChanges: changes } : {}),
     },
     page,
-    pageParts: ['page content'],
+    pageParts:
+      changes.length > 0
+        ? changes.slice(0, 10).map((c) => `${c.what ?? 'text'}: ${textChangeWords({ ...c, page: '' })}`)
+        : ['page content'],
     prefetched: [{ op: 'getDocumentBlocks', path, body }],
     fix: kind,
     reads: 1,
