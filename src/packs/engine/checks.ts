@@ -611,7 +611,10 @@ export function coreTextFill(ctx: FillContext): FillResult {
   const input = (ctx.input ?? {}) as CoreTextInput;
   const done = applyCoreText(ctx.current.blocks as LkBlock[], input);
   if ((ctx.planned ?? []).length === 0)
-    return { blocks: done.blocks, note: { replaced: done.replaced, removed: done.removed } };
+    return {
+      blocks: done.blocks,
+      note: { replaced: done.replaced, removed: done.removed, ...(done.held ? { held: done.held } : {}) },
+    };
   const appended = appendImages({
     ...ctx,
     input: { section: input.section ?? 'Reference Images', boundaries: input.boundaries ?? [] },
@@ -619,7 +622,12 @@ export function coreTextFill(ctx: FillContext): FillResult {
   });
   return {
     blocks: appended.blocks,
-    note: { replaced: done.replaced, removed: done.removed, ...(appended.note ?? {}) },
+    note: {
+      replaced: done.replaced,
+      removed: done.removed,
+      ...(done.held ? { held: done.held } : {}),
+      ...(appended.note ?? {}),
+    },
   };
 }
 

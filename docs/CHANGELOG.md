@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased: v3 F7.1a, only self-references; proposals show the words they change (24 November 2026)
+
+[ADR 0072, amendment 1](adr/0072-v3-f7-1-the-character-core-rule.md). No migration. Nothing was run against a live
+system: the mock only. Until this is deployed the owner has `core_compact_wording` switched Off on the Automation page.
+
+- **The bug**: `core_compact_wording`'s fix rewrote a sentence on Mehrana al-Khalid's Character Core that was about
+  Taraji's page ("…owned by the separate compact character reference" → "…the separate Character Core"), and the
+  proposal did not show the change.
+- **Only self-references** (`src/packs/engine/core.ts`, shared by the upgrade, the split and the audit): a compact
+  phrasing on the Core is replaced only after "this", or as the Purpose paragraph's opener naming the page's own
+  Subject or Canonical Display Name; never in a sentence that mentions another page, names someone else's possessive or
+  names another known character. The Art page's "character reference" test is stricter too ("<Name>'s"; "her", "his",
+  "their", "its" only when the paragraph names nobody else; "the" no longer). Everything else is listed, never edited.
+  Inside the lock the filler writes a block only if its replacements are exactly those the owner was shown.
+- **Proposals show the words** (`src/jobs/text-change.ts`): every fix whose plan replaces words (the Core upgrade and
+  the split's, `core_compact_wording`, `em_dash_text`, `heading_links`, `art_stale_folder_ref`, the narrative dateline,
+  the consistency pick) gives each sentence before and after; the summary includes them, the Proposals page has a
+  "Words that change" card and highlights them in item diffs, and the Review page's card lists them for direct jobs.
+
 ## Unreleased: v3 F7c, image archives (24 November 2026)
 
 [ADR 0075](adr/0075-v3-f7c-image-archives.md). Migration `4400_image_archives.sql`. Nothing was run against a live

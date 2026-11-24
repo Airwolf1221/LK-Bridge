@@ -14,6 +14,7 @@ import {
   useToast,
 } from '../components';
 import { diffBlocks, looksLikeBlocks } from '../diff';
+import { TextChangeView, TextChangesList, textChangesOf } from '../text-change';
 import { fmtAgo, fmtTime, prettyJson, principalText, type PrincipalNames } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
@@ -1036,6 +1037,21 @@ function PageSummaryView({ p }: { p: ProposalDetail }) {
   );
 }
 
+/**
+ * Amendment 1 to ADR 0072: every change of words the proposal makes, sentence by sentence, the replaced words
+ * highlighted (a proposal that changes words never hides them).
+ */
+function TextChangesView({ p }: { p: ProposalDetail }) {
+  const changes = textChangesOf(p.operations);
+  if (changes.length === 0) return null;
+  return (
+    <section className="card" aria-label="Words that change" data-testid="words-that-change">
+      <h3>Words that change ({changes.length})</h3>
+      <TextChangesList changes={changes} />
+    </section>
+  );
+}
+
 const LIFECYCLE_VERB: Readonly<Record<string, string>> = {
   archive_page: 'Archive',
   unarchive_page: 'Unarchive',
@@ -1281,11 +1297,28 @@ function ItemDiffView({ diff }: { diff: PlanItem['diff'] }) {
   if (diff.changes && diff.changes.length > 0)
     return (
       <ul className="small-text">
-        {diff.changes.map((c, i) => (
-          <li key={i}>
-            <strong>{c.what}</strong>: <del>{c.before ?? '(none)'}</del> → <ins>{c.after ?? '(none)'}</ins>
-          </li>
-        ))}
+        {diff.changes.map((c, i) =>
+          // Amendment 1 to ADR 0072: a change of words shows its sentences, the replaced words highlighted.
+          c.removed && c.added && c.before !== null && c.after !== null ? (
+            <li key={i}>
+              <TextChangeView
+                showPage={false}
+                c={{
+                  page: '',
+                  what: c.what,
+                  before: c.before,
+                  after: c.after,
+                  removed: c.removed,
+                  added: c.added,
+                }}
+              />
+            </li>
+          ) : (
+            <li key={i}>
+              <strong>{c.what}</strong>: <del>{c.before ?? '(none)'}</del> → <ins>{c.after ?? '(none)'}</ins>
+            </li>
+          ),
+        )}
       </ul>
     );
   if (diff.before === undefined && diff.after === undefined) return context;
@@ -1610,6 +1643,7 @@ function ProposalReview({
             </p>
           )}
           <PageSummaryView p={p} />
+          <TextChangesView p={p} />
           {plan && (
             <ItemsView
               p={p}

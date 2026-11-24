@@ -541,7 +541,14 @@ export interface PlanItem {
     before?: string | null;
     after?: string | null;
     context?: string;
-    changes?: { what: string; before: string | null; after: string | null }[];
+    changes?: {
+      what: string;
+      before: string | null;
+      after: string | null;
+      /** Amendment 1 to ADR 0072: a change of words: the replaced words in `before`, the new ones in `after`. */
+      removed?: TextSpan;
+      added?: TextSpan;
+    }[];
   };
   /** The items it needs: leaving one of them out leaves this one out too. */
   dependsOn: string[];
@@ -549,6 +556,27 @@ export interface PlanItem {
   selected: boolean;
   why?: string;
   tags?: string[];
+}
+
+/** Amendment 1 to ADR 0072: character offsets of the words that change (end exclusive). */
+export interface TextSpan {
+  start: number;
+  end: number;
+}
+
+/**
+ * Amendment 1 to ADR 0072: one change of a page's words as the owner reads it (src/jobs/text-change.ts): the sentence(s)
+ * before and after, and where the replaced words are in each.
+ */
+export interface TextChange {
+  page: string;
+  pageId?: string;
+  blockId?: string;
+  what?: string;
+  before: string;
+  after: string;
+  removed: TextSpan;
+  added: TextSpan;
 }
 
 /** v2 C2a: one line of a proposal's page-level summary. */
@@ -2618,6 +2646,8 @@ export interface ReviewItem {
   /** CR-2026-11-R2 (R2-06): the title the agent gave a low-level job (a secondary label, never the summary). */
   agentTitle?: string;
   pages: { id: string; name: string | null }[];
+  /** Amendment 1 to ADR 0072: the words the job changed, sentence by sentence. */
+  textChanges?: TextChange[];
   reviewed: { at: number; by: string; via: string } | null;
   revert: ReviewRevert | null;
 }
