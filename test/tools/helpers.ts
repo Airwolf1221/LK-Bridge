@@ -131,6 +131,9 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     LK_READ_ONLY: 'false',
     WRITE_SPACING_MS: '0',
     WRITE_SPACING_STRETCHED_MS: '0',
+    // v3 F9 (ADR 0074): the bulk passes (full snapshots, tree builds) at the pace P3 had before F9 (50% of each tier),
+    // so the mock worlds that take several full snapshots in a row test their logic, not the 30% default's pacing.
+    RESERVE_FLOOR_BULK: '0.5',
     LOG_LEVEL: 'silent',
     SESSION_SECRET: throwawaySecret(),
     JWT_SIGNING_KEY: throwawaySecret(),
