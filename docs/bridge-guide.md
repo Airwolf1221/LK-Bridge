@@ -11,7 +11,7 @@ tasks come first and the reference after. The last section, **Operations**, list
 1. **Use the high-level tool, not `lk_api_*`.** Every common job has a tool that knows the repository. The `lk_api_*`
    tools are the fallback for the rare job none of them does ([When the low-level tools are right](#when-the-low-level-tools-are-right)).
 2. **Read, then write, and pass the version you read back.** `write_page` takes `baseVersion` (from `read_document`);
-   `set_facts` takes `baseFactsVersion` (from `get_resource`). A stale version writes nothing.
+   `set_facts` takes `baseFactsVersion` (from `get_resource`). A stale version writes nothing. Never write a page you have not read.
 3. **Never retry a write that came back `proposal_captured`, `queued` or `waiting_budget`.** It is not lost. Follow a job
    with `bridge_job_status`, a proposal with `bridge_proposal_status`. After a refusal, do the one step the message names, once.
 4. **Canon and lifecycle belong to the owner.** Making a page canon, archiving it, bringing it back or deleting an

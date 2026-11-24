@@ -133,6 +133,37 @@ describe('the suggestion rules', () => {
     expect(r.reason).toContain('two categories');
   });
 
+  it('the design’s T1 types: “Historical Conflict Reference” → Conflict Reference', () => {
+    const r = s('Historical Conflict Reference', 'Event');
+    expect(r).toMatchObject({ kind: 'suggested', value: 'Conflict Reference' });
+    expect(r.moved.time).toEqual(['Historical']);
+    expect(r.reason).toContain('Temporal Scope');
+  });
+
+  it('the design’s T1 types: “Historical Regional Reference” → Region Reference (the adjective names the role)', () => {
+    const r = s('Historical Regional Reference', 'Place');
+    expect(r).toMatchObject({ kind: 'suggested', value: 'Region Reference' });
+    expect(r.moved.time).toEqual(['Historical']);
+    expect(r.moved.scope).toEqual([]);
+    expect(r.synonyms).toEqual(['Regional → Region']);
+    // Where another word names the role, "Regional" is still scope, moved out.
+    expect(s('Regional Settlement Reference', 'Place')).toMatchObject({ value: 'Settlement Reference' });
+    expect(s('Regional Settlement Reference', 'Place').moved.scope).toEqual(['Regional']);
+  });
+
+  it('a canonical type that is an adjective’s word is found before any synonym: “Historical Legal Reference”', () => {
+    expect(s('Historical Legal Reference', 'Law')).toMatchObject({
+      kind: 'suggested',
+      value: 'Legal Reference',
+    });
+    expect(s('Historical Religious Practice Reference', 'Religion')).toMatchObject({
+      value: 'Religious Practice Reference',
+    });
+    expect(s('Shared Magical Tradition Reference', 'Magic')).toMatchObject({
+      value: 'Magical Tradition Reference',
+    });
+  });
+
   it('category scoping: the same word in two categories', () => {
     // “Relationship” is the role word of the Character category's joint relationship and of the Relationship category.
     expect(s('Relationship', 'Character')).toMatchObject({
@@ -183,10 +214,10 @@ describe('the published section', () => {
     expect(lines[1]).toBe(RT.rule);
     expect(lines[2]).toBe(INTRO_TYPES);
     expect(lines).toContain(
-      'Polity: Polity Reference (Polity); Polity Constitution Reference (Constitution).',
+      'Polity: Polity Reference (Polity); Polity Constitution Reference (Constitution); Polity History Reference (History); Polity Directory (Directory).',
     );
     expect(lines).toContain(
-      'Culture: Culture Reference (Culture); Language & Naming Reference (Language & Naming).',
+      'Culture: Culture Reference (Culture); Culture Foundations Reference (Culture Foundations); Language & Naming Reference (Language & Naming); Lexicon Reference (Lexicon).',
     );
     expect(lines).toContain(INTRO_SPECIALIST);
     expect(lines).toContain(

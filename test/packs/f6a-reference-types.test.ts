@@ -486,7 +486,7 @@ describe('publishing the vocabulary', () => {
     expect(dry.replaced).toBe(false);
     expect(dry.lines[0]).toBe('Reference Type Vocabulary');
     expect(dry.lines).toContain(
-      'Culture: Culture Reference (Culture); Language & Naming Reference (Language & Naming); Naming Custom Reference (Naming Custom).',
+      'Culture: Culture Reference (Culture); Culture Foundations Reference (Culture Foundations); Language & Naming Reference (Language & Naming); Lexicon Reference (Lexicon); Naming Custom Reference (Naming Custom).',
     );
     expect(dry.lines).toContain(
       'Specialist type: Arkonan Calendar Reference (Event), any page in this category.',
@@ -582,7 +582,9 @@ describe('publishing the vocabulary', () => {
     (doc.blocks as any[])[i] = {
       ...(doc.blocks as any[])[i],
       content: [
-        { text: 'Culture: Culture Reference (Culture); Language & Naming Reference (Language & Naming).' },
+        {
+          text: 'Culture: Culture Reference (Culture); Culture Foundations Reference (Culture Foundations); Language & Naming Reference (Language & Naming); Lexicon Reference (Lexicon).',
+        },
       ],
     };
     doc.version++;

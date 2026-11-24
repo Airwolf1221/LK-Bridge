@@ -1201,6 +1201,9 @@ const rules: PackRules = packRulesSchema.parse({
     under: 'Sidebar Metadata',
     status: 'draft',
     rule: 'A Reference Type names the page’s role, from a closed list per primary category. Time goes in Temporal Scope, geography in placement, and detail in Scope. A specialist source that needs a unique type keeps it only as an approved specialist type listed below. Never invent a Reference Type.',
+    // The design's T1 table (the owner, 24 November 2026), in its order; the types the first draft had besides T1's
+    // follow them (Character; Military, Education and Ceremony; Magic Reference; Law Reference). T1 puts Programme
+    // Reference under Technology, so the Programme category lists none (a Reference Type is canonical in one category).
     categories: [
       {
         category: 'Character',
@@ -1224,15 +1227,36 @@ const rules: PackRules = packRulesSchema.parse({
         types: [
           { name: 'Polity Reference', role: 'Polity' },
           { name: 'Polity Constitution Reference', role: 'Constitution' },
+          { name: 'Polity History Reference', role: 'History' },
+          { name: 'Polity Directory', role: 'Directory' },
         ],
       },
-      { category: 'Institution', types: [{ name: 'Institution Reference', role: 'Institution' }] },
-      { category: 'Military', types: [{ name: 'Military Reference', role: 'Military' }] },
+      {
+        category: 'Institution',
+        types: [
+          { name: 'Institution Reference', role: 'Institution' },
+          { name: 'Religious Institution Reference', role: 'Religious Institution' },
+          { name: 'Military Institution Reference', role: 'Military Institution' },
+        ],
+      },
+      {
+        category: 'Military',
+        types: [{ name: 'Military Reference', role: 'Military' }],
+      },
       {
         category: 'Culture',
         types: [
           { name: 'Culture Reference', role: 'Culture' },
+          { name: 'Culture Foundations Reference', role: 'Culture Foundations' },
           { name: 'Language & Naming Reference', role: 'Language & Naming' },
+          { name: 'Lexicon Reference', role: 'Lexicon' },
+        ],
+      },
+      {
+        category: 'Religion',
+        types: [
+          { name: 'Religion Reference', role: 'Religion' },
+          { name: 'Religious Practice Reference', role: 'Religious Practice' },
         ],
       },
       {
@@ -1240,39 +1264,91 @@ const rules: PackRules = packRulesSchema.parse({
         types: [
           { name: 'Event Reference', role: 'Event' },
           { name: 'Conflict Reference', role: 'Conflict' },
+          { name: 'Period Reference', role: 'Period' },
+          { name: 'Chronology Reference', role: 'Chronology' },
         ],
       },
       {
         category: 'Place',
         types: [
-          { name: 'Place Reference', role: 'Place' },
+          { name: 'World Reference', role: 'World' },
           { name: 'Continent Reference', role: 'Continent' },
+          { name: 'Realmship Reference', role: 'Realmship' },
           { name: 'Region Reference', role: 'Region' },
           { name: 'Settlement Reference', role: 'Settlement' },
+          { name: 'Place Reference', role: 'Place' },
           { name: 'Divine Realm Reference', role: 'Divine Realm' },
         ],
       },
-      { category: 'Technology', types: [{ name: 'Technology Reference', role: 'Technology' }] },
-      { category: 'Magic', types: [{ name: 'Magic Reference', role: 'Magic' }] },
-      { category: 'Material', types: [{ name: 'Material Reference', role: 'Material' }] },
-      { category: 'Equipment', types: [{ name: 'Equipment Reference', role: 'Equipment' }] },
+      {
+        category: 'Magic',
+        types: [
+          { name: 'Magic Foundation Reference', role: 'Magic Foundation' },
+          { name: 'Magical Tradition Reference', role: 'Magical Tradition' },
+          { name: 'Magic Overview', role: 'Magic Overview' },
+          { name: 'Magic Reference', role: 'Magic' },
+        ],
+      },
+      {
+        category: 'Technology',
+        types: [
+          { name: 'Technology Reference', role: 'Technology' },
+          { name: 'Programme Reference', role: 'Programme' },
+        ],
+      },
+      {
+        category: 'Equipment',
+        types: [
+          { name: 'Equipment Reference', role: 'Equipment' },
+          { name: 'Equipment Tradition Reference', role: 'Equipment Tradition' },
+        ],
+      },
+      {
+        category: 'Material',
+        types: [{ name: 'Material Reference', role: 'Material' }],
+      },
+      {
+        category: 'Law',
+        types: [
+          { name: 'Foundation Reference', role: 'Foundation' },
+          { name: 'Legal Reference', role: 'Legal' },
+          { name: 'Agreement Reference', role: 'Agreement' },
+          { name: 'Law Reference', role: 'Law' },
+        ],
+      },
       {
         category: 'Species',
         types: [
-          { name: 'Race Core Reference', role: 'Race' },
+          { name: 'Racial Foundation', role: 'Racial Foundation' },
           { name: 'Racial Group Reference', role: 'Racial Group' },
+          { name: 'Race Core Reference', role: 'Race' },
           { name: 'Subrace Reference', role: 'Subrace' },
           { name: 'Species Reference', role: 'Species' },
         ],
       },
-      { category: 'Creature', types: [{ name: 'Creature Reference', role: 'Creature' }] },
-      { category: 'Religion', types: [{ name: 'Religion Reference', role: 'Religion' }] },
-      { category: 'Law', types: [{ name: 'Law Reference', role: 'Law' }] },
-      { category: 'Programme', types: [{ name: 'Programme Reference', role: 'Programme' }] },
-      { category: 'Education', types: [{ name: 'Education Reference', role: 'Education' }] },
-      { category: 'Ceremony', types: [{ name: 'Ceremony Reference', role: 'Ceremony' }] },
-      { category: 'Condition', types: [{ name: 'Condition Reference', role: 'Condition' }] },
-      { category: 'Relationship', types: [{ name: 'Relationship Reference', role: 'Relationship' }] },
+      {
+        category: 'Creature',
+        types: [{ name: 'Creature Reference', role: 'Creature' }],
+      },
+      {
+        category: 'Condition',
+        types: [{ name: 'Condition Reference', role: 'Condition' }],
+      },
+      {
+        category: 'Relationship',
+        types: [
+          { name: 'Relationship Reference', role: 'Relationship' },
+          { name: 'Political Relationship Reference', role: 'Political Relationship' },
+        ],
+      },
+      {
+        category: 'Education',
+        types: [{ name: 'Education Reference', role: 'Education' }],
+      },
+      {
+        category: 'Ceremony',
+        types: [{ name: 'Ceremony Reference', role: 'Ceremony' }],
+      },
     ],
     specialist: [],
     normalise: {
@@ -1286,6 +1362,9 @@ const rules: PackRules = packRulesSchema.parse({
         Ceremonial: 'Ceremony',
         Institutional: 'Institution',
         Biographical: 'Biography',
+        // A scope adjective read as its noun only when nothing else names the role (“Historical Regional Reference”).
+        Regional: 'Region',
+        Continental: 'Continent',
       },
       timeWords: ['Historical', 'Historic', 'Contemporary', 'Present-Day'],
       scopeWords: [
@@ -1305,7 +1384,6 @@ const rules: PackRules = packRulesSchema.parse({
         'Multinational',
         'Supranational',
         'Pan-Continental',
-        'World',
         'Global',
         'General',
         'Overall',

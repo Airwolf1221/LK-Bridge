@@ -68,7 +68,11 @@ const cand = (e: Entry): Candidate => ({ name: e.name, category: e.category, rol
 const uniq = (list: readonly Entry[]): Entry[] => [...new Map(list.map((e) => [e.name, e])).values()];
 
 /** The value's words with synonyms replaced and time and scope words taken out (hyphenated words are one word). */
-function rewrite(value: string, n: Normalise) {
+function rewrite(
+  value: string,
+  n: Normalise,
+  o: { readonly synonyms: boolean; readonly stripScope: boolean } = { synonyms: true, stripScope: true },
+) {
   const words = value
     .normalize('NFKC')
     .replace(/[–—]/g, '-')
@@ -84,8 +88,8 @@ function rewrite(value: string, n: Normalise) {
   for (const w of words) {
     const bare = lower(w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''));
     if (time.has(bare)) moved.time.push(w);
-    else if (scope.has(bare)) moved.scope.push(w);
-    else if (syn.has(bare)) {
+    else if (scope.has(bare) && o.stripScope) moved.scope.push(w);
+    else if (syn.has(bare) && o.synonyms) {
       synonyms.push(`${w} → ${syn.get(bare)!}`);
       kept.push(syn.get(bare)!);
     } else kept.push(w);
@@ -181,21 +185,32 @@ export function suggest(
       `the same type written differently (${describeForm(trimmed, direct[0]!)})`,
     ]);
   if (direct.length > 1) return noConfident(`it reads as ${direct.length} types of ${category}`, direct);
-  // 3. Synonyms, time words and scope adjectives.
-  const r = rewrite(trimmed, n);
+  // 3. Time words and scope adjectives stripped (a canonical type that is itself an adjective's word, "Legal Reference",
+  // is found before any synonym); then synonyms too; then, when a scope adjective is all that names the role
+  // ("Historical Regional Reference"), that adjective read as its noun through the synonyms (Regional → Region).
+  const attempts = [
+    rewrite(trimmed, n, { synonyms: false, stripScope: true }),
+    rewrite(trimmed, n, { synonyms: true, stripScope: true }),
+    rewrite(trimmed, n, { synonyms: true, stripScope: false }),
+  ];
+  const r = attempts[1]!;
   const reasons = why(r.moved, r.synonyms);
   const k2 = coreKey(r.text);
-  if (k2 !== '' && k2 !== k) {
-    const after = hit(k2, mine);
+  const tried = new Set<string>([k]);
+  for (const a of attempts) {
+    const ka = coreKey(a.text);
+    if (ka === '' || tried.has(ka)) continue;
+    tried.add(ka);
+    const after = hit(ka, mine);
     if (after.length === 1)
       return confident(
         after[0]!,
-        [`read as “${r.text.trim() || trimmed}”, the type ${after[0]!.name}`, ...reasons],
-        r.moved,
-        r.synonyms,
+        [`read as “${a.text.trim() || trimmed}”, the type ${after[0]!.name}`, ...why(a.moved, a.synonyms)],
+        a.moved,
+        a.synonyms,
       );
     if (after.length > 1)
-      return noConfident(`it reads as ${after.length} types of ${category}`, after, r.moved, r.synonyms);
+      return noConfident(`it reads as ${after.length} types of ${category}`, after, a.moved, a.synonyms);
   }
   const key = k2 !== '' ? k2 : k;
   // 4. Another category's type, two roles or two categories: the owner's choice.

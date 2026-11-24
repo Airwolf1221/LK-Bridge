@@ -6,8 +6,8 @@
 `arkona-2026-11-24-f6a`. Nothing was run against a live system: the mock only (the sandbox check `f6a-reftypes` is the
 owner's to run). No new setting.
 
-- **The vocabulary** (`rules.referenceTypes`, a draft): a closed list of Reference Types per primary category, each with
-  its role word for F6d's templated names; the pack's character types as they stand; the rules' words (synonyms, time
+- **The vocabulary** (`rules.referenceTypes`, a draft): the design's T1 table, a closed list of Reference Types per
+  primary category, each with its role word for F6d's templated names; the pack's character types as they stand; the rules' words (synonyms, time
   words, scope adjectives) as pack data.
 - **`arkona_reference_types`** (read-only, free): every value in use across the AI REPOSITORY (the Legacy Canon Archive,
   Design References, Working, Archived and Narratives pages left out and counted), one row per value and primary

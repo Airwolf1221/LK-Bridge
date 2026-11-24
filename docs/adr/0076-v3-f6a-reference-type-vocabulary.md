@@ -31,12 +31,14 @@ normalise: { synonyms, timeWords, scopeWords } }`.
 - **Role words** are stored now for F6d's templated names (Polity Reference → "Polity", Polity Constitution Reference →
   "Constitution", Language & Naming Reference → "Language & Naming", Race Core Reference → "Race"). Nothing in F6a
   renames a page.
-- **The draft** in the seed (src/packs/arkona.ts) has one or more canonical types for each of the 20 primary categories
-  and, for Character, the pack's own Reference Types as they stand (Character Core, Compact Character Reference,
-  Character Art, Joint Character Relationship Reference, Character Biography, and the four specialist references).
-  **Chosen**: the design's T1 table was not in the repository, so the draft was built from the brief's examples and the
-  pack's existing types (role, kind and specialist names); it is marked draft and the owner's decisions and publication
-  replace it.
+- **The draft** in the seed (src/packs/arkona.ts) is the design's T1 table (given by the owner at review, 24 November
+  2026), in its order, for Polity, Institution, Culture, Religion, Event, Place, Magic, Technology, Equipment, Material,
+  Law, Species, Creature, Condition and Relationship; then the first draft's types T1 does not list are kept: Character
+  (the pack's own Reference Types as they stand: Character Core, Compact Character Reference, Character Art, Joint
+  Character Relationship Reference, Character Biography and the four specialist references), Military, Education and
+  Ceremony, Magic Reference and Law Reference. T1 lists Programme Reference under Technology; a type is canonical in
+  one category only, so the Programme category lists none (a Programme page using it is a category mismatch for the
+  owner to rule). It is marked draft; the owner's decisions and publication replace it.
 - **Names the section could not write back** are refused by the schema (`;`, `(`, `)`, `:`, ", also").
 - **`aliases`**: variants the vocabulary itself says mean a type ("Culture & Naming Reference" → Language & Naming
   Reference only if the vocabulary lists it). The draft lists none.
@@ -48,7 +50,11 @@ src/packs/reftypes/suggest.ts, for a value and the page's primary category (from
 `and`, a missing or extra "Reference"; a type's name, an alias or its role word, **within the page's category**; (3)
 synonyms word by word (Cultural → Culture), then time words (Historical…) and scope adjectives (Regional, Shared,
 National, Cross-National, Cross-Jurisdictional, Civilisation…) stripped, the words moved named in the reason; step 2
-again; (4) another category's type, two roles or two categories ("Historical Polity and Institution Reference"), or no
+again, in three ordered attempts, the first matching exactly one type winning: time and scope words stripped without
+synonyms (so "Historical Legal Reference" finds Legal Reference before Legal → Law), then with synonyms, then time
+words only with a scope adjective read as its noun through the synonyms when it alone names the role ("Historical
+Regional Reference" → Region Reference; "Regional Settlement Reference" is still Settlement Reference, Regional moved
+to Scope); (4) another category's type, two roles or two categories ("Historical Polity and Institution Reference"), or no
 primary category tag: **no confident suggestion**, the candidates listed, the choice the owner's. Never inferred from a
 page's content. The words are pack data (`normalise`).
 
@@ -133,8 +139,8 @@ pages cannot cover a page not made yet).
 
 ## Decision 8: guidance
 
-The bridge guide: one row in "How to decide" (its cap, 9,450 characters, unchanged: rules 1, 2 and 4, the split line
-and the scope paragraph trimmed), and the section "Arkona Reference Types" (use the vocabulary; never invent a type;
+The bridge guide: one row in "How to decide" (its cap, 9,450 characters, unchanged at 9,446: rules 1 and 4, the split
+line and the scope paragraph trimmed; rule 2 kept whole at the owner's review; R5 trims the section), and the section "Arkona Reference Types" (use the vocabulary; never invent a type;
 `arkona_reference_types` for the state; the owner decides). `arkona_create_owner`'s example now uses a canonical type.
 
 ## Decision 9: meter's titled-block default (F7's G10 completed)
