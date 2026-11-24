@@ -1,10 +1,16 @@
 /** Shared types of the job engine (PLAN §6). */
-import type { PriorityClass } from '../config/lk.js';
+import type { PriorityClass as GovernorPriorityClass } from '../config/lk.js';
 import type { OperationKind } from '../lk/registry-types.js';
 import type { LmrMode } from './lmr-hook.js';
 import type { ProposalExtras } from './policy.js';
 
-export type { PriorityClass } from '../config/lk.js';
+/**
+ * A job's class (PLAN §5.2): P0 to P3. v3 F9 (ADR 0074): the governor's P4 (bulk) is a request class only, for the
+ * bridge's own whole-repository reads (`internalRead`); no job row is ever P4.
+ */
+export type PriorityClass = Exclude<GovernorPriorityClass, 'P4'>;
+/** Every class the governor schedules, P4 (bulk) included. */
+export type { GovernorPriorityClass };
 
 export const JOB_STATUSES = [
   'queued',
@@ -821,11 +827,19 @@ export interface ReadInfo {
 
 /** Options of `engine.internalRead`. */
 export interface InternalReadOptions {
-  readonly priority: PriorityClass;
+  /** v3 F9 (ADR 0074): P4 for a bulk pass's reads (always patient in the governor). */
+  readonly priority: GovernorPriorityClass;
   /** The job the read belongs to (fair share in the governor, and the error record). */
   readonly jobId?: string;
   readonly stepNo?: number;
   readonly signal?: AbortSignal;
   /** A 404 is an answer ("it is gone"), not an error: it is not recorded in the errors table. */
   readonly notFoundIsAnswer?: boolean;
+  /**
+   * v3 F9 (ADR 0074): the governor's fair-share lane when the read names no job (calls of one class take turns across
+   * lanes): a bulk pass's own id, so two passes at P4 share it. Ignored when `jobId` is given (the job is the lane).
+   */
+  readonly lane?: string;
+  /** v3 F9 review: first claim within its class (`ExecuteRequest.firstClaim`): the full snapshot's reads. */
+  readonly firstClaim?: boolean;
 }

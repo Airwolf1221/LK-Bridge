@@ -485,7 +485,7 @@ const SPECS: readonly Spec[] = [
     group: 'governor',
     label: 'Reserve floor: agents',
     description:
-      'The share of each tier an agent’s direct call must leave untouched. The floors must rise: agents ≤ jobs ≤ maintenance. Also on the Budgets page.',
+      'The share of each tier an agent’s direct call must leave untouched. The floors must rise: agents ≤ jobs ≤ maintenance ≤ bulk. Also on the Budgets page.',
     unit: UNITS.percent,
     applies: 'now',
     legacy: 'reserveFloors',
@@ -506,7 +506,19 @@ const SPECS: readonly Spec[] = [
     schema: 'main',
     group: 'governor',
     label: 'Reserve floor: maintenance',
-    description: 'The share of each tier scheduled maintenance must leave untouched.',
+    description:
+      'The share of each tier routine maintenance (P3) must leave untouched: change snapshots, refreshes after a bridge write, automation, block-id upkeep. The whole-repository passes have their own floor (bulk), so this one no longer needs raising to keep the night’s full snapshot in check.',
+    unit: UNITS.percent,
+    applies: 'now',
+    legacy: 'reserveFloors',
+  },
+  {
+    key: 'RESERVE_FLOOR_BULK',
+    schema: 'main',
+    group: 'governor',
+    label: 'Reserve floor: bulk passes',
+    description:
+      'The share of each tier the whole-repository passes (P4) must leave untouched: the nightly full snapshot, the full repository tree and asset tree checks, the link sweep. At 70% they use at most 30% of each tier, give way to routine maintenance and to agents, and still finish. Must be at least the maintenance floor. Left unset, it is 70%, or the maintenance floor if that is higher. Also on the Budgets page.',
     unit: UNITS.percent,
     applies: 'now',
     legacy: 'reserveFloors',

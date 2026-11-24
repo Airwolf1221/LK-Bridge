@@ -208,6 +208,7 @@ describe('budgets', () => {
       interactive: 0.2,
       job: 0.4,
       maintenance: 0.6,
+      bulk: 0.7, // v3 F9: not given, so the default
     });
     const bad = await stack.put('/api/admin/budgets/reserve-floors', {
       interactive: 0.5,
@@ -229,8 +230,50 @@ describe('budgets', () => {
     });
     const { applyStoredSettings } = await import('../../src/admin/index.js');
     const applied = applyStoredSettings(stack.runtime.envConfig, stack.db);
-    expect(applied.governor.reserveFloors).toEqual({ interactive: 0.15, job: 0.3, maintenance: 0.7 });
+    expect(applied.governor.reserveFloors).toEqual({
+      interactive: 0.15,
+      job: 0.3,
+      maintenance: 0.7,
+      bulk: 0.7,
+    });
     await stack.put('/api/admin/budgets/reserve-floors', { reset: true, confirm: true });
+  });
+
+  // v3 F9 (ADR 0074): the fourth floor, bulk (P4).
+  describe('the bulk floor (P4)', () => {
+    const put = (body: Record<string, unknown>) =>
+      stack.put('/api/admin/budgets/reserve-floors', { ...body, confirm: true });
+    const gov = () => stack.runtime.projects.client(PROJECT)!.governor;
+
+    it('is saved, shown and applied live', async () => {
+      const r = await put({ interactive: 0.1, job: 0.25, maintenance: 0.5, bulk: 0.8 });
+      expect(r.status).toBe(200);
+      expect(gov().settings.reserveFloors.P4).toBe(0.8);
+      const b = (await stack.get('/api/admin/budgets')).json.reserveFloors;
+      expect(b.current).toEqual({ interactive: 0.1, job: 0.25, maintenance: 0.5, bulk: 0.8 });
+      expect(b.bulkExplicit).toBe(true);
+      await put({ reset: true });
+      expect(gov().settings.reserveFloors.P4).toBe(0.7);
+      expect((await stack.get('/api/admin/budgets')).json.reserveFloors.bulkExplicit).toBe(false);
+    });
+
+    it('refuses a bulk floor below the maintenance floor, naming both', async () => {
+      const r = await put({ interactive: 0.1, job: 0.25, maintenance: 0.6, bulk: 0.55 });
+      expect(r.status).toBe(400);
+      expect(JSON.stringify(r.json)).toContain('The bulk floor (55%) is below the maintenance floor (60%)');
+      expect(gov().settings.reserveFloors.P3).toBe(0.5); // nothing changed
+    });
+
+    it('the owner-raised P3 floor: with no bulk value the bulk floor follows it up, and back', async () => {
+      const r = await put({ interactive: 0.1, job: 0.25, maintenance: 0.85 });
+      expect(r.status).toBe(200);
+      expect(gov().settings.reserveFloors).toMatchObject({ P3: 0.85, P4: 0.85 });
+      const { applyStoredSettings } = await import('../../src/admin/index.js');
+      expect(applyStoredSettings(stack.runtime.envConfig, stack.db).governor.reserveFloors.bulk).toBe(0.85);
+      await put({ interactive: 0.1, job: 0.25, maintenance: 0.5 }); // the note in the report: back to the default
+      expect(gov().settings.reserveFloors).toMatchObject({ P3: 0.5, P4: 0.7 });
+      await put({ reset: true });
+    });
   });
 });
 

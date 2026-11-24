@@ -224,6 +224,10 @@ describe('the Snapshots page', () => {
     // The run in progress, with its schedule.
     const runs = screen.getByRole('table', { name: 'Runs' });
     expect(within(runs).getByText('300 of 1,500')).toBeInTheDocument();
+    // v3 F9 (ADR 0074): the running full snapshot's progress, pages done of the total, on the card.
+    expect(screen.getByTestId('full-progress')).toHaveTextContent(
+      'Full snapshot running: 300 of 1,500 pages (20%), at P4 (bulk)',
+    );
     expect(screen.getByText(/Daily at 00:30/)).toBeInTheDocument();
     // The retention: every full snapshot for 30 days, then one a week for 8 weeks.
     expect(

@@ -341,7 +341,7 @@ export class MaintenanceScheduler {
       scheduleText: describeSchedule(schedule),
       defaultSchedule: def.defaultSchedule,
       scheduleOverridden: s?.schedule != null,
-      priority: 'P3',
+      priority: def.budgetClass ?? 'P3',
       running: this.running.has(def.id) || this.inBackground.has(def.id) || this.waitingOne.has(def.id),
       runningProjectId: this.running.has(def.id) ? (this.runningTarget.get(def.id) ?? null) : null,
       ...((def.scope ?? 'bridge') === 'project' ? { projects: this.projectLines(def) } : {}),

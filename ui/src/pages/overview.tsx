@@ -279,8 +279,8 @@ export function OverviewPage() {
               ))}
             </div>
             <p className="muted small-text">
-              Waiting for budget: interactive {queues.P1} · jobs {queues.P2} · maintenance {queues.P3} ·
-              dashboard {queues.P0}
+              Waiting for budget: interactive {queues.P1} · jobs {queues.P2} · maintenance {queues.P3} · bulk{' '}
+              {queues.P4} · dashboard {queues.P0}
             </p>
           </>
         ) : (

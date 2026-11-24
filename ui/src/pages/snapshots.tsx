@@ -1102,6 +1102,15 @@ function Runs({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void })
   return (
     <section className="card" aria-labelledby="snap-runs-h">
       <h2 id="snap-runs-h">Runs and schedules</h2>
+      {runs
+        .filter((r) => r.kind === 'full' && r.state === 'running')
+        .map((r) => (
+          <p key={r.id} data-testid="full-progress">
+            Full snapshot running: <strong>{fmtInt(r.done)}</strong> of {fmtInt(r.total)} pages
+            {r.total > 0 ? ` (${Math.floor((r.done / r.total) * 100)}%)` : ''}, at P4 (bulk): it gives way to
+            agents’ work and to routine maintenance.
+          </p>
+        ))}
       <ul className="plain" aria-label="Snapshot jobs">
         {d.jobs.map((j) => (
           <li key={j.id}>

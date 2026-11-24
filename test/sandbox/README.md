@@ -519,6 +519,26 @@ mock: `test/sandbox-mock/f7-1-core.test.ts`, and `test/sandbox-mock/pack-governa
 governance itself; `copyBridgeState`'s report lists, in `governanceMissing`, each pack whose sources are in a project
 this runtime does not register, and `pack-governance.test.ts` fails a check that opts in to neither.
 
+## The bulk class P4 (v3 F9)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- bulk-f9` (`bulk-f9.ts`; ADR 0074).
+WRITES, then cleans up (about 15 writes and 100 reads, plus the asset library's listing). Setup: a throwaway root
+`lk-bridge bulk-f9 <time>` with 12 pages, made the AI REPOSITORY in the sandbox runtime's TEMPORARY database only, and
+its tree. Then a small full snapshot of that subtree (and the asset library, as every full snapshot takes it), with a
+change snapshot requested mid-way: at the third page, a rename of one of its pages as a P2 job. The two timelines are
+printed first, each with its start, finish, request count and classes:
+
+```
+full snapshot   started 02:40:36.584  finished 02:40:36.833  27 requests  classes P4
+change snapshot started 02:40:36.628  finished 02:40:36.679  4 requests  classes P1, P2
+```
+
+What to look for: B1 every request of the full snapshot's run at **P4**; B2 the write and its change snapshot at P1 or
+P2, **never P4**, finished **before** the full snapshot finished; B3 the full snapshot still finished, complete, with
+every page (13: the root and its 12). INCONCLUSIVE on B2 means the full snapshot ended before the write was made (a
+tiny library on a fast link): run it again. Clean-up: the root, with its subtree. On the mock:
+`test/sandbox-mock/bulk-f9.test.ts`.
+
 ## Every check on the mock, in the ordinary suite (CR-2026-11-R4)
 
 Each check's steps are an exported runner beside its thin `.test.ts` wrapper (the wrapper is the real run, unchanged in

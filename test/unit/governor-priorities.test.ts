@@ -117,7 +117,7 @@ describe('priority classes and fair share', () => {
     void env.call({ costs: WRITE, priority: 'P2' });
     void env.call({ costs: WRITE, priority: 'P2' });
     await env.clock.advance(0);
-    expect(env.governor.snapshot().queues).toEqual({ P0: 0, P1: 1, P2: 2, P3: 0 });
+    expect(env.governor.snapshot().queues).toEqual({ P0: 0, P1: 1, P2: 2, P3: 0, P4: 0 });
     await env.clock.advance(5000);
   });
 

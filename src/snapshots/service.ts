@@ -4,8 +4,8 @@
  * (rehearsal.ts) build on it.
  *
  * - **Full** (`full`): every page under the AI REPOSITORY (the root and the lifecycle indexes included) and the whole
- *   asset library, at P3 through the governor, giving way while agents' P1 or P2 work is queued (as the link sweep
- *   does). Each page done is recorded, so an interrupted run continues where it stopped (at start-up, or the next run);
+ *   asset library, at P4 (bulk, v3 F9, ADR 0074) through the governor: below routine maintenance (P3), giving way
+ *   while agents' P1 or P2 work is queued (as the link sweep does). Each page done is recorded, so an interrupted run continues where it stopped (at start-up, or the next run);
  *   the manifest is written only when the run completes. Refused, with a dashboard notice, when the disk would be left
  *   with less than the minimum free space.
  * - **Change**: after every write step a bridge job makes to a page (any tool, `lk_api_*` included), the page's changed
@@ -31,6 +31,9 @@ import {
   type WriteStepResult,
 } from '../jobs/index.js';
 import type { PriorityClass } from '../lk/governor/index.js';
+
+/** v3 F9 (ADR 0074): the class of a full snapshot's reads (and its image downloads): bulk. */
+export const FULL_SNAPSHOT_PRIORITY = 'P4' satisfies PriorityClass;
 import type { ProjectsRuntime } from '../projects/registry.js';
 import type { TreeNode } from '../tree/types.js';
 import type { SnapshotStoreSettings } from '../config/tools.js';
@@ -219,6 +222,8 @@ export class SnapshotService {
   private seq = 0;
   private changes: Promise<void> = Promise.resolve();
   private readonly running = new Set<string>();
+  /** v3 F9: projects whose full snapshot has finished and whose after-snapshot hooks are running now. */
+  private readonly afterFullRunning = new Set<string>();
   private detach: (() => void)[] = [];
   private started: Promise<void> | null = null;
 
@@ -325,7 +330,14 @@ export class SnapshotService {
   reader(
     projectId: string,
     priority: PriorityClass,
-    o: { readonly wait?: boolean; readonly signal?: AbortSignal } = {},
+    o: {
+      readonly wait?: boolean;
+      readonly signal?: AbortSignal;
+      /** v3 F9: the governor's fair-share lane (a full run's id, so bulk passes take turns). */
+      readonly lane?: string;
+      /** v3 F9 review: first claim within its class (a full run's reads go before the other bulk passes). */
+      readonly firstClaim?: boolean;
+    } = {},
   ): Reader {
     return async (op, params) => {
       for (;;) {
@@ -335,6 +347,8 @@ export class SnapshotService {
             priority,
             notFoundIsAnswer: true,
             signal: o.signal ?? this.stopper.signal,
+            ...(o.lane !== undefined ? { lane: o.lane } : {}),
+            ...(o.firstClaim === true ? { firstClaim: true } : {}),
           });
         } catch (e) {
           if (e instanceof LkOperationError && (e.lk.status === 404 || e.lkCode === 'NOT_FOUND'))
@@ -671,8 +685,14 @@ export class SnapshotService {
   /** Takes a run's pending pages one at a time (each recorded when done), then its library, then writes the manifest. */
   private async runPages(projectId: string, run: RunRow, _trigger: string): Promise<RunOutcome> {
     const resumed = run.done > 0;
-    const read = this.reader(projectId, 'P3');
-    const deps = this.captureDeps(projectId, 'P3');
+    // v3 F9 (ADR 0074): a full run reads every page and the whole library: bulk (P4), below routine maintenance, in
+    // its own fair-share lane. Each read is patient in the governor (a long wait is waited, never a refusal).
+    // First claim within P4 (the owner's review): when ready, it goes before the other bulk passes.
+    const read = this.reader(projectId, FULL_SNAPSHOT_PRIORITY, {
+      lane: `snapshot:${run.id}`,
+      firstClaim: true,
+    });
+    const deps = this.captureDeps(projectId, FULL_SNAPSHOT_PRIORITY);
     const abandoned = (): RunOutcome | null =>
       this.index.run(run.id)?.state === 'running'
         ? null
@@ -747,10 +767,13 @@ export class SnapshotService {
       await this.writeSnapshot(manifest);
       this.index.finishRun(run.id, 'succeeded', { snapshotId: manifest.id });
       if (run.kind === 'full' && this.o.afterFull) {
+        this.afterFullRunning.add(projectId);
         try {
           await this.o.afterFull(projectId, manifest.id);
         } catch (e) {
           this.o.log?.warn({ err: e }, 'the off-site copy could not be requested after the full snapshot');
+        } finally {
+          this.afterFullRunning.delete(projectId);
         }
       }
       return {
@@ -772,7 +795,7 @@ export class SnapshotService {
   /**
    * v2 E2 (ADR 0044): every template of the project (`listTemplates`, then each template as a page: its settings, sidebar
    * and documents), so a full snapshot lets the audits compare a page's sidebar and tabs with its template's. Templates
-   * sit outside the AI REPOSITORY, so they are no page of the tree. About 2 to 3 reads a template at P3. A failure
+   * sit outside the AI REPOSITORY, so they are no page of the tree. About 2 to 3 reads a template at P4 (bulk). A failure
    * (other than a stop) is logged and leaves the manifest without templates; it never fails the snapshot.
    */
   private async captureTemplates(
@@ -826,6 +849,15 @@ export class SnapshotService {
     return n
       ? { id: n.id, parentId: n.parentId, rank: n.rank, name: n.rawName, kind: n.kind }
       : { id: pageId, parentId: null, rank: null, name: pageId, kind: 'unclassified' };
+  }
+
+  /**
+   * v3 F9 (ADR 0074, B5): whether a full snapshot of the project is under way: a run not yet finished (taking pages,
+   * or left by a restart to be continued), or its after-snapshot hooks (the off-site copy request, the audit's start).
+   * The night's scheduled block-id sweep and automation run wait while it is.
+   */
+  fullInProgress(projectId: string): boolean {
+    return this.afterFullRunning.has(projectId) || this.index.runningRun(projectId, 'full') !== null;
   }
 
   /** Stops a run for good (the owner's "Abandon" on the dashboard): it will not be continued. */

@@ -123,6 +123,12 @@ describe('the Settings page’s model, on the real bridge', () => {
     );
     // Reserve floors must rise (a pre-F8 setting, through its own action).
     await refused('RESERVE_FLOOR_JOB', { value: 0.9 }, /interactive <= job <= maintenance/);
+    // v3 F9 (ADR 0074): the bulk floor below the maintenance floor, refused with both named.
+    await refused(
+      'RESERVE_FLOOR_BULK',
+      { amount: 40, unit: '%' },
+      /The bulk floor \(40%\) is below the maintenance floor \(50%\)/,
+    );
     // Display units: MB → bytes, seconds → ms, % → fraction; another unit, or one that is not whole, is refused.
     const mb = await put(s, 'UPLOAD_MAX_BYTES', { amount: 20, unit: 'MB' });
     expect(mb.json.entry).toMatchObject({ value: 20 * 1024 * 1024, source: 'dashboard' });
@@ -342,6 +348,24 @@ describe('the six settings that existed before F8', () => {
         ).value,
       ),
     ).toEqual({ retentionDays: 40, maxBytes: 3 * 1024 ** 3 });
+    // v3 F9 (ADR 0074): the bulk floor, in the Governor and budgets group: unset it follows the maintenance floor
+    // (0.6 here, below its 70% default, so 70%); set, it applies at once and is stored with the others.
+    const gov = () => s.runtime.projects.clients()[0]!.client.governor.settings.reserveFloors;
+    expect(entry(await config(s), 'RESERVE_FLOOR_BULK')).toMatchObject({
+      group: 'governor',
+      applies: 'now',
+      value: 0.7,
+      source: 'default',
+      dashboard: null,
+    });
+    const b = await put(s, 'RESERVE_FLOOR_BULK', { amount: 85, unit: '%' });
+    expect(b.status, b.text).toBe(200);
+    expect(gov().P4).toBe(0.85);
+    expect(entry(await config(s), 'RESERVE_FLOOR_BULK')).toMatchObject({ value: 0.85, source: 'dashboard' });
+    expect(s.audit('budget.set_reserve_floors')[0]).toBeTruthy();
+    await reset(s, 'RESERVE_FLOOR_BULK');
+    expect(gov().P4).toBe(0.7);
+    expect(gov().P3).toBe(0.6); // the others kept
     // A reserve floor: applies at once (the governor), stored as the trio.
     await put(s, 'RESERVE_FLOOR_JOB', { amount: 40, unit: '%' });
     expect(s.runtime.projects.clients()[0]!.client.governor.settings.reserveFloors.P2).toBe(0.4);

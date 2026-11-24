@@ -169,6 +169,7 @@ describe('the registry agrees with the schemas', () => {
       RESERVE_FLOOR_INTERACTIVE: [0.1, 0, 1],
       RESERVE_FLOOR_JOB: [0.25, 0, 1],
       RESERVE_FLOOR_MAINTENANCE: [0.5, 0, 1],
+      RESERVE_FLOOR_BULK: [0.7, 0, 1], // v3 F9 (ADR 0074)
       WRITE_SPACING_MS: [500, 0, 60000],
       WRITE_SPACING_STRETCHED_MS: [1200, 0, 60000],
       POLICY_PROPOSAL_EXPIRY_DAYS: [14, 1, 365],

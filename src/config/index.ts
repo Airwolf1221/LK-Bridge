@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { DEFAULT_LK_BASE_URL } from '../lk/constants.js';
 import { TIER_IDS, type TierId } from '../lk/registry-types.js';
+import { DEFAULT_BULK_FLOOR, effectiveBulkFloor } from './floors.js';
 import { bool, fraction, intFrom } from './schema-helpers.js';
 
 /** Published LK limits (PLAN §1.2). `null` = no published number, handled reactively only. */
@@ -75,6 +76,9 @@ export const MAIN_ENV_SCHEMA = z.object({
   RESERVE_FLOOR_INTERACTIVE: fraction(0.1),
   RESERVE_FLOOR_JOB: fraction(0.25),
   RESERVE_FLOOR_MAINTENANCE: fraction(0.5),
+  // v3 F9 (ADR 0074): bulk (P4). Unset, it is the default raised to the maintenance floor if that is higher
+  // (`effectiveBulkFloor`); set, it must be at least the maintenance floor.
+  RESERVE_FLOOR_BULK: fraction(DEFAULT_BULK_FLOOR),
   WRITE_SPACING_MS: intFrom(500, 0, 60000),
   WRITE_SPACING_STRETCHED_MS: intFrom(1200, 0, 60000),
 
@@ -129,7 +133,11 @@ export interface Config {
       readonly interactive: number;
       readonly job: number;
       readonly maintenance: number;
+      /** v3 F9 (ADR 0074): the bulk (P4) floor in force (`effectiveBulkFloor`). */
+      readonly bulk: number;
     };
+    /** v3 F9: RESERVE_FLOOR_BULK as the environment sets it, or null when it is unset (the bulk floor is derived). */
+    readonly bulkFloorSet: number | null;
     readonly writeSpacingMs: number;
     readonly writeSpacingStretchedMs: number;
   };
@@ -338,8 +346,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maintenance: e.RESERVE_FLOOR_MAINTENANCE,
   };
   if (!(interactive <= job && job <= maintenance)) {
-    throw new ConfigError(['RESERVE_FLOOR_*: expected interactive <= job <= maintenance']);
+    throw new ConfigError(['RESERVE_FLOOR_*: expected interactive <= job <= maintenance <= bulk']);
   }
+  // v3 F9 (ADR 0074): an explicit bulk floor must keep the order; an unset one follows a raised maintenance floor.
+  const rawBulk = env.RESERVE_FLOOR_BULK;
+  const bulkFloorSet = rawBulk !== undefined && rawBulk.trim() !== '' ? e.RESERVE_FLOOR_BULK : null;
+  if (bulkFloorSet !== null && bulkFloorSet < maintenance) {
+    throw new ConfigError([
+      `RESERVE_FLOOR_BULK (${bulkFloorSet}) is below RESERVE_FLOOR_MAINTENANCE (${maintenance}): expected interactive <= job <= maintenance <= bulk`,
+    ]);
+  }
+  const bulk = effectiveBulkFloor(maintenance, bulkFloorSet);
   return {
     env: e.NODE_ENV,
     logLevel: e.LOG_LEVEL,
@@ -355,7 +372,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       tierLimits: { ...DEFAULT_TIER_LIMITS, ...e.LK_TIER_LIMITS },
     },
     governor: {
-      reserveFloors: { interactive, job, maintenance },
+      reserveFloors: { interactive, job, maintenance, bulk },
+      bulkFloorSet,
       writeSpacingMs: e.WRITE_SPACING_MS,
       writeSpacingStretchedMs: e.WRITE_SPACING_STRETCHED_MS,
     },

@@ -41,7 +41,7 @@ describe('overview', () => {
       'key-hour',
       'project-hour',
     ]);
-    expect(o.budget.queues).toEqual({ P0: 0, P1: 0, P2: 0, P3: 0 });
+    expect(o.budget.queues).toEqual({ P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 });
   });
 
   it('reads the key’s role from what LegendKeeper shows of the members (emails are visible to ADMIN keys only)', async () => {
@@ -345,8 +345,8 @@ describe('budgets', () => {
       ]),
     );
     expect(b.snapshot.tiers.upload).toMatchObject({ reactiveOnly: true, limit: null });
-    expect(b.snapshot.queues).toEqual({ P0: 0, P1: 0, P2: 0, P3: 0 });
-    expect(b.reserveFloors.current).toEqual({ interactive: 0.1, job: 0.25, maintenance: 0.5 });
+    expect(b.snapshot.queues).toEqual({ P0: 0, P1: 0, P2: 0, P3: 0, P4: 0 });
+    expect(b.reserveFloors.current).toEqual({ interactive: 0.1, job: 0.25, maintenance: 0.5, bulk: 0.7 });
     expect(b.projectDrift === null || typeof b.projectDrift.delta === 'number').toBe(true);
     expect(b.samples.count).toBeGreaterThanOrEqual(3);
     expect(b.samples.points.length).toBeGreaterThanOrEqual(1);

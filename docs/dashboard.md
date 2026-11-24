@@ -1192,6 +1192,16 @@ the card shows. Outside systemd (no `INVOCATION_ID` in the bridge's environment)
 Optionally, `RestartForceExitStatus=75` in the unit's `[Service]` section restarts it whatever `Restart=` says
 (docs/runbook-deploy.md); the button works without it.
 
+## Request Budgets: the bulk class (v3 F9)
+
+The **Waiting for budget** card has a fifth queue, **P4 · bulk passes**: the whole-repository passes (the nightly full
+snapshot, the repository tree's and the asset tree's full passes, the link sweep), which go after routine maintenance
+(P3) and only while no agent or job work is queued ([ADR 0074](adr/0074-v3-f9-the-bulk-class-p4.md)). The **Reserve
+floors** card has a fourth field, **Bulk (P4)** (`RESERVE_FLOOR_BULK`, default 70% kept free): it must be at least the
+maintenance floor; left unset it follows the default, or the maintenance floor when that is higher, and the card sends
+it only when it is changed. The Overview's budget line adds "bulk n"; the Snapshots page's **Runs and schedules** card
+shows a running full snapshot's pages done of the total.
+
 ## Request Budgets: learned operation limits (v2 E5.5)
 
 LegendKeeper's asset routes have rate limits of their own that its spec does not list (about 20 a minute for asset

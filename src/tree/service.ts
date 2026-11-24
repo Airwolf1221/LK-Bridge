@@ -2,13 +2,14 @@
  * The repository tree service (v2 A2, docs/tree.md, ADR 0025): the bridge's own model of each project's AI REPOSITORY.
  *
  * - **First build** (`prepareBuild` → `confirmBuild`): lists every resource (paged), shows an estimate, then reads each
- *   node under the root with getResource, at P3. Progress is persisted; a restart continues where it stopped.
+ *   node under the root with getResource, at P4 (bulk, v3 F9, ADR 0074; the listing at P3). Progress is persisted; a restart continues where it stopped.
  * - **After the bridge's own writes** (a write observer on the job engine): every operation that can change what the
  *   tree holds is followed, in the same job, by a getResource of the affected resource(s); the tree is updated from
  *   what LegendKeeper answers, never from the request. A re-read that fails leaves the node stale and is retried.
  * - **Structural sweep** (hourly maintenance job) and **daily consistency check** (nightly maintenance job): a listing
  *   reconciles structure; the sweep reads properties only of new and stale nodes, the check of every node. What they
- *   correct is written to the correction log.
+ *   correct is written to the correction log. v3 F9 (ADR 0074): the check's (and the build's) reads of every node are
+ *   bulk (P4); every listing, and the sweep's few reads, are routine (P3): `passPriority`.
  * - **Concurrency**: every change to a project's tree goes through one queue per project, and an observation never
  *   replaces one made later (see store.ts), so a sweep never undoes a newer after-write update.
  *
@@ -24,6 +25,7 @@ import {
   LkOperationError,
   type JobEngine,
   type OpParams,
+  type GovernorPriorityClass,
   type PriorityClass,
   type WriteStepInfo,
   type WriteStepResult,
@@ -51,6 +53,15 @@ import {
   type TreeMeta,
   type TreeStatus,
 } from './types.js';
+
+/**
+ * v3 F9 (ADR 0074): the class of a pass's requests. The listing (about one request per 100 resources: finding what
+ * changed) is routine (P3) for every pass, and so is the sweep's reading of new and stale nodes only; the build's and the
+ * nightly check's reading of every node is bulk (P4).
+ */
+export function passPriority(kind: PassKind, phase: 'list' | 'read'): 'P3' | 'P4' {
+  return phase === 'read' && (kind === 'build' || kind === 'check') ? 'P4' : 'P3';
+}
 
 export interface TreeLogger {
   info?(obj: Record<string, unknown>, msg: string): void;
@@ -614,7 +625,7 @@ export class TreeService {
             'listResources',
             { query },
             {
-              priority: 'P3',
+              priority: passPriority(pass.kind, 'list'),
               jobId: pass.id,
               signal,
               passId: pass.id,
@@ -654,11 +665,16 @@ export class TreeService {
     }
   }
 
-  /** The estimate shown before a build reads (bridge_estimate's arithmetic, at P3). */
+  /** The estimate shown before a build reads (bridge_estimate's arithmetic, at the build's class: P4). */
   private estimate(pass: PassView): BuildEstimate {
     const subtree = this.listedSubtreeSize(pass);
     const gov = this.o.projects.anyClient(pass.projectId)?.governor;
-    const e = gov?.estimate({ reads: subtree, writes: 0, createManyItems: 0, priority: 'P3' });
+    const e = gov?.estimate({
+      reads: subtree,
+      writes: 0,
+      createManyItems: 0,
+      priority: passPriority(pass.kind, 'read'),
+    });
     return {
       listed: pass.listed,
       subtree,
@@ -710,7 +726,7 @@ export class TreeService {
         'getResource',
         { path: { resourceId: pass.rootId } },
         {
-          priority: 'P3',
+          priority: passPriority(pass.kind, 'list'),
           jobId: pass.id,
           passId: pass.id,
           signal,
@@ -735,7 +751,7 @@ export class TreeService {
     this.store.clearListing(pass.id);
   }
 
-  /** Reads the properties of every node the pass has to read (getResource each, P3). Resumable. */
+  /** Reads the properties of every node the pass has to read (getResource each; `passPriority`). Resumable. */
   private async readPhase(pass: PassView, signal: AbortSignal): Promise<void> {
     const projectId = pass.projectId;
     const T = pass.snapshotAt ?? 0;
@@ -759,7 +775,7 @@ export class TreeService {
     let placeUnknown = false;
     try {
       const ro: ReadOptions = {
-        priority: 'P3',
+        priority: passPriority(pass.kind, 'read'),
         jobId: pass.id,
         signal,
         passId: pass.id,
@@ -1557,7 +1573,7 @@ export interface PassOutcome {
 }
 
 interface ReadOptions {
-  readonly priority: PriorityClass;
+  readonly priority: GovernorPriorityClass;
   readonly jobId?: string | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly passId?: string;

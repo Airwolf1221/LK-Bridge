@@ -70,6 +70,11 @@ export interface MaintenanceJobDef {
   readonly canEnable?: () => string | null;
   /** v3 F3.5: told after the owner has enabled the job (the block-id sweep acknowledges a standing stop). */
   readonly onEnabled?: () => void;
+  /**
+   * v3 F9 (ADR 0074): the class its LegendKeeper reads go at, as the Maintenance page shows it. `P4` (bulk) for a
+   * whole-repository or whole-library pass (its service sends them at P4); default `P3` (routine).
+   */
+  readonly budgetClass?: 'P3' | 'P4';
   readonly run?: (ctx: MaintenanceContext) => Promise<MaintenanceResult> | MaintenanceResult;
 }
 
@@ -103,7 +108,8 @@ export interface MaintenanceJobView {
   readonly scheduleText: string;
   readonly defaultSchedule: Schedule;
   readonly scheduleOverridden: boolean;
-  readonly priority: 'P3';
+  /** v3 F9 (ADR 0074): the class of the job's LegendKeeper reads: P4 (bulk) for a whole-repository pass, else P3. */
+  readonly priority: 'P3' | 'P4';
   readonly running: boolean;
   /**
    * v2 E5.1: the project a per-project job is running for now (its current target), or null (not running, waiting, or

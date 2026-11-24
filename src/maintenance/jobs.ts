@@ -10,7 +10,8 @@ import type { Db } from '../db/open.js';
 import type { ConnectionManager } from '../policy/connections.js';
 import type { ProposalService } from '../policy/proposals.js';
 import { assetJobs, type AssetMaintenance } from './asset-jobs.js';
-import type { MaintenanceJobDef, MaintenanceResult } from './types.js';
+import { afterNightChain, withWaitNote, type ChainBusy, type ChainWaitOptions } from './chain.js';
+import type { MaintenanceContext, MaintenanceJobDef, MaintenanceResult } from './types.js';
 
 /** v2 A2: what the tree jobs need from the repository tree (src/tree). */
 export interface TreeMaintenance {
@@ -33,6 +34,8 @@ export interface AuditMaintenance {
     projectId: string,
     trigger: 'manual' | 'schedule',
   ): Promise<{ readonly summary: string; readonly changed: boolean; readonly skipped?: boolean }>;
+  /** v3 F9 (ADR 0074): whether an audit of the project is running now (the night's chain). */
+  running?(projectId: string): boolean;
 }
 
 export interface LinkMaintenance {
@@ -44,6 +47,8 @@ export interface SnapshotMaintenance {
   full(projectId: string, trigger: string): Promise<MaintenanceResult>;
   prune(): Promise<{ removed: number; gc: { removed: number; freed: number; kept: number } }>;
   verify(): Promise<{ summary: string; missing: number; corrupt: number; badManifests: number }>;
+  /** v3 F9 (ADR 0074): whether a full snapshot of the project is under way (or its after-snapshot hooks are). */
+  fullInProgress?(projectId: string): boolean;
 }
 
 export interface BuiltinJobDeps {
@@ -76,6 +81,34 @@ export interface BuiltinJobDeps {
   readonly blockIds?: BlockIdMaintenance;
   /** v3 F5b (ADR 0068): the automation framework. Without it the job skips, saying why. */
   readonly automation?: AutomationMaintenance;
+  /**
+   * v3 F9 (ADR 0074, B5): what the block-id sweep and the automation run wait for when scheduled (the night's full
+   * snapshot and the audit after it), and the clock and stop signal of that wait. Without it they go at their time.
+   */
+  readonly chain?: { readonly busy: ChainBusy } & Omit<ChainWaitOptions, 'pollMs' | 'maxWaitMs'> &
+    Partial<Pick<ChainWaitOptions, 'pollMs' | 'maxWaitMs'>>;
+}
+
+/** v3 F9 (ADR 0074): the night chain of a project, from the snapshots and the audits. */
+export function nightChainBusy(snapshots?: SnapshotMaintenance, audits?: AuditMaintenance): ChainBusy {
+  return (projectId) =>
+    snapshots?.fullInProgress?.(projectId) === true
+      ? 'the night’s full snapshot was still running'
+      : audits?.running?.(projectId) === true
+        ? 'the audit after the full snapshot was still running'
+        : null;
+}
+
+/** Runs `run` once the project's night chain has finished (a scheduled run; a manual one goes at once). */
+async function afterChain(
+  chain: BuiltinJobDeps['chain'],
+  ctx: MaintenanceContext,
+  run: () => Promise<MaintenanceResult> | MaintenanceResult,
+): Promise<MaintenanceResult> {
+  if (!chain || !ctx.project) return run();
+  const w = await afterNightChain(chain.busy, ctx.project.id, ctx.trigger, chain);
+  if (!w.go) return w.result;
+  return withWaitNote(await run(), w.waitedMs, w.waitedFor);
 }
 
 /** v3 F5b (ADR 0068, H5): what the automation job needs from src/automation. */
@@ -90,7 +123,10 @@ export interface AutomationMaintenance {
  * Switched on by default: what runs is decided per code by the owner on the Automation page, where everything starts
  * Off.
  */
-function automationJob(a: AutomationMaintenance | undefined): MaintenanceJobDef {
+function automationJob(
+  a: AutomationMaintenance | undefined,
+  chain?: BuiltinJobDeps['chain'],
+): MaintenanceJobDef {
   return {
     id: 'automation-run',
     name: 'Automation',
@@ -107,9 +143,12 @@ function automationJob(a: AutomationMaintenance | undefined): MaintenanceJobDef 
     record: 'on-change',
     scope: 'project',
     background: true,
+    // v3 F9 (B5): a scheduled run waits for the night's full snapshot and its audit, whose findings it acts on.
     run: (ctx) =>
       a && ctx.project
-        ? a.run(ctx.project.id, ctx.trigger === 'manual' ? 'manual' : 'nightly')
+        ? afterChain(chain, ctx, () =>
+            a.run(ctx.project!.id, ctx.trigger === 'manual' ? 'manual' : 'nightly'),
+          )
         : { skipped: true, summary: 'Skipped: automation is not running.' },
   };
 }
@@ -129,7 +168,10 @@ export interface BlockIdMaintenance {
  * the checks that follow it, so its candidates come from that snapshot. It writes, so read-only mode, a writes pause and
  * draining skip it (the scheduler's rule).
  */
-function blockIdSweepJob(b: BlockIdMaintenance | undefined): MaintenanceJobDef {
+function blockIdSweepJob(
+  b: BlockIdMaintenance | undefined,
+  chain?: BuiltinJobDeps['chain'],
+): MaintenanceJobDef {
   return {
     id: 'assign-block-ids-sweep',
     name: 'Assign block IDs sweep',
@@ -149,9 +191,10 @@ function blockIdSweepJob(b: BlockIdMaintenance | undefined): MaintenanceJobDef {
     background: true,
     canEnable: () => (b ? b.canEnable() : 'The block-id sweep is not running on this bridge.'),
     onEnabled: () => b?.enabled(),
+    // v3 F9 (B5): a scheduled run waits for the night's full snapshot (its candidates come from it) and its audit.
     run: (ctx) =>
       b && ctx.project
-        ? b.run(ctx.project.id)
+        ? afterChain(chain, ctx, () => b.run(ctx.project!.id))
         : { skipped: true, summary: 'Skipped: the block-id sweep is not running.' },
   };
 }
@@ -324,6 +367,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
     },
     {
       id: 'tree-check',
+      budgetClass: 'P4', // v3 F9 (ADR 0074): a whole-repository pass
       name: 'Repository tree consistency check',
       description:
         'A full pass over each project’s repository tree at night: the structure, then every page’s properties (one request per page). Corrects the tree and records each correction (old and new values) in the correction log on the Repository Tree page.',
@@ -338,13 +382,14 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       run: (ctx) => (d.tree && ctx.project ? d.tree.check(ctx.project.id, ctx.trigger) : NO_TREE),
     },
     // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation (kept where the placeholder was).
-    blockIdSweepJob(d.blockIds),
-    automationJob(d.automation),
+    blockIdSweepJob(d.blockIds, d.chain),
+    automationJob(d.automation, d.chain),
     // v2 A4: the asset tree's refresh and check (kept after the placeholders so earlier positions do not move).
     ...assetJobs(d.assets),
     // v2 C2c (ADR 0035): the link index's sweep, for the related-pages report of archive_page and move_to_working.
     {
       id: 'link-sweep',
+      budgetClass: 'P4', // v3 F9 (ADR 0074): a whole-repository pass
       name: 'Link index sweep',
       description:
         'Reads every page of each project’s AI REPOSITORY (its sidebar, for link collections, and each page document, for ' +
@@ -414,6 +459,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
     // v2 E1a (ADR 0042): snapshots.
     {
       id: 'snapshot-full',
+      budgetClass: 'P4', // v3 F9 (ADR 0074): a whole-repository pass
       name: 'Full snapshot',
       description:
         'Every night, takes a full snapshot of each project (so edits made in the LegendKeeper app are caught within a day: ' +
@@ -421,7 +467,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
         'document: page blocks, map features, timeline lanes and events, board content) and the whole asset library with ' +
         'every image’s bytes, into the bridge’s snapshot store. Each piece is stored once, so unchanged pages and images take ' +
         'no extra space, and an image whose id and URL have not changed is recorded from the earlier snapshot without ' +
-        'being downloaded again (only new or replaced images download). About 2.2 requests per page at the lowest priority ' +
+        'being downloaded again (only new or replaced images download). About 2.2 requests per page at the lowest priority (P4, bulk: at most 30% of each tier by default, after routine maintenance) ' +
         '(downloads come from the asset host, which uses no request budget); it waits while agents’ work is queued, and a run that stops is continued, never restarted. ' +
         'Refused, with a message on the Snapshots page, when it would leave less free disk space than the minimum. Skips ' +
         'projects whose tree is not built.',

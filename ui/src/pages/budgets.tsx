@@ -31,6 +31,7 @@ const QUEUE_LABELS: Record<PriorityClass, string> = {
   P1: 'P1 · interactive (agents)',
   P2: 'P2 · jobs',
   P3: 'P3 · maintenance',
+  P4: 'P4 · bulk passes',
 };
 
 /**
@@ -164,7 +165,7 @@ function ProjectBudgets({ toggle }: { toggle: ReactNode }) {
       <section className="card" aria-labelledby="queue-h">
         <h2 id="queue-h">Waiting for budget</h2>
         <div className="row">
-          {(['P0', 'P1', 'P2', 'P3'] as const).map((c) => (
+          {(['P0', 'P1', 'P2', 'P3', 'P4'] as const).map((c) => (
             <div key={c} className="stat">
               <span className="stat-value">{snap.queues[c]}</span>
               <span className="stat-label">{QUEUE_LABELS[c]}</span>
@@ -293,7 +294,8 @@ function AllBudgets({ toggle }: { toggle: ReactNode }) {
                 </div>
                 <p className="muted small-text">
                   {fmtInt(perMinute)} write{perMinute === 1 ? '' : 's'} in the last minute · waiting for
-                  budget: interactive {snap.queues.P1} · jobs {snap.queues.P2} · maintenance {snap.queues.P3}
+                  budget: interactive {snap.queues.P1} · jobs {snap.queues.P2} · maintenance {snap.queues.P3}{' '}
+                  · bulk {snap.queues.P4}
                 </p>
                 <div className="stack">
                   {b.data!.tierOrder.map((t) =>
@@ -337,32 +339,36 @@ function AllBudgets({ toggle }: { toggle: ReactNode }) {
 function FloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => void }) {
   const cur = data.reserveFloors.current;
   const toPct = (f: number) => String(Math.round(f * 1000) / 10);
-  const [vals, setVals] = useState({
+  const fromCur = () => ({
     interactive: toPct(cur.interactive),
     job: toPct(cur.job),
     maintenance: toPct(cur.maintenance),
+    bulk: toPct(cur.bulk),
   });
-  useEffect(
-    () =>
-      setVals({
-        interactive: toPct(cur.interactive),
-        job: toPct(cur.job),
-        maintenance: toPct(cur.maintenance),
-      }),
-    [cur.interactive, cur.job, cur.maintenance],
-  );
+  const [vals, setVals] = useState(fromCur);
+  useEffect(() => setVals(fromCur()), [cur.interactive, cur.job, cur.maintenance, cur.bulk]);
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const n = {
     interactive: Number(vals.interactive) / 100,
     job: Number(vals.job) / 100,
     maintenance: Number(vals.maintenance) / 100,
+    bulk: Number(vals.bulk) / 100,
   };
+  // v3 F9 (ADR 0074): the bulk floor is sent only when it is set or the owner changes it; otherwise it keeps following
+  // the default (70%), raised to the maintenance floor when that is higher.
+  const sendBulk = data.reserveFloors.bulkExplicit || n.bulk !== cur.bulk;
   const valid =
     Object.values(n).every((v) => Number.isFinite(v) && v >= 0 && v <= 1) &&
     n.interactive <= n.job &&
-    n.job <= n.maintenance;
-  const changed = n.interactive !== cur.interactive || n.job !== cur.job || n.maintenance !== cur.maintenance;
+    n.job <= n.maintenance &&
+    (!sendBulk || n.maintenance <= n.bulk);
+  const changed =
+    n.interactive !== cur.interactive ||
+    n.job !== cur.job ||
+    n.maintenance !== cur.maintenance ||
+    n.bulk !== cur.bulk;
+  const body = sendBulk ? n : { interactive: n.interactive, job: n.job, maintenance: n.maintenance };
   const field = (key: keyof typeof vals, label: string, hint: string) => (
     <div>
       <label htmlFor={`floor-${key}`}>{label}</label>
@@ -385,17 +391,23 @@ function FloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => v
       <h2 id="floors-h">Reserve floors</h2>
       <p className="muted small-text">
         The share of each tier a class must leave untouched, so agents stay responsive while a big job runs.
-        Changes apply to the next request. Dashboard actions (P0) always have the whole budget.
+        Changes apply to the next request. Dashboard actions (P0) always have the whole budget. Bulk passes
+        (the nightly full snapshot, the tree and asset checks, the link sweep) also give way to routine
+        maintenance.
         {data.reserveFloors.stored ? ' Saved in the dashboard.' : ' Using the environment’s values.'}
+        {data.reserveFloors.bulkExplicit
+          ? ''
+          : ' The bulk floor follows its default (70%, or the maintenance floor if that is higher).'}
       </p>
       <div className="field-row">
         {field('interactive', 'Interactive (P1)', 'kept free')}
         {field('job', 'Jobs (P2)', 'kept free')}
         {field('maintenance', 'Maintenance (P3)', 'kept free')}
+        {field('bulk', 'Bulk (P4)', 'kept free')}
       </div>
       {!valid && (
         <p className="note note-bad" role="alert">
-          Each value must be between 0 and 100, and interactive ≤ jobs ≤ maintenance.
+          Each value must be between 0 and 100, and interactive ≤ jobs ≤ maintenance ≤ bulk.
         </p>
       )}
       <div className="row mt">
@@ -408,15 +420,16 @@ function FloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => v
               title: 'Change the reserve floors?',
               message: (
                 <p>
-                  Interactive {vals.interactive}%, jobs {vals.job}%, maintenance {vals.maintenance}%. Lower
-                  floors let jobs use more of the budget and leave agents less headroom.
+                  Interactive {vals.interactive}%, jobs {vals.job}%, maintenance {vals.maintenance}%, bulk{' '}
+                  {sendBulk ? `${vals.bulk}%` : 'following its default'}. Lower floors let jobs use more of
+                  the budget and leave agents less headroom.
                 </p>
               ),
               confirmLabel: 'Save floors',
             }).then((ok) => {
               if (ok)
                 void run(
-                  () => api.put('/budgets/reserve-floors', { ...n, confirm: true }),
+                  () => api.put('/budgets/reserve-floors', { ...body, confirm: true }),
                   'Reserve floors saved.',
                 ).then(onSaved);
             });
@@ -434,7 +447,8 @@ function FloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => v
                   <p>
                     Interactive {toPct(data.reserveFloors.environment.interactive)}%, jobs{' '}
                     {toPct(data.reserveFloors.environment.job)}%, maintenance{' '}
-                    {toPct(data.reserveFloors.environment.maintenance)}%.
+                    {toPct(data.reserveFloors.environment.maintenance)}%, bulk{' '}
+                    {toPct(data.reserveFloors.environment.bulk)}%.
                   </p>
                 ),
                 confirmLabel: 'Reset',

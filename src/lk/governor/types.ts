@@ -4,7 +4,8 @@ import type { OperationKind, TierId } from '../registry-types.js';
 import type { BudgetTierId, GroupTierId } from './groups.js';
 
 export type { PriorityClass } from '../../config/lk.js';
-export const PRIORITY_CLASSES: readonly PriorityClass[] = ['P0', 'P1', 'P2', 'P3'];
+/** Highest first. v3 F9 (ADR 0074): P4, bulk, after P3. */
+export const PRIORITY_CLASSES: readonly PriorityClass[] = ['P0', 'P1', 'P2', 'P3', 'P4'];
 
 /** The order LK consumes tiers in (PLAN §1.2), followed by the bridge-only tiers. */
 export const TIER_ORDER: readonly TierId[] = [
@@ -47,8 +48,15 @@ export interface ExecuteRequest<T> {
    * priority, as any queued call), instead of a `BudgetWaitError` once the wait passes `maxQueueWaitMs`. For the reads
    * of a job's check or read-back that holds no lock: parking there runs the whole step again, so a step needing more
    * reads than an hour's budget would never finish. A restart still ends the wait at once (`RestartWaitError`).
+   * v3 F9 (ADR 0074): every P4 (bulk) call is patient, whether or not this is set.
    */
   readonly patient?: boolean;
+  /**
+   * v3 F9 review (ADR 0074 decision 3): first claim within its class. While this call heads its lane and is ready, it
+   * goes before the class's other lanes (which take turns among themselves as before); the class's floor and the
+   * classes above it are unchanged. The full snapshot's reads (P4) set it, so it goes before the other bulk passes.
+   */
+  readonly firstClaim?: boolean;
   /**
    * Makes exactly one LK request through the governed fetch (the SDK client from `createLkClient`, or
    * `governor.fetch`). Must honour `signal`. May return the raw `Response`; non-2xx responses then throw.

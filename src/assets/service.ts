@@ -2,10 +2,11 @@
  * The asset tree service (v2 A4, docs/assets.md, ADR 0027): the bridge's own model of each project's asset library.
  *
  * - **First build** (`prepareBuild` → `confirmBuild`): lists the library's root level and stops to show the estimate;
- *   after the owner confirms it walks every folder (listAssets returns one folder level at a time, paged), at P3.
+ *   after the owner confirms it walks every folder (listAssets returns one folder level at a time, paged), at P4.
  *   Progress is persisted; a restart continues where it stopped.
  * - **Regular refresh** (default every 6 hours, can be switched off per project) and **nightly check**: the same walk,
- *   at P3, so it paces itself and gives way to agents' work. What they correct is written to the correction log.
+ *   at P4 (bulk, v3 F9, ADR 0074: a whole-library walk), so it paces itself and gives way to agents' work and to routine
+ *   maintenance (P3). What they correct is written to the correction log.
  * - **After the bridge's own asset writes** (a write observer on the job engine): createAssetFolder, createImageAsset,
  *   updateAsset and deleteAsset are each followed, in the same job, by a getAsset of what they changed; the model is
  *   updated from what LegendKeeper answers, never from the request.
@@ -23,6 +24,7 @@ import {
   LkOperationError,
   type JobEngine,
   type OpParams,
+  type GovernorPriorityClass,
   type PriorityClass,
   type WriteStepInfo,
   type WriteStepResult,
@@ -46,6 +48,11 @@ import {
   type AssetTreeStatus,
 } from './types.js';
 
+/**
+ * v3 F9 (ADR 0074): the class of a pass's requests. Every pass (the build, the regular refresh, the nightly check) walks
+ * every folder of the library: bulk (P4). The re-reads after the bridge's own asset writes stay routine (P3).
+ */
+export const ASSET_PASS_PRIORITY = 'P4' as const;
 export interface AssetLogger {
   info?(obj: Record<string, unknown>, msg: string): void;
   warn(obj: Record<string, unknown>, msg: string): void;
@@ -114,7 +121,7 @@ export class AssetError extends Error {
 }
 
 interface ReadOptions {
-  readonly priority: PriorityClass;
+  readonly priority: GovernorPriorityClass;
   readonly jobId?: string | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly passId?: string | undefined;
@@ -576,7 +583,7 @@ export class AssetService {
       ? Math.max(min, folders + Math.ceil(assets / this.pageSize) - pass.requests)
       : min;
     const gov = this.o.projects.anyClient(pass.projectId)?.governor;
-    const e = gov?.estimate({ reads: likely, writes: 0, createManyItems: 0, priority: 'P3' });
+    const e = gov?.estimate({ reads: likely, writes: 0, createManyItems: 0, priority: ASSET_PASS_PRIORITY });
     return {
       rootFolders: root.folders,
       rootAssets: root.assets,
@@ -628,7 +635,7 @@ export class AssetService {
           'listAssets',
           { query },
           {
-            priority: 'P3',
+            priority: ASSET_PASS_PRIORITY,
             jobId: pass.id,
             signal,
             passId: pass.id,
@@ -737,7 +744,7 @@ export class AssetService {
   private async verifyMissing(pass: AssetPassView, m: MissingChild, signal: AbortSignal): Promise<void> {
     const projectId = pass.projectId;
     const ro: ReadOptions = {
-      priority: 'P3',
+      priority: ASSET_PASS_PRIORITY,
       jobId: pass.id,
       signal,
       passId: pass.id,

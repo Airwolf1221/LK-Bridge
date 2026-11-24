@@ -3,8 +3,9 @@
  * mock: about 1,500 pages under the AI REPOSITORY and about 3,500 resources overall. Minute limits are raised so the
  * run takes seconds on the real clock (the floors' arithmetic at the published limits is rv4-budget-night.test.ts).
  * While it runs, an agent makes MCP calls (P1); each call's time is measured, and the snapshot must give way to them.
- * Then the maintenance floor: the project's hour tier is set so P3 has room for only part of the run; the snapshot stops
- * there (a budget wait), and continues where it stopped once the budget is back. This measures; it passes.
+ * Then the bulk floor (v3 F9, ADR 0074: the snapshot is P4): the project's hour tier is set so P4 has room for only part
+ * of the run; the snapshot stops there (waiting in the governor's queue: its reads are patient), and continues where it
+ * stopped once the budget is back. This measures; it passes.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -31,7 +32,8 @@ async function arkona(limits: Record<string, number> = BIG) {
   const world = await snapshotsWorld({
     bulk: 1440,
     // The governor's limits; the mock itself never refuses (its limits stay raised).
-    env: { LK_TIER_LIMITS: JSON.stringify(limits) },
+    // v3 F9: the bulk floor at its production default (the shared test stack runs bulk at 50%).
+    env: { LK_TIER_LIMITS: JSON.stringify(limits), RESERVE_FLOOR_BULK: '0.7' },
     limits: BIG,
     seed: (x) => {
       // Resources outside the AI REPOSITORY (the rest of Arkona's 3,500): never read by the snapshot.
@@ -100,32 +102,42 @@ it('Arkona-sized: the full snapshot’s cost, and agents’ MCP calls served whi
   expect(q(times, 0.95)).toBeLessThan(1000);
 });
 
-it('Arkona-sized: the snapshot stops at the maintenance floor and continues where it stopped', async () => {
-  // The hour tier (as the governor is configured) leaves P3, half of it, room for part of the run.
+it('Arkona-sized: the snapshot stops at the bulk floor and continues where it stopped', async () => {
+  // v3 F9 (ADR 0074): the full snapshot is bulk (P4). The hour tier (as the governor is configured) leaves P4, 30% of
+  // it, room for part of the run. Its reads are patient: the snapshot waits in the governor's queue at the floor (no
+  // budget wait reaches its reader), and goes on once the budget is back (here, the floors lowered, as the hour passing
+  // would).
   const HOUR = 4000;
+  const CAP = HOUR * 0.3;
   const limits = { ...BIG, 'key-hour': HOUR };
   w = await arkona(limits);
   const snaps = w.stack.runtime.snapshots;
   const gov = w.stack.runtime.projects.client(PROJECT)!.governor;
   const waits: number[] = [];
-  let usedAtStop = -1;
   (snaps.o as { sleep?: unknown }).sleep = async (ms: number) => {
-    if (ms >= 1000) {
-      // A budget wait (the agents' waits are 250 ms): where did it stop? Then let the hour pass, as it would.
-      waits.push(ms);
-      if (usedAtStop < 0) usedAtStop = gov.snapshot().tiers['key-hour'].used;
-      gov.setReserveFloors({ P1: 0, P2: 0, P3: 0 });
-    }
+    if (ms >= 1000) waits.push(ms); // a budget wait would land here
     await new Promise((r) => setTimeout(r, 5));
   };
-  const r = await snaps.full(PROJECT, 'manual');
-  expect(r.changed, r.summary).toBe(true);
-  const m = (await snaps.manifest(r.snapshotId!))!;
-  process.stdout.write(
-    `  floor: ${waits.length} budget wait(s) of ${waits.map((x) => Math.round(x / 1000)).join(', ')} s; key-hour used when it stopped ${usedAtStop} of ${HOUR} (P3 cap ${HOUR / 2}); ${m.counts.reads} reads in all, ${m.pages.length} pages\n`,
-  );
-  expect(waits.length).toBeGreaterThan(0);
-  expect(usedAtStop).toBeLessThanOrEqual(HOUR / 2);
-  expect(usedAtStop).toBeGreaterThan(HOUR / 2 - 20);
-  expect(m.pages.length).toBe(w.repo.subtree('airepo01').length);
+  let usedAtStop = -1;
+  const watch = setInterval(() => {
+    const s = gov.snapshot();
+    if (usedAtStop < 0 && s.queues.P4 > 0 && s.tiers['key-hour'].used >= CAP - 20) {
+      usedAtStop = s.tiers['key-hour'].used;
+      gov.setReserveFloors({ P1: 0, P2: 0, P3: 0, P4: 0 });
+    }
+  }, 5);
+  try {
+    const r = await snaps.full(PROJECT, 'manual');
+    expect(r.changed, r.summary).toBe(true);
+    const m = (await snaps.manifest(r.snapshotId!))!;
+    process.stdout.write(
+      `  floor: stopped in the queue at key-hour ${usedAtStop} of ${HOUR} (P4 cap ${CAP}); ${waits.length} budget waits reached the reader; ${m.counts.reads} reads in all, ${m.pages.length} pages\n`,
+    );
+    expect(waits).toEqual([]);
+    expect(usedAtStop).toBeLessThanOrEqual(CAP);
+    expect(usedAtStop).toBeGreaterThan(CAP - 20);
+    expect(m.pages.length).toBe(w.repo.subtree('airepo01').length);
+  } finally {
+    clearInterval(watch);
+  }
 });

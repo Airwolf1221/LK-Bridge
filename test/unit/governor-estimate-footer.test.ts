@@ -11,7 +11,7 @@ const NOW = Date.UTC(2026, 10, 7, 12, 0, 0);
 
 function snapshot(
   used: Partial<Record<TierId, number>> = {},
-  queues = { P0: 0, P1: 0, P2: 0, P3: 0 },
+  queues: { P0: number; P1: number; P2: number; P3: number; P4?: number } = { P0: 0, P1: 0, P2: 0, P3: 0 },
 ): BudgetSnapshot {
   const tiers = Object.fromEntries(
     TIER_IDS.map((tier) => {
@@ -36,7 +36,7 @@ function snapshot(
     atMs: NOW,
     tiers,
     operationTiers: [],
-    queues,
+    queues: { P4: 0, ...queues },
     inFlight: 0,
     writeSpacingMs: 500,
     nextWriteAtMs: null,

@@ -23,6 +23,7 @@ import {
   DEFAULT_CANONICAL_RULES,
   type CanonicalRule,
 } from '../facts/index.js';
+import { bulkOrderMessage } from '../config/floors.js';
 import { AdminHttpError } from './http.js';
 import {
   SETTING_KEYS,
@@ -31,7 +32,9 @@ import {
   readStoredSettings,
   reserveFloorsSchema,
   tierLimitsSchema,
+  withBulk,
   writeStoredSetting,
+  type FloorsInForce,
   type JournalRetention,
   type ReserveFloors,
   type TierLimitOverrides,
@@ -686,23 +689,39 @@ export function createAdminActions(d: AdminDeps) {
       controlsAudit('settings.read_only', before, after);
       return after;
     },
-    /** Reserve floors are bridge-wide: every project's governor gets the same (v2 A1). */
-    setReserveFloors(value: ReserveFloors | null): ReserveFloors {
-      const next =
-        value === null ? d.runtime.envConfig.governor.reserveFloors : reserveFloorsSchema.parse(value);
+    /**
+     * Reserve floors are bridge-wide: every project's governor gets the same (v2 A1). v3 F9 (ADR 0074): a value without
+     * `bulk` leaves the bulk floor to the environment (or the default, raised to the maintenance floor); an explicit
+     * bulk floor (saved here, or the environment's) below the maintenance floor is refused, naming both. Returns the
+     * four floors in force.
+     */
+    setReserveFloors(value: ReserveFloors | null): FloorsInForce {
+      const refuse = (message: string) => new AdminHttpError(400, 'INVALID_INPUT', message);
+      const env = d.runtime.envConfig.governor;
+      let next: FloorsInForce;
+      if (value === null) next = env.reserveFloors;
+      else {
+        const parsed = reserveFloorsSchema.safeParse(value);
+        if (!parsed.success) throw refuse(parsed.error.issues.map((i) => i.message).join('; '));
+        if (
+          parsed.data.bulk === undefined &&
+          env.bulkFloorSet !== null &&
+          env.bulkFloorSet < parsed.data.maintenance
+        )
+          throw refuse(
+            `${bulkOrderMessage(parsed.data.maintenance, env.bulkFloorSet)} The bulk floor is RESERVE_FLOOR_BULK in ` +
+              'the environment: give a bulk floor here too, or lower the maintenance floor.',
+          );
+        next = withBulk(parsed.data, env.bulkFloorSet);
+      }
       const governors = projects.clients().map((c) => c.client.governor);
       const before = governors[0]?.settings.reserveFloors ?? null;
       try {
         // Validated once (the same floors for all), then applied to each.
-        reserveFloorsSchema.parse(next);
         for (const g of governors)
-          g.setReserveFloors({ P1: next.interactive, P2: next.job, P3: next.maintenance });
+          g.setReserveFloors({ P1: next.interactive, P2: next.job, P3: next.maintenance, P4: next.bulk });
       } catch (e) {
-        throw new AdminHttpError(
-          400,
-          'INVALID_INPUT',
-          e instanceof Error ? e.message : 'Invalid reserve floors',
-        );
+        throw refuse(e instanceof Error ? e.message : 'Invalid reserve floors');
       }
       writeStoredSetting(store.db, SETTING_KEYS.reserveFloors, value, OWNER, store.now());
       audit('budget.set_reserve_floors', null, before, governors[0]?.settings.reserveFloors ?? next);

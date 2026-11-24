@@ -56,7 +56,7 @@ export interface MaintenanceJob {
   scheduleText: string;
   defaultSchedule: Schedule;
   scheduleOverridden: boolean;
-  priority: 'P3';
+  priority: 'P3' | 'P4';
   running: boolean;
   lastRun: MaintenanceRun | null;
   nextRunAt: number | null;
@@ -120,8 +120,10 @@ export function MaintenancePage() {
       </PageHeader>
       <p className="muted">
         Scheduled housekeeping. Every run is queued at priority <strong>P3</strong>, so it keeps to the
-        governor’s maintenance floor and waits while interactive or job work is queued. A job that writes to
-        LegendKeeper is skipped, and the skip recorded, while read-only mode is on or writes are paused.
+        governor’s maintenance floor and waits while interactive or job work is queued; the whole-repository
+        passes (the full snapshot, the tree and asset checks, the link sweep) at <strong>P4</strong> (bulk),
+        with their own floor, after routine maintenance. A job that writes to LegendKeeper is skipped, and the
+        skip recorded, while read-only mode is on or writes are paused.
       </p>
       {!schedulerEnabled && (
         <div className="note note-warn" role="status">
