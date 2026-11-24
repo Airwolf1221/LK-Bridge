@@ -4,7 +4,9 @@
   fake clock only; nothing in this session touched a live system (no LegendKeeper, no bridge connector, no dashboard,
   no sandbox run). The sandbox check is opt-in and the owner runs it. Where the brief was silent the choice is marked
   **chosen**.
-- Design: agreed with the owner in chat, 24 November 2026.
+- Design: agreed with the owner in chat, 24 November 2026. Reviewed by the owner: approved with one change, the full
+  snapshot's first claim within P4 (decision 3), made before merge. The owner confirmed the 05:30 job is the block-id
+  sweep (decision 6).
 - The problem: every maintenance request ran in one class, P3. The nightly full snapshot (00:30) and the passes that
   follow it read the whole repository; routine upkeep (change snapshots' follow-ups, re-reads after a bridge write,
   automation, block-id upkeep) shared the class, its 50% floor and its turn-taking, so a snapshot's thousands of reads
@@ -59,7 +61,13 @@ runs while it is derived.
   bulk up, so a trickle of routine work never starves a bulk pass.
 - The floors apply as before: P4 uses a tier only down to its own floor (against the tier's whole count), so bulk never
   eats the headroom between its 70% and P3's 50%.
-- Within P4, lanes take turns (the round-robin every class has).
+- **The full snapshot has first claim within P4** (the owner's review). Its reads carry `firstClaim`
+  (`ExecuteRequest.firstClaim`, through `internalRead` and the client); a lane whose head has it is looked at before
+  the class's other lanes (`claimOrder`), so when a full-snapshot request is ready it goes before the link sweep, the
+  tree check and the asset check. Those take turns among themselves (the round-robin every class has), and take what
+  the snapshot is not ready for (between its sequential reads). Bulk as a whole still stays within
+  `RESERVE_FLOOR_BULK`, and P3 still goes before all of P4: first claim orders lanes within a class, never across
+  classes or past a floor.
 
 ## Decision 4: every P3 caller classified
 
@@ -127,15 +135,20 @@ skip. The summary says how long it waited. (The brief's "05:30 consistency run" 
 - **A whole night** (the snapshot at 00:30, the link sweep at 01:15, the tree check at 02:30, the asset check at 02:50,
   6,800 bulk reads in all, routine P3 work every 5 minutes and light agent traffic of about 10% of key-hour): routine
   P3 work never waited (624 requests, 0 budget waits, 0 ms dispatch delay); bulk stayed within 85 a minute and 1,496 an
-  hour; the snapshot finished at **05:47**, the link sweep at 04:42, the tree check at 05:41, the asset check at 04:36.
-  The four bulk passes share one 30% share, and agents' traffic counts against it.
+  hour. With the snapshot's first claim: the snapshot finished at **03:48**, the asset check at 04:40, the link sweep
+  at 05:42, the tree check at 05:47 (before first claim, with all four taking turns: the snapshot at 05:47, the link
+  sweep 04:42, the tree check 05:41, the asset check 04:36). The four bulk passes share one 30% share, and agents'
+  traffic counts against it. The snapshot does not take the whole share: it reads one request at a time, and the units
+  that free between its reads go to the other passes.
 - For comparison, RV4's night (everything at P3, heavier agents, test/e4/rv4-budget-night.test.ts) had the snapshot
   finish after 225 minutes with routine work in the same queue.
 
 ## Consequences
 
-- Routine maintenance is no longer behind the night's bulk passes; the bulk passes take longer (about four to five hours
-  on an Arkona night with light agent use) and the downstream jobs now wait for them. To finish sooner, lower
+- Routine maintenance is no longer behind the night's bulk passes; the bulk passes take longer (the snapshot about
+  three and a quarter hours on an Arkona night with light agent use, the last pass about five and a quarter), and the
+  downstream jobs now wait for the snapshot and its audit (the block-id sweep and the automation run at 05:30 and 06:30
+  find it finished, on these figures). To finish sooner, lower
   `RESERVE_FLOOR_BULK` (0.6 gives bulk 40%); it must stay at least the maintenance floor.
 - The owner can **reset the P3 floor to its default (0.5)** once this is deployed: the bulk floor now keeps the night in
   check. While the P3 floor stays raised and no bulk floor is set, the bulk floor follows it up.
@@ -145,7 +158,9 @@ skip. The summary says how long it waited. (The brief's "05:30 consistency run" 
 ## Tests
 
 `test/unit/governor-bulk.test.ts` (P4 waits for P1/P2; P3 before P4; P4 when P3 is idle or not ready; the floor; no
-starvation under a P3 trickle; turn-taking; patience; queue depth and footer; `setReserveFloors` order), the floors at
+starvation under a P3 trickle; turn-taking; patience; queue depth and footer; `setReserveFloors` order; the
+snapshot's first claim: with all four bulk passes queued it finishes first, within the floor, with routine work still
+first, and without first claim it finishes last), the floors at
 load (`test/unit/config.test.ts`), set and save (`test/admin/actions.test.ts`, `test/admin/config-settings.test.ts`), the
 registry (`test/unit/config-registry.test.ts`), the callers (`test/f9/snapshot-classes`, `pass-classes`,
 `link-sweep-class`, `classification`), the chain (`test/f9/night-chain`), the night (`test/f9/night-p4`), the UI

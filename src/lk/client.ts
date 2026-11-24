@@ -41,6 +41,8 @@ export interface LkCallRequest<T> {
   readonly signal?: AbortSignal;
   /** CR-2026-11-R3 (R3-62): waits for the budget in its queue (`ExecuteRequest.patient`). */
   readonly patient?: boolean;
+  /** v3 F9: first claim within its class (`ExecuteRequest.firstClaim`). */
+  readonly firstClaim?: boolean;
   readonly verify?: (ctx: {
     readonly error: BridgeLkError;
     readonly signal: AbortSignal;
@@ -104,6 +106,7 @@ export function createLkClient(config: LkClientConfig): LkClient {
         ...(req.signal ? { signal: req.signal } : {}),
         ...(req.verify ? { verify: req.verify } : {}),
         ...(req.patient === true ? { patient: true } : {}),
+        ...(req.firstClaim === true ? { firstClaim: true } : {}),
         run: (signal) => req.run(sdk, signal),
       });
     },

@@ -86,7 +86,8 @@ counted at dispatch. Reserve floors: P0 0%, P1 10%, P2 25%, P3 50%, P4 70% (`RES
 P4 is bulk, the whole-repository passes, and its floor left unset follows a P3 floor raised above 70%). Classes are
 served in order; P3 and P4 run only while no P1/P2 call is queued, and P4 is scanned after P3, so a ready P3 call
 always goes first and a P4 call goes when no P3 call is ready (queued P3 work that is not ready never holds bulk up).
-Every P4 call is patient. Within a class, calls are FIFO per `jobId` and round-robin across job ids (calls without a
+Every P4 call is patient, and the full snapshot's reads have first claim within P4 (`firstClaim`: when ready they go
+before the other bulk lanes). Within a class, calls are FIFO per `jobId` and round-robin across job ids (calls without a
 `jobId` share one lane; `internalRead`'s `lane` names one for a bulk pass that has no job).
 
 **Pacing.** Writes are at least `WRITE_SPACING_MS` (500 ms) apart. When the trailing-minute write count

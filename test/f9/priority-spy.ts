@@ -10,6 +10,8 @@ export interface SeenClass {
   readonly opId: string;
   readonly priority: PriorityClass;
   readonly jobId: string | undefined;
+  /** v3 F9 review: first claim within its class (the full snapshot's reads). */
+  readonly firstClaim: boolean;
   readonly atMs: number;
 }
 
@@ -17,7 +19,13 @@ export function recordClasses(governor: Governor, now: () => number = Date.now) 
   const seen: SeenClass[] = [];
   const original = governor.execute.bind(governor);
   (governor as { execute: Governor['execute'] }).execute = <T>(req: ExecuteRequest<T>) => {
-    seen.push({ opId: req.opId, priority: req.priority, jobId: req.jobId, atMs: now() });
+    seen.push({
+      opId: req.opId,
+      priority: req.priority,
+      jobId: req.jobId,
+      firstClaim: req.firstClaim === true,
+      atMs: now(),
+    });
     return original(req);
   };
   return {

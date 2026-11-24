@@ -39,6 +39,8 @@ describe('the full snapshot asks for P4 (bulk)', () => {
     expect(reads.length).toBeGreaterThan(50);
     expect([...new Set(reads.map((s) => s.priority))]).toEqual(['P4']);
     expect([...new Set(reads.map((s) => s.jobId))]).toEqual([`snapshot:${r.runId!}`]);
+    // First claim within P4 (the owner's review): every read of the run has it.
+    expect(reads.every((s) => s.firstClaim)).toBe(true);
     // Its image downloads (the asset host, no request budget) are queued at the same class.
     expect(spy.classes('snapshot.image')).toEqual(
       spy.seen.some((s) => s.opId === 'snapshot.image') ? ['P4'] : [],

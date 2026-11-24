@@ -335,6 +335,8 @@ export class SnapshotService {
       readonly signal?: AbortSignal;
       /** v3 F9: the governor's fair-share lane (a full run's id, so bulk passes take turns). */
       readonly lane?: string;
+      /** v3 F9 review: first claim within its class (a full run's reads go before the other bulk passes). */
+      readonly firstClaim?: boolean;
     } = {},
   ): Reader {
     return async (op, params) => {
@@ -346,6 +348,7 @@ export class SnapshotService {
             notFoundIsAnswer: true,
             signal: o.signal ?? this.stopper.signal,
             ...(o.lane !== undefined ? { lane: o.lane } : {}),
+            ...(o.firstClaim === true ? { firstClaim: true } : {}),
           });
         } catch (e) {
           if (e instanceof LkOperationError && (e.lk.status === 404 || e.lkCode === 'NOT_FOUND'))
@@ -684,7 +687,11 @@ export class SnapshotService {
     const resumed = run.done > 0;
     // v3 F9 (ADR 0074): a full run reads every page and the whole library: bulk (P4), below routine maintenance, in
     // its own fair-share lane. Each read is patient in the governor (a long wait is waited, never a refusal).
-    const read = this.reader(projectId, FULL_SNAPSHOT_PRIORITY, { lane: `snapshot:${run.id}` });
+    // First claim within P4 (the owner's review): when ready, it goes before the other bulk passes.
+    const read = this.reader(projectId, FULL_SNAPSHOT_PRIORITY, {
+      lane: `snapshot:${run.id}`,
+      firstClaim: true,
+    });
     const deps = this.captureDeps(projectId, FULL_SNAPSHOT_PRIORITY);
     const abandoned = (): RunOutcome | null =>
       this.index.run(run.id)?.state === 'running'

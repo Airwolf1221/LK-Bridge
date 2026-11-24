@@ -912,6 +912,7 @@ export class JobEngine {
       const value = await callOp(this.clientOf(project), def, params, {
         priority: opts.priority,
         jobId: opts.jobId ?? opts.lane,
+        ...(opts.firstClaim === true ? { firstClaim: true } : {}),
         signal: opts.signal,
         requestIdPrefix: `lkb.t${randomBytes(6).toString('hex')}`,
         onError: (err) => {

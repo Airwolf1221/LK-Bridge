@@ -821,7 +821,9 @@ export class Governor {
    *   P4 call goes only when no P3 call is ready (one waiting for its tier or the write gap does not hold bulk up, so
    *   a trickle of routine work never starves a bulk pass);
    * - each class uses a tier only down to its own floor, so bulk never eats the headroom P3 relies on;
-   * - within a class, lanes (job ids) take turns: the lane just served goes to the back (`dispatch`);
+   * - within a class, a lane whose head has first claim (`firstClaim`: the full snapshot's reads) is looked at first,
+   *   so when ready it goes before the class's other lanes (`claimOrder`); the rest take turns: the lane just served
+   *   goes to the back (`dispatch`);
    * - a P4 call is always patient: it waits in its queue however long, never a `BudgetWaitError` from the queue.
    */
   private pumpOnce(): void {
@@ -833,7 +835,7 @@ export class Governor {
       const agentsQueued = this.queueDepth('P1') + this.queueDepth('P2') > 0;
       scan: for (const cls of PRIORITY_CLASSES) {
         if ((cls === 'P3' || cls === 'P4') && agentsQueued) continue;
-        for (const [key, lane] of this.lanes[cls]) {
+        for (const [key, lane] of this.claimOrder(cls)) {
           if (this.inFlight >= this.settings.maxInFlight) break scan;
           const head = lane[0];
           if (!head) continue;
@@ -862,6 +864,26 @@ export class Governor {
       if (!progressed) break;
     }
     this.armWake(earliest, now);
+  }
+
+  /**
+   * v3 F9 review (ADR 0074 decision 3): a class's lanes in the order they are looked at: those whose head has first
+   * claim, then the others, each group in its turn order. Nothing is reordered when no head has first claim.
+   */
+  private claimOrder(cls: PriorityClass): Iterable<[string, Pending[]]> {
+    const lanes = this.lanes[cls];
+    let any = false;
+    for (const lane of lanes.values())
+      if (lane[0]?.req.firstClaim === true) {
+        any = true;
+        break;
+      }
+    if (!any) return lanes;
+    const all = [...lanes];
+    return [
+      ...all.filter(([, l]) => l[0]?.req.firstClaim === true),
+      ...all.filter(([, l]) => l[0]?.req.firstClaim !== true),
+    ];
   }
 
   private armWake(at: number, now: number): void {

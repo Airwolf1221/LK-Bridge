@@ -840,4 +840,6 @@ export interface InternalReadOptions {
    * lanes): a bulk pass's own id, so two passes at P4 share it. Ignored when `jobId` is given (the job is the lane).
    */
   readonly lane?: string;
+  /** v3 F9 review: first claim within its class (`ExecuteRequest.firstClaim`): the full snapshot's reads. */
+  readonly firstClaim?: boolean;
 }

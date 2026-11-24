@@ -52,6 +52,12 @@ export interface ExecuteRequest<T> {
    */
   readonly patient?: boolean;
   /**
+   * v3 F9 review (ADR 0074 decision 3): first claim within its class. While this call heads its lane and is ready, it
+   * goes before the class's other lanes (which take turns among themselves as before); the class's floor and the
+   * classes above it are unchanged. The full snapshot's reads (P4) set it, so it goes before the other bulk passes.
+   */
+  readonly firstClaim?: boolean;
+  /**
    * Makes exactly one LK request through the governed fetch (the SDK client from `createLkClient`, or
    * `governor.fetch`). Must honour `signal`. May return the raw `Response`; non-2xx responses then throw.
    */

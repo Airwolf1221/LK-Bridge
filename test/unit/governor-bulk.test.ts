@@ -150,6 +150,57 @@ describe('P4 (bulk) scheduling', () => {
     expect(sentTags(env).slice(1)).toEqual(['A1', 'B1', 'A2', 'B2', 'A3', 'B3']);
   });
 
+  /** Four bulk passes, every request of each queued at once (the snapshot's last), at 30 a minute for P4. */
+  async function fourPasses(snapshotFirstClaim: boolean) {
+    const env = setup({ tierLimits, maxInFlight: 1000 });
+    const finished: string[] = [];
+    const routineAt: number[] = [];
+    const pass = (name: string, n: number, firstClaim = false) =>
+      Promise.all(
+        Array.from({ length: n }, () =>
+          env.governor.execute<Response>({
+            opId: 'getResource',
+            kind: 'read',
+            costs: READ,
+            priority: 'P4',
+            jobId: name,
+            ...(firstClaim ? { firstClaim: true } : {}),
+            run: (signal) => env.governor.fetch('http://lk.test/api/v3/x', { method: 'GET', signal }),
+          }),
+        ),
+      ).then(() => finished.push(name));
+    const passes = [
+      pass('link sweep', 40),
+      pass('tree check', 40),
+      pass('asset check', 40),
+      pass('snapshot', 40, snapshotFirstClaim),
+    ];
+    // Routine work arriving while bulk is at its floor still goes first, within its own floor.
+    await env.clock.advance(30_000);
+    const routine = env.call({ priority: 'P3' }).then(() => routineAt.push(env.clock.now()));
+    const askedAt = env.clock.now();
+    await env.clock.runUntil(() => finished.length === 4, 3600_000);
+    await Promise.all([...passes, routine]);
+    // Bulk as a whole stayed within its floor: at most 30 in any minute.
+    const at = env.seen.map((x) => x.atMs);
+    let most = 0;
+    for (let hi = 0, lo = 0; hi < at.length; hi++) {
+      while (at[lo]! <= at[hi]! - 60_000) lo++;
+      most = Math.max(most, hi - lo + 1);
+    }
+    return { finished, most, routineWait: routineAt[0]! - askedAt };
+  }
+
+  it('the full snapshot has first claim: with all four bulk passes queued, it finishes first', async () => {
+    const r = await fourPasses(true);
+    expect(r.finished[0]).toBe('snapshot');
+    expect(r.finished.slice(1).sort()).toEqual(['asset check', 'link sweep', 'tree check']);
+    expect(r.most).toBeLessThanOrEqual(31); // 30 bulk, plus the one routine call
+    expect(r.routineWait).toBe(0);
+    // Without first claim the lanes take turns and the snapshot, queued last, finishes last.
+    expect((await fourPasses(false)).finished.at(-1)).toBe('snapshot');
+  });
+
   it('is patient: a long wait is waited, where the same call at P3 surfaces BudgetWaitError', async () => {
     const env = setup({ tierLimits, maxInFlight: 1000 });
     for (let i = 0; i < 50; i++) await env.call({ priority: 'P3' }); // the window is at P3's floor, and P4's is past

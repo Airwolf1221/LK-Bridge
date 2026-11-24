@@ -30,6 +30,7 @@ describe('the link sweep', () => {
     expect(run).toMatchObject({ outcome: 'succeeded' });
     expect(spy.seen.length).toBeGreaterThan(5);
     expect(spy.classes()).toEqual(['P4']);
+    expect(spy.seen.some((s) => s.firstClaim)).toBe(false); // only the full snapshot has first claim
     expect([...new Set(spy.seen.map((s) => s.jobId))]).toEqual(['link-sweep']);
     spy.restore();
   });

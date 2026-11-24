@@ -42,6 +42,8 @@ export interface CallOptions {
   readonly signal?: AbortSignal | undefined;
   /** CR-2026-11-R3 (R3-62): waits for the budget in its queue (`ExecuteRequest.patient`). */
   readonly patient?: boolean | undefined;
+  /** v3 F9: first claim within its class (`ExecuteRequest.firstClaim`): the full snapshot's reads. */
+  readonly firstClaim?: boolean | undefined;
   readonly requestIdPrefix: string;
   readonly verify?:
     ((ctx: { error: BridgeLkError; signal: AbortSignal }) => Promise<VerifyResult<unknown>>) | undefined;
@@ -92,6 +94,7 @@ export async function callOp(
       ...(o.signal ? { signal: o.signal } : {}),
       ...(o.verify ? { verify: o.verify } : {}),
       ...(o.patient === true ? { patient: true } : {}),
+      ...(o.firstClaim === true ? { firstClaim: true } : {}),
       run: async (sdk, signal) => {
         stats.attempts++;
         const requestId = `${o.requestIdPrefix}.${stats.attempts}`.slice(0, 64);

@@ -46,13 +46,14 @@ function night() {
     },
   });
   let n = 0;
-  const call = (p: PriorityClass, write = false, jobId?: string) =>
+  const call = (p: PriorityClass, write = false, jobId?: string, firstClaim = false) =>
     governor.execute<Response>({
       opId: write ? 'updateResource' : 'getResource',
       kind: write ? 'write' : 'read',
       costs: write ? WRITE : READ,
       priority: p,
       ...(jobId ? { jobId } : {}),
+      ...(firstClaim ? { firstClaim: true } : {}),
       ...(write ? { idempotencyKey: `k${n++}` } : {}),
       run: (signal) =>
         governor.fetch(`http://lk.test/api/v3/x?p=${p}`, {
@@ -86,7 +87,8 @@ async function snapshotPass(env: ReturnType<typeof night>, reads: number) {
   let done = 0;
   for (let i = 0; i < reads; i++) {
     for (let k = 0; k < 240 && env.busy(); k++) await sleep(env.clock, 250);
-    await env.call('P4', false, 'snapshot'); // patient: never a BudgetWaitError from the queue
+    // Patient (never a BudgetWaitError from the queue), and first claim within P4, as the service sends them.
+    await env.call('P4', false, 'snapshot', true);
     done++;
   }
   return { done, finishedAt: env.clock.now() };
@@ -222,6 +224,8 @@ it('a night on Arkona with the bulk class: the passes at P4 beside routine P3 wo
   expect(hour.all).toBeLessThanOrEqual(6000);
   // Everything finished; routine work and agents went at once (bulk never sat in front of them).
   expect(s.done).toBe(3400);
+  // First claim within P4 (the owner's review): the snapshot finishes before every other bulk pass.
+  for (const x of b) expect(s.finishedAt, x.name).toBeLessThan(x.finishedAt);
   expect(p3Waits).toBe(0);
   expect(Math.max(...p3Delays)).toBeLessThan(1000);
   expect(Math.max(...p1Delays)).toBeLessThan(1000);

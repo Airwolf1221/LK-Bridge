@@ -41,6 +41,7 @@ describe('the repository tree (src/tree/service.ts)', () => {
     spy.reset();
     await r.settle(r.i.tree.check(P.id));
     expect(spy.classes('getResource')).toEqual(['P4']);
+    expect(spy.seen.some((s) => s.firstClaim)).toBe(false); // only the full snapshot has first claim
     expect(spy.classes('listResources')).toEqual(['P3']);
 
     spy.reset();
@@ -87,6 +88,7 @@ describe('the asset tree (src/assets/service.ts)', () => {
       await r.settle(r.i.assets[pass](P.id, 'manual'));
       expect(spy.seen.length).toBeGreaterThan(0);
       expect(spy.classes()).toEqual(['P4']);
+      expect(spy.seen.some((s) => s.firstClaim)).toBe(false);
     }
 
     spy.reset();
