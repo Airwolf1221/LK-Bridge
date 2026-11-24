@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased: sandbox harness fix, f7-1-core's governance (24 November 2026)
+
+Harness only (test/sandbox, test/sandbox-mock); no product code. Nothing run against a live system: the mock only.
+
+- **The bug** (the owner's live run of f7-1-core, 23 November 2026 23:51): C1 failed PACK_NOT_CURRENT. The Arkona pack
+  attached to `test` reads its six governance sources from project `arkona`; a sandbox runtime registers only the
+  sandbox project, so every source read "project arkona is not registered". The mock's owners world keeps its
+  governance in `test`, which hid it.
+- **The fix**: `ensureSandboxGovernance` (test/sandbox/governance.ts), an opt-in for any pack check: when a source's
+  project is not registered, one throwaway governance page in the sandbox project, the sources pointed at it and the
+  pack approved, in the TEMPORARY database only (what identity-f5c's I1 already did). The `arkona` project is never
+  registered, read or keyed, and the bridge's database is never written. f7-1-core opts in at C0 and deletes the page
+  at clean-up. `copyBridgeState` now reports `governanceMissing`.
+- **The guard**: `test/sandbox-mock/pack-governance.test.ts` runs f7-1-core with the governance in `arkona`, as on the
+  server (without the opt-in C0 fails naming the project, before any write; with it every item passes), and fails any
+  sandbox check that runs a tag-computing pack tool on a copy of the bridge's state without opting in.
+
 ## Unreleased: v3 F7.1, the Character Core rule (23 November 2026)
 
 [ADR 0072](adr/0072-v3-f7-1-the-character-core-rule.md). No migration, no new pack seed. Nothing was run against a live
