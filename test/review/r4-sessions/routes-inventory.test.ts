@@ -171,6 +171,8 @@ const ROUTES: Record<string, Route> = {
   'POST /api/admin/staging/:id/place': { kind: 'outside' },
   'POST /api/admin/staging/:id/discard': { kind: 'one-click' }, // a staged image never placed
   'POST /api/admin/staging/allow-delete': { kind: 'asks', body: { assetId: 'r4x', confirm: true } },
+  // ---- v3 F7c (ADR 0075): image archives
+  'POST /api/admin/archives/:id/discard': { kind: 'asks' },
   // ---- snapshots
   'POST /api/admin/snapshots/full': { kind: 'one-click' },
   'POST /api/admin/snapshots/runs/:id/abandon': { kind: 'outside' },

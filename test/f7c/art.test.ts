@@ -68,6 +68,17 @@ describe('Z9: list first, convert when used', () => {
     expect(r.body.limits.brake.setting).toBe('IMAGE_UPLOAD_RATE_PER_PRINCIPAL');
   });
 
+  it('an art call converts only the entries it uses', async () => {
+    const r = await uploadZip(w, w.call, await pngs(['only/u1.png', 'only/u2.png', 'only/u3.png']));
+    const a = await art({ images: [ref(r.body.archive_id, 'u2.png', 'Primary Reference - Only Used')] });
+    expect(a.body.status, a.text).toBe('proposal_captured');
+    await drain(w);
+    expect(status(r.body.archive_id, 'only/u2.png')).toBe('staged');
+    expect(status(r.body.archive_id, 'only/u1.png')).toBe('listed');
+    expect(status(r.body.archive_id, 'only/u3.png')).toBe('listed');
+    w.stack.runtime.policy.commands.reject('owner', String(a.body.proposalId), 'test');
+  });
+
   it('the same zip uploaded twice is the same archive and entries; nothing is staged twice', async () => {
     const bytes = await pngs(['x1.png', 'x2.png']);
     const a = await uploadZip(w, w.call, bytes, { stageAll: true });

@@ -115,6 +115,9 @@ describe('showLowLevelTools, per profile', () => {
         // v2 D3: the image pipeline
         'prepare_image_upload',
         'upload_image',
+        // v3 F7c (ADR 0075): image archives
+        'upload_image_archive',
+        'bridge_archive_status',
         // v2 E1a: snapshots and restores
         'list_snapshots',
         'snapshot_diff',
@@ -154,9 +157,9 @@ describe('showLowLevelTools, per profile', () => {
     // CR-2026-11-R4 (LD-01): the 12 consistency and narrative tools are not listed while the pack is not approved.
     // v3 F5c (ADR 0069): bridge_workstream, bridge_workstream_report, query_facts and arkona_identity_reconcile (+4).
     // v3 F7b (ADR 0071): arkona_get_art (+1).
-    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 1);
+    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 1 + 2);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 1 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(86 - 12 + 4 + 1 + 2 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

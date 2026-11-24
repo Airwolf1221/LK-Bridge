@@ -138,7 +138,7 @@ export function archiveTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Image archive status',
       access: 'read',
       description:
-        'Free (no LegendKeeper request). The rows of an image archive (`archive_id`): each entry’s status (listed, queued with its queuePosition, converting, held with heldBy rate|storage and expectedAt, staged with staged_id, refused or failed with the reason, duplicate with duplicateOf, discarded), and the three limits kept apart: holding (the staging capacity), processing (conversions at once) and the hourly brake; LegendKeeper’s own budgets are bridge_budget’s. Without archive_id: this connection’s recent archives. `retry`: entries that failed (by entry or path) are converted again; nothing already staged is redone. Held entries finish on their own: never upload them again.',
+        'Cost: free (no LegendKeeper request). The rows of an image archive (`archive_id`): each entry’s status (listed, queued with its queuePosition, converting, held with heldBy rate|storage and expectedAt, staged with staged_id, refused or failed with the reason, duplicate with duplicateOf, discarded), and the three limits kept apart: holding (the staging capacity), processing (conversions at once) and the hourly brake; LegendKeeper’s own budgets are bridge_budget’s. Without archive_id: this connection’s recent archives. `retry`: entries that failed (by entry or path) are converted again; nothing already staged is redone. Held entries finish on their own: never upload them again.',
       inputSchema: z.object({
         archive_id: z.string().min(1).max(64).optional(),
         retry: z

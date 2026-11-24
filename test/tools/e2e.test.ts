@@ -120,6 +120,9 @@ describe('the MCP surface with the official client', () => {
         // v2 D3: the image pipeline
         'prepare_image_upload',
         'upload_image',
+        // v3 F7c (ADR 0075): image archives
+        'upload_image_archive',
+        'bridge_archive_status',
         // v2 E1a: snapshots and restores
         'list_snapshots',
         'snapshot_diff',

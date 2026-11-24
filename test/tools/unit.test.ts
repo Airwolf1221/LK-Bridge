@@ -59,7 +59,7 @@ describe('tools configuration', () => {
       convertTimeoutMs: 60_000,
       convertConcurrency: 1,
       dataDir: null,
-      ratePerPrincipalPerHour: 30,
+      ratePerPrincipalPerHour: 1000,
       ratePerIpPerHour: 60,
       bodyTimeoutMs: 120_000,
       idleTimeoutMs: 15_000,
@@ -68,6 +68,9 @@ describe('tools configuration', () => {
       stagingMaxDays: 90,
       stagingMinFreeBytes: 5 * 1024 ** 3,
       keptBytesRetentionDays: 90,
+      archiveMaxEntries: 300,
+      archiveMaxUncompressedBytes: 2 * 1024 ** 3,
+      stagedMaxBytes: 5 * 1024 ** 3,
       assetHosts: ['assets.legendkeeper.com', 'assets2.legendkeeper.com'],
     });
     // v2 E5.2: the defaults apply only where LK_ASSET_HOSTS is unset; a set list is kept as it is.
