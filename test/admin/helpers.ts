@@ -53,6 +53,12 @@ export interface AdminStackOptions {
   readonly googleOAuth?: GoogleOAuthOptions;
   /** v2 A1: how soon a project whose key could not be checked is checked again. */
   readonly projectRetryMs?: { readonly first: number; readonly max: number };
+  /** v3 F8: variables only the process environment has (e.g. INVOCATION_ID), added to the Settings page's env. */
+  readonly processEnv?: Record<string, string>;
+  /** v3 F8: tool settings (default DEFAULT_TOOLS_SETTINGS). */
+  readonly toolsSettings?: typeof DEFAULT_TOOLS_SETTINGS;
+  /** v3 F8: how "Restart the bridge" exits (a fake in tests; default: never exits). */
+  readonly exit?: (code: number) => void;
 }
 
 export interface Reply {
@@ -165,9 +171,11 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
   const { app, services, runtime } = await createBridge({
     config,
     authConfig,
-    toolsSettings: DEFAULT_TOOLS_SETTINGS,
+    toolsSettings: o.toolsSettings ?? DEFAULT_TOOLS_SETTINGS,
     db,
     version: '0.0.0-test',
+    settingsEnv: { ...envConfig, ...o.processEnv },
+    exit: o.exit ?? (() => undefined),
     logLevel: o.captureLogs ? 'info' : 'silent',
     ...(o.captureLogs
       ? {

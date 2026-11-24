@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 import * as z from 'zod';
 import { type OutboundPortAllowlist, parseOutboundPortAllowlist } from '../auth/ports.js';
+import { intFrom } from './schema-helpers.js';
 
 /**
  * Configuration for the OAuth 2.1 authorization server, owner login and the MCP resource server
@@ -75,9 +76,6 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 /** Argon2id PHC string, e.g. `$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>`. */
 export const ARGON2ID_PHC = /^\$argon2id\$v=19\$m=\d+,t=\d+,p=\d+\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$/;
 
-const intFrom = (def: number, min: number, max: number) =>
-  z.coerce.number().int().min(min).max(max).default(def);
-
 const secret = (name: string) =>
   z
     .string({ error: `${name} is required (generate with: openssl rand -base64 48)` })
@@ -93,7 +91,8 @@ const csv = z
       .filter((s) => s.length > 0),
   );
 
-const authEnvSchema = z.object({
+/** The auth schema (`loadAuthConfig`). Exported for the settings registry (v3 F8, ADR 0073). */
+export const AUTH_ENV_SCHEMA = z.object({
   BRIDGE_PUBLIC_URL: z.string({ error: 'BRIDGE_PUBLIC_URL is required, e.g. https://lk.example.com' }),
   OWNER_USERNAME: z
     .string()
@@ -250,7 +249,7 @@ function normaliseOrigins(list: readonly string[], issues: string[]): string[] {
 
 /** Parses and validates the auth environment variables. Throws {@link AuthConfigError}. */
 export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
-  const parsed = authEnvSchema.safeParse(env);
+  const parsed = AUTH_ENV_SCHEMA.safeParse(env);
   if (!parsed.success) {
     throw new AuthConfigError(
       parsed.error.issues.map((i) => {

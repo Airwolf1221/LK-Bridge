@@ -309,6 +309,18 @@ sudo -u lkbridge sudo -n /usr/bin/systemctl restart caddy && echo "WRONG: this m
 If `visudo -cf` reports an error, remove the `.new` file (`sudo rm /etc/sudoers.d/lk-bridge.new`) and stop; a broken file
 in `/etc/sudoers.d` can lock you out of `sudo`.
 
+**Restart the bridge from the dashboard (v3 F8, ADR 0073).** The Settings page's button stops the bridge as SIGTERM
+does and exits with code 75; `Restart=on-failure` brings it back about 5 seconds later (`RestartSec=5`), so it works
+with the unit as shipped. Optionally, to have systemd restart on 75 whatever `Restart=` says, add this line with a
+drop-in (it leaves `deploy/lk-bridge.service` unchanged):
+
+```bash
+sudo systemctl edit lk-bridge     # then, between the comment lines: [Service] and RestartForceExitStatus=75
+```
+
+The journal then shows `status=75/TEMPFAIL` for that stop; the bridge's own line before it says "restart requested by
+the owner". Each restart counts towards `StartLimitBurst=5` in 300 seconds, like any other start.
+
 `lkbuild` gets **no** sudo rule. Check:
 
 ```bash

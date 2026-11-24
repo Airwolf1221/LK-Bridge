@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased: v3 F8, every setting on the dashboard (24 November 2026)
+
+[ADR 0073](adr/0073-v3-f8-every-setting-on-the-dashboard.md). No migration. Nothing was run against a live system: the
+mock only.
+
+- **The settings registry** (`src/config/registry.ts`): one entry per configuration key (112: 81 environment variables,
+  the contact email, 30 per-project settings), each with its group, label, description, display unit, how a change
+  applies, and whether it is secret or bootstrap; type, default and range read from the zod schemas (now exported and
+  written with the shared helpers of `src/config/schema-helpers.ts`; no default or range changed).
+- **Precedence** (the owner's): dashboard value → environment → default, applied where the configuration is loaded
+  (`src/config/effective.ts`, at start). Dashboard values are stored as `dash.cfg.<KEY>`; a value that no longer loads
+  is left out at start and named. The six settings that existed before keep their keys, routes and behaviour.
+- **At once**: 17 more settings apply without a restart (image limits and timeouts, staging and snapshot retention and
+  free-disk floors, the largest inline tool result), read on each use (`src/config/live.ts`).
+- **The Settings page**: a section per group, a search box, each setting's value, source, range, unit and apply mode;
+  Edit (validated, display units converted exactly) and Reset, both with the step-up; Recent changes with old and new
+  values; bootstrap settings read-only ("Change on the server: the env file, via env-sync"); secrets as set or not set,
+  linked to where they are managed; per-project settings linked to the Projects page.
+- **Restart the bridge**: "N settings pending a restart" and a button that drains and exits 75 for systemd to restart
+  it, logged as the owner's request and recorded when it is back; disabled outside systemd. Optional unit line
+  `RestartForceExitStatus=75` (runbook, section 8); `deploy/lk-bridge.service` unchanged.
+- **Kept complete**: `test/unit/config-registry.test.ts` (S5); `.env.example` gained the image and snapshot variables
+  it lacked; CLAUDE.md's new standing instruction.
+- **API**: `GET /api/admin/settings/config`, `PUT /api/admin/settings/config/:key`,
+  `POST /api/admin/settings/config/:key/reset`, `POST /api/admin/bridge/restart` (each change asks for the step-up).
+
 ## Unreleased: sandbox harness fix, f7-1-core's governance (24 November 2026)
 
 Harness only (test/sandbox, test/sandbox-mock); no product code. Nothing run against a live system: the mock only.

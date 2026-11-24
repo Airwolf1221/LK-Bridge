@@ -811,6 +811,59 @@ export interface SettingsView {
   writersMax: number;
 }
 
+// ------------------------------------------------------------------------------- every setting (v3 F8, ADR 0073)
+
+export interface ConfigUnit {
+  base: string;
+  display: string;
+  factor: number;
+}
+
+export interface ConfigEntry {
+  key: string;
+  group: string;
+  label: string;
+  description: string;
+  type: 'integer' | 'number' | 'boolean' | 'enum' | 'string' | 'url' | 'list' | 'json';
+  unit: ConfigUnit | null;
+  default: unknown;
+  min: number | null;
+  max: number | null;
+  enum: string[] | null;
+  integer: boolean;
+  applies: 'now' | 'next_start' | 'bootstrap';
+  secret: boolean;
+  editedOn: 'settings' | 'projects' | 'server';
+  editable: boolean;
+  bootstrapReason: string | null;
+  managedAt: { label: string; href: string } | null;
+  projectSetting: string | null;
+  scope: 'env' | 'dashboard' | 'project';
+  value?: unknown;
+  source?: 'default' | 'environment' | 'dashboard';
+  environment?: unknown;
+  dashboard?: unknown;
+  running?: unknown;
+  pendingRestart: boolean;
+  isSet?: boolean;
+  setIn?: 'environment' | 'secret store' | null;
+}
+
+export interface RestartStatus {
+  available: boolean;
+  reason: string | null;
+  last: { requestedAt: number; by: string; backAt: number | null } | null;
+  inProgress: boolean;
+}
+
+export interface ConfigView {
+  groups: { id: string; label: string }[];
+  entries: ConfigEntry[];
+  pendingRestart: number;
+  restart: RestartStatus;
+  dropped: string[];
+}
+
 export interface AuditEntry {
   id: number;
   at: number;

@@ -9,12 +9,10 @@ import * as z from 'zod';
 import { ConfigError } from './index.js';
 import { DEFAULT_LK_ASSET_HOSTS } from '../lk/constants.js';
 import { type OutboundPortAllowlist, parseOutboundPortAllowlist } from '../auth/ports.js';
+import { bool, intFrom, numberFrom } from './schema-helpers.js';
 
-const bool = (def: boolean) => z.stringbool().default(def);
-const intFrom = (def: number, min: number, max: number) =>
-  z.coerce.number().int().min(min).max(max).default(def);
-
-const toolsEnvSchema = z.object({
+/** The tool layer's schema (`loadToolsConfig`). Exported for the settings registry (v3 F8, ADR 0073). */
+export const TOOLS_ENV_SCHEMA = z.object({
   /** Largest image the bridge will upload (decoded bytes), from base64 or a URL. */
   UPLOAD_MAX_BYTES: intFrom(10 * 1024 * 1024, 1024, 100 * 1024 * 1024),
   /** `lk_upload_image` may fetch a public https URL. Set false to accept base64 only. */
@@ -57,7 +55,7 @@ const toolsEnvSchema = z.object({
   // the dashboard first warned (per project on the Projects page: imageStagingMaxDays); and the image store keeps this
   // much free disk (a new staging upload is refused below it).
   IMAGE_STAGING_MAX_DAYS: intFrom(90, 1, 3650),
-  IMAGE_STAGING_MIN_FREE_GB: z.coerce.number().min(0).max(100_000).default(5),
+  IMAGE_STAGING_MIN_FREE_GB: numberFrom(5, 0, 100_000),
   /** How long the bytes kept before an asset delete are kept. */
   ASSET_BYTES_RETENTION_DAYS: intFrom(90, 1, 3650),
   /**
@@ -74,7 +72,7 @@ const toolsEnvSchema = z.object({
   /** The snapshot store's directory (objects, manifests). Default: `snapshots/` next to the database. */
   SNAPSHOT_DIR: z.string().min(1).optional(),
   /** A full snapshot is refused rather than leave less than this much free space (GiB, as `df -h` shows it). */
-  SNAPSHOT_MIN_FREE_GB: z.coerce.number().min(0).max(100_000).default(10),
+  SNAPSHOT_MIN_FREE_GB: numberFrom(10, 0, 100_000),
   /** Days every full snapshot is kept (they are nightly). */
   SNAPSHOT_KEEP_FULL_DAYS: intFrom(30, 1, 3650),
   /** After those days, weeks one full snapshot a week is kept (the latest of each ISO week). */
@@ -196,7 +194,7 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
 
 /** Parses and validates the tool-layer environment variables. Never echoes values, only names. */
 export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSettings {
-  const parsed = toolsEnvSchema.safeParse(env);
+  const parsed = TOOLS_ENV_SCHEMA.safeParse(env);
   if (!parsed.success) {
     throw new ConfigError(parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`));
   }

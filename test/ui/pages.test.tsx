@@ -2,6 +2,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- parsed JSON replies and mock data in tests */
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { configView, settingsView } from './settings-fixtures';
 import {
   baseRoutes,
   connections,
@@ -743,44 +744,11 @@ describe('Journal', () => {
 });
 
 describe('Settings', () => {
-  const settings = () => ({
-    readOnly: { effective: true, override: null, environment: true, appliesAt: 'immediately' },
-    exposePerOpTools: {
-      running: false,
-      stored: null,
-      environment: false,
-      pendingRestart: false,
-      appliesAt: 'restart',
-    },
-    memberAdmin: {
-      running: false,
-      stored: true,
-      environment: false,
-      pendingRestart: true,
-      appliesAt: 'restart',
-    },
-    journalRetention: {
-      running: { retentionDays: 30, maxBytes: 2 * 1024 ** 3 },
-      stored: null,
-      environment: { retentionDays: 30, maxBytes: 2 * 1024 ** 3 },
-      pendingRestart: false,
-      appliesAt: 'restart',
-    },
-    tierLimits: {
-      running: { 'write-min': 120 },
-      stored: null,
-      environment: { 'write-min': 120 },
-      pendingRestart: false,
-      tiers: ['write-min'],
-      appliesAt: 'restart',
-    },
-    contactEmail: { stored: null, appliesAt: 'immediately' },
-    writersMax: 2,
-  });
-  it('shows every setting, the pending-restart ones, and recent audited changes', async () => {
+  it('shows every group, the pending-restart ones, and recent audited changes', async () => {
     installApi({
       ...baseRoutes(),
-      'GET /settings': { settings: settings() },
+      'GET /settings': { settings: settingsView() },
+      'GET /settings/config': configView(),
       'GET /audit': {
         entries: [
           {
@@ -797,12 +765,8 @@ describe('Settings', () => {
     });
     renderApp('/ui/settings');
     expect(await h1('Settings')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Read-only mode' })).toHaveTextContent('on now');
-    expect(screen.getByRole('region', { name: 'Per-operation tools' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Member administration' })).toHaveTextContent(
-      'pending restart',
-    );
-    expect(screen.getByRole('region', { name: 'Journal retention' })).toHaveTextContent('30 days');
+    expect(await screen.findByRole('region', { name: 'Read-only mode' })).toHaveTextContent('on now');
+    expect(screen.getByRole('region', { name: 'Images and uploads' })).toHaveTextContent('pending restart');
     expect(screen.getByRole('region', { name: 'Tier limit overrides' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Recent changes' })).toHaveTextContent('settings.read_only');
   });

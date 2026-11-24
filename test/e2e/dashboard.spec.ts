@@ -458,3 +458,59 @@ test('v3 F5c: the Workstreams page lists a workstream and opens its report', asy
   await expect(report).toHaveCount(0);
   expect(problems).toEqual([]);
 });
+
+test('v3 F8: every setting by group; an edit and a reset with the step-up; search; a bootstrap setting read-only', async ({
+  page,
+}) => {
+  const problems = watch(page);
+  await signIn(page, '/ui/settings');
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
+  const images = page.getByRole('region', { name: 'Images and uploads' });
+  await expect(images).toBeVisible();
+  const frames = images.getByRole('group', { name: 'Most frames in an animation' });
+  await expect(frames).toContainText('300 frames');
+  await expect(frames).toContainText('default');
+  await expect(frames).toContainText('Applies at once');
+  // Edit: confirmation, then the step-up; the value is saved here and applies at once.
+  await frames.getByRole('button', { name: 'Edit Most frames in an animation' }).click();
+  await frames.getByLabel('New value (frames)').fill('250');
+  await frames.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Save' }).click();
+  await stepUp(page);
+  await expect(frames).toContainText('250 frames', { timeout: 15_000 });
+  await expect(frames).toContainText('saved here');
+  // Reset: back to the default (the step-up holds for ten minutes on this session).
+  await frames.getByRole('button', { name: 'Reset Most frames in an animation' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Reset' }).click();
+  await expect(frames).toContainText('300 frames', { timeout: 15_000 });
+  await expect(frames.getByRole('button', { name: /Reset/ })).toHaveCount(0);
+  // A change that only applies at the next start shows as pending, and the restart card counts it.
+  const upload = images.getByRole('group', { name: 'Largest image upload' });
+  await upload.getByRole('button', { name: 'Edit Largest image upload' }).click();
+  await upload.getByLabel('New value (MB)').fill('12');
+  await upload.getByRole('button', { name: 'Save' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Save' }).click();
+  await expect(upload).toContainText('pending restart', { timeout: 15_000 });
+  await expect(page.getByRole('region', { name: 'Restart the bridge' })).toContainText(
+    '1 setting pending a restart',
+  );
+  await upload.getByRole('button', { name: 'Reset Largest image upload' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Reset' }).click();
+  await expect(upload).not.toContainText('pending restart', { timeout: 15_000 });
+  // Search over labels and keys.
+  await page.getByLabel('Search settings').fill('DB_PATH');
+  const db = page.getByRole('group', { name: 'Database file' });
+  await expect(db).toBeVisible();
+  await expect(frames).toBeHidden();
+  // A bootstrap setting: its value, read-only, changed on the server.
+  await expect(db).toContainText('Change on the server: the env file, via env-sync.');
+  await expect(db.getByRole('button')).toHaveCount(0);
+  // Outside systemd the restart button is disabled and says why.
+  const restart = page.getByRole('region', { name: 'Restart the bridge' });
+  await expect(restart.getByRole('button', { name: 'Restart the bridge' })).toBeDisabled();
+  await expect(restart).toContainText('not running under systemd');
+  await expect(page.getByRole('region', { name: 'Recent changes' })).toContainText('settings.config_reset');
+  const expected = stepUpRefusal('PUT', /\/api\/admin\/settings\/config\/IMAGE_MAX_FRAMES/);
+  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
+  expect(problems.filter((p) => !expected(p))).toEqual([]);
+});

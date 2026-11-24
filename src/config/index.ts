@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { DEFAULT_LK_BASE_URL } from '../lk/constants.js';
 import { TIER_IDS, type TierId } from '../lk/registry-types.js';
+import { bool, fraction, intFrom } from './schema-helpers.js';
 
 /** Published LK limits (PLAN §1.2). `null` = no published number, handled reactively only. */
 export const DEFAULT_TIER_LIMITS: Readonly<Record<TierId, number | null>> = {
@@ -28,11 +29,6 @@ export const TIER_WINDOW_SECONDS: Readonly<Record<TierId, number | null>> = {
   upload: null,
 };
 
-const bool = (def: boolean) => z.stringbool().default(def);
-const intFrom = (def: number, min: number, max: number) =>
-  z.coerce.number().int().min(min).max(max).default(def);
-const fraction = (def: number) => z.coerce.number().min(0).max(1).default(def);
-
 const tierOverrides = z
   .string()
   .optional()
@@ -55,7 +51,8 @@ const tierOverrides = z
     return result.data;
   });
 
-const envSchema = z.object({
+/** The main configuration schema (`loadConfig`). Exported for the settings registry (v3 F8, ADR 0073). */
+export const MAIN_ENV_SCHEMA = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
@@ -106,7 +103,7 @@ const envSchema = z.object({
 
 export interface Config {
   readonly env: 'development' | 'test' | 'production';
-  readonly logLevel: z.infer<typeof envSchema>['LOG_LEVEL'];
+  readonly logLevel: z.infer<typeof MAIN_ENV_SCHEMA>['LOG_LEVEL'];
   readonly server: {
     readonly host: string;
     readonly port: number;
@@ -167,6 +164,22 @@ export interface ProjectKeyConfig {
    */
   readonly keyVariable: string | null;
 }
+
+/**
+ * The variables `projectsFrom` reads besides the schema above (their names are not all fixed): v3 F8 (ADR 0073) keeps
+ * them in the settings registry too. `LK_PROJECT_<NAME>_API_KEY` stands for every project's key variable.
+ */
+export const DYNAMIC_ENV_KEYS = [
+  'LK_PROJECTS',
+  'LK_DEFAULT_PROJECT',
+  'LK_API_KEY',
+  'LK_PROJECT_ID',
+  'LK_PROJECT_NAME',
+  'LK_PROJECT_<NAME>_API_KEY',
+] as const;
+
+/** Matches every project key variable (`LK_PROJECT_<NAME>_API_KEY`). */
+export const PROJECT_KEY_VARIABLE_PATTERN = /^LK_PROJECT_[A-Z][A-Z0-9_]{0,31}_API_KEY$/;
 
 /** A project name: lowercase letter first, then lowercase letters, digits and underscores; 1 to 32 characters. */
 export const PROJECT_NAME_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
@@ -308,7 +321,7 @@ export class ConfigError extends Error {
 
 /** Parses and validates environment variables. Never logs or echoes values, only names. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = envSchema.safeParse(env);
+  const parsed = MAIN_ENV_SCHEMA.safeParse(env);
   const projects = projectsFrom(env);
   if (!parsed.success || projects.issues.length > 0) {
     throw new ConfigError([
