@@ -28,7 +28,14 @@ import { KEEP_KINDS } from '../../markdown/model.js';
 import type { Registry } from '../../registry/index.js';
 import { cleanPrefixes, key as nameKey } from '../../registry/names.js';
 import type { Packs } from '../service.js';
-import { PACK_ART_FILLER, PACK_CHECKS, PACK_CORE_FILLER, PACK_FILLER, PACK_RECORD_STORE } from './job.js';
+import {
+  PACK_ART_FILLER,
+  PACK_ART_GROUPS_FILLER,
+  PACK_CHECKS,
+  PACK_CORE_FILLER,
+  PACK_FILLER,
+  PACK_RECORD_STORE,
+} from './job.js';
 import { applyCoreText, type CoreTextInput } from './core.js';
 import { blockText, sectionsOf, textKey } from './text.js';
 import { mintClientId } from '../../jobs/ids.js';
@@ -98,6 +105,7 @@ export function registerPackEngine(
     engine.registerAsyncChecker(PACK_CHECKS.art, (ctx) => artLayoutCheck(ctx)),
     engine.registerFiller(PACK_FILLER, fillBody),
     engine.registerFiller(PACK_ART_FILLER, appendImages),
+    engine.registerFiller(PACK_ART_GROUPS_FILLER, appendImageGroups),
     engine.registerFiller(PACK_CORE_FILLER, coreTextFill),
     engine.registerRecordHandler((job, _step, params) => {
       const r = ((params.body ?? {}) as { record?: Obj }).record ?? {};
@@ -119,6 +127,7 @@ export function registerPackEngine(
         );
       }
       if (r.kind === 'art_outfit' && d.outfits) return recordOutfit(d, job, r);
+      if (r.kind === 'art_groups') return reportArtGroups(d, job, r);
       if (
         r.kind === 'taxonomy_rename' &&
         typeof r.entryId === 'string' &&
@@ -503,7 +512,12 @@ async function pageCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckRe
 
 /** The pack's filler (see the module comment). */
 export function fillBody(ctx: FillContext): FillResult {
-  const planned = ctx.planned as LkBlock[];
+  // v3 F7d (ADR 0077, A3, A4): a heading the groups call made (Wardrobe, an outfit's, Reference Images) goes when none
+  // of the images it was made for is left (all withdrawn, or their groups not approved).
+  const prune = ((ctx.input ?? {}) as { prune?: { id: string; needs: string[] }[] }).prune ?? [];
+  const present = new Set((ctx.planned as LkBlock[]).map((b) => (b as Obj).id as string));
+  const gone = new Set(prune.filter((x) => !x.needs.some((n) => present.has(n))).map((x) => x.id));
+  const planned = (ctx.planned as LkBlock[]).filter((b) => !gone.has((b as Obj).id as string));
   const current = ctx.current.blocks as LkBlock[];
   const keepKind = (b: unknown) => isObj(b) && typeof b.kind === 'string' && b.kind in KEEP_KINDS;
   // v3 F3b (ADR 0052): the template copy's own headings the plan does not fill are left out (design 1.4: placeholder
@@ -599,6 +613,50 @@ export function appendImages(ctx: FillContext): FillResult {
   if (b >= 0) current.splice(offset(b), 0, ...withHead);
   else current.push(...withHead);
   return { blocks: current, note: { madeSection: section, blocks: withHead.length } };
+}
+
+/**
+ * v3 F7d (ADR 0077, A4): a groups call's ONE write to an existing Art page. The planned blocks are every group's; each
+ * group (in the order given) takes its own blocks, by id, and places them as the Art filler does: the design pieces at
+ * the end of the images section (made before the boundary sections when missing), an outfit's under the heading naming
+ * it (else under the page's first "Wardrobe" heading, else in a new "Wardrobe" section). A group whose blocks were all
+ * left out (its images withdrawn, or not approved) adds nothing. Nothing else on the page is touched.
+ */
+export function appendImageGroups(ctx: FillContext): FillResult {
+  const input = (ctx.input ?? {}) as {
+    boundaries?: string[];
+    groups?: {
+      key: string;
+      section: string;
+      outfit?: { name: string; aliases?: string[] };
+      blockIds: string[];
+    }[];
+  };
+  const planned = ctx.planned as LkBlock[];
+  const byId = new Map(planned.map((b) => [(b as Obj).id as string, b]));
+  let blocks = [...(ctx.current.blocks as LkBlock[])];
+  const notes: Obj[] = [];
+  for (const g of input.groups ?? []) {
+    const mine = g.blockIds.map((id) => byId.get(id)).filter((b): b is LkBlock => b !== undefined);
+    // Only the group's heading left (every image of it withdrawn or not approved): nothing to add.
+    if (!mine.some((b) => (b as Obj).kind === 'image')) {
+      notes.push({ group: g.key, added: 0 });
+      continue;
+    }
+    const r = appendImages({
+      ...ctx,
+      planned: mine,
+      input: {
+        section: g.section,
+        boundaries: input.boundaries ?? [],
+        ...(g.outfit ? { outfit: g.outfit } : {}),
+      },
+      current: { version: ctx.current.version, blocks },
+    });
+    blocks = r.blocks as LkBlock[];
+    notes.push({ group: g.key, ...(r.note ?? {}) });
+  }
+  return { blocks, note: { groups: notes } };
 }
 
 /**
@@ -739,6 +797,61 @@ async function artLayoutCheck(ctx: RegisteredCheckContext): Promise<RegisteredCh
   };
 }
 
+/**
+ * v3 F7d (ADR 0077, A4): what each group of a groups call placed and what it did not, from the job's own steps: an
+ * image placed (its asset), withdrawn (why: its upload failed, its archive entry was refused or discarded) or not
+ * approved (left out by the owner: still staged, for a later call); likewise each loose piece's move.
+ */
+function reportArtGroups(d: PackEngineDeps, job: JobView, r: Obj): Record<string, unknown> {
+  const valueOf = (n: unknown): Obj | null => {
+    if (typeof n !== 'number' || !d.stepValue) return null;
+    const v = d.stepValue(job.id, n);
+    return isObj(v) ? v : null;
+  };
+  const why = (v: Obj | null): string => {
+    const w = v && isObj(v.withdrawn) ? v.withdrawn : null;
+    return w && typeof w.reason === 'string' ? w.reason : 'withdrawn';
+  };
+  const groups = (Array.isArray(r.groups) ? (r.groups as Obj[]) : []).map((g) => {
+    const placed: Obj[] = [];
+    const notPlaced: Obj[] = [];
+    for (const im of Array.isArray(g.images) ? (g.images as Obj[]) : []) {
+      const name = str(im.name) ?? '';
+      if (typeof im.assetStep !== 'number') {
+        notPlaced.push({
+          name,
+          stagedId: im.stagedId,
+          why: 'not approved: its group was left out; the image stays staged for a later call',
+        });
+        continue;
+      }
+      const v = valueOf(im.assetStep);
+      if (v && typeof v.id === 'string' && !v.withdrawn) placed.push({ name, assetId: v.id });
+      else notPlaced.push({ name, stagedId: im.stagedId, why: v ? why(v) : 'not run' });
+    }
+    const moved: Obj[] = [];
+    const notMoved: Obj[] = [];
+    for (const m of Array.isArray(g.moves) ? (g.moves as Obj[]) : []) {
+      if (typeof m.moveStep !== 'number') {
+        notMoved.push({ name: m.name, assetId: m.assetId, why: 'not approved' });
+        continue;
+      }
+      const v = valueOf(m.moveStep);
+      if (v && !v.withdrawn) moved.push({ name: m.name, assetId: m.assetId });
+      else notMoved.push({ name: m.name, assetId: m.assetId, why: v ? why(v) : 'not run' });
+    }
+    return {
+      group: g.label,
+      key: g.key,
+      placed,
+      ...(notPlaced.length ? { notPlaced } : {}),
+      ...(moved.length ? { moved } : {}),
+      ...(notMoved.length ? { notMoved } : {}),
+    };
+  });
+  return { recorded: 'art_groups', groups };
+}
+
 /** v3 F7 (ADR 0070, G3): the outfit record, from the ids the job's own steps returned. */
 function recordOutfit(d: PackEngineDeps, job: JobView, r: Obj): Record<string, unknown> {
   const idOf = (n: unknown): string | null => {
@@ -751,7 +864,14 @@ function recordOutfit(d: PackEngineDeps, job: JobView, r: Obj): Record<string, u
   const pieces = (Array.isArray(r.pieces) ? (r.pieces as Obj[]) : [])
     .map((p) => ({ assetId: idOf(p.assetStep), name: str(p.name) ?? '' }))
     .filter((p): p is { assetId: string; name: string } => p.assetId !== null);
+  // v3 F7d (ADR 0077, A4): a move withdrawn in the job (its folder could not be made, or it failed) is not counted.
+  const withdrawnStep = (n: unknown): boolean => {
+    if (typeof n !== 'number' || !d.stepValue) return false;
+    const v = d.stepValue(job.id, n) as { withdrawn?: unknown } | null | undefined;
+    return Boolean(v?.withdrawn);
+  };
   const moved = (Array.isArray(r.moved) ? (r.moved as Obj[]) : [])
+    .filter((p) => !withdrawnStep(p.moveStep))
     .map((p) => ({ assetId: str(p.assetId), name: str(p.name) ?? '' }))
     .filter((p): p is { assetId: string; name: string } => p.assetId !== null);
   const rec = d.outfits!.recordPlacement({

@@ -789,7 +789,146 @@ export async function proposeFix(
       return fixCoreWording(d, projectId, f);
     case 'reference_type':
       return fixReferenceType(d, projectId, f, c.propertiesName);
+    case 'identity_copy':
+      return fixIdentityCopy(d, projectId, f, c.propertiesName);
   }
+}
+
+// ============================================================================================ v3 F7d: identity copies
+
+/**
+ * v3 F7d (ADR 0077, A10): the `owner_identity_copy_drift` fix. Both pages are read LIVE: the identity page must still
+ * hold the values the finding saw, and the page its copies the finding saw (either changed: FIX_STALE, nothing
+ * proposed). Then ONE set_facts copies the identity page's values into the page's rows (never a row added), through the
+ * governed facts path: the rows checked inside the lock, the writes If-Match chained, journalled, read back. A proposal;
+ * with the automation's Apply (`direct`), a job every guard judges.
+ */
+async function fixIdentityCopy(
+  d: FixDeps,
+  projectId: string,
+  f: Finding,
+  propertiesName: string,
+): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const pageId = String(a.pageId);
+  const identityId = String(a.identityId);
+  const expected = a.expectedCurrent as Record<string, string>;
+  const expectedIdentity = a.expectedIdentity as Record<string, string>;
+  const kvOf = (sidebar: ReturnType<typeof sidebarFrom>, what: string) => {
+    const kv = sidebar.filter(
+      (p) => p.kind === 'keyValue' && p.title.trim().toLowerCase() === propertiesName.trim().toLowerCase(),
+    );
+    if (kv.length !== 1) throw stale(`${what} does not have exactly one “${propertiesName}” property now.`);
+    return kv[0]!;
+  };
+  const valueOf = (kv: ReturnType<typeof kvOf>, key: string, what: string): string => {
+    const rows = (kv.rows ?? []).filter((r) => r.key.trim().toLowerCase() === key.trim().toLowerCase());
+    if (rows.length !== 1) throw stale(`${what}: the row “${key}” is not there exactly once now.`);
+    return runsText(rows[0]!.content).trim();
+  };
+  // The identity page, live: the values to copy, as the finding saw them.
+  const idRes = (await read(d, projectId, 'getResource', { path: { resourceId: identityId } })) as
+    Obj | undefined;
+  if (!isObj(idRes)) throw stale(`The identity page ${identityId} is gone.`);
+  const idKv = kvOf(
+    sidebarFrom(await read(d, projectId, 'listProperties', { path: { resourceId: identityId } })),
+    String(idRes.name),
+  );
+  const copy: Record<string, string> = {};
+  for (const [key, v] of Object.entries(expectedIdentity)) {
+    const live = valueOf(idKv, key, String(idRes.name));
+    if (live !== v.trim())
+      throw stale(
+        `${String(idRes.name)}: “${key}” is now “${live}”, not “${v}” (the identity page changed since the audit).`,
+        {
+          found: live,
+        },
+      );
+    copy[key] = live;
+  }
+  // The page, live: its rows as the finding saw them.
+  const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+  if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+  const path = { resourceId: pageId };
+  const body = await read(d, projectId, 'listProperties', { path });
+  const sidebar = sidebarFrom(body);
+  const kv = kvOf(sidebar, String(res.name));
+  for (const [key, v] of Object.entries(expected)) {
+    const live = valueOf(kv, key, String(res.name));
+    if (live !== v.trim())
+      throw stale(
+        `${String(res.name)}: “${key}” is now “${live}”, not “${v}” (the page changed since the audit).`,
+        {
+          found: live,
+        },
+      );
+  }
+  const name = String(res.name);
+  let plan;
+  try {
+    plan = planFacts({
+      resourceId: pageId,
+      sidebar,
+      propertyTitle: kv.title,
+      facts: Object.entries(copy).map(([key, value]) => ({ key, value: rowTextRuns(value) })),
+      links: [],
+      templateKeys: null,
+    });
+  } catch (e) {
+    if (e instanceof FactsPlanError) throw new AuditError(e.code, e.message, e.details);
+    throw e;
+  }
+  if (plan.empty)
+    return { status: 'nothing_to_do', message: `${name} already holds the identity page's values.` };
+  const job = expandFacts(plan, { id: pageId, name }, sidebar, { facts: copy, links: {} });
+  const operation = {
+    ...job.operation,
+    fromAudit: f.code,
+    identityPage: { id: identityId, name: String(idRes.name) },
+    copied: copy,
+  };
+  const keys = Object.keys(copy);
+  const title = `${name}: ${keys.join(', ')} copied from ${String(idRes.name)}`;
+  if (d.direct !== true)
+    return propose(d, projectId, {
+      steps: job.steps,
+      title,
+      holdLock: { resourceId: pageId },
+      operation,
+      page: { id: pageId, name },
+      pageParts: ['sidebar', ...keys.map((k) => `${k}: copied`)],
+      prefetched: [{ op: 'listProperties', path, body }],
+      fix: 'identity_copy',
+    });
+  const r = await d.engine.submit({
+    kind: 'batch_ops',
+    project: projectId,
+    steps: job.steps,
+    onError: 'stop',
+    priority: 'P1',
+    origin: d.origin ?? ORIGIN,
+    title: title.slice(0, 300),
+    holdLock: { resourceId: pageId },
+    internal: true,
+    proposal: {
+      operation,
+      operations: [
+        {
+          ...operation,
+          page: { id: pageId, name },
+          pageParts: ['sidebar', ...keys.map((k) => `${k}: copied`)],
+          summaryLabel: title,
+        },
+      ],
+      summary: title,
+      prefetched: [{ op: 'listProperties', path, body }],
+    },
+  });
+  if (typeof r.proposalId === 'string')
+    return { status: 'proposal_captured', proposalId: r.proposalId, summary: title, fix: 'identity_copy' };
+  if (typeof r.jobId === 'string')
+    return { status: 'job_submitted', jobId: r.jobId, summary: title, fix: 'identity_copy' };
+  throw new AuditError('NOT_PROPOSED', 'The fix was neither proposed nor submitted; nothing was done.');
 }
 
 // ============================================================================================ v3 F6a: Reference Type

@@ -644,6 +644,21 @@ export class StepExecutor {
     }
   }
 
+  /** v3 F7d (ADR 0077, A4): the keys withdrawn before `beforeStep` (`withdrawAs`, and archive entries' staged ids). */
+  private withdrawnInJob(jobId: string, beforeStep: number): Set<string> {
+    const out = new Set<string>();
+    for (const s of this.d.repo.steps(jobId)) {
+      if (s.stepNo >= beforeStep) break;
+      if (s.status !== 'succeeded') continue;
+      const w = (s.resultSummary as { withdrawn?: unknown } | null)?.withdrawn as
+        { keys?: unknown; stagedId?: unknown } | undefined;
+      if (!w || typeof w !== 'object') continue;
+      if (Array.isArray(w.keys)) for (const k of w.keys) if (typeof k === 'string') out.add(k);
+      if (typeof w.stagedId === 'string') out.add(w.stagedId);
+    }
+    return out;
+  }
+
   /**
    * v3 F3d amendment (ADR 0058, A): a shared bridge step without what belongs only to items skipped earlier in the job
    * (changed meanwhile): a check's or read-back's parts, a Last Major Revision step's evidence. Never stored.
@@ -1430,6 +1445,9 @@ export class StepExecutor {
           // v2 D3 (ADR 0041): an asset read back with getAsset: its folder (or the folder an earlier step of the job
           // created), hidden flag and name.
           let assetId = t.assetId;
+          // v3 F7d (ADR 0077, A4): a move (or image) withdrawn earlier in the job has nothing of its own to read back.
+          if (t.withdrawnWith && t.withdrawnWith.some((k) => this.withdrawnInJob(job.id, step.stepNo).has(k)))
+            continue;
           if (t.assetFrom) {
             const src = this.d.repo.step(job.id, t.assetFrom.step);
             const made = src

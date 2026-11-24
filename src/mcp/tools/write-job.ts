@@ -220,11 +220,15 @@ export function describeJob(
     const res = (view.result ?? {}) as { verified?: unknown; verification?: Record<string, unknown> };
     const verified = typeof res.verified === 'boolean' ? res.verified : null;
     const ver = res.verification ?? {};
+    const art = (view.result ?? {}) as { artGroups?: unknown; withdrawn?: unknown };
     const body = {
       ...head,
       status: typeof writtenStatus === 'string' ? writtenStatus : 'written',
       verified,
       jobId: view.id,
+      // v3 F7d (ADR 0077, A4): an art set's per-group report, and what was withdrawn with why.
+      ...(Array.isArray(art.artGroups) ? { artGroups: art.artGroups } : {}),
+      ...(Array.isArray(art.withdrawn) && art.withdrawn.length > 0 ? { withdrawn: art.withdrawn } : {}),
       ...(factsVersions(ver) ?? {}),
       ...(verified === false
         ? {

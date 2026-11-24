@@ -53,7 +53,7 @@ interface Run<I> {
 }
 
 /** One character by name, alias or id, or the refusal (none: CHARACTER_NOT_FOUND; several: CHARACTER_AMBIGUOUS). */
-function oneCharacter(
+export function oneCharacter(
   pd: ProjectDeps,
   env: PlanEnv,
   q: string,
@@ -91,7 +91,7 @@ function oneCharacter(
 }
 
 /** A character's index (its own `[INDEX] <name>` holding its identity page), or null. */
-function indexOf(env: PlanEnv, hit: CharacterHit): TreeNode | null {
+export function indexOf(env: PlanEnv, hit: CharacterHit): TreeNode | null {
   const node = env.ctx.tree.node(env.ctx.projectId, hit.identity.id).data;
   const parent = node?.parentId ? env.ctx.tree.node(env.ctx.projectId, node.parentId).data : null;
   const subject = hit.subject || subjectOf(hit.identity.displayName, null);
@@ -101,7 +101,7 @@ function indexOf(env: PlanEnv, hit: CharacterHit): TreeNode | null {
 }
 
 /** "Both names exactly as their indexes give them" (design section 2): the index's name, else the subject. */
-function nameOf(env: PlanEnv, hit: CharacterHit): string {
+export function nameOf(env: PlanEnv, hit: CharacterHit): string {
   return indexOf(env, hit)?.displayName ?? (hit.subject || subjectOf(hit.identity.displayName, null));
 }
 
@@ -356,19 +356,7 @@ export async function runArt(
   // 2. The character's Art page: extended when it has one, else made.
   const subject = nameOf(env, ch.hit);
   const index = indexOf(env, ch.hit);
-  const artName =
-    type.roles.find((r) => r.role === type.assets.role)?.name.replace('{Name}', subject) ?? null;
-  const artRef = type.roles.find((r) => r.role === type.assets.role)?.referenceType ?? null;
-  const art = index
-    ? (env.ctx.tree
-        .children(env.ctx.projectId, index.id)
-        .data.find(
-          (n) =>
-            n.kind !== 'index' &&
-            ((artName !== null && nameKey(n.displayName) === nameKey(artName)) ||
-              (artRef !== null && n.referenceType !== null && textKey(n.referenceType) === textKey(artRef))),
-        ) ?? null)
-    : null;
+  const art = artPageOf(env, index, subject);
   // 3. v3 F7 (ADR 0070, G2, G9): the character's folders read live, then where the images go.
   const placed = await placeArt(
     env,
@@ -458,7 +446,7 @@ export async function runArt(
  * live, and each line naming a moved piece by asset id or name is listed for the owner (it may state where the piece is):
  * never edited. One read per page document; none when nothing moves.
  */
-async function piecesNamedOnPages(
+export async function piecesNamedOnPages(
   env: PlanEnv,
   index: TreeNode | null,
   pieces: readonly { readonly id: string; readonly name: string }[],
@@ -486,6 +474,24 @@ async function piecesNamedOnPages(
     }
   }
   return { lines, unread };
+}
+
+/** The character's Art page under its index (by name or Reference Type), or null. */
+export function artPageOf(env: PlanEnv, index: TreeNode | null, subject: string): TreeNode | null {
+  const { type } = env;
+  const artName =
+    type.roles.find((r) => r.role === type.assets.role)?.name.replace('{Name}', subject) ?? null;
+  const artRef = type.roles.find((r) => r.role === type.assets.role)?.referenceType ?? null;
+  return index
+    ? (env.ctx.tree
+        .children(env.ctx.projectId, index.id)
+        .data.find(
+          (n) =>
+            n.kind !== 'index' &&
+            ((artName !== null && nameKey(n.displayName) === nameKey(artName)) ||
+              (artRef !== null && n.referenceType !== null && textKey(n.referenceType) === textKey(artRef))),
+        ) ?? null)
+    : null;
 }
 
 /** v3 F7: the images' placement as planImages takes it. */

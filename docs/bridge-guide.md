@@ -575,8 +575,8 @@ one, the tags in order, every template row, each page's place, each link and eac
   `{name} - {title}`), an optional `referenceType` (one is suggested) and at most one `specialistTag` (Biography,
   Personality, Relationship, Character Art, Visual Reference, Wardrobe, Magic or Equipment); `art`, with `images` (each a
   `staged_id` from `upload_image` with `stage: true` and no destination, a `label` `"{Visual Role} - {Descriptor}"` and its `interpretation`,
-  what the image establishes: design pieces, placed in the character's own folder; add outfit art afterwards with
-  `arkona_add_character_art` and `outfit`); and `relationship`, with
+  what the image establishes: design pieces, placed in the character's own folder; for a whole art set, outfits included,
+  use ONE `arkona_add_character_art` call with `groups` instead); and `relationship`, with
   `with` (the other character), an optional `label` and `host` (`"self"`, the default, or `"other"`). The relationship
   is added to both characters' Related Sources (a Working relationship
   is linked from a canon character only after promotion: the warning `PARTNER_LINK_DEFERRED` says to add it then).
@@ -817,30 +817,84 @@ Sources in the same proposal (a Working relationship is linked from a canon char
 (`RELATIONSHIP_EXISTS`, naming it: edit that page with `write_page`). For a relationship of a character you are making
 now, give a `relationship` page in its `arkona_create_character` package instead.
 
-**Art for an existing character: `arkona_add_character_art`.** ONE call, ONE target. Design pieces:
-`{ "character": "…", "images": [{ "staged_id": "…", "label": "Primary Reference - Character Portrait", "interpretation": "…" }] }`.
-An outfit's pieces: `{ "character": "…", "outfit": "Ceremonial Robes", "images": [{ "staged_id": "…", "label": "Outfit Reference - Front", "interpretation": "…" }] }`.
-`outfit` applies to every image of the call; without it they are design pieces. You never name a folder: the bridge
-reads the character's folders LIVE and decides. Design pieces go in the character's own folder
-(`Characters / <race path> / <name>`) as `<name> - <label>`. An outfit's pieces are named `<name> - <outfit> - <label>`:
-an outfit's only piece lies loose in `Wardrobe`; with two or more pieces the outfit has its folder `Wardrobe / <outfit>`,
-made when the second piece arrives, the loose piece moved into it in the same job; an outfit that has its folder takes
-new pieces there. Forms, Outfits and Details are retired: nothing makes them again (`LEGACY_ART_FOLDER`). The outfit is
-matched by its name or an alias the owner gave it (case and spacing ignored). A name CLOSE to an existing outfit's
-("Imperial Regalia" beside "Supreme Imperial Regalia") is refused with `OUTFIT_NEAR_MATCH`, which lists the candidates:
-call again with the exact name, or with `newOutfit: true` when it really is another outfit. Names are never given a file
-extension and are numbered when taken. On the character's Art page, design pieces go under "Reference Images"; an
-outfit's go under a heading naming it (wherever it is on the page), else a new one under the page's first heading
-holding "Wardrobe", else a new "Wardrobe" section; the Art page is made when it is missing, nothing else on it changed.
-Every image needs its `interpretation`, what it establishes (`BARE_IMAGE` otherwise). Up to 30 images a call. Sources:
-`staged_id` (staged with no destination), `upload_id` (from `prepare_image_upload`), or in ChatGPT the attached `file`
-for one image; an upload or file is staged first, even on a dry run, and its `staged_id` is in the answer. **Several
-images: use an archive** (a zip), below.
+**Art for an existing character: `arkona_add_character_art`. Do a character's whole art set in one call; don't wait
+for the Art page before adding outfits.** Give `groups`, one group per target, in the order they go on the Art page:
 
-**Many images: an archive (`upload_image_archive`).** In ChatGPT: attach the zip to `upload_image_archive` (as `file`);
-open the same zip in your own code tool to look at each image and write its interpretation; then call the art tool with
-images given as `{ "archive": { "id": "<archive_id>", "entry": "<entry>" }, "label": "…", "interpretation": "…" }`.
-Elsewhere: `prepare_image_upload` with the zip (`content_type` `application/zip`), run its script, then
+```json
+{
+  "character": "…",
+  "groups": [
+    {
+      "images": [
+        { "staged_id": "…", "label": "Primary Reference - Character Portrait", "interpretation": "…" }
+      ]
+    },
+    {
+      "outfit": "Ceremonial Robes",
+      "images": [{ "staged_id": "…", "label": "Outfit Reference - Front", "interpretation": "…" }]
+    },
+    {
+      "outfit": "Riding Leathers",
+      "images": [
+        {
+          "archive": { "id": "…", "entry": "Riding/front.png" },
+          "label": "Outfit Reference - Front",
+          "interpretation": "…"
+        }
+      ]
+    }
+  ],
+  "artPage": { "temporalScope": "…", "visualState": "…", "dependencies": ["…"], "related": ["…"] },
+  "dryRun": true
+}
+```
+
+A group without `outfit` (or with `null`) holds the design pieces; a group with `outfit` holds that outfit's pieces. The
+whole call is planned at once: the character's folders are read live once, each group is matched against the outfit
+record, and the call is ONE proposal the owner approves item by item: "Art page" (when the call makes it, with the
+Compact Reference's upgrade to a Core when the Core rule needs it), "Design pieces", and one item per outfit; an outfit
+needs the "Art page" item when the page is new. A group the owner leaves out is not placed: its images stay staged for a
+later call. **Any problem in any group refuses the whole call, every problem listed (`problems`): fix them all, then
+call again.** Groups naming the same outfit are merged (a note says so). At most `ART_CALL_MAX_GROUPS` groups (40) and
+`ART_CALL_MAX_IMAGES` images (120) a call. The dry run shows, per group, the folder decision, the asset names and the
+moves of loose pieces, the sidebar the page will get, and the totals (reads, writes, uploads).
+
+**The Art page's sidebar.** The bridge copies the identity fields from the character's Core (or Compact Reference),
+read live: Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture and Aliases, into
+EMPTY rows only (a different value already there is left alone and reported, `IDENTITY_COPY_DIFFERS`), and adds the
+identity page to Dependencies. `artPage` gives the rest: `scope`, `temporalScope`, `visualState`, `dependencies`,
+`related` (and a new page's `markdown` and `status`), used when the page is made and applied only to empty rows when it
+exists. Temporal Scope and Visual State / Period are the Art page's own (when its outfits are attested, for example):
+they are never copied from the Core; left out, they are listed as still to fill. A name in `dependencies` or `related`
+that resolves to no page refuses the call.
+
+**Where everything goes.** You never name a folder: the bridge decides. Design pieces go in the character's own folder
+(`Characters / <race path> / <name>`) as `<name> - <label>`. An outfit's pieces are named `<name> - <outfit> - <label>`:
+an outfit's only piece lies loose in `Wardrobe`; with two or more pieces (those recorded plus this call's) the outfit has
+its folder `Wardrobe / <outfit>`, made when needed, the loose piece moved into it in the same job; an outfit that has its
+folder takes new pieces there. Forms, Outfits and Details are retired: nothing makes them again (`LEGACY_ART_FOLDER`).
+The outfit is matched by its name or an alias the owner gave it (case and spacing ignored). A name CLOSE to an existing
+outfit's ("Imperial Regalia" beside "Supreme Imperial Regalia") is refused with `OUTFIT_NEAR_MATCH`, which lists the
+candidates: use the exact name, or `newOutfit: true` when it really is another outfit. Names are never given a file
+extension and are numbered when taken. On the Art page (ONE write), design pieces go under "Reference Images"; each
+outfit's under a heading naming it (wherever it is on the page), else a new one under the page's first heading holding
+"Wardrobe", else a new "Wardrobe" section. Every image needs its `interpretation`, what it establishes (`BARE_IMAGE`
+otherwise). Sources: `staged_id` (staged with no destination), `upload_id` (from `prepare_image_upload`) or `archive`
+`{ id, entry }`; an upload is staged first, even on a dry run, and its `staged_id` is in the answer.
+
+**When it runs.** One job: the page and the upgrade, the folders and moves, the uploads, the Art page's one write, the
+outfit records, the sidebar, then the read-back. A failed image never fails the rest: it is withdrawn (its blocks left
+off the page, why recorded), and the job's result (and `bridge_workstream_report`) lists, per group, what was placed and
+what was not. A long rate wait parks the job; it resumes where it stopped without uploading anything again.
+
+**One target only** (the earlier form) still works: `{ "character": "…", "outfit": "…", "images": [ … ] }` (up to 30
+images; in ChatGPT the attached `file` for one image). Use one form or the other, never both (`ART_FORMS_MIXED`).
+
+**A whole character from a zip: the standard path.** (1) `upload_image_archive` with `character`; (2) look at the images;
+(3) ONE `arkona_add_character_art` call with `groups`, each image as `{ "archive": { "id": "<archive_id>", "entry":
+"<entry>" }, "label": "…", "interpretation": "…" }`; (4) one proposal for the owner. In ChatGPT: attach the zip to
+`upload_image_archive` (as `file`) and open the same zip in your own code tool to look at each image and write its
+interpretation. Elsewhere: `prepare_image_upload` with the zip (`content_type` `application/zip`), run its script, then
 `upload_image_archive { "upload_id": "…" }`. Every entry is listed at once (its `entry`, `path`, `folder`,
 `suggestedOutfit`, format, size and SHA-256); only the entries an art call uses are converted (or all, with
 `stageAll: true`). One archive can feed several calls, and one call can draw from several archives. The folder is a
@@ -849,7 +903,7 @@ a design piece or a single-piece outfit; if you are unsure, ask the owner. `char
 character's outfits (`outfitMatch`: exact, near with its candidates, or new). An entry past the hourly brake or the staging
 capacity is `held` and finishes on its own: never upload it again; follow `bridge_archive_status` (free; `retry` converts
 failed entries again). An art call naming an entry not staged yet is planned from its header and its job waits
-(`waiting_staging`); an entry refused or discarded is left out with its reason, never the others.
+(`waiting_staging`). In a groups call an entry that cannot be used (refused, discarded) is one of the call's problems.
 
 **Recall who a character is: `arkona_character_brief`.** `{ "character": "…" }` answers from the bridge's own records,
 free: the six identity fields, every page of their set with its Reference Type and Scope, their relationships, their Art

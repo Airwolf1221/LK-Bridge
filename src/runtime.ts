@@ -1318,6 +1318,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachRenames = renames.start();
+  // v3 F7d (ADR 0077, A3): an art set's left-out groups are never re-proposed from the old plan (its Art page's one write
+  // and its placements were worked out with them): the agent calls again with those groups, whose images stay staged.
+  const detachArtSets = policy.proposals.addHooks({
+    refuseRepropose: (original) =>
+      (original.tool ?? original.operation?.tool) === 'arkona_add_character_art' &&
+      policy.proposals.itemsOf(original.id)?.items.some((i) => i.id.startsWith('art:'))
+        ? 'An art set’s left-out groups are not proposed again from the old plan: its placements and its Art page’s one write were worked out with them. Ask the agent to call arkona_add_character_art again with those groups (their images are still staged).'
+        : null,
+  });
   // v3 F3e (ADR 0059): arkona_split_owner: its in-job checks and rebasers, its record, phase 2 (the source's archive,
   // proposed by the bridge once phase 1 has verified) and the deletion proposal after a revert of phase 1.
   const unregisterSplitChecks = registerSplitChecks(engine);
@@ -1787,6 +1796,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     detachReverts();
     detachResume();
     detachRenames();
+    detachArtSets();
     unregisterRenameChecks();
     detachSplits();
     unregisterSplitChecks();

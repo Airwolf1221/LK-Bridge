@@ -22,6 +22,7 @@ import type { AuditPage } from '../model.js';
 import type { FindingCode, FindingDraft } from '../types.js';
 import { coreNeed, nameWord, reword, wordingLeft, type WordingNames } from '../../packs/engine/core.js';
 import type { LkBlock } from '../../markdown/index.js';
+import { identityCopyDrift } from './identity-copies.js';
 
 const DRIFT_CODE: Record<DriftCode, FindingCode> = {
   type_root_missing: 'taxonomy_type_root_missing',
@@ -213,6 +214,8 @@ export function taxonomyCheck(ctx: AuditContext): FindingDraft[] {
   }
   out.push(...coreMissing(ctx));
   out.push(...coreWording(ctx));
+  // v3 F7d (ADR 0077, A10): a page of a character's set whose identity copies are empty or differ.
+  out.push(...identityCopyDrift(ctx));
   return out;
 }
 

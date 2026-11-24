@@ -10,6 +10,7 @@ import * as z from 'zod';
 import { characterBrief } from '../../packs/brief.js';
 import { COST_LINE, getArt, MAX_IMAGES } from '../../art/view/get-art.js';
 import { runArt, runRelationship } from '../../packs/character-tools.js';
+import { runArtGroups } from '../../packs/art-groups.js';
 import { runOwner, runPackage } from '../../packs/run.js';
 import { renameReport, runRename } from '../../packs/rename/run.js';
 import { runSplit, splitReport } from '../../packs/split/run.js';
@@ -58,6 +59,21 @@ const archiveRef = z
   .describe(
     'An entry of an image archive (upload_image_archive), instead of staged_id. A staged entry is used as its staged image; one not staged yet is planned from its header and the job waits for it.',
   );
+
+/** v3 F7d (ADR 0077, A1): an image of arkona_add_character_art (either form), with its one source. */
+const artImage = z
+  .object({
+    staged_id: z.string().min(1).max(64).optional().describe('A staged image.'),
+    upload_id: z.string().min(1).max(64).optional().describe('A prepared binary upload.'),
+    archive: archiveRef.optional(),
+    label: z
+      .string()
+      .min(1)
+      .max(300)
+      .describe('“{Visual Role} - {Descriptor}”, e.g. “Primary Reference - Character Portrait”.'),
+    interpretation: z.string().max(5000).optional().describe('What this reference establishes (required).'),
+  })
+  .strict();
 
 const image = z
   .object({
@@ -601,10 +617,13 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Add art to an Arkona character (pack)',
       access: 'write',
       description:
-        'The Arkona pack: adds reference images to an EXISTING character (`character`: name, alias or id). ONE call, ONE target: `outfit` applies to every image. Without it (or null) they are DESIGN pieces, always in the character’s own folder (Characters / … / <Character>), named “<Character> - <Label>”. With `outfit` they are pieces of that outfit, named “<Character> - <Outfit> - <Label>”, and the BRIDGE decides the folder from the character’s folders read live and its outfit record: an outfit’s only piece goes loose in Wardrobe; two or more go in Wardrobe / <Outfit> (made when missing, the loose piece moved into it in the same job); an outfit that has its folder takes them there. You never name a folder (Forms, Outfits and Details are retired). An outfit is matched by its name or an alias (case and spacing ignored); a name CLOSE to an existing outfit’s (e.g. “Imperial Regalia” beside “Supreme Imperial Regalia”) is refused with OUTFIT_NEAR_MATCH listing the candidates: use the exact name, or newOutfit: true if it really is another outfit. Names use the character’s full canonical name, are numbered if taken, never carry a file extension. Each image is shown on the character’s Art page with its label and interpretation: design pieces under “Reference Images”; an outfit’s under a heading naming it (found anywhere on the page, else made under the page’s first heading holding “Wardrobe”, else in a new “Wardrobe” section); the Art page is made when missing. Each image needs `interpretation` (what it establishes); a bare image is refused. Up to 30 images. A Compact Reference becomes the Character Core automatically, in the same proposal, when its character gains an index with several owners. ' +
-        'Sources: `staged_id` (from upload_image { stage: true } with NO destination, which proposes nothing), `upload_id` (prepare_image_upload), `archive` { id, entry } (an entry of a zip from upload_image_archive: in ChatGPT attach the zip there, open it in your own code tool to look at each image and write its interpretation, then name the entries here; one call may draw from several archives), or in ChatGPT the attached `file` (for the one image with none of these). An upload or file is staged on the bridge’s server first, even on a dry run (its staged_id is in the answer). An archive entry not staged yet is planned from its header and the job waits for it (waiting_staging); one that cannot be used (refused, discarded, failed) is left out with its reason (`notUsed`) and the others go ahead. ' +
-        'dryRun shows the preview; otherwise ONE proposal for the owner whatever your scope: nothing reaches LegendKeeper until the owner approves it. Never resubmit it. ' +
-        'Cost: 4 to 7 reads to plan, plus the live read of the character’s folders (one listing per folder, usually 2 to 5 reads); the job about 11 reads and 3 writes for one image on an existing Art page, about 27 and 16 when it makes the Art page, and one more write for each loose piece moved.',
+        'The Arkona pack: adds reference images to an EXISTING character (`character`: name, alias or id). Do a character’s whole art set in one call; don’t wait for the Art page before adding outfits. ' +
+        'Use `groups`: one group per target, `{ outfit?, newOutfit?, images: [...] }`; a group with no `outfit` (or null) holds the DESIGN pieces (in the character’s own folder, named “<Character> - <Label>”); a group with `outfit` holds that outfit’s pieces (named “<Character> - <Outfit> - <Label>”). The whole call is planned at once: the character’s folders read live once, every group matched against its outfit record, and ONE proposal the owner approves item by item (“Art page” when it is new, “Design pieces”, one item per outfit; an outfit needs the Art page’s item). Any problem in any group refuses the whole call with EVERY problem listed (`problems`): fix them all and call again. Groups naming the same outfit are merged. `artPage` { scope, temporalScope, visualState, dependencies, related, markdown, status } fills the Art page’s sidebar: used when the page is made, applied only to EMPTY rows when it exists. The bridge copies the identity fields (Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture, Aliases) from the character’s Core or Compact Reference into empty rows, never overwriting a different value (reported), and adds the identity page to Dependencies; Temporal Scope and Visual State / Period are never copied: give them, or they are listed as still to fill. At most ART_CALL_MAX_GROUPS groups (40) and ART_CALL_MAX_IMAGES images (120) a call. ' +
+        'The bridge decides every folder from the folders read live and the outfit record: an outfit’s only piece goes loose in Wardrobe; two or more go in Wardrobe / <Outfit> (made when missing, the loose piece moved into it in the same job); an outfit that has its folder takes them there. You never name a folder (Forms, Outfits and Details are retired). An outfit is matched by its name or an alias (case and spacing ignored); a name CLOSE to an existing outfit’s (e.g. “Imperial Regalia” beside “Supreme Imperial Regalia”) is refused with OUTFIT_NEAR_MATCH listing the candidates: use the exact name, or newOutfit: true if it really is another outfit. Names use the character’s full canonical name, are numbered if taken, never carry a file extension. On the Art page (ONE write): design pieces under “Reference Images”; each outfit’s under a heading naming it (found anywhere on the page, else made under the page’s first heading holding “Wardrobe”, else in a new “Wardrobe” section), in the order the groups were given. Each image needs `interpretation` (what it establishes); a bare image is refused. A Compact Reference becomes the Character Core automatically, in the same proposal, when this call makes the Art page and its character gains an index with several owners. A failed image never fails the rest: it is withdrawn (its blocks left off the page, why recorded) and the job’s result lists, per group, what was placed and what was not. ' +
+        'The single-target form (`outfit` plus `images`, up to 30 images) still works; use one form or the other, never both. ' +
+        'Sources: `staged_id` (from upload_image { stage: true } with NO destination, which proposes nothing), `upload_id` (prepare_image_upload), `archive` { id, entry } (an entry of a zip from upload_image_archive: the standard path for a whole character is upload_image_archive with `character`, look at the images, then ONE groups call naming the entries, then one proposal for the owner; one call may draw from several archives), or (single-target form only) in ChatGPT the attached `file`. An upload or file is staged on the bridge’s server first, even on a dry run (its staged_id is in the answer). An archive entry not staged yet is planned from its header and the job waits for it (waiting_staging). ' +
+        'dryRun shows the preview (per group: the folder decision, the asset names, the moves of loose pieces; the sidebar; the totals: reads, writes, uploads); otherwise ONE proposal for the owner whatever your scope: nothing reaches LegendKeeper until the owner approves it. Never resubmit it. ' +
+        'Cost: 4 to 7 reads to plan, plus the live read of the character’s folders (one listing per folder, usually 2 to 5 reads) and of the identity page; the job about 4 reads and 3 writes per image (folders found or made, the upload, its check), one write for the Art page, one for each loose piece moved, one per sidebar row filled; about 27 reads and 16 writes more when it makes the Art page.',
       inputSchema: z.object({
         character: z.string().min(1).max(200).describe('An existing character (name, alias or id).'),
         outfit: z
@@ -622,29 +641,73 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .describe(
             'true: `outfit` is a new outfit although its name is close to an existing one’s (after OUTFIT_NEAR_MATCH).',
           ),
-        images: z
+        groups: z
           .array(
             z
               .object({
-                staged_id: z.string().min(1).max(64).optional().describe('A staged image.'),
-                upload_id: z.string().min(1).max(64).optional().describe('A prepared binary upload.'),
-                archive: archiveRef.optional(),
-                label: z
+                outfit: z
                   .string()
                   .min(1)
-                  .max(300)
-                  .describe('“{Visual Role} - {Descriptor}”, e.g. “Primary Reference - Character Portrait”.'),
-                interpretation: z
-                  .string()
-                  .max(5000)
+                  .max(100)
+                  .nullable()
                   .optional()
-                  .describe('What this reference establishes (required).'),
+                  .describe('The outfit (its name or an alias); omit or null for the design pieces.'),
+                newOutfit: z
+                  .boolean()
+                  .optional()
+                  .describe('true: `outfit` is new although its name is close to an existing one’s.'),
+                images: z.array(artImage).max(1000).describe('The group’s images.'),
               })
               .strict(),
           )
+          .max(1000)
+          .optional()
+          .describe(
+            'The whole art set: one group per target (the design pieces, each outfit), in the order they go on the Art page. Limits: ART_CALL_MAX_GROUPS, ART_CALL_MAX_IMAGES.',
+          ),
+        artPage: z
+          .object({
+            scope: z.string().max(1000).optional().describe('The Scope row.'),
+            temporalScope: z
+              .string()
+              .max(500)
+              .optional()
+              .describe('Temporal Scope: the span this art covers (never copied from the Core).'),
+            visualState: z
+              .string()
+              .max(500)
+              .optional()
+              .describe('Visual State / Period: the state or period the art shows.'),
+            dependencies: z
+              .array(z.string().max(500))
+              .max(50)
+              .optional()
+              .describe('More Dependencies (names or ids); the identity page is always added.'),
+            related: z
+              .array(z.string().max(500))
+              .max(50)
+              .optional()
+              .describe('Related Sources (names or ids).'),
+            markdown: z
+              .string()
+              .max(200_000)
+              .optional()
+              .describe('A new Art page’s text (“## Purpose” first); drafted when left out.'),
+            status: z.enum(['working', 'authoritative']).optional().describe('A new Art page’s status.'),
+          })
+          .strict()
+          .optional()
+          .describe(
+            'groups form: the Art page’s own sidebar fields, used when it is made, applied only to EMPTY rows when it exists.',
+          ),
+        images: z
+          .array(artImage)
           .min(1)
           .max(30)
-          .describe('The images, each with its label and interpretation.'),
+          .optional()
+          .describe(
+            'Single-target form: the images, each with its label and interpretation (with `outfit`).',
+          ),
         file: z
           .object({
             download_url: z.string().min(1).max(8192),
@@ -674,8 +737,51 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       meta: { 'openai/fileParams': ['file'] },
       listed: hasCharacters,
       handler: (args, mctx) =>
-        withProject(deps, args.project, 'write', (pd) =>
-          runArt(pd, mctx, {
+        withProject(deps, args.project, 'write', (pd) => {
+          // v3 F7d (ADR 0077, A1): one form or the other, never both.
+          if (args.groups !== undefined) {
+            const mixed = ['outfit', 'newOutfit', 'images', 'file', 'scope', 'markdown', 'status'].filter(
+              (k) => (args as Record<string, unknown>)[k] !== undefined,
+            );
+            if (mixed.length > 0)
+              return Promise.resolve(
+                errorResult(
+                  {
+                    code: 'ART_FORMS_MIXED',
+                    message: `Use one form or the other: \`groups\` (with \`artPage\`) for the whole set, or \`outfit\` plus \`images\` for one target; this call also gives ${mixed.join(', ')}. Put each outfit's images in its own group, and the Art page's scope, text and status in artPage.`,
+                    mixed,
+                  },
+                  pd,
+                ),
+              );
+            return runArtGroups(pd, mctx, {
+              packId: 'arkona',
+              tool: 'arkona_add_character_art',
+              input: {
+                character: args.character,
+                groups: args.groups,
+                ...(args.artPage !== undefined ? { artPage: args.artPage } : {}),
+              },
+              dryRun: args.dryRun === true || args.preview === true,
+              operationId: args.operation_id,
+              args,
+              lastMajorRevision: args.lastMajorRevision,
+            });
+          }
+          if (args.images === undefined)
+            return Promise.resolve(
+              errorResult(
+                {
+                  code: args.artPage !== undefined ? 'ART_FORMS_MIXED' : 'IMAGES_REQUIRED',
+                  message:
+                    args.artPage !== undefined
+                      ? 'artPage goes with `groups`: give the images in groups (one per target).'
+                      : 'Give `groups` (the whole art set, one group per target) or, for one target, `images`.',
+                },
+                pd,
+              ),
+            );
+          return runArt(pd, mctx, {
             packId: 'arkona',
             tool: 'arkona_add_character_art',
             input: {
@@ -701,8 +807,8 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
                 }
               : args,
             lastMajorRevision: args.lastMajorRevision,
-          }),
-        ),
+          });
+        }),
     }),
     defineTool({
       name: 'arkona_rename',

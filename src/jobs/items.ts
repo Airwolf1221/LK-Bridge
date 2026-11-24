@@ -185,7 +185,7 @@ export function defaultSelection(items: readonly PlanItem[]): string[] {
 // ============================================================================================ step references
 
 /** A step number a step refers to, and how it may be re-mapped when that step is dropped. */
-type RefKind = 'chain' | 'lmrAfter' | 'lmrChain' | 'decision' | 'hard';
+type RefKind = 'chain' | 'lmrAfter' | 'lmrChain' | 'decision' | 'hard' | 'image';
 
 /** Every step number a step refers to, with its kind. */
 export function stepRefs(s: StepSpec): { readonly step: number; readonly kind: RefKind }[] {
@@ -195,7 +195,9 @@ export function stepRefs(s: StepSpec): { readonly step: number; readonly kind: R
   if (s.bindBody) out.push({ step: s.bindBody.step, kind: 'hard' });
   if (s.bindFrom) out.push({ step: s.bindFrom.step, kind: 'hard' });
   if (s.decisionFrom) out.push({ step: s.decisionFrom.step, kind: 'decision' });
-  for (const b of s.bindAssetUrls ?? []) out.push({ step: b.step, kind: 'hard' });
+  // v3 F7d (ADR 0077, A3): an image whose blocks the write can leave out (`drop`) is a soft reference: the page's item
+  // does not need the image's; an image left out of the approval takes its blocks with it (filterSteps).
+  for (const b of s.bindAssetUrls ?? []) out.push({ step: b.step, kind: b.drop?.length ? 'image' : 'hard' });
   const body = (s.params?.body ?? null) as Obj | null;
   if (body && s.op === VERIFY_STEP && Array.isArray(body.targets)) {
     for (const t of body.targets as Obj[]) for (const n of targetRefs(t)) out.push({ step: n, kind: 'hard' });
@@ -273,10 +275,33 @@ export function mapStepRefs(s: StepSpec, f: (n: number) => number): StepSpec {
 
 /** v3 F7 (ADR 0070): an art job's outfit record (its step references are mapped like a binding's). */
 const isArtRecord = (r: unknown): r is Obj =>
-  typeof r === 'object' && r !== null && (r as Obj).kind === 'art_outfit';
+  typeof r === 'object' &&
+  r !== null &&
+  ((r as Obj).kind === 'art_outfit' || (r as Obj).kind === 'art_groups');
 
 /** v3 F7: an outfit record's step references (the character's and the outfit's folders, each piece's asset) mapped. */
 export function mapArtRecordSteps(r: Obj, f: (n: number) => number): Obj {
+  // v3 F7d (ADR 0077, A4): the groups' report: each image's asset step and each move's step (a step left out of the
+  // approval maps to nothing: that image was not approved).
+  if (r.kind === 'art_groups' && Array.isArray(r.groups)) {
+    const at = (n: unknown) => (typeof n === 'number' ? f(n) : undefined);
+    return {
+      ...r,
+      groups: (r.groups as Obj[]).map((g) => ({
+        ...g,
+        images: (Array.isArray(g.images) ? (g.images as Obj[]) : []).map((im) => {
+          const { assetStep, ...rest } = im;
+          const n = at(assetStep);
+          return n === undefined ? rest : { ...rest, assetStep: n };
+        }),
+        moves: (Array.isArray(g.moves) ? (g.moves as Obj[]) : []).map((m) => {
+          const { moveStep, ...rest } = m;
+          const n = at(moveStep);
+          return n === undefined ? rest : { ...rest, moveStep: n };
+        }),
+      })),
+    };
+  }
   return {
     ...r,
     ...(typeof r.characterFolderStep === 'number' ? { characterFolderStep: f(r.characterFolderStep) } : {}),
@@ -285,6 +310,14 @@ export function mapArtRecordSteps(r: Obj, f: (n: number) => number): Obj {
       ? {
           pieces: (r.pieces as Obj[]).map((p) =>
             typeof p.assetStep === 'number' ? { ...p, assetStep: f(p.assetStep) } : p,
+          ),
+        }
+      : {}),
+    // v3 F7d (ADR 0077): each move's own step (a withdrawn move is not counted).
+    ...(Array.isArray(r.moved)
+      ? {
+          moved: (r.moved as Obj[]).map((p) =>
+            typeof p.moveStep === 'number' ? { ...p, moveStep: f(p.moveStep) } : p,
           ),
         }
       : {}),
@@ -626,6 +659,20 @@ export function filterSteps(
         s = { ...s, params: { ...s.params, body: rest } };
       }
     }
+    // v3 F7d (ADR 0077, A3): an image left out of the approval (its group unticked) is not placed: its binding and the
+    // blocks that would show it go, as a withdrawn image's do.
+    if (s.bindAssetUrls?.some((b) => !newNo.has(b.step) && (b.drop?.length ?? 0) > 0)) {
+      const gone = new Set(
+        s.bindAssetUrls.filter((b) => !newNo.has(b.step) && b.drop).flatMap((b) => b.drop ?? []),
+      );
+      const binds = s.bindAssetUrls.filter((b) => newNo.has(b.step) || !b.drop?.length);
+      const { bindAssetUrls: _b, ...rest } = s;
+      s = {
+        ...rest,
+        ...(binds.length > 0 ? { bindAssetUrls: binds } : {}),
+        params: withoutBlocks(s.params, gone) as NonNullable<StepSpec['params']>,
+      };
+    }
     for (const r of stepRefs(s))
       if (!newNo.has(r.step))
         throw new ItemFilterError(
@@ -678,6 +725,18 @@ export function filterSteps(
     from.push(i + 1);
   });
   return { steps: out, from, notCreated: [...droppedSlots.keys()] };
+}
+
+/** v3 F7d (ADR 0077, A3): a step's params without the blocks (objects with one of these ids) anywhere in them. */
+function withoutBlocks(v: unknown, ids: ReadonlySet<string>, depth = 0): unknown {
+  if (depth > 60 || ids.size === 0) return v;
+  if (Array.isArray(v))
+    return v
+      .filter((x) => !(isObj(x) && typeof x.id === 'string' && ids.has(x.id)))
+      .map((x) => withoutBlocks(x, ids, depth + 1));
+  if (isObj(v))
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withoutBlocks(x, ids, depth + 1)]));
+  return v;
 }
 
 /**

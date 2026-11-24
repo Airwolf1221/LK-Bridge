@@ -105,7 +105,7 @@ export function legacyFolderRefusal(
   if (typeof name !== 'string' || !isLegacyName(name)) return null;
   return {
     code: 'LEGACY_ART_FOLDER',
-    message: `A folder named “${name}” is never made: Forms, Outfits and Details are retired. Character art goes in the character’s folder (design pieces) and its Wardrobe (outfit pieces, through arkona_add_character_art with \`outfit\`).`,
+    message: `A folder named “${name}” is never made: Forms, Outfits and Details are retired. Character art goes in the character’s folder (design pieces) and its Wardrobe (outfit pieces, through arkona_add_character_art: one group per outfit).`,
   };
 }
 

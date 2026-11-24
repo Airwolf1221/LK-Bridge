@@ -1472,8 +1472,30 @@ page), and the character tool's refusals for the host (`TARGET_ARCHIVED`, a Work
 partner's index) and for the page. **Warning**: `PARTNER_LINK_DEFERRED` (a Working relationship is linked from a canon
 character only after promotion). **In the job**: `RELATIONSHIP_EXISTS`.
 
-**`arkona_add_character_art`** `{ character, outfit?, newOutfit?, images: [{ staged_id? | upload_id?, label, interpretation }], file?, scope?, markdown?, status?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
-reference images for an existing character. **Since v3 F7** ([ADR 0070](adr/0070-v3-f7-guided-character-art.md)): ONE
+**`arkona_add_character_art`** `{ character, groups: [{ outfit?, newOutfit?, images: [{ staged_id? | upload_id? | archive?, label, interpretation }] }], artPage?: { scope?, temporalScope?, visualState?, dependencies?, related?, markdown?, status? }, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`,
+or the single-target form `{ character, outfit?, newOutfit?, images: [...], file?, scope?, markdown?, status?, … }`:
+reference images for an existing character. **Since v3 F7d** ([ADR 0077](adr/0077-v3-f7d-one-call-art.md)): a
+character's whole art set in ONE call (`groups`) and ONE proposal. A group without `outfit` holds the design pieces; a
+group with `outfit`, that outfit's. Planned once, together: the folders read live once, the outfit record once, each
+group matched (a near match refused unless `newOutfit`), groups naming the same outfit merged (a note), placement as
+below counting the outfit's recorded pieces plus this call's; ANY problem in any group refuses the whole call with every
+problem listed (`ART_GROUPS_REFUSED`, `problems`). Limits `ART_CALL_MAX_GROUPS` (40) and `ART_CALL_MAX_IMAGES` (120):
+`ART_CALL_TOO_LARGE`. One form or the other: `ART_FORMS_MIXED`. The proposal's items, in order: "Art page" (when the call
+makes it, with a Compact Reference's upgrade to its Core), "Design pieces", one per outfit; each needs "Art page" when it
+exists. An item left out is not placed: its images stay staged. The job: the page and the upgrade; the folders and moves;
+the uploads; ONE Art-page write (each group under its own place, in the order given; `pack.art_groups` for an existing
+page); the outfit records; the sidebar; the read-back; then the per-group report (`artGroups` on the job's result:
+`placed`, `notPlaced` with why, `moved`, `notMoved`). A failed image (an upload, a folder, a move refused for certain) is
+withdrawn, its blocks left off the page and why recorded (`withdrawn`), and the others go ahead. **The sidebar** (A8,
+A9): the identity page read live; Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming
+Culture and Aliases copied where the Art page's template has the row, only into empty rows (a differing value is left and
+reported, `IDENTITY_COPY_DIFFERS`); `artPage` fills Scope, Temporal Scope, Visual State / Period, Dependencies and Related
+Sources (when the page is made; else only empty rows); Temporal Scope and Visual State / Period are never copied (listed
+under "still to fill"); Dependencies always gain the identity page. On an existing page the sidebar is written after the
+images through the governed facts path, the identity page's rows checked as planned inside the job (changed: the sidebar
+is withdrawn, the images stay placed); a new page's copies are written with it, after a check of the identity page's
+rows. The dry run's `groups` (per group: folder decision, asset names, moves), `sidebar` and `cost` (planning reads; the
+job's reads, an estimate, writes and uploads). **Since v3 F7** ([ADR 0070](adr/0070-v3-f7-guided-character-art.md)): ONE
 call, ONE target. Without `outfit` (or null) the images are design pieces, in the character's own folder (`Characters /
 <race path> / <name>`), named `<name> - <label>`. With `outfit` they are that outfit's pieces, named `<name> - <outfit> -
 <label>`, and the bridge decides the folder: the character's folders are read LIVE first (one listing per folder, plus a

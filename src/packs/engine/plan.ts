@@ -16,7 +16,7 @@
  *   of a Compact Reference to a Core, the gate's fixes, the relationship's automatic links, the index's routing lines.
  */
 import { createHash } from 'node:crypto';
-import { factKey, sidebarFrom, type SidebarProperty } from '../../facts/index.js';
+import { factKey, sidebarFrom, type SidebarProperty, type SidebarRow } from '../../facts/index.js';
 import { FactsPlanError, planFacts, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
 import { rowTextRuns } from '../../facts/values.js';
 import { mintClientId } from '../../jobs/ids.js';
@@ -173,6 +173,14 @@ export interface ImagePlacement {
   readonly taken?: ReadonlySet<string>;
 }
 
+/** v3 F7d (ADR 0077): one group of a groups call, as the engine takes it. */
+export interface ArtImageGroup {
+  /** The group's item key (`design`, or `outfit:<key>`). */
+  readonly key: string;
+  readonly placement: ImagePlacement;
+  readonly images: readonly PackageImage[];
+}
+
 export interface PackagePage {
   readonly role: string;
   readonly title?: string | undefined;
@@ -183,6 +191,11 @@ export interface PackagePage {
   readonly dependencies?: readonly string[] | undefined;
   readonly related?: readonly string[] | undefined;
   readonly images?: readonly PackageImage[] | undefined;
+  /**
+   * v3 F7d (ADR 0077, A8, A9): more sidebar rows for the Art page (the identity copies, Temporal Scope, Visual State /
+   * Period), written only where its template has the row.
+   */
+  readonly extraFacts?: readonly { readonly key: string; readonly value: string }[] | undefined;
   readonly with?: string | undefined;
   readonly label?: string | undefined;
   readonly host?: 'self' | 'other' | undefined;
@@ -200,6 +213,11 @@ export interface PackageInput {
   readonly upgradeToCore?: boolean | undefined;
   /** v3 F7 (ADR 0070, G2): where the Art page's images go, as the bridge decided (none: design pieces). */
   readonly imagePlacement?: ImagePlacement | undefined;
+  /**
+   * v3 F7d (ADR 0077, A1 to A3): the Art page's images in groups, each with its own placement (the design pieces, then
+   * each outfit in the order given); instead of the art page's `images` and `imagePlacement`.
+   */
+  readonly imageGroups?: readonly ArtImageGroup[] | undefined;
   /**
    * With upgradeToCore: warn about the Reference's sections a new page now owns (default true). A split (F3e) moves those
    * sections itself, each leaving an interface summary, so it passes false (and the Reference is not read for it).
@@ -304,6 +322,11 @@ export interface PlannedPage extends NewPage {
   readonly images: readonly PlannedImage[];
   /** For the preview: where its body's headings are. */
   readonly headings: readonly string[];
+  /**
+   * v3 F7d (ADR 0077, A3, A4): the headings a groups call made on a new Art page (Wardrobe, each outfit's, Reference
+   * Images), each with the image blocks it was made for: the filler leaves one out when none of them is left.
+   */
+  readonly prune?: readonly { readonly id: string; readonly needs: readonly string[] }[];
   /** v3 F3b (ADR 0052): what the proposal says of this page besides its facts (a named step, a home override). */
   readonly notes?: readonly string[];
 }
@@ -379,6 +402,17 @@ export type ExistingChange =
       readonly why: readonly string[];
       /** A substantial change (its Last Major Revision is set): not for a link alone. */
       readonly substantial: boolean;
+      /**
+       * v3 F7d (ADR 0077, A4, A8): the Art page's sidebar in a groups call: run after the images, the page's text and the
+       * outfit records, and withdrawn (with why) rather than failing the job when it cannot be written.
+       */
+      readonly late?: boolean;
+      /** v3 F7d (A8): the identity page whose values it copies: its rows must still be as planned inside the job. */
+      readonly identityCheck?: {
+        readonly page: NodeRef;
+        readonly propertyId: string;
+        readonly rows: readonly SidebarRow[];
+      };
     }
   | {
       readonly kind: 'routing';
@@ -419,7 +453,20 @@ export type ExistingChange =
        * else a new one under the page's first heading holding "Wardrobe", else in a new "Wardrobe" section.
        */
       readonly outfit?: { readonly name: string; readonly aliases: readonly string[] };
+      /**
+       * v3 F7d (ADR 0077, A4): a groups call's ONE write: each group's blocks (by id) under its own place, in the order
+       * the groups were given (the `pack.art_groups` filler); `blocks` is every group's blocks together.
+       */
+      readonly groups?: readonly ArtBlockGroup[];
     };
+
+/** v3 F7d (ADR 0077, A4): one group's blocks on the Art page (design pieces: `section`; an outfit: `outfit`). */
+export interface ArtBlockGroup {
+  readonly key: string;
+  readonly section: string;
+  readonly outfit?: { readonly name: string; readonly aliases: readonly string[] };
+  readonly blockIds: readonly string[];
+}
 
 /** v3 F7 (ADR 0070, G5): the section an Art page's outfits go under when it has no heading holding "Wardrobe". */
 export const WARDROBE_SECTION = 'Wardrobe';
@@ -449,6 +496,31 @@ export interface ArtPlan {
      */
     readonly linesForOwner?: readonly ArtLine[];
   } | null;
+  /**
+   * v3 F7d (ADR 0077): a groups call: every outfit of the call (its moves and record, as `outfit` for one), each with its
+   * group's key; and each image's group (by staged id). `outfit` is then null.
+   */
+  readonly outfits?: readonly (NonNullable<ArtPlan['outfit']> & { readonly key: string })[];
+  readonly groupOf?: Readonly<Record<string, string>>;
+  /**
+   * v3 F7d (ADR 0077, A8): the identity page whose values a NEW Art page copies, its key-value rows as read when planned:
+   * checked inside the job before anything is written.
+   */
+  readonly identityCheck?: {
+    readonly page: NodeRef;
+    readonly propertyId: string;
+    readonly rows: readonly SidebarRow[];
+  };
+  /** v3 F7d (A4): the groups, for the job's per-group report (what was placed and what was not). */
+  readonly report?: readonly ArtGroupReport[];
+}
+
+/** v3 F7d (ADR 0077, A4): one group, as the job's report names it. */
+export interface ArtGroupReport {
+  readonly key: string;
+  readonly label: string;
+  readonly images: readonly { readonly stagedId: string; readonly name: string }[];
+  readonly moves: readonly { readonly assetId: string; readonly name: string }[];
 }
 
 /** v3 F7 (G5): a line on one of a character's pages, for the owner. */
@@ -1404,6 +1476,9 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     put('Continuity', continuity);
     put('Inheritance', inheritance);
     if (rule.facts === 'identity') for (const f of identityFacts()) put(f.key, f.value);
+    // v3 F7d (ADR 0077, A8, A9): the Art page's identity copies (its Subject included) and its own fields, where its
+    // template has the row.
+    for (const f of p.extraFacts ?? []) put(f.key, f.value);
     put(
       'Subject',
       d.partner && type.relationship
@@ -1417,7 +1492,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       rule.facts === 'identity'
         ? null
         : rule.facts === 'general'
-          ? new Set(type.generalKeys.map(factKey))
+          ? new Set([...type.generalKeys, ...(p.extraFacts ?? []).map((f) => f.key)].map(factKey))
           : new Set<string>();
     // Only rows the template has (never one added or dropped), in the template's order.
     const order = (k: string) => tKeys?.findIndex((x) => factKey(x) === factKey(k)) ?? -1;
@@ -1471,6 +1546,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     let blocks: LkBlock[] | null = null;
     const headings: string[] = [];
     const pageImages: PlannedImage[] = [];
+    const prune: { id: string; needs: string[] }[] = [];
     if (rule.body === 'required' && md.trim() === '') {
       refuse(
         'BODY_REQUIRED',
@@ -1497,8 +1573,58 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         else throw e;
       }
     }
-    // Images (the Art page): staged uploads, each with its label and interpretation.
-    if (rule.role === type.assets.role && p.images && p.images.length > 0 && blocks) {
+    // v3 F7d (ADR 0077, A2): a groups call: each group planned with its own placement, the design pieces under the
+    // images section and each outfit under its heading in a "Wardrobe" section, in the order the groups were given.
+    if (rule.role === type.assets.role && input.imageGroups && input.imageGroups.length > 0 && blocks) {
+      const outfitImages: string[] = [];
+      let wardrobeHead: string | null = null;
+      for (const g of input.imageGroups) {
+        const before = new Set(blocks.map((x) => (x as Obj).id as string));
+        const planned = planImages(env, {
+          page: d.displayName,
+          subject,
+          race: mode === 'extend' ? targetRace : raceFallback ? null : raceValue,
+          images: g.images,
+          refuse,
+          warn,
+          placement: g.placement,
+          where: g.placement.outfit ? `outfit “${g.placement.outfit}”` : 'design pieces',
+        });
+        pageImages.push(...planned);
+        images.push(...planned);
+        const bounds = rule.warnMissing.concat(['Source Boundaries', 'Unresolved Material']);
+        blocks = g.placement.outfit
+          ? withOutfitSection(
+              blocks,
+              withImages([], planned, type.assets.section, bounds, converter!, g.placement.outfit),
+              bounds,
+            )
+          : withImages(blocks, planned, type.assets.section, bounds, converter!);
+        // The headings this group made besides its images' labels, and the image blocks each was made for.
+        const added = blocks.filter((x) => !before.has((x as Obj).id as string));
+        const imageIds = added.filter((x) => (x as Obj).kind === 'image').map((x) => (x as Obj).id as string);
+        const labels = new Set<string>();
+        added.forEach((x, i) => {
+          if ((x as Obj).kind === 'image' && (added[i - 1] as Obj | undefined)?.kind === 'heading')
+            labels.add((added[i - 1] as Obj).id as string);
+        });
+        for (const x of added) {
+          if ((x as Obj).kind !== 'heading' || labels.has((x as Obj).id as string)) continue;
+          const id = (x as Obj).id as string;
+          if (g.placement.outfit && textKey(blockText(x)) === textKey(WARDROBE_SECTION)) wardrobeHead = id;
+          else prune.push({ id, needs: imageIds });
+        }
+        if (g.placement.outfit) outfitImages.push(...imageIds);
+      }
+      if (wardrobeHead) prune.push({ id: wardrobeHead, needs: outfitImages });
+      headings.splice(
+        0,
+        headings.length,
+        ...sectionsOf(blocks)
+          .filter((s) => s.heading)
+          .map((s) => s.title),
+      );
+    } else if (rule.role === type.assets.role && p.images && p.images.length > 0 && blocks) {
       const planned = planImages(env, {
         page: d.displayName,
         subject,
@@ -1556,6 +1682,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       drafted: false,
       images: pageImages,
       headings,
+      ...(prune.length ? { prune } : {}),
     };
     pages.push(page);
   }
@@ -2044,7 +2171,7 @@ export function planOnTemplate(
 }
 
 /** A facts and links change to an existing page, planned on its live sidebar. */
-function planExisting(
+export function planExisting(
   sidebar: readonly SidebarProperty[],
   resourceId: string,
   property: string,
@@ -2193,6 +2320,38 @@ export function withImages(
   return out;
 }
 
+/**
+ * v3 F7d (ADR 0077, A4): one outfit's blocks (`## Wardrobe`, `### <Outfit>`, its pieces, as `withImages` lays them out on
+ * an empty page) on a new Art page: at the END of its Wardrobe section, after the outfits already there (its deeper
+ * headings included), so the outfits stand in the order the groups were given; the section is made before the boundary
+ * sections (else at the end) when the page has none.
+ */
+export function withOutfitSection(
+  blocks: readonly LkBlock[],
+  chunk: readonly LkBlock[],
+  boundaries: readonly string[],
+): LkBlock[] {
+  const isHead = (b: LkBlock | undefined) => (b as Obj | undefined)?.kind === 'heading';
+  const level = (b: LkBlock) => (typeof (b as Obj).level === 'number' ? ((b as Obj).level as number) : 1);
+  const out = [...blocks];
+  const w = out.findIndex((b) => isHead(b) && textKey(blockText(b)) === textKey(WARDROBE_SECTION));
+  if (w >= 0) {
+    const body =
+      isHead(chunk[0]) && textKey(blockText(chunk[0]!)) === textKey(WARDROBE_SECTION)
+        ? chunk.slice(1)
+        : chunk;
+    let end = w + 1;
+    while (end < out.length && !(isHead(out[end]) && level(out[end]!) <= level(out[w]!))) end++;
+    out.splice(end, 0, ...body);
+    return out;
+  }
+  const keys = boundaries.map(textKey);
+  const b = out.findIndex((x) => isHead(x) && keys.includes(textKey(blockText(x))));
+  if (b >= 0) out.splice(b, 0, ...chunk);
+  else out.push(...chunk);
+  return out;
+}
+
 /** The staged images of an Art page, with their folder and display names (refused rather than guessed). */
 export function planImages(
   env: PlanEnv,
@@ -2205,6 +2364,8 @@ export function planImages(
     warn: (code: string, message: string, more?: Obj) => void;
     /** v3 F7 (G2): the bridge's placement; none: design pieces in the character's own folder. */
     placement?: ImagePlacement | undefined;
+    /** v3 F7d (ADR 0077): the group, in each refusal's place (`Art page: outfit “X”: images[2]`). */
+    where?: string | undefined;
   },
 ): PlannedImage[] {
   const { pd, ctx, type } = env;
@@ -2218,7 +2379,7 @@ export function planImages(
   const sub = [...(o.placement?.subfolders ?? [])];
   const outfit = o.placement?.outfit ?? null;
   for (const [i, im] of o.images.entries()) {
-    const where = `${o.page}: images[${i}]`;
+    const where = `${o.page}: ${o.where ? `${o.where}: ` : ''}images[${i}]`;
     if (!im.interpretation || im.interpretation.trim() === '') {
       o.refuse(
         'BARE_IMAGE',
