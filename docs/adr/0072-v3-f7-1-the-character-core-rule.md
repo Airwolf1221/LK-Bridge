@@ -162,3 +162,105 @@ Character Core, its wording replaced) and the Art page; then everything it made 
 - Tests: `test/f7_1/core-upgrade.test.ts` (art, the other callers, the refusals, Revert, both audits and their automation
   default); the earlier upgrade tests updated where the Core's wording now changes (`test/packs/extend.test.ts`,
   `test/packs/pack-lmr.test.ts`); the split's tests unchanged.
+
+## Amendment 1 (24 November 2026, v3 F7.1a): only self-references are replaced; a proposal shows the words it changes
+
+- Status: **Proposed**. Built and tested against the mock LegendKeeper only; nothing in this session touched a live
+  system. Where the brief was silent the choice is marked **chosen**.
+- **The bug** (the owner, 24 November 2026): `core_compact_wording`'s fix rewrote a sentence on Mehrana al-Khalid's
+  Character Core that was about another character's page: "Taraji resumed lifelong personal service and is still
+  Mehrana's tailor in 5A 931; her identity is owned by the separate compact character reference." became "… owned by the
+  separate Character Core." Taraji has no Character Core (her page is a Compact Character Reference). The owner approved
+  it without seeing the change, because the proposal did not show the text. The sentence has since been corrected by
+  hand. The same night's other finding (Shibukawa Akari's "This compact character reference owns Akari's individual
+  identity…") was right.
+- **Root cause**: a specification error, not an implementation one. Decision 3 told the upgrade to replace the compact
+  phrasings on the Core everywhere; only the Art page had a test of what the phrase means. And the finding's
+  `replacements` carried each run before and after, but the proposal built from them kept only a count: its summary said
+  "Replace N compact phrases", its page summary "N phrase(s) → Character Core", and the operation's `replacements` were
+  stored but shown nowhere (the proposal list's `operationBrief` and the Proposals page render neither).
+- Amends decision 3 (the wording) and decision 5b (`core_compact_wording`).
+
+### A1. Only self-references (decisions 3 and 5b)
+
+The shared helper (`src/packs/engine/core.ts`, `reword`), used by the upgrade (a package, the split) and by
+`core_compact_wording`'s check and fix, replaces a compact phrasing on the Core only when it refers to the page itself:
+
+- it is directly preceded by "this" ("This compact character reference owns …", "this compact reference"); or
+- it is the page's **Purpose opener**: it opens a sentence of the page's Purpose paragraph (the first paragraph under
+  "Purpose", or the first paragraph of a page whose text starts before any heading), optionally after "The", and is
+  followed by "for <Subject>" or "for <Canonical Display Name>" ("Compact Main CANON reference for Emine al-Noor …",
+  "The Compact Character Reference for Kamigawa Shirahime."); the optional "The" and the Purpose-paragraph limit are
+  **chosen**;
+- the page's own old name "<Name> - Character Reference" is the page itself, as before.
+
+And never when its sentence names or mentions anyone else: a mention of any page but the character's own, a possessive
+of a capitalised word that is not one of the character's names ("Taraji's"), or the name (or a capitalised word of
+the name) of another character the bridge knows (every Character Core and Compact Character Reference in the tree or
+the audit's snapshot whose name appears in the pages' text: kept with the plan and the fix, so the filler applies the
+same test). Everything else ("the separate compact character reference", "Taraji's compact reference", a phrase in a
+sentence naming another character page) is **listed for the owner** (`COMPACT_WORDING_LEFT`, the finding's `left`),
+never edited. When in doubt, list it: a false negative costs the owner a glance; a false positive rewrites canon.
+
+The **Art page's** "character reference" test is at least as strict: replaced only after the character's own
+possessive ("Emine's character reference", "Emine al-Noor's …"), or after "her", "his", "their" or "its" when the whole
+paragraph names nobody else (**chosen**: a pronoun is less certain than "this", so the paragraph, not only the
+sentence, must be clear); "the character reference" is no longer enough; never in a sentence naming anyone else; and
+not before "images", "sheet", "art", "pages" or "folder", as before.
+
+**Inside the lock** (`pack.core_text`), the filler now also receives the replacements the owner was shown (`expect`):
+a block whose replacements when the job runs are not exactly those is left as it is (counted `held` in the step's
+note). The filler never writes words the proposal did not show.
+
+**`core_compact_wording`** still finds a Core only where a rule would replace something (decision 5b's **chosen**
+rule): a Core whose compact phrasings all mean another page, or cannot be cleared, gives no finding, because its text
+is the author's and correct. Such a sentence is listed in a finding only when the same Core also has a self-reference
+to fix.
+
+### A2. A proposal shows exactly what changes
+
+A **text change** (`src/jobs/text-change.ts`) is one edit of a page's words as the owner reads it: the sentence(s) before
+and after (a long sentence shortened around the change), and the replaced words' place in each. Every automation and
+audit fix whose plan replaces words gives its changes on its high-level operation (`textChanges`). Then:
+
+- **the summary**: the proposal service adds them to every proposal's summary ("Text: “…” → “…”", within the
+  summary's 500 characters, the rest counted "and N more on the proposal");
+- **the Proposals page**: a "Words that change" card on the proposal shows each sentence before and after, the replaced
+  words struck through and highlighted, the new ones highlighted; an item's diff (a package's or a split's upgrade, a
+  consistency pick) does the same for each change of words (`ItemDiff.changes[].removed` and `added`);
+- **the Review card**: a job run directly (at scope write, or the automation's Apply) keeps them in its review note,
+  and its card on the Review page lists them the same way.
+
+`core_compact_wording`'s fix now puts the sentence before and after in its page summary and its operation's
+`textChanges` (the proposal builder dropped them: fixed in the builder, not only in the dashboard).
+
+**Every text-changing fix kind, audited:**
+
+| Fix kind                                                                                                                                          | Before this amendment                                                                           | Now                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `core_text`: the upgrade in a package (`arkona_add_character_art`, `arkona_create_character` with `target`, `arkona_create_owner`, relationships) | the item's diff showed each whole run before and after, unhighlighted; the summary only a count | sentence before and after, highlighted, in the summary, the item, the Review card |
+| `core_text`: the split's upgrade (R3-66)                                                                                                          | not shown at all (its wording change was left out of the split's items)                         | shown on the upgrade's item, in the summary and in the operations                 |
+| `core_wording` (`core_compact_wording`'s fix)                                                                                                     | a count only (the bug)                                                                          | sentence before and after, highlighted, everywhere                                |
+| `em_dash_text` (appraisal)                                                                                                                        | "page content" and the raw block JSON of each `replaceBlock`                                    | each sentence with the dash before and after                                      |
+| `heading_links` (appraisal)                                                                                                                       | "page content" and the raw block JSON                                                           | the heading before (its link as `[label]`) and after                              |
+| `art_stale_folder_ref` (`update_line`)                                                                                                            | the old and new path in the title, not the line                                                 | the line before and after, the path marked                                        |
+| `narrative_dateline_mismatch` (`dateline`)                                                                                                        | the new dateline in the title, the replaced line in the operation only                          | the first line before (or "added") and after                                      |
+| consistency pick (`arkona_consistency_suggest`, `consistency_birth`)                                                                              | the item's diff showed each sentence before and after, unhighlighted                            | highlighted, and in the summary and the Review card                               |
+| `split_paragraph` (`line_break_paragraph`)                                                                                                        | —                                                                                               | no words replaced (one paragraph split at its line breaks): unchanged             |
+| `blank_paragraphs`                                                                                                                                | —                                                                                               | no words replaced (empty paragraphs removed): unchanged                           |
+| `em_dash_name`, `em_dash_subject_name`, `asset_extension`, the art layout's `rename`                                                              | the name before and after in the title                                                          | unchanged (already shown)                                                         |
+
+### Consequences
+
+- The two characters of the bug: Mehrana's sentence about Taraji is never a replacement; Akari's "This compact character
+  reference owns Akari's …" still is. Emine al-Noor's and Hana Mori's Purpose openers still are.
+- A Core upgraded by a tool now keeps every compact phrasing that does not say "this" or open its Purpose paragraph, and
+  lists it. The owner may see more `COMPACT_WORDING_LEFT` sentences than before; none is edited.
+- No migration (the text changes are part of the stored operations; the review note is in the job's options).
+- Tests: `test/f7_1/self-reference.test.ts` (the rule, the Art page's test, the filler's `expect`, the text changes),
+  `test/f7_1/wording-proposal.test.ts` (the audit and its fix on Mehrana's and Akari's Cores, an upgrade's proposal, a
+  direct upgrade's Review card), `test/review/r3-split/core.test.ts` (the split's parity), `test/ui/text-changes.test.tsx`
+  (the Proposals page and the Review card), the browser test "F7.1a" in `test/e2e/dashboard.spec.ts`, and one assertion
+  each in the tests of `em_dash_text`, `heading_links` (`test/appraisal/fixes.test.ts`), `update_line`
+  (`test/f7/art-layout.test.ts`), the dateline (`test/narrative/audit.test.ts`) and the consistency pick
+  (`test/consistency/pick-placement.test.ts`).

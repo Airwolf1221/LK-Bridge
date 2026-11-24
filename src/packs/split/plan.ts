@@ -38,7 +38,7 @@ import {
   type ExpectCheck,
   type VerifyTarget,
 } from '../../jobs/internal-steps.js';
-import { validateItems, withStepDependencies, type PlanItem } from '../../jobs/items.js';
+import { textChangeEntry, validateItems, withStepDependencies, type PlanItem } from '../../jobs/items.js';
 import type { LmrMode } from '../../jobs/lmr-hook.js';
 import type { ItemPartShape, LifecycleMarker, StepSpec } from '../../jobs/types.js';
 import { fromMarkdown, MarkdownError, toMarkdown, type LkBlock } from '../../markdown/index.js';
@@ -50,7 +50,7 @@ import { cleanPrefixes } from '../../registry/names.js';
 import { blockIds, unwritableBlocks } from '../../snapshots/canonical.js';
 import type { TreeNode } from '../../tree/index.js';
 import { buildPackJob, coreTextStep, PACK_CHECKS, shiftStep, type PackJob } from '../engine/job.js';
-import { coreNeed, coreTextWords, ownersInIndex } from '../engine/core.js';
+import { coreNeed, coreTextChanges, coreTextWords, ownersInIndex } from '../engine/core.js';
 import { itemizePackage } from '../engine/items.js';
 import { planOwner } from '../engine/owner.js';
 import {
@@ -2450,6 +2450,21 @@ export async function planSplit(
         if ([...dests.values()].some((r) => r.isNew && r.d.item === d.id))
           destItems[k] = { ...d, dependsOn: [...new Set([...d.dependsOn, head])] };
   }
+  // Amendment 1 to ADR 0072: the upgrade's wording change is shown on the upgrade's item, sentence by sentence.
+  const wording = upgradeToCore ? coreText.flatMap((c) => coreTextChanges(c)) : [];
+  if (wording.length > 0) {
+    const head = itemIds.get(`existing:${node.id}`) ?? `existing:${node.id}`;
+    const k = packItems.findIndex((p) => p.id === head);
+    if (k >= 0)
+      packItems[k] = {
+        ...packItems[k]!,
+        label: `${packItems[k]!.label}; ${coreText.map((c) => `${c.page.rawName}: ${coreTextWords(c)}`).join('; ')}`,
+        diff: {
+          ...packItems[k]!.diff,
+          changes: [...(packItems[k]!.diff?.changes ?? []), ...wording.map(textChangeEntry)],
+        },
+      };
+  }
   let items: PlanItem[] = [
     ...destItems,
     ...packItems.filter((p) => !destItems.some((d) => d.id === p.id)),
@@ -2506,6 +2521,18 @@ export async function planSplit(
         .slice(0, 40),
       summaryLabel: `${r.isNew ? 'New page' : 'Existing owner'} ${r.page?.name}: ${[...new Set((blocksTo.get(r.d.key) ?? []).map((id) => titleOfTop(topOf(id))))].join(', ')}`,
     })),
+    // Amendment 1 to ADR 0072: the upgrade's wording change, with its sentences (the summary and the Review card).
+    ...(upgradeToCore
+      ? coreText
+          .filter((c) => c.replacements.length > 0)
+          .map((c) => ({
+            tool: SPLIT_TOOL,
+            split: splitId,
+            page: { id: c.page.id, name: c.page.rawName },
+            pageParts: [coreTextWords(c)],
+            textChanges: coreTextChanges(c),
+          }))
+      : []),
   ];
   return {
     ok: true,

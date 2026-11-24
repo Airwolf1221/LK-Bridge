@@ -35,7 +35,14 @@ import { classifyName, nameKey as treeNameKey } from '../tree/classify.js';
 import { isKnownRun, runsHashOf, runsText, splitRunsAtBreaks } from './model.js';
 import { AuditError } from './errors.js';
 import type { Finding, FixKind } from './types.js';
-import { CORE_TEXT_FILLER, reword, type CoreTextInput, type WordingRole } from '../packs/engine/core.js';
+import {
+  CORE_TEXT_FILLER,
+  coreTextChanges,
+  reword,
+  type CoreTextInput,
+  type WordingRole,
+} from '../packs/engine/core.js';
+import { shownText, textChange, textChangeWords, type TextChange } from '../jobs/text-change.js';
 import type { LkBlock } from '../markdown/index.js';
 
 type Obj = Record<string, unknown>;
@@ -926,6 +933,12 @@ interface WordingPart {
 async function fixCoreWording(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
   const a = f.fix!.args as Obj;
   const subject = String(a.subject);
+  // Amendment 1 to ADR 0072: the names the audit's self-reference test used (the filler applies the same ones).
+  const strings = (v: unknown): string[] | undefined =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined;
+  const names = strings(a.names);
+  const others = strings(a.others);
+  const wn = { ...(names ? { names } : {}), ...(others ? { others } : {}) };
   const core = a.core as Obj;
   const parts: WordingPart[] = [];
   if (isObj(a.art))
@@ -960,7 +973,7 @@ async function fixCoreWording(d: FixDeps, projectId: string, f: Finding): Promis
     })) as Obj | undefined;
     const blocks = isObj(doc) && Array.isArray(doc.blocks) ? (doc.blocks as LkBlock[]) : null;
     if (!blocks) throw stale(`${p.name}'s text could not be read now.`);
-    const now = reword(blocks, p.role, subject).replacements;
+    const now = reword(blocks, p.role, subject, undefined, wn).replacements;
     if (keyOf(now) !== keyOf(p.replacements))
       throw stale(
         `${p.name}'s text has changed since the audit (the phrases to replace are not the ones it found).`,
@@ -972,12 +985,19 @@ async function fixCoreWording(d: FixDeps, projectId: string, f: Finding): Promis
   }
   if (live.length === 0) return { status: 'nothing_to_do', message: 'No compact phrase is left to replace.' };
   const n = live.reduce((k, p) => k + p.replacements.length, 0);
-  const title = `Replace ${n} compact phrase${n === 1 ? '' : 's'} for ${subject}'s Character Core (${live.map((p) => p.name).join(', ')})`;
+  // Amendment 1 to ADR 0072: the words that change, sentence by sentence, in the title, the page summary and the
+  // operation (the Proposals page and the Review card show them, the replaced words highlighted).
+  const changes: TextChange[] = live.flatMap((p) =>
+    coreTextChanges({ page: { id: p.pageId, name: p.name }, replacements: p.replacements }),
+  );
+  const title = `Replace ${n} phrase${n === 1 ? '' : 's'} where ${subject}'s Character Core calls itself compact (${live.map((p) => p.name).join(', ')})`;
   const steps: StepSpec[] = live.map((p) => {
     const input: CoreTextInput = {
       role: p.role,
       subject,
+      ...wn,
       reword: [...new Set(p.replacements.map((r) => r.blockId))],
+      expect: p.replacements.map((r) => ({ blockId: r.blockId, before: r.before, after: r.after })),
       remove: [],
     };
     return {
@@ -1000,6 +1020,7 @@ async function fixCoreWording(d: FixDeps, projectId: string, f: Finding): Promis
     replacements: live.flatMap((p) =>
       p.replacements.map((r) => ({ page: p.name, before: r.before, after: r.after })),
     ),
+    textChanges: changes,
   };
   if (d.direct !== true)
     return propose(d, projectId, {
@@ -1008,7 +1029,12 @@ async function fixCoreWording(d: FixDeps, projectId: string, f: Finding): Promis
       holdDocuments: live.map((p) => p.documentId),
       operation,
       page: { id: String(a.pageId), name: String(a.name) },
-      pageParts: live.map((p) => `${p.name}: ${p.replacements.length} phrase(s) → Character Core`),
+      pageParts: live.flatMap((p) => {
+        const mine = changes.filter((c) => c.pageId === p.pageId);
+        return mine.length > 0
+          ? mine.map((c) => `wording: ${textChangeWords({ ...c, page: '' })}`)
+          : [`${p.replacements.length} phrase(s) → Character Core`];
+      }),
       fix: 'core_wording',
     });
   // The automation's Apply: a job, every guard judging it (a guard may still make it a proposal).
@@ -1227,6 +1253,15 @@ async function fixArtLayout(d: FixDeps, projectId: string, f: Finding): Promise<
           'The stale path is no longer in one piece of the line’s text (edited, or split by formatting); nothing was proposed. Update it by hand.',
         );
       const content = runs.map((r, i) => (i === at ? { ...r, text: String(r.text).replace(from, to) } : r));
+      // Amendment 1 to ADR 0072: the line before and after, the path that changes marked.
+      const lineChange = textChange({
+        page: String(res.name),
+        pageId,
+        blockId,
+        what: 'folder path',
+        before: shownText(runs),
+        after: shownText(content),
+      });
       return propose(d, projectId, {
         steps: [
           {
@@ -1244,9 +1279,20 @@ async function fixArtLayout(d: FixDeps, projectId: string, f: Finding): Promise<
         ],
         title: `${String(res.name)}: update a line naming ${from} to ${to}`,
         holdDocuments: [documentId],
-        operation: { tool, action: 'update_line', from, to, block: blockId },
+        operation: {
+          tool,
+          action: 'update_line',
+          from,
+          to,
+          block: blockId,
+          ...(lineChange ? { textChanges: [lineChange] } : {}),
+        },
         page: { id: pageId, name: String(res.name) },
-        pageParts: ['page content: one line updated'],
+        pageParts: [
+          lineChange
+            ? `page content: one line updated: ${textChangeWords({ ...lineChange, page: '' })}`
+            : 'page content: one line updated',
+        ],
         fix: 'art_layout',
       });
     }
@@ -1520,6 +1566,14 @@ async function fixNarrative(
       const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as
         Obj | undefined;
       const name = isObj(res) ? String(res.name) : pageId;
+      // Amendment 1 to ADR 0072: the first line before and after (a dateline put first: nothing before it).
+      const datelineChange = textChange({
+        page: name,
+        pageId,
+        what: 'dateline',
+        before: isDateline ? firstText : '',
+        after: dateline,
+      });
       return propose(d, projectId, {
         steps: [
           {
@@ -1541,9 +1595,14 @@ async function fixNarrative(
           fromAudit: f.code,
           dateline,
           replaced: isDateline ? firstText : null,
+          ...(datelineChange ? { textChanges: [datelineChange] } : {}),
         },
         page: { id: pageId, name },
-        pageParts: [isDateline ? 'the first line (the dateline) replaced' : 'a dateline put first'],
+        pageParts: [
+          isDateline
+            ? `the first line (the dateline) replaced: “${firstText}” → “${dateline}”`
+            : `a dateline put first: “${dateline}”`,
+        ],
         prefetched: [{ op: 'getDocumentBlocks', path, body: doc }],
         fix: 'narrative',
         lifecycle: marker(pageId),

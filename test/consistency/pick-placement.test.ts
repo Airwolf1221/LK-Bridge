@@ -226,8 +226,20 @@ describe('the pick places each edit where the check read the value (CR-2026-11-R
         what: 'the sentence',
         before: 'Beth Ivers was born in 4A 103, the parish says.',
         after: 'Beth Ivers was born in 4A 100, the parish says.',
+        // Amendment 1 to ADR 0072: the replaced words, marked for the Proposals page.
+        removed: { start: 26, end: 29 },
+        added: { start: 26, end: 29 },
       },
     ]);
+    // …and the proposal's summary and operations show the sentence before and after.
+    const detail = w.stack.runtime.policy.proposals.detail(String(r.json.proposalId))!;
+    expect((detail.operations as Obj[]).flatMap((o) => (o.textChanges as Obj[] | undefined) ?? [])).toEqual([
+      expect.objectContaining({
+        before: 'Beth Ivers was born in 4A 103, the parish says.',
+        after: 'Beth Ivers was born in 4A 100, the parish says.',
+      }),
+    ]);
+    expect(detail.summary).toContain('“Beth Ivers was born in 4A 103, the parish says.”');
     const done = await approve(w, String(r.json.proposalId));
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     expect(textOf(reg(BETH), 'bethp1')).toBe('The stone by the well reads “Beth Ivers was born in 4A 103.”');

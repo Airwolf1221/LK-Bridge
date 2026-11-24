@@ -19,7 +19,9 @@ import { MockLk, type MockRequest, type MockResponse } from '../contract/mock-lk
 import { SidebarModel } from '../facts/sidebar-model.js';
 import { LkModel } from '../jobs/lk-model.js';
 import { mintClientId } from '../../src/jobs/index.js';
-import { getSection, toMarkdown } from '../../src/markdown/index.js';
+import { getSection, toMarkdown, type LkBlock } from '../../src/markdown/index.js';
+import { coreTextChanges, reword } from '../../src/packs/engine/core.js';
+import { textChangeWords } from '../../src/jobs/text-change.js';
 import { planPageWrite, sha256 } from '../../src/pages/index.js';
 import { observationFromResource } from '../../src/tree/classify.js';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
@@ -47,6 +49,26 @@ model.seedResource('res2', {
     { id: 'mh2', kind: 'heading', level: 2, content: [{ text: 'Relations' }] },
     { id: 'mp2', kind: 'paragraph', content: [{ text: 'Sister of Kaede.' }] },
     { id: 'mun1', kind: 'unsupported' },
+  ],
+});
+// Amendment 1 to ADR 0072: a Character Core whose text calls itself compact in one sentence and names another
+// character's page in another (the owner's bug of 24 November 2026), for a core_text proposal seen in a browser.
+model.seedResource('res4', {
+  name: '[BSRC] Shibukawa Akari - Character Core',
+  blocks: [
+    { id: 'ak1', kind: 'heading', level: 2, content: [{ text: 'Purpose' }] },
+    {
+      id: 'ak2',
+      kind: 'paragraph',
+      content: [
+        { text: "This compact character reference owns Akari's individual identity, voice and history." },
+      ],
+    },
+    {
+      id: 'ak3',
+      kind: 'paragraph',
+      content: [{ text: 'Her tailor’s identity is owned by the separate compact character reference.' }],
+    },
   ],
 });
 // v2 C2a: a page whose sidebar is modelled (versions, If-Match, rows), for a proposal that touches protected canon.
@@ -267,6 +289,48 @@ async function proposePageWrite(): Promise<string> {
 }
 
 /**
+ * Amendment 1 to ADR 0072: a Core's compact wording replaced, planned as `core_compact_wording`'s fix plans it (the
+ * shared helper's self-reference rule, the proposal's text changes), so the highlighted change can be seen in a
+ * browser. The audit itself needs snapshots this harness does not take; test/f7_1 covers the fix end to end.
+ */
+async function proposeWording(): Promise<string> {
+  const path = { resourceId: 'res4', documentId: 'd_res4' };
+  const who = {
+    kind: 'mcp' as const,
+    tool: 'audits.core_wording',
+    principal: { principalId: proposer?.id ?? 'unknown', profile: profile.label, label: 'e2e proposer' },
+  };
+  const read = await engine.run('getDocumentBlocks', { path }, { project: PROJECT, origin: who });
+  if (read.status !== 'succeeded') return 'none';
+  const current = read.result as { version: string; blocks: LkBlock[] };
+  const planned = reword(current.blocks, 'core', 'Shibukawa Akari');
+  const page = { id: 'res4', name: '[BSRC] Shibukawa Akari - Character Core' };
+  const textChanges = coreTextChanges({ page, replacements: planned.replacements });
+  const r = await engine.run(
+    'replaceDocumentBlocks',
+    { path, ifMatch: current.version, body: { blocks: planned.blocks } },
+    {
+      project: PROJECT,
+      origin: who,
+      verifyAfterWrite: true,
+      proposal: {
+        operations: [
+          {
+            tool: 'audits.core_wording',
+            page,
+            pageParts: textChanges.map((c) => `wording: ${textChangeWords({ ...c, page: '' })}`),
+            textChanges,
+          },
+        ],
+        summary: `Replace ${planned.replacements.length} phrase(s) where Shibukawa Akari's Character Core calls itself compact`,
+        prefetched: [{ op: 'getDocumentBlocks', path, body: read.result }],
+      },
+    },
+  );
+  return r.status === 'proposal_captured' ? r.proposalId : 'none';
+}
+
+/**
  * v2 C2a: an agent at scope propose makes Inae canon (Status Working → Authoritative): a proposal only "accept as canon"
  * can run. v3 F3c (ADR 0051 decision 4): through promote_page, over MCP with the proposer's token, as an agent does.
  * Writing the Status row directly is refused by the C2c lifecycle guard (a lifecycle change goes through its tools).
@@ -378,6 +442,8 @@ createServer((req, res) => {
       res.end(
         JSON.stringify({ status: sidebars.rows('res3').find((r) => r.key === 'Status')?.text ?? null }),
       );
+    } else if (url.pathname === '/wording-proposal') {
+      res.end(JSON.stringify({ proposalId: await proposeWording() }));
     } else if (url.pathname === '/page-proposal') {
       res.end(JSON.stringify({ proposalId: await proposePageWrite() }));
     } else if (url.pathname === '/automation-setup') {

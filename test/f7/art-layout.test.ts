@@ -3,6 +3,7 @@
  * real, cleaned-up ones), then the audit → automation → proposal path against the mock: every fix is a proposal
  * (Propose by default, never Apply), and an approved one does exactly its moves and deletes.
  */
+import { textChangesOf } from '../../src/jobs/text-change.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { readLayout } from '../../src/art/layout.js';
 import { artLayoutFindings } from '../../src/audits/checks/art-layout.js';
@@ -295,5 +296,24 @@ describe('G7: audit → automation → proposals (mock LegendKeeper)', () => {
     ).toEqual(['Nadira al-Khalid - Twin Coat - Back', 'Nadira al-Khalid - Twin Coat - Front']);
     // The Outfits folder with an asset is left for the owner.
     expect(w.assets.byName('Court Dress')).toHaveLength(1);
+  });
+
+  it('a stale folder path’s proposal shows the line before and after, the path that changes marked (amendment 1 to ADR 0072)', async () => {
+    const f = open('art_stale_folder_ref').find((x) => x.pageId === 'nadircor' && x.blockId === 'f7stale1')!;
+    const item = a()
+      .store.codeItems(PROJECT, 'art_stale_folder_ref', 20)
+      .find((i) => i.proposalId && i.pageId === 'nadircor');
+    const proposalId =
+      item?.proposalId ??
+      ((await w.stack.runtime.audits.proposeFix('owner', PROJECT, f.id)) as { proposalId: string })
+        .proposalId;
+    const detail = w.stack.runtime.policy.proposals.detail(proposalId)!;
+    const tc = textChangesOf(detail.operations);
+    expect(tc).toHaveLength(1);
+    const c = tc[0]!;
+    expect(c.what).toBe('folder path');
+    expect(c.before).toMatch(/Outfits \/ Single Robe|Qishen/);
+    expect(c.before.slice(c.removed.start, c.removed.end)).not.toBe('');
+    expect(detail.summary).toContain('Text: “');
   });
 });

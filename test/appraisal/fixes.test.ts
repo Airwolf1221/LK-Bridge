@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
 /**
  * v3 F3c, section F (ADR 0054): "Propose a fix". Each deterministic fix re-reads its target live (one read), checks the
  * finding still holds, and makes exactly the intended proposal and nothing more; Last Major Revision follows ADR 0051 (a
@@ -60,6 +60,17 @@ describe('the deterministic fixes', () => {
       { text: 'never', bold: true },
       { text: '.' },
     ]);
+    // Amendment 1 to ADR 0072: the proposal shows each sentence before and after, the replaced characters marked.
+    const tc = (proposal(r.body.proposalId).operations as any[]).flatMap((o) => o.textChanges ?? []);
+    expect(tc.map((c: any) => [c.blockId, c.what])).toEqual([
+      ['dh1', 'dash'],
+      ['dp1', 'dash'],
+    ]);
+    expect(tc[0].after).toBe('Trade - and Tolls');
+    expect(tc[0].before.slice(tc[0].removed.start, tc[0].removed.end)).toMatch(/[—–]/);
+    expect(tc[1].after).toBe('The gate - its keepers say - never closes; never.');
+    expect(r.body.summary).toContain('Text: “');
+    expect(JSON.stringify(proposal(r.body.proposalId).pageSummary)).toContain('dash: “');
     // ADR 0051: a dash is punctuation, not a major revision: Last Major Revision is skipped, and the proposal says so.
     expect(proposal(r.body.proposalId).ops.some((o) => o.op === 'bridge.lmr')).toBe(false);
     expect(r.body.summary).toMatch(/Last Major Revision skipped/);
@@ -97,6 +108,12 @@ describe('the deterministic fixes', () => {
     });
     // The heading's words are unchanged (a mention reads as its label): not a major revision.
     expect(r.body.summary).toMatch(/Last Major Revision skipped/);
+    // Amendment 1 to ADR 0072: the link dropped is shown (a link reads as [its label]).
+    const tc = (proposal(r.body.proposalId).operations as any[]).flatMap((o) => o.textChanges ?? []);
+    expect(tc.map((c: any) => [c.what, c.before, c.after])).toEqual([
+      ['heading link', 'Relations with [Tarim]', 'Relations with Tarim'],
+    ]);
+    expect(r.body.summary).toContain('“Relations with [Tarim]” → “Relations with Tarim”');
   });
 
   it('an em dash in the page name: update_resource with the prefix kept, nothing else', async () => {

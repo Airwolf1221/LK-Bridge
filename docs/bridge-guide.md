@@ -685,7 +685,7 @@ canon beside a canon one, its continuity kept (an AU character's pages stay AU a
 flat under `[INDEX] Working`, to promote into the character's place later. A Compact Reference that gains sibling pages
 gets its own index in its place (the Reference moves under it and keeps its id); `upgradeToCore: true` renames the
 Compact Reference to its Character Core (its text kept). A Compact Reference becomes the Character Core automatically,
-in the same proposal, when its character gains an index with several owners (its compact wording replaced, its images
+in the same proposal, when its character gains an index with several owners (where its text calls itself compact, that phrase replaced; any other compact phrasing listed, never edited; its images
 left to the Art page; `upgradeToCore: false` is then refused with `CORE_REQUIRED`). New pages are announced in the index's "How to Use This Index"
 section. The tool refuses a name that matches several characters (`TARGET_AMBIGUOUS`, with the candidates: pass the
 id), an Archived character (`TARGET_ARCHIVED`: it is unarchived first, by the owner), a domain the character already has
