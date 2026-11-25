@@ -63,7 +63,8 @@ describe('arkona_story_create (E1, E5)', () => {
     const names = kids(story.id).map((r) => r.name);
     expect(names[0]).toBe('Story Map');
     expect(names.slice(1)).toEqual(
-      Array.from({ length: 10 }, (_, i) => `[INDEX] Act ${i + 1} - Part ${i + 1}`),
+      // v3 F6b (ADR 0079): an act only routes, so it is [NAV] (the story stays [INDEX]).
+      Array.from({ length: 10 }, (_, i) => `[NAV] Act ${i + 1} - Part ${i + 1}`),
     );
     const map = kids(story.id)[0]!;
     expect(map.tags).toEqual(['Narrative', 'Story Map']);
@@ -310,7 +311,7 @@ describe('arkona_chapter_plan and arkona_chapter_save (E5)', () => {
     });
     expect(ok.status, JSON.stringify(ok)).toBe('written');
     const story = named(N.main, '[INDEX] The Glass Coast');
-    expect(kids(named(story.id, '[INDEX] Act 1 - Part 1').id).map((r) => r.name)).toEqual([
+    expect(kids(named(story.id, '[NAV] Act 1 - Part 1').id).map((r) => r.name)).toEqual([
       'Chapter 1 - Arrival',
     ]);
     await w.tool('arkona_chapter_plan', {

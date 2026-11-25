@@ -369,3 +369,11 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   judgement linked to the value's row; rejected values and approved specialist types give no finding. Automation:
   proposal-only with Apply allowed, default Off.
 - `reference_type_category_mismatch` (info): the value is another primary category's type; no fix.
+- v3 F6b ([ADR 0079](adr/0079-v3-f6b-navigation-and-subject-indexes.md)), only for indexes the owner approved on the
+  Index Classification page: `index_prefix` (warning): the prefix disagrees with the approved role; the fix renames the
+  prefix only (`[INDEX] X` ↔ `[NAV] X`; display name, id and links kept). `index_tags` (warning): the tags differ from
+  T11 (a `[NAV]` exactly Navigation; an `[INDEX]` exactly its subject's primary category; never CANON), once the Tagging
+  Standard's "Navigation and Subject Index Tags" is published and approved; not under Narratives (the narrative tag grammar
+  governs story, continuity and act indexes there, the owner's ruling); the fix goes through the retag engine's write path, and taking CANON off is always a canonical
+  proposal. Automation: proposal-first, Apply allowed, default Propose. `out_of_order` applies T11's order ([NAV], then
+  [INDEX], then sources) once the approved pack carries it.

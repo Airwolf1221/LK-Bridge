@@ -8,6 +8,7 @@
  * source's document version; a preview reads the current ones; a job reads them again before it writes. When any differs
  * the pack is "drifted" and tag computation fails closed until the owner approves again.
  */
+import { parseIndexTagSection, SUBJECT_KINDS, type SubjectKind } from './indextax/rules.js';
 import { createHash } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { JobEngine } from '../jobs/index.js';
@@ -134,6 +135,63 @@ export interface GovernanceStatus {
   readonly referenceTypes?: {
     readonly state: 'draft' | 'same' | 'offered' | 'unreadable';
     readonly reason?: string;
+  };
+  /**
+   * v3 F6b (ADR 0079): the index tag rule as its section reads now: `draft` (not written yet: the old rules stay in
+   * force, never refusing the approval), `same`, `offered` (a new version made, the section as the authority),
+   * `unreadable` (the section cannot be read exactly: the approval is refused). Absent when the version has no rule.
+   */
+  readonly indexTags?: {
+    readonly state: 'draft' | 'same' | 'offered' | 'unreadable';
+    readonly reason?: string;
+  };
+}
+
+/**
+ * v3 F6b (ADR 0079): the heading keys of a source's pinned sections that are drafts not written yet (the Reference Type
+ * Vocabulary while it is a draft, the index tag rule while it is a draft): absent, they read `unpublished` and never
+ * refuse the approval.
+ */
+function draftSectionKeys(pack: Pack, sourceKey: string): Set<string> {
+  const out = new Set<string>();
+  const rt = pack.rules.referenceTypes;
+  if (rt?.status === 'draft' && rt.source === sourceKey) out.add(headingKey(rt.section));
+  const it = pack.rules.indexTaxonomy;
+  if (it?.status === 'draft' && it.source === sourceKey) out.add(headingKey(it.section));
+  return out;
+}
+
+/**
+ * v3 F6b (ADR 0079): the version's index tag rule against its section as read now. Null when the version has none, its
+ * source could not be read, or the source does not pin the section.
+ */
+function deriveIndexTaxonomy(
+  pack: Pack,
+  blocks: ReadonlyMap<string, unknown>,
+): {
+  state: 'draft' | 'same' | 'differs' | 'unreadable';
+  parsed?: { navTag: string; subjectTags: Record<SubjectKind, string>; narrativeGrammar: boolean };
+  reason?: string;
+} | null {
+  const it = pack.rules.indexTaxonomy;
+  if (!it || !blocks.has(it.source)) return null;
+  const src = pack.governance.find((g) => g.key === it.source);
+  if (!(src?.sections ?? []).some((h) => headingKey(h) === headingKey(it.section))) return null;
+  const section = sectionBlocksOf(blocks.get(it.source), it.section);
+  if (!section) return it.status === 'draft' ? { state: 'draft' } : null;
+  const parsed = parseIndexTagSection(section);
+  if (!parsed.ok) return { state: 'unreadable', reason: parsed.reason };
+  // A section that states the Narratives exclusion instead of a story's tag keeps the version's story tag (unused:
+  // stories are under Narratives, where the narrative grammar governs).
+  const subjectTags: Record<SubjectKind, string> = { ...it.subjectTags, ...parsed.subjectTags };
+  const same =
+    parsed.navTag === it.navTag &&
+    SUBJECT_KINDS.every((k) => subjectTags[k] === it.subjectTags[k]) &&
+    parsed.narrativeGrammar === (it.narrativeGrammar ?? false);
+  if (it.status === 'published' && same) return { state: 'same' };
+  return {
+    state: 'differs',
+    parsed: { navTag: parsed.navTag, subjectTags, narrativeGrammar: parsed.narrativeGrammar },
   };
 }
 
@@ -450,6 +508,26 @@ export function createPacks(d: PacksDeps): Packs {
           ...(stored.rules.referenceTypes?.status === 'published'
             ? { referenceTypes: stored.rules.referenceTypes }
             : {}),
+          // v3 F6b (ADR 0079): a published index tag rule is the section's, and the structural lists are the owner's.
+          ...(s.rules.indexTaxonomy && stored.rules.indexTaxonomy
+            ? {
+                indexTaxonomy: {
+                  ...s.rules.indexTaxonomy,
+                  structural: stored.rules.indexTaxonomy.structural,
+                  outOfScope: stored.rules.indexTaxonomy.outOfScope,
+                  ...(stored.rules.indexTaxonomy.status === 'published'
+                    ? {
+                        status: 'published' as const,
+                        navTag: stored.rules.indexTaxonomy.navTag,
+                        subjectTags: stored.rules.indexTaxonomy.subjectTags,
+                        ...(stored.rules.indexTaxonomy.narrativeGrammar !== undefined
+                          ? { narrativeGrammar: stored.rules.indexTaxonomy.narrativeGrammar }
+                          : {}),
+                      }
+                    : {}),
+                },
+              }
+            : {}),
         });
         const governance = mergeGovernance(stored.governance, s.governance);
         const after = store.upgrade(
@@ -638,10 +716,8 @@ export function createPacks(d: PacksDeps): Packs {
       // v3 F3b (ADR 0052): each pinned section against the digest the approval recorded. The document's version alone
       // decides the source's state (fail closed, as F3a); this says which pinned part moved.
       // v3 F6a (ADR 0076): the vocabulary's own section, while the version's vocabulary is a draft.
-      const draftVocabulary =
-        pack.rules.referenceTypes?.status === 'draft' && pack.rules.referenceTypes.source === src.key
-          ? headingKey(pack.rules.referenceTypes.section)
-          : null;
+      // v3 F6b (ADR 0079): and the index tag rule's section, while that rule is a draft.
+      const drafts = draftSectionKeys(pack, src.key);
       const sections =
         (src.sections ?? []).length === 0 || read.version === null
           ? undefined
@@ -653,7 +729,7 @@ export function createPacks(d: PacksDeps): Packs {
                 state:
                   s.matches > 1
                     ? ('ambiguous' as const)
-                    : s.digest === null && draftVocabulary === headingKey(s.heading)
+                    : s.digest === null && drafts.has(headingKey(s.heading))
                       ? ('unpublished' as const)
                       : s.digest === null
                         ? ('missing' as const)
@@ -754,10 +830,53 @@ export function createPacks(d: PacksDeps): Packs {
       );
       changed();
     }
+    // v3 F6b (ADR 0079): the index tag rule, parsed from the Tagging Standard's "Navigation and Subject Index Tags" once
+    // the owner's reviewer writes it. A section that states another rule than this version's is offered as a NEW version
+    // (`published`, the section as the authority), never applied until the owner approves it.
+    const indexTags = deriveIndexTaxonomy(pack, blocksBySource);
+    if (indexTags?.state === 'differs' && indexTags.parsed) {
+      const before = pack.rules.indexTaxonomy!;
+      const rules = packRulesSchema.parse({
+        ...pack.rules,
+        indexTaxonomy: {
+          ...before,
+          status: 'published',
+          navTag: indexTags.parsed.navTag,
+          subjectTags: indexTags.parsed.subjectTags,
+          ...(indexTags.parsed.narrativeGrammar ? { narrativeGrammar: true } : {}),
+        },
+      });
+      pack = store.newVersion(
+        pack.id,
+        rules,
+        `${before.section} in ${pack.governance.find((g) => g.key === before.source)?.name ?? before.source} now states the index tag rule (the section is its authority)`,
+      );
+      d.audit(
+        'system',
+        'pack.derive_index_tags',
+        pack.id,
+        { status: before.status, navTag: before.navTag, subjectTags: before.subjectTags },
+        {
+          version: pack.version,
+          navTag: indexTags.parsed.navTag,
+          subjectTags: indexTags.parsed.subjectTags,
+          narrativeGrammar: indexTags.parsed.narrativeGrammar,
+        },
+      );
+      changed();
+    }
     const base = {
       sources,
       version: pack.version,
       approvedVersion: approved?.version ?? null,
+      ...(indexTags
+        ? {
+            indexTags: {
+              state: indexTags.state === 'differs' ? ('offered' as const) : indexTags.state,
+              ...(indexTags.reason ? { reason: indexTags.reason } : {}),
+            },
+          }
+        : {}),
       ...(referenceTypes
         ? {
             referenceTypes: {
@@ -950,8 +1069,7 @@ export function createPacks(d: PacksDeps): Packs {
             approvedDigest === null &&
             before === null &&
             after === null &&
-            pack.rules.referenceTypes?.status === 'draft' &&
-            headingKey(h) === headingKey(pack.rules.referenceTypes.section)
+            draftSectionKeys(pack, g.key).has(headingKey(h))
           )
             continue;
           if (approvedDigest === null || before !== approvedDigest || after === null) return false;
@@ -1065,6 +1183,12 @@ export function createPacks(d: PacksDeps): Packs {
           throw new PackError(
             'GOVERNANCE_SECTION_UNPARSABLE',
             `The pack cannot be approved: the Reference Type Vocabulary section cannot be read exactly (${status.referenceTypes.reason ?? 'unreadable'}). Publish the vocabulary again from the Reference Types page, or restore the section's form on the page.`,
+            { governance: status },
+          );
+        if (status.indexTags?.state === 'unreadable')
+          throw new PackError(
+            'GOVERNANCE_SECTION_UNPARSABLE',
+            `The pack cannot be approved: the Navigation and Subject Index Tags section cannot be read exactly (${status.indexTags.reason ?? 'unreadable'}). Write it in the form the bridge reads (one paragraph per kind of index, “Character index: Character.”).`,
             { governance: status },
           );
         const unreadable = status.sources.filter((s) => s.current === null);

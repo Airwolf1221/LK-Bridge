@@ -362,7 +362,7 @@ describe('the race roster and the Bestiary (design 1.1a, the owner’s ruling)',
     expect(warned.body.pages).toHaveLength(1);
     const made = await dry(race({ createCharacterNavigation: true }));
     expect(made.isError, made.text).toBe(false);
-    const index = made.body.pages.find((p: { name: string }) => p.name === '[INDEX] Qilin');
+    const index = made.body.pages.find((p: { name: string }) => p.name === '[NAV] Qilin'); // v3 F6b (ADR 0079): a race's navigation is [NAV]
     expect(index.parent).toBe('[INDEX] Beastkin');
     expect(index.notes.join(' ')).toMatch(/character navigation \(createCharacterNavigation\)/);
     // A racial group's navigation is directly under Characters; an existing race's is not made again.
@@ -374,7 +374,7 @@ describe('the race roster and the Bestiary (design 1.1a, the owner’s ruling)',
         createCharacterNavigation: true,
       }),
     );
-    expect(group.body.pages.find((p: { name: string }) => p.name === '[INDEX] Merfolk').parent).toBe(
+    expect(group.body.pages.find((p: { name: string }) => p.name === '[NAV] Merfolk').parent).toBe(
       '[INDEX] Characters',
     );
     const subrace = await dry(
@@ -396,7 +396,7 @@ describe('the race roster and the Bestiary (design 1.1a, the owner’s ruling)',
     const done = await approve(w, String(p.body.proposalId));
     expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
     expect((done.job?.result as { verified?: boolean }).verified).toBe(true);
-    const nav = pageNamed('[INDEX] Qilin')!;
+    const nav = pageNamed('[NAV] Qilin')!; // v3 F6b (ADR 0079)
     expect(w.repo.res.get(nav.parentId!)!.name).toBe('[INDEX] Beastkin');
     expect(w.repo.res.get(pageNamed('[BSRC] Qilin - Core Information')!.parentId!)!.name).toBe(
       '[BSRC] Beastkin - Racial Group Reference',
@@ -424,7 +424,7 @@ describe('the race roster and the Bestiary (design 1.1a, the owner’s ruling)',
       project: 'test',
     });
     expect(ch.isError, ch.text).toBe(false);
-    expect(ch.body.tree[0].parent).toBe('[INDEX] Qilin');
+    expect(ch.body.tree[0].parent).toBe('[NAV] Qilin');
   });
 });
 
@@ -622,6 +622,8 @@ describe('the lifecycle and the AU rule (design 1.4, 1.5)', () => {
     expect(rules.tags.au).toEqual({ continuityType: 'AU', tag: 'AU' });
     expect(rules.rulings).toEqual([
       expect.objectContaining({ key: 'au-status-tag', date: '2026-11-16', by: 'owner' }),
+      // v3 F6b (ADR 0079): T11, navigation and subject indexes.
+      expect.objectContaining({ key: 'nav-and-subject-indexes', date: '2026-11-25', by: 'owner' }),
     ]);
   });
 });

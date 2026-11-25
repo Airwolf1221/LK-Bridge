@@ -9,6 +9,7 @@
  * Name lookups are EXACT (no fuzzy matching, PLAN-v2 4.4) and return EVERY match. By default they ignore case
  * (Unicode NFC, lower case); `caseSensitive: true` compares the stored text as it is.
  */
+import { indexRoleOfName, type IndexRole } from './classify.js';
 import { prepared } from '../db/statements.js';
 import { nameKey } from './classify.js';
 import { TreeStore, type NodeRow } from './store.js';
@@ -53,6 +54,26 @@ export interface PageScanRow {
   readonly propertiesPending: boolean;
   readonly lastReadAt: number;
   readonly stale: boolean;
+}
+
+/**
+ * v3 F6b (ADR 0079): every node, light (no sidebar, no documents): what the index classification report needs to place
+ * each index among its parent's children and its subject's pages. In sibling order (by rank) within each parent.
+ */
+export interface NodeScanRow {
+  readonly id: string;
+  readonly rawName: string;
+  readonly displayName: string;
+  readonly kind: NodeKind;
+  readonly indexRole: IndexRole | null;
+  readonly parentId: string | null;
+  readonly depth: number;
+  readonly pathIds: readonly string[];
+  readonly pathNames: readonly string[];
+  readonly tags: readonly string[];
+  readonly referenceType: string | null;
+  readonly canonicalDisplayName: string | null;
+  readonly isLocked: boolean | null;
 }
 
 const ORDER = 'ORDER BY rank IS NULL, rank COLLATE BINARY, id';
@@ -224,6 +245,53 @@ export class TreeQueries {
    * v3 F6a.1 (ADR 0076 amendment 1): the tree's version, bumped by every change to any of its nodes (migration 4510's
    * triggers). 0 before the first node. Cheap (one row): callers cache what they derive from the tree on it.
    */
+  /** v3 F6b (ADR 0079): every node, light (`NodeScanRow`), ordered by parent and rank. ONE query. */
+  nodeScan(projectId: string): NodeScanRow[] {
+    const rows = prepared(
+      this.db,
+      `SELECT id, raw_name, display_name, kind, index_role, parent_id, depth, path_ids, path_names, tags,
+              reference_type, canonical_name, is_locked
+         FROM tree_nodes WHERE project_id = ?
+        ORDER BY parent_id, rank IS NULL, rank COLLATE BINARY, id`,
+    ).all(projectId) as {
+      id: string;
+      raw_name: string;
+      display_name: string;
+      kind: NodeKind;
+      index_role: IndexRole | null;
+      parent_id: string | null;
+      depth: number;
+      path_ids: string;
+      path_names: string;
+      tags: string;
+      reference_type: string | null;
+      canonical_name: string | null;
+      is_locked: number | null;
+    }[];
+    const parse = <T>(v: string, fallback: T): T => {
+      try {
+        return JSON.parse(v) as T;
+      } catch {
+        return fallback;
+      }
+    };
+    return rows.map((r) => ({
+      id: r.id,
+      rawName: r.raw_name,
+      displayName: r.display_name,
+      kind: r.kind,
+      indexRole: r.kind === 'index' ? (r.index_role ?? indexRoleOfName(r.raw_name) ?? 'subject') : null,
+      parentId: r.parent_id,
+      depth: r.depth,
+      pathIds: parse<string[]>(r.path_ids, []),
+      pathNames: parse<string[]>(r.path_names, []),
+      tags: parse<string[]>(r.tags, []),
+      referenceType: r.reference_type,
+      canonicalDisplayName: r.canonical_name,
+      isLocked: r.is_locked === null ? null : r.is_locked === 1,
+    }));
+  }
+
   version(projectId: string): number {
     const r = prepared(this.db, 'SELECT version FROM tree_versions WHERE project_id = ?').get(projectId) as
       { version: number } | undefined;

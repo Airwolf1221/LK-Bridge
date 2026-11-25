@@ -331,8 +331,9 @@ export interface DeletedPageRecord {
  * is still judged as one, so it cannot take a page out of its state unseen.
  */
 export function looseKind(name: string): string {
-  const m = /^\[\s*(bsrc|bwrk|barc|index)\s*\]/.exec(factKey(name));
-  return m ? m[1]! : classifyName(name).kind;
+  const m = /^\[\s*(bsrc|bwrk|barc|index|nav)\s*\]/.exec(factKey(name));
+  // v3 F6b: `[NAV]` is an index, whatever its role.
+  return m ? (m[1] === 'nav' ? 'index' : m[1]!) : classifyName(name).kind;
 }
 
 /** CR-2026-11-R4 (F2): a change marked as the first state of a page the request creates. */

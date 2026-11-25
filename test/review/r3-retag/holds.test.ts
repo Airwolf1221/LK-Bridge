@@ -222,7 +222,9 @@ describe('one page, one open batch', () => {
     const client = await w.stack.connect();
     const list = await client.listTools();
     // A tool that could set one: its name, or one of its input's properties, names a classification.
+    // v3 F6b (ADR 0079): a read-only tool sets nothing (arkona_index_classify reports the index classification).
     const offenders = list.tools
+      .filter((t) => t.annotations?.readOnlyHint !== true)
       .filter((t) => {
         const props = Object.keys((t.inputSchema as { properties?: object }).properties ?? {});
         return /classif/i.test(t.name) || props.some((k) => /classif|owner/i.test(k));

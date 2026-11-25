@@ -18,7 +18,7 @@ describe('the seed (arkona-2026-11-23-f5a, superseding F3.4’s arkona-2026-11-1
     // v3 F3e (ADR 0059), F3f (ADR 0060), F4a (ADR 0063), F4b (ADR 0064), F4b.1 (ADR 0064 amendment 1) and F4c (ADR 0065) made new seeds; F3.4's
     // switches are unchanged in them.
     // v3 F5a (ADR 0067): the seed is now arkona-2026-11-23-f5a, superseding -r4.
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-24-f6a'); // v3 F6a (ADR 0076): -f6a supersedes -f7b
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-25-f6b'); // v3 F6b (ADR 0079): -f6b supersedes -f6a
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-21-r4');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b1');
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-20-f4b');

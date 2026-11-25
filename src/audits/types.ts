@@ -52,6 +52,10 @@ export const CATEGORIES: readonly Category[] = [
 
 /** What "Propose a fix" does for a finding (the tool the proposal goes through). */
 export type FixKind =
+  /** v3 F6b (ADR 0079): the index's prefix renamed to its approved role's (`updateResource` name; display name kept). */
+  | 'index_prefix'
+  /** v3 F6b: the index's tags set to the rule's, through the retag engine's own write path (checked, rebased, read back). */
+  | 'index_tags'
   /** `move_resource`: re-places the page under the same parent, alphabetically. */
   | 'move_resource'
   /** `set_facts`: one fact, only when the right value is unambiguous. */
@@ -323,6 +327,19 @@ export const CODES = {
     severity: 'warning',
     title: 'A page of a character’s set whose identity copies are empty or differ from its identity page',
     fix: 'identity_copy',
+  },
+  // v3 F6b (ADR 0079; design T12 step 2): an approved index classification not yet carried out (category taxonomy).
+  index_prefix: {
+    category: 'taxonomy',
+    severity: 'warning',
+    title: 'An index’s prefix disagrees with its approved role ([NAV] or [INDEX])',
+    fix: 'index_prefix',
+  },
+  index_tags: {
+    category: 'taxonomy',
+    severity: 'warning',
+    title: 'An index’s tags differ from the navigation and subject index rule',
+    fix: 'index_tags',
   },
   reference_type_category_mismatch: {
     category: 'taxonomy',

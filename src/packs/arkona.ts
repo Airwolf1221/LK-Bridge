@@ -1397,7 +1397,113 @@ const rules: PackRules = packRulesSchema.parse({
       summary:
         'An AU page carries the status tag AU in place of CANON, and Continuity Type AU stays in its facts; everything after the status tag follows the same grammar. A Working or Archived AU page leads with Working or Archived, so neither CANON nor AU appears on it. For every pack tool. Not yet recorded in the Controlled Native Tagging Standard: when it is, the pack sees governance drift and is approved again.',
     },
+    {
+      key: 'nav-and-subject-indexes',
+      date: '2026-11-25',
+      by: 'owner',
+      summary:
+        'T11 (the F6 taxonomy design, approved with the owner’s amendments T11, T12 and T14): an index that only groups or routes is [NAV] <name> and carries exactly Navigation; an index about one subject (a character, a nation or polity, a continent, a Realmship or a named Divine Realm, a culture or religion family, a story) is [INDEX] <name> and carries its subject’s primary category; neither carries CANON. In every parent: [NAV] first, then [INDEX], then sources, each alphabetical (the narrative number order still applies inside a story). Atomic, predictable structure wins over current names. Not yet recorded in Source Formatting or the Controlled Native Tagging Standard: the owner’s reviewer writes the three sections after deploy.',
+    },
   ],
+  // v3 F6b (ADR 0079; design T11, T12): navigation and subject indexes. The tag rule is a draft until the Tagging
+  // Standard's "Navigation and Subject Index Tags" section exists (its pin reads unpublished meanwhile, never refusing the
+  // approval); the ordering rule applies once this version is approved. The structural lists are the classification
+  // report's exact names (the owner edits them on the Index Classification page: a new version).
+  indexTaxonomy: {
+    source: 'tagging-standard',
+    section: 'Navigation and Subject Index Tags',
+    status: 'draft',
+    ordering: 'nav-index-sources',
+    navTag: 'Navigation',
+    subjectTags: {
+      character: 'Character',
+      polity: 'Polity',
+      culture: 'Culture',
+      religion: 'Religion',
+      place: 'Place',
+      story: 'Story',
+    },
+    templates: { nav: '[NAV] AI Navigation', subject: '[INDEX] AI Index' },
+    structural: {
+      topLevel: [
+        'Characters',
+        'Arkona',
+        'The Elysaria System',
+        'Setting Framework',
+        'Narratives',
+        'Continuities',
+        'Design References',
+        'Working',
+        'Archive',
+      ],
+      named: [
+        'Arkona’s Continents',
+        "Arkona's Continents",
+        'Arkona’s Realmships',
+        "Arkona's Realmships",
+        'Lost Realmships',
+        'Arkonan Cultures',
+        'Arkonan Religions',
+        'Religions',
+        'Arkonan Historical Events',
+        'Historical Events',
+        'Arkonan Conflicts',
+        'Conflicts',
+        'Divine Realms',
+        'Divine Realm Cultures',
+      ],
+      continentCategories: [
+        'Polities',
+        'Institutions',
+        'Cultures',
+        'Historical Events',
+        'Conflicts',
+        'Regions',
+        'Settlements & Locations',
+        'Unique Magic & Technologies',
+        'Religions',
+      ],
+      continentParents: ['Arkona’s Continents', "Arkona's Continents"],
+      realmshipParents: ['Arkona’s Realmships', "Arkona's Realmships", 'Lost Realmships'],
+      settingFramework: 'Setting Framework',
+      settingFrameworkCategories: [
+        'Chronology & Calendar',
+        'Cosmology & Metaphysics',
+        'Divinity',
+        'Void Lords',
+        'Bestiary',
+        'Conditions',
+        'Equipment & Items',
+      ],
+      divineRealms: 'Divine Realms',
+      divineRealmCategories: [
+        'Cosmic Realms',
+        'Lower Realms',
+        'Upper Realms',
+        'Ur-Realms',
+        'Lunar Realms',
+        'Planetary Realms',
+      ],
+      nationSubindexes: [
+        'Institutions',
+        'Government & Administration',
+        'Cultures',
+        'Historical Events',
+        'History',
+        'Settlements & Locations',
+        'Unique Magic & Technologies',
+        'Religions',
+        'Laws',
+        'Programmes',
+        'Education',
+        'Ceremonies',
+        'Conditions',
+      ],
+      cultureCategories: ['Cultures'],
+      religionCategories: ['Religions'],
+    },
+    outOfScope: ['Working', 'Archive', 'Archived', 'Legacy Canon Archive', 'Design References'],
+  },
 });
 
 export const ARKONA_PACK: PackSeed = Object.freeze({
@@ -1434,8 +1540,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // `-f6a` (ADR 0076, 24 November 2026; session F6a): the Reference Type vocabulary (`referenceTypes`, a draft) and
   // Source Formatting's "Reference Type Vocabulary" pinned (not there until the owner publishes it: shown as
   // unpublished, never refusing the approval while the vocabulary is a draft).
-  seed: 'arkona-2026-11-24-f6a',
+  // `-f6b` (ADR 0079, 25 November 2026; session F6b): navigation and subject indexes (`indexTaxonomy`: T11's ordering and
+  // tag rule, a draft until published, and the classification report's structural lists), and the Tagging Standard's
+  // "Navigation and Subject Index Tags" pinned (unpublished until the owner's reviewer writes it).
+  seed: 'arkona-2026-11-25-f6b',
   supersedes: [
+    'arkona-2026-11-24-f6a',
     'arkona-2026-11-23-f7b',
     'arkona-2026-11-23-f5c',
     'arkona-2026-11-23-f5b',
@@ -1494,6 +1604,8 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
         'Closed Primary Categories and Specialist Functions',
         'Excluded Routine Tags',
         'Approved Supplementary Tags',
+        // v3 F6b (ADR 0079): the index tag rule, once the owner's reviewer writes it (unpublished until then).
+        'Navigation and Subject Index Tags',
       ],
     },
     // v3 F5b (ADR 0068, H5): Repository Automation (the governance root's tab xd9gzkel, read live by the owner on 19

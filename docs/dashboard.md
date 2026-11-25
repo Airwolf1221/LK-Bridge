@@ -285,6 +285,29 @@ ids, sample }`, `bulkMax`, `value`, `offset`), `POST /api/admin/reference-types/
 `POST /api/admin/reference-types/bulk-accept` (`{ ids, confirm }`; returns the rows it changed, the rows skipped with
 their reasons, and `remaining`; `BULK_TOO_LARGE` over the bound).
 
+## Index Classification (v3 F6b)
+
+In the Setup group, after Reference Types ([ADR 0079](adr/0079-v3-f6b-navigation-and-subject-indexes.md)). Every current
+index with the role the rules propose: **[NAV]** (an index that only groups or routes) or **[INDEX]** (an index about one
+subject), or **undecided** (no rule settles it, or two rules disagree), with the rule that decided it. The rules use only
+the bridge's own data (the registry, the narrative layout, the pack's exact names, position); a page's kind is never
+guessed from its name. Working, Archive, Legacy and Design References pages are listed as **out of scope**, never
+proposed. The card above the table says which pack version is in force, whether T11's order ([NAV], then [INDEX], then
+sources) is in force, and whether the index tag rule is published.
+
+Filters: status (Proposed by default), proposed role, rule, name. Per row: **Approve** (as proposed), **Change** (to
+[NAV], or to [INDEX] with the subject's kind: character, polity, culture, religion, place, story; without one its tags are
+left to you), **Leave undecided**. **Approve all as proposed (n)** takes every proposed row of the filter, every page of
+it: ONE request, at most `INDEX_CLASSIFY_BULK_MAX` (500) at a time, decided in one transaction; running it again touches
+only the rows still proposed. Every decision asks for the step-up and is recorded in the audit log. Nothing is renamed or
+retagged here: approved rows become proposals in the audits (`index_prefix`, `index_tags`), which Automation runs
+(default Propose).
+
+**Structural names**: the pack's exact-name lists the rules read (top-level branches, routing indexes, the category words
+of continents and Realmships, Setting Framework's and Divine Realms' categories, nation subindex words, the culture and
+religion category words, the out-of-scope areas), one per line. Saving makes a new pack version, approved on the Packs
+page before the report uses it.
+
 ## Asset Tree (v2 A4)
 
 The **Asset Tree** page shows the selected project's asset library as the bridge knows it: status, counts, the build

@@ -289,6 +289,13 @@ const ROUTES: Record<string, Route> = {
     body: { id: 'rtd_0123456789abcdef', confirm: true },
   },
   'POST /api/admin/reference-types/publish': { kind: 'conditional' }, // a preview is one click; the write asks
+  // v3 F6b (ADR 0079): every index classification decision, the bulk approve and the structural lists ask.
+  'POST /api/admin/index-classification/decide': {
+    kind: 'asks',
+    body: { pageId: 'idx00001', action: 'approve', confirm: true },
+  },
+  'POST /api/admin/index-classification/bulk-approve': { kind: 'asks', body: { confirm: true } },
+  'PUT /api/admin/index-classification/structural': { kind: 'asks', body: { confirm: true } },
   // ---- review
   'POST /api/admin/review/mark': { kind: 'outside' },
   'POST /api/admin/review/mark-all': { kind: 'outside' },

@@ -216,7 +216,9 @@ export const CHECKS = {
     none: 'change it in the app: LegendKeeper’s API cannot change a mention’s custom label',
   },
   sibling_order: {
-    title: 'Out of order among its siblings (INDEX pages first, then the rest, each alphabetical)',
+    // v3 F6b (ADR 0079): the audit's order: [NAV], then [INDEX], then the rest once the approved pack carries T11.
+    title:
+      'Out of order among its siblings (indexes first, [NAV] before [INDEX] where approved, then the rest, each alphabetical)',
     group: 'required',
     evidence: 'Confirmed deterministic defect',
     rule: ORDER,

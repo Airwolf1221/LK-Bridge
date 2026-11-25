@@ -82,7 +82,11 @@ export function parseNarrativeName(
 export type { SiblingCompare };
 
 /** The order inside Narratives (see the module comment). */
-export function narrativeCompare(rules: NarrativeRules): SiblingCompare {
+export function narrativeCompare(
+  rules: NarrativeRules,
+  /** v3 F6b (ADR 0079): the order of what the narrative order does not place (T11's when the approved pack has it). */
+  fallback: SiblingCompare = compareSiblings,
+): SiblingCompare {
   const rank = (x: Pick<Orderable, 'displayName' | 'kind'>): [number, number] => {
     const p = parseNarrativeName(rules, x.displayName, x.kind === 'index');
     if (!p) return [3, 0];
@@ -102,8 +106,8 @@ export function narrativeCompare(rules: NarrativeRules): SiblingCompare {
     const ra = rank(a);
     const rb = rank(b);
     if (ra[0] !== rb[0]) return ra[0] - rb[0];
-    if (ra[0] === 3) return compareSiblings(a, b);
-    return ra[1] - rb[1] || compareSiblings(a, b);
+    if (ra[0] === 3) return fallback(a, b);
+    return ra[1] - rb[1] || fallback(a, b);
   };
 }
 

@@ -146,6 +146,9 @@ describe('G7: the findings', () => {
       'owner_identity_copy_drift',
       // v3 F6a (ADR 0076): Apply allowed, but default Off (no defaultMode).
       'reference_type_noncanonical',
+      // v3 F6b (ADR 0079): Propose by default, Apply the owner's switch.
+      'index_prefix',
+      'index_tags',
       // v3 F10 (ADR 0078): the chronology's codes, Propose by default, Apply the owner's switch.
       'chronology_row_without_event',
       'chronology_date_mismatch',
@@ -161,6 +164,8 @@ describe('G7: the findings', () => {
       'core_compact_wording',
       'owner_identity_copy_drift',
       'reference_type_noncanonical',
+      'index_prefix',
+      'index_tags',
       // v3 F10 (ADR 0078): the chronology's codes, Propose by default, Apply the owner's switch.
       'chronology_row_without_event',
       'chronology_date_mismatch',

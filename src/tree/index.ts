@@ -19,14 +19,28 @@ export {
   type TreeServiceOptions,
   type PassOutcome,
 } from './service.js';
-export { TreeQueries, type PageScanRow, type SubtreeEntry, type TreeCounts } from './queries.js';
+export {
+  TreeQueries,
+  type NodeScanRow,
+  type PageScanRow,
+  type SubtreeEntry,
+  type TreeCounts,
+} from './queries.js';
 export { TreeStore } from './store.js';
 export {
   BARC_PREFIX,
   BSRC_PREFIX,
   BWRK_PREFIX,
   INDEX_PREFIX,
+  INDEX_PREFIXES,
   KIND_PREFIX,
+  NAV_PREFIX,
+  ROLE_PREFIX,
+  indexRawNames,
+  indexRoleOf,
+  indexRoleOfName,
+  roleOfClassified,
+  type IndexRole,
   PAGE_KINDS,
   catalogueFrom,
   classifyName,

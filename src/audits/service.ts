@@ -6,6 +6,9 @@
  * from the maintenance job. Findings are never fixed here: "Propose a fix" and "Re-check now" (src/audits/fixes.ts) are
  * the only two things that read LegendKeeper live, each on the owner's request.
  */
+import { indexTaxonomyCheck } from './checks/index-taxonomy.js';
+import { compareSiblingsNav } from '../registry/ordering.js';
+import type { IndexTaxonomyAuditInput } from '../packs/indextax/service.js';
 import { loggedTask } from '../maintenance/task-log.js';
 import type { Db } from '../db/open.js';
 import type { Chronology } from '../chronology/index.js';
@@ -85,6 +88,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'taxonomy', run: taxonomyCheck },
   // v3 F6a (ADR 0076): the Reference Type vocabulary (category taxonomy; the noncanonical fix is the owner's mapping).
   { id: 'reference-types', run: referenceTypesCheck },
+  // v3 F6b (ADR 0079): approved index classifications not yet carried out (index_prefix, index_tags).
+  { id: 'index-taxonomy', run: indexTaxonomyCheck },
   { id: 'facts', run: factsCheck },
   { id: 'lifecycle', run: lifecycleCheck },
   { id: 'keep-regions', run: keepRegionsCheck },
@@ -168,6 +173,8 @@ export interface AuditDeps {
   readonly narrative?: (projectId: string) => NarrativeAuditInput | null;
   /** v3 F6a (ADR 0076): the Reference Type vocabulary and the owner's decisions for a project (null: none approved). */
   readonly referenceTypes?: (projectId: string) => ReferenceTypeAuditInput | null;
+  /** v3 F6b (ADR 0079): the approved index taxonomy and rows. */
+  readonly indexTaxonomy?: (projectId: string) => IndexTaxonomyAuditInput | null;
   /** v3 F6a: a decision as it stands now, for the `reference_type` fix (null: undone). */
   readonly referenceTypeDecision?: (
     projectId: string,
@@ -586,9 +593,14 @@ export class Audits {
           ...(this.coreUpgrader ? { coreUpgrade: this.coreUpgrader } : {}),
           ...(opts.direct === true ? { direct: true } : {}),
           ...(this.d.referenceTypeDecision ? { referenceTypeDecision: this.d.referenceTypeDecision } : {}),
+          // v3 F6b (ADR 0079): T11's order where the approved pack carries it (and as the narrative order's fallback).
+          ...(this.indexTaxonomyInput(projectId)?.navOrdering ? { navOrder: true } : {}),
           narrativeOrder: (() => {
             const n = this.narrativeInput(projectId);
-            return n ? narrativeCompare(n.rules) : null;
+            if (!n) return null;
+            return this.indexTaxonomyInput(projectId)?.navOrdering
+              ? narrativeCompare(n.rules, compareSiblingsNav)
+              : narrativeCompare(n.rules);
           })(),
         },
         projectId,
@@ -790,6 +802,17 @@ export class Audits {
   }
 
   /** v3 F4c (ADR 0065): the narrative audit's input for a project, or null. */
+  /** v3 F6b (ADR 0079): the approved index taxonomy and rows, or null (none, or unreadable: logged). */
+  indexTaxonomyInput(projectId: string): IndexTaxonomyAuditInput | null {
+    if (!this.d.indexTaxonomy) return null;
+    try {
+      return this.d.indexTaxonomy(projectId);
+    } catch (e) {
+      this.d.log?.warn({ err: e, projectId }, 'the index taxonomy could not be read; its checks are skipped');
+      return null;
+    }
+  }
+
   narrativeInput(projectId: string): NarrativeAuditInput | null {
     if (!this.d.narrative) return null;
     try {
@@ -991,6 +1014,7 @@ export class Audits {
             })(),
           }
         : {}),
+      ...(this.d.indexTaxonomy ? { indexTaxonomy: this.indexTaxonomyInput(projectId) } : {}),
     });
   }
 

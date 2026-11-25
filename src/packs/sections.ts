@@ -16,7 +16,7 @@ import { stableJson } from '../jobs/sidebar-state.js';
 type Obj = Record<string, unknown>;
 
 /** The plain text of a block's runs. */
-function runsText(b: Obj): string {
+export function runsText(b: Obj): string {
   const content = b.content;
   if (!Array.isArray(content)) return '';
   return (content as Obj[])

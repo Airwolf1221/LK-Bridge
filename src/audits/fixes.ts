@@ -22,6 +22,9 @@
  *
  * D1.1's `sync_timeline_event` fix goes through the chronology module's own "Propose a fix".
  */
+import { textChangeEntry, type PlanItem } from '../jobs/items.js';
+import { stateHash } from '../jobs/sidebar-state.js';
+import { RETAG_CHECKS, RETAG_REBASER } from '../packs/retag/checks.js';
 import { expandFacts } from '../facts/expand.js';
 import { sidebarFrom } from '../facts/index.js';
 import { planFacts, FactsPlanError } from '../facts/plan.js';
@@ -30,8 +33,8 @@ import { mintClientId } from '../jobs/ids.js';
 import { SYSTEM_PRINCIPAL, type JobOrigin, type LifecycleMarker, type StepSpec } from '../jobs/index.js';
 import { EXPECT_STEP, VERIFY_STEP, type DocumentChecker, type VerifyTarget } from '../jobs/internal-steps.js';
 import { stableJson } from '../jobs/sidebar-state.js';
-import { slotAmong, type SiblingCompare } from '../registry/ordering.js';
-import { classifyName, nameKey as treeNameKey } from '../tree/classify.js';
+import { compareSiblingsNav, slotAmong, type SiblingCompare } from '../registry/ordering.js';
+import { classifyName, nameKey as treeNameKey, roleOfClassified } from '../tree/classify.js';
 import { isKnownRun, runsHashOf, runsText, splitRunsAtBreaks } from './model.js';
 import { AuditError } from './errors.js';
 import type { Finding, FixKind } from './types.js';
@@ -71,6 +74,8 @@ export interface FixDeps {
   readonly origin?: JobOrigin;
   /** v3 F4c (ADR 0065): the order inside Narratives (an ordering fix whose args say `order: 'narrative'`). */
   readonly narrativeOrder?: SiblingCompare | null;
+  /** v3 F6b (ADR 0079): T11's order is in force (the approved pack carries it): an ordering fix uses it. */
+  readonly navOrder?: boolean;
   /**
    * v3 F7.1 (ADR 0072): the `core_upgrade` fix, planned by the packs layer (src/packs/core-fix.ts): the page read live
    * (FIX_STALE when its name changed), then arkona_create_character's upgrade through `engine.submit`.
@@ -232,11 +237,24 @@ async function fixMove(d: FixDeps, projectId: string, f: Finding): Promise<FixRe
   const narrative = f.fix!.args.order === 'narrative';
   if (narrative && !d.narrativeOrder)
     throw stale('The narrative rules are not available now, so the narrative order cannot be worked out.');
+  // v3 F6b (ADR 0079): T11's order (`[NAV]` first) where the finding was made under it and it is still in force.
+  const navOrder = !narrative && f.fix!.args.order === 'nav';
+  if (navOrder && d.navOrder !== true)
+    throw stale(
+      'The [NAV]-first order is no longer in force (the approved pack changed), so this place is out of date.',
+    );
+  const role = roleOfClassified(classifyName(name));
   const slot = slotAmong(
-    others.map((o) => ({ id: o.id, displayName: o.displayName, kind: o.kind })),
+    others.map((o) => ({
+      id: o.id,
+      displayName: o.displayName,
+      kind: o.kind,
+      indexRole: roleOfClassified(o),
+    })),
     displayName,
     kind,
-    narrative ? d.narrativeOrder! : undefined,
+    narrative ? d.narrativeOrder! : navOrder ? compareSiblingsNav : undefined,
+    role,
   );
   const cur = kids.findIndex((k) => k.id === pageId);
   const here = {
@@ -247,9 +265,9 @@ async function fixMove(d: FixDeps, projectId: string, f: Finding): Promise<FixRe
   if (here.after === then.after && here.before === then.before)
     return {
       status: 'nothing_to_do',
-      message: `The page is already in its ${narrative ? 'narrative' : 'alphabetical'} place.`,
+      message: `The page is already in its ${narrative ? 'narrative' : navOrder ? '[NAV]-first' : 'alphabetical'} place.`,
     };
-  const title = `Re-place ${name} ${narrative ? 'in narrative order' : 'alphabetically'} under its parent`;
+  const title = `Re-place ${name} ${narrative ? 'in narrative order' : navOrder ? 'in order ([NAV], then [INDEX], then sources)' : 'alphabetically'} under its parent`;
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,
@@ -795,6 +813,10 @@ export async function proposeFix(
       return fixReferenceType(d, projectId, f, c.propertiesName);
     case 'identity_copy':
       return fixIdentityCopy(d, projectId, f, c.propertiesName);
+    case 'index_prefix':
+      return fixIndexPrefix(d, projectId, f);
+    case 'index_tags':
+      return fixIndexTags(d, projectId, f, c.propertiesName);
   }
 }
 
@@ -1754,4 +1776,310 @@ async function fixNarrative(
     default:
       throw new AuditError('FIX_NOT_APPLICABLE', 'This narrative finding offers no fix.');
   }
+}
+
+// ============================================================================================ v3 F6b: index prefix and tags
+
+/**
+ * v3 F6b (ADR 0079): submits an index fix: a proposal (one item, its before and after shown, F7.1a's display), or with
+ * the automation's Apply (`direct`) a job that every guard judges (an Authoritative page's rename is what the canon guard
+ * decides: never bypassed). Tags never date a page (ADR 0051): Last Major Revision is skipped.
+ */
+async function submitIndexFix(
+  d: FixDeps,
+  projectId: string,
+  spec: {
+    readonly steps: readonly StepSpec[];
+    readonly title: string;
+    readonly pageId: string;
+    readonly name: string;
+    readonly operation: Obj;
+    readonly pageParts: readonly string[];
+    readonly item: PlanItem;
+    readonly fix: FixKind;
+    /** The lifecycle marker: an index has no lifecycle (`to: null`), so a status tag it carries is not one. */
+    readonly lifecycle?: LifecycleMarker;
+  },
+): Promise<FixResult> {
+  const r = await d.engine.submit({
+    kind: 'batch_ops',
+    project: projectId,
+    steps: spec.steps,
+    onError: 'stop',
+    priority: 'P1',
+    origin: d.origin ?? ORIGIN,
+    title: spec.title.slice(0, 300),
+    holdLock: { resourceId: spec.pageId },
+    internal: true,
+    // A canonical change (CANON taken off an index) is always the owner's canonical proposal, even under Apply.
+    ...(d.direct === true && spec.lifecycle?.canonical !== true ? {} : { forceProposal: true }),
+    lastMajorRevision: 'skip',
+    ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
+    proposal: {
+      operation: spec.operation,
+      items: [spec.item],
+      operations: [
+        {
+          ...spec.operation,
+          page: { id: spec.pageId, name: spec.name },
+          pageParts: spec.pageParts,
+          summaryLabel: spec.title,
+        },
+      ],
+      summary: spec.title,
+    },
+  });
+  if (typeof r.proposalId === 'string')
+    return {
+      status: 'proposal_captured',
+      proposalId: r.proposalId,
+      summary: typeof r.summary === 'string' ? r.summary : spec.title,
+      fix: spec.fix,
+    };
+  if (d.direct === true && typeof r.jobId === 'string')
+    return { status: 'job_submitted', jobId: r.jobId, summary: spec.title, fix: spec.fix };
+  throw new AuditError('NOT_PROPOSED', 'The fix was neither proposed nor submitted; nothing was done.');
+}
+
+const tagList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : [];
+
+/**
+ * v3 F6b (ADR 0079): the `index_prefix` fix. The page is read LIVE and must still carry the name the finding saw (else
+ * FIX_STALE, nothing proposed). ONE `updateResource` of its name: the prefix only, the display name kept; the id, the
+ * parent, the tags and every link stay. Checked inside the lock, read back.
+ */
+async function fixIndexPrefix(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const pageId = String(a.pageId);
+  const seen = String(a.name);
+  const to = String(a.to);
+  const c = classifyName(seen);
+  const t = classifyName(to);
+  if (c.kind !== 'index' || t.kind !== 'index' || c.displayName !== t.displayName)
+    throw new AuditError(
+      'FIX_NOT_APPLICABLE',
+      'Only an index’s prefix is renamed here; nothing was proposed.',
+    );
+  const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+  if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+  const name = String(res.name);
+  if (name === to) return { status: 'nothing_to_do', message: `The page is already “${to}”.` };
+  if (name !== seen) throw stale(`The page is now “${name}”, not “${seen}”.`, { name });
+  const parentId = typeof res.parentId === 'string' ? res.parentId : null;
+  const change = textChange({ page: name, pageId, what: 'prefix', before: name, after: to });
+  const title = `Rename the prefix of ${c.displayName}: ${name} → ${to}`;
+  const item: PlanItem = {
+    id: `prefix:${pageId}`,
+    kind: 'index_prefix',
+    group: 'Index prefixes',
+    label: `${name} → ${to}`,
+    page: { id: pageId, name },
+    diff: {
+      before: name,
+      after: to,
+      ...(change ? { changes: [textChangeEntry(change)] } : {}),
+    },
+    dependsOn: [],
+    selected: true,
+  };
+  const steps: StepSpec[] = [
+    {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [
+            { label: 'page', kind: 'resource', resourceId: pageId, name, parentId, tags: tagList(res.tags) },
+          ],
+        },
+      },
+      items: [item.id],
+    },
+    {
+      op: 'updateResource',
+      params: { path: { resourceId: pageId }, body: { name: to } },
+      items: [item.id],
+      journalOperation: {
+        tool: 'audits.index_prefix',
+        page: { id: pageId, name },
+        from: 'audits.propose_fix',
+        write: `prefix ${roleOfClassified(c) === 'nav' ? '[NAV]' : '[INDEX]'} → ${roleOfClassified(t) === 'nav' ? '[NAV]' : '[INDEX]'}`,
+      },
+    },
+    {
+      op: VERIFY_STEP,
+      params: {
+        body: {
+          targets: [
+            {
+              kind: 'resource',
+              label: to,
+              resourceId: pageId,
+              fields: { name: to, ...(parentId !== null ? { parentId } : {}), tags: tagList(res.tags) },
+            } satisfies VerifyTarget,
+          ],
+        },
+      },
+      items: [item.id],
+    },
+  ];
+  return submitIndexFix(d, projectId, {
+    steps,
+    title,
+    pageId,
+    name,
+    operation: {
+      tool: 'audits.index_prefix',
+      fromAudit: f.code,
+      changes: { name: { before: name, after: to } },
+      ...(change ? { textChanges: [change] } : {}),
+    },
+    pageParts: [change ? `name: ${textChangeWords({ ...change, page: '' })}` : `name → ${to}`],
+    item,
+    fix: 'index_prefix',
+  });
+}
+
+/**
+ * v3 F6b (ADR 0079): the `index_tags` fix, through the retag engine's own write path: the page read LIVE (its tags must
+ * still be the finding's, else FIX_STALE); in the job, the retag page check (a fresh read; a renamed or moved page, or
+ * tags changed since, is skipped and recorded), the write with the retag rebaser (judged again inside the lock, never
+ * rebased onto a newer array), and the retag read-back (the exact array in order; name, aliases, parentage, sidebar and
+ * every document's body unchanged).
+ */
+async function fixIndexTags(
+  d: FixDeps,
+  projectId: string,
+  f: Finding,
+  propertiesName: string,
+): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const pageId = String(a.pageId);
+  const current = tagList(a.current);
+  const proposed = tagList(a.proposed);
+  if (proposed.length === 0)
+    throw new AuditError(
+      'FIX_NOT_APPLICABLE',
+      'The rule gives no tags for this index; nothing was proposed.',
+    );
+  const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+  if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+  const name = String(res.name);
+  const live = tagList(res.tags);
+  if (live.join('\u0000') === proposed.join('\u0000'))
+    return { status: 'nothing_to_do', message: `${name} already carries ${proposed.join(', ')}.` };
+  if (live.join('\u0000') !== current.join('\u0000'))
+    throw stale(
+      `The page's tags are now ${live.join(', ') || '(none)'}, not ${current.join(', ') || '(none)'}.`,
+      {
+        tags: live,
+      },
+    );
+  const parentId = typeof res.parentId === 'string' ? res.parentId : null;
+  const itemId = `tags:${pageId}`;
+  const checkLabel = `page ${pageId}`;
+  const pageInput = {
+    pageId,
+    name,
+    item: itemId,
+    current: live,
+    proposed,
+    propertiesName,
+    facts: {},
+    parentId,
+  };
+  const before = live.join(', ') || '(none)';
+  const after = proposed.join(', ');
+  const STATUS = new Set(['canon', 'au', 'working', 'archived']);
+  const removed = live.filter(
+    (t) =>
+      STATUS.has(t.trim().toLowerCase()) &&
+      !proposed.some((x) => x.trim().toLowerCase() === t.trim().toLowerCase()),
+  );
+  const removesStatus = removed.length > 0;
+  const change = textChange({ page: name, pageId, what: 'tags', before, after });
+  const title = `Set the tags of ${classifyName(name).displayName}: ${before} → ${after}`;
+  const item: PlanItem = {
+    id: itemId,
+    kind: 'index_tags',
+    group: 'Index tags',
+    label: `${name}: ${before} → ${after}`,
+    page: { id: pageId, name },
+    diff: { before, after, ...(change ? { changes: [textChangeEntry(change)] } : {}) },
+    dependsOn: [],
+    selected: true,
+  };
+  const steps: StepSpec[] = [
+    {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [{ label: checkLabel, kind: 'registered', checker: RETAG_CHECKS.page, input: pageInput }],
+        },
+      },
+      items: [itemId],
+    },
+    {
+      op: 'updateResource',
+      params: { path: { resourceId: pageId }, body: { tags: [...proposed] } },
+      expectCurrent: { state: 'resource', hash: stateHash({ name, tags: live }), label: name },
+      judgedInLock: true,
+      deferTreeReread: true,
+      items: [itemId],
+      rebase: { rebaser: RETAG_REBASER, input: pageInput, always: true },
+      journalOperation: {
+        tool: 'audits.index_tags',
+        page: { id: pageId, name },
+        from: 'audits.propose_fix',
+        write: 'tags',
+        to: proposed,
+      },
+    },
+    {
+      op: VERIFY_STEP,
+      params: {
+        body: {
+          targets: [
+            {
+              kind: 'registered',
+              label: `${name}: read-back`,
+              checker: RETAG_CHECKS.verify,
+              resourceId: pageId,
+              input: { pageId, name, proposed, beforeLabel: checkLabel },
+              inputFrom: [{ step: 1, as: 'before' }],
+            },
+          ],
+        },
+      },
+      items: [itemId],
+    },
+  ];
+  return submitIndexFix(d, projectId, {
+    steps,
+    title,
+    pageId,
+    name,
+    operation: {
+      tool: 'audits.index_tags',
+      fromAudit: f.code,
+      changes: { tags: { before: live, after: proposed } },
+      ...(change ? { textChanges: [change] } : {}),
+    },
+    pageParts: [`tags ${before} → ${after}`],
+    item,
+    fix: 'index_tags',
+    // T11: an index never carries CANON. Taking a status tag (CANON, AU) off a page is canon's: the job declares it with
+    // a CANONICAL marker, so it is always the owner's canonical approval, whatever the scope or the automation's mode (the
+    // canon guard decides, never bypassed). An index stays where it is: its state is unchanged (`authoritative`).
+    ...(removesStatus
+      ? {
+          lifecycle: {
+            tool: 'audits.index_tags',
+            canonical: true,
+            reason: `takes ${removed.join(', ')} off an index (T11: an index never carries CANON); the owner approves it as canon`,
+            pages: [{ id: pageId, to: 'authoritative' as const }],
+          },
+        }
+      : {}),
+  });
 }

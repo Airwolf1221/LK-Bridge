@@ -17,6 +17,7 @@
  * - **Neighbours**: the plan simulates every insertion on the sibling lists, so the verify step can check each page's
  *   final neighbours (by rank) exactly.
  */
+import { indexRoleOfName } from '../tree/classify.js';
 import { compareSiblings, slotAmong, type Orderable, type SiblingCompare } from '../registry/ordering.js';
 import type { ResolveKind, Slot } from '../registry/index.js';
 
@@ -43,7 +44,14 @@ export class SiblingSim {
   list(parentId: string): SimNode[] {
     let l = this.lists.get(parentId);
     if (!l) {
-      l = this.children(parentId).map((c) => ({ id: c.id, displayName: c.displayName, kind: c.kind }));
+      // v3 F6b (ADR 0079): the raw name and an index's role travel with each sibling (T11's order reads them).
+      l = this.children(parentId).map((c) => ({
+        id: c.id,
+        displayName: c.displayName,
+        kind: c.kind,
+        ...(c.rawName !== undefined ? { rawName: c.rawName } : {}),
+        ...(c.indexRole !== undefined ? { indexRole: c.indexRole } : {}),
+      }));
       this.lists.set(parentId, l);
     }
     return l;
@@ -52,12 +60,16 @@ export class SiblingSim {
   /** Where `page` goes among the siblings that exist (`anchorable`), as one neighbour. */
   slot(
     parentId: string,
-    page: Pick<Orderable, 'displayName' | 'kind'>,
+    page: Pick<Orderable, 'displayName' | 'kind' | 'rawName' | 'indexRole'>,
     anchorable: (n: SimNode) => boolean = () => true,
     excludeId?: string,
   ): Slot {
     const sibs = this.list(parentId).filter((s) => s.id !== excludeId && anchorable(s));
-    return slotAmong(sibs, page.displayName, page.kind as ResolveKind, this.compareFor(parentId));
+    const role =
+      page.kind === 'index'
+        ? (page.indexRole ?? (page.rawName !== undefined ? indexRoleOfName(page.rawName) : null))
+        : null;
+    return slotAmong(sibs, page.displayName, page.kind as ResolveKind, this.compareFor(parentId), role);
   }
 
   /** Puts `page` where LegendKeeper will put it for `slot` (no slot: at the end). */
@@ -200,7 +212,13 @@ export function planCreates<T extends CreateItem>(
   const parentOf = (it: T) => ('item' in it.parent ? byKey.get(it.parent.item)!.id : it.parent.existing);
   const created = new Set<string>(); // ids created by an earlier step
   const steps: PlannedStep<T>[] = [];
-  const node = (it: T): SimNode => ({ id: it.id, displayName: it.displayName, kind: it.kind, isNew: true });
+  const node = (it: T): SimNode => ({
+    id: it.id,
+    displayName: it.displayName,
+    kind: it.kind,
+    rawName: it.rawName,
+    isNew: true,
+  });
   const exists = (n: SimNode) => !n.isNew || created.has(n.id);
 
   let pending: T[] = [];

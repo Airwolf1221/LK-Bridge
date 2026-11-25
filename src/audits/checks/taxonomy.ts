@@ -36,7 +36,7 @@ const DRIFT_CODE: Record<DriftCode, FindingCode> = {
 /** The Reference Type a template's name stands for: its prefix, a leading "AI" and a trailing "Template" removed. */
 export const referenceTypeOfTemplate = (name: string): string =>
   name
-    .replace(/^\s*\[(INDEX|BSRC|BWRK|BARC)\]\s*/i, '')
+    .replace(/^\s*\[(INDEX|NAV|BSRC|BWRK|BARC)\]\s*/i, '')
     .replace(/^AI\s+/i, '')
     .replace(/\s+Template\s*$/i, '')
     .trim();

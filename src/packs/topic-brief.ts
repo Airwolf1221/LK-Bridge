@@ -27,6 +27,7 @@
  * References (ADR 0054's non-current areas) are left out unless `include` names them, and what was left out is counted.
  * A name that resolves to several subjects is refused with the candidates, as `get_resource` refuses one.
  */
+import { indexRoleOf } from '../tree/classify.js';
 import { inNarratives, narrativeScope } from '../narrative/scope.js';
 import { sidebarFrom } from '../facts/index.js';
 import { collectionsOf, type Collection, type PageReader } from '../appraisal/reader.js';
@@ -376,17 +377,33 @@ export async function topicBrief(
   const body: Obj = {
     subject: {
       asked: o.input.subject,
-      resolvedTo: { id: node.id, name: node.rawName, kind: node.kind === 'index' ? 'index' : 'owner' },
+      // v3 F6b (ADR 0079): a [NAV] is labelled `nav` (it only routes), an [INDEX] `index` (about one subject).
+      resolvedTo: {
+        id: node.id,
+        name: node.rawName,
+        kind: node.kind === 'index' ? (indexRoleOf(node) === 'nav' ? 'nav' : 'index') : 'owner',
+      },
       ...(r.via ? { via: r.via } : {}),
       path: node.path.names.join(' / '),
     },
     owners: ownerViews,
     ...(node.kind === 'index' && owners.length === 0
       ? {
-          note: 'This index holds no owner page of its own (only subindexes, or pages left out as non-current).',
+          note:
+            indexRoleOf(node) === 'nav'
+              ? 'This is a navigation index ([NAV]): it only routes, so it holds no owner page of its own; ask about one of the subjects under it.'
+              : 'This index holds no owner page of its own (only subindexes, or pages left out as non-current).',
         }
       : {}),
-    ...(subindexes.length > 0 ? { subindexes: subindexes.map((s) => ({ id: s.id, name: s.rawName })) } : {}),
+    ...(subindexes.length > 0
+      ? {
+          subindexes: subindexes.map((s) => ({
+            id: s.id,
+            name: s.rawName,
+            ...(indexRoleOf(s) === 'nav' ? { kind: 'nav' } : {}),
+          })),
+        }
+      : {}),
     chronology: chronology ?? 'not checked (the snapshots cannot be read)',
     workInProgress: {
       workingPages: [...working.entries()].slice(0, cap).map(([id, e]) => ({

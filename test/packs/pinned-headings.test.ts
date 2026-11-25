@@ -64,9 +64,11 @@ describe('the six exact headings', () => {
       'Excluded Routine Tags',
       // v3 F5a (ADR 0067, H1): the Approved Supplementary Tags.
       'Approved Supplementary Tags',
+      // v3 F6b (ADR 0079): unpublished while the index tag rule is a draft (never refusing the approval).
+      'Navigation and Subject Index Tags',
     ]);
     expect(seeded('source-formatting')).toEqual([...PINNED.formatting, 'Reference Type Vocabulary']);
-    expect(seeded('tagging-standard')).toEqual([...PINNED.tagging]);
+    expect(seeded('tagging-standard')).toEqual([...PINNED.tagging, 'Navigation and Subject Index Tags']);
     await packs().commands.approve('owner', 'arkona');
     const status = await packs().governance('arkona');
     expect(status.state).toBe('current');
@@ -124,7 +126,10 @@ describe('the six exact headings', () => {
       ...PINNED.formatting,
       'Reference Type Vocabulary',
     ]);
-    expect(after.governance.find((g) => g.key === 'tagging-standard')!.sections).toEqual([...PINNED.tagging]);
+    expect(after.governance.find((g) => g.key === 'tagging-standard')!.sections).toEqual([
+      ...PINNED.tagging,
+      'Navigation and Subject Index Tags',
+    ]);
     expect(after.rules.owners?.tags.working).toEqual(['$status', '$primary', '$specialist']);
     expect((await p.governance('arkona')).state).toBe('rules_changed');
     await p.commands.approve('owner', 'arkona');
@@ -204,6 +209,8 @@ describe('re-mapping a pinned heading', () => {
       'Closed Primary Categories and Specialist Functions',
       'Excluded Routine Tags',
       'Approved Supplementary Tags',
+      // v3 F6b: unpublished (the index tag rule is a draft).
+      'Navigation and Subject Index Tags',
     ]);
     // The mapping waits for the owner with the version.
     expect(r.governance.state).toBe('rules_changed');
@@ -228,6 +235,7 @@ describe('re-mapping a pinned heading', () => {
       expect.objectContaining({ heading: 'Closed Primary Categories and Specialist Functions' }),
       expect.objectContaining({ heading: 'Excluded Routine Tags' }),
       expect.objectContaining({ heading: 'Approved Supplementary Tags' }),
+      // v3 F6b: the unpublished index tag section has no digest to record.
     ]);
     const ok = await w.call('arkona_create_owner', compactPolity({ dryRun: true }));
     expect(ok.isError, ok.text).toBe(false);

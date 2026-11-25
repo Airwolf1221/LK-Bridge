@@ -595,6 +595,37 @@ export const CATALOGUE: readonly CodeEntry[] = [
     automatable: 'propose',
     applyDirect: true,
   }),
+  // ======================================================================== v3 F6b (ADR 0079): default Propose, Apply allowed
+  defineCode({
+    code: 'index_prefix',
+    source: 'audit',
+    name: 'Index prefix ([NAV] or [INDEX])',
+    example:
+      '“[INDEX] High Humans”, approved as a navigation index on the Index Classification page, becomes “[NAV] High Humans”.',
+    transformation:
+      'ONE proposal per index the owner approved on the Index Classification page: one updateResource renaming the prefix only ([INDEX] ↔ [NAV]); the display name, the id, the parent, the tags and every link stay. The page read live first (a name changed since: nothing proposed), checked inside the lock, read back; the proposal shows the name before and after. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s rename is what the canon guard decides. Once T11’s order is approved, out_of_order then re-places a renamed [NAV] first among its siblings, within the caps',
+    traits: ['rename', 'canon'],
+    target: 'resource',
+    changes: ['name'],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+  }),
+  defineCode({
+    code: 'index_tags',
+    source: 'audit',
+    name: 'Index tags (Navigation, or the subject’s category)',
+    example:
+      '“[NAV] High Humans” tagged “Species, Navigation” is tagged “Navigation”; “[INDEX] Miyubi Sakura” tagged “CANON, Character” is tagged “Character”.',
+    transformation:
+      'ONE proposal per index the owner approved: one updateResource setting its tags to T11’s rule (a [NAV] exactly the navigation tag; an [INDEX] exactly its subject’s primary category; never CANON), through the retag engine’s own write path: a fresh read (a renamed or moved page, or tags changed since, is skipped and recorded), the write judged again inside the lock (never rebased onto a newer array), and the retag read-back (the exact array; name, aliases, parentage, sidebar and every document’s body unchanged). Tags never date a page; taking CANON (or AU) off an index is always the owner’s canonical approval, whatever the mode. Only once the Tagging Standard’s “Navigation and Subject Index Tags” section is published and approved. Apply (only when the owner switches it) submits the same job, every guard judging it',
+    traits: ['tags', 'canon'],
+    target: 'resource',
+    changes: ['tags'],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+  }),
   // ======================================================================== v3 F10 (ADR 0078): the chronology, default Propose, Apply allowed
   defineCode({
     code: 'chronology_row_without_event',

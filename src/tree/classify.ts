@@ -15,6 +15,11 @@ import type {
 import { inRankOrder } from '../lk/row-order.js';
 
 export const INDEX_PREFIX = '[INDEX] ';
+/**
+ * v3 F6b (ADR 0079): a navigation index, one that only groups or routes (T11). Its kind is `index`, as a subject index's
+ * is; its index role is `nav`. Every site that means "an index, not a source" keeps treating both alike.
+ */
+export const NAV_PREFIX = '[NAV] ';
 export const BSRC_PREFIX = '[BSRC] ';
 /** v2 C2c (ADR 0035): a Working page. */
 export const BWRK_PREFIX = '[BWRK] ';
@@ -29,6 +34,43 @@ export const KIND_PREFIX: Readonly<Record<'index' | PageKind, string>> = {
   barc: BARC_PREFIX,
 };
 
+/** v3 F6b (ADR 0079): an index's role: `nav` ([NAV], groups or routes) or `subject` ([INDEX], about one subject). */
+export type IndexRole = 'nav' | 'subject';
+
+/** v3 F6b: the prefix of each index role, exactly as names carry it. */
+export const ROLE_PREFIX: Readonly<Record<IndexRole, string>> = { nav: NAV_PREFIX, subject: INDEX_PREFIX };
+
+/** v3 F6b: both index prefixes, for a site that accepts an index of either role by its raw name. */
+export const INDEX_PREFIXES: readonly string[] = [INDEX_PREFIX, NAV_PREFIX];
+
+/**
+ * v3 F6b: a raw name's index role (by its exact prefix), or null when the name is not an index's. The tree stores it
+ * (`tree_nodes.index_role`); it is always this function of the raw name, so a rename that keeps the prefix keeps it.
+ */
+export function indexRoleOfName(raw: string): IndexRole | null {
+  if (raw.startsWith(NAV_PREFIX)) return 'nav';
+  if (raw.startsWith(INDEX_PREFIX)) return 'subject';
+  return null;
+}
+
+/** v3 F6b: a node's index role: the stored one when the node carries it, else from its raw name; null for a non-index. */
+export function indexRoleOf(n: {
+  readonly kind: string;
+  readonly rawName: string;
+  readonly indexRole?: IndexRole | null;
+}): IndexRole | null {
+  if (n.kind !== 'index') return null;
+  return n.indexRole ?? indexRoleOfName(n.rawName) ?? 'subject';
+}
+
+/**
+ * v3 F6b: the raw names an index of this display name may carry, `[INDEX] name` first. A lookup by an index's exact raw
+ * name accepts both, so an index the owner moved to `[NAV]` is still found.
+ */
+export function indexRawNames(displayName: string): string[] {
+  return INDEX_PREFIXES.map((p) => `${p}${displayName}`);
+}
+
 /** v2 C2c: the page kinds, in the order mentions prefer them (current first: [BSRC], then [BWRK], then [BARC]). */
 export const PAGE_KINDS: readonly PageKind[] = ['bsrc', 'bwrk', 'barc'];
 
@@ -38,11 +80,28 @@ export function isPageKind(kind: string): kind is PageKind {
 }
 
 /** A name's kind (by its exact prefix) and its display name (the prefix removed, and spaces after it). */
-export function classifyName(raw: string): { kind: Exclude<NodeKind, 'root'>; displayName: string } {
+export function classifyName(raw: string): {
+  kind: Exclude<NodeKind, 'root'>;
+  displayName: string;
+  /**
+   * v3 F6b: `nav` for `[NAV] ` (an index that only groups or routes). Present only then, so every other result reads as
+   * before; an `[INDEX] ` name's role is `subject` (`indexRoleOfName`).
+   */
+  role?: IndexRole;
+} {
+  // v3 F6b: `[NAV] ` is an index (kind `index`, role `nav`).
+  if (raw.startsWith(NAV_PREFIX)) {
+    return { kind: 'index', displayName: raw.slice(NAV_PREFIX.length).trimStart(), role: 'nav' };
+  }
   for (const [kind, prefix] of Object.entries(KIND_PREFIX) as ['index' | PageKind, string][]) {
     if (raw.startsWith(prefix)) return { kind, displayName: raw.slice(prefix.length).trimStart() };
   }
   return { kind: 'unclassified', displayName: raw };
+}
+
+/** v3 F6b: a classification's index role: `nav`, `subject` for any other index, null for a non-index. */
+export function roleOfClassified(c: { kind: string; role?: IndexRole }): IndexRole | null {
+  return c.kind === 'index' ? (c.role ?? 'subject') : null;
 }
 
 /** The case-folded form of a name, for case-insensitive exact lookups (Unicode NFC, lower case). */
@@ -75,9 +134,10 @@ export function treeSettingsFrom(s: ProjectSettings): TreeSettings {
 
 /**
  * v2 C2c: the version of the name classification. Stored with the tree (in its catalogue key), so a tree built before
- * `[BWRK]` and `[BARC]` were kinds is re-classified once, with no reads.
+ * `[BWRK]` and `[BARC]` were kinds is re-classified once, with no reads. v3 F6b: `kinds-3`, `[NAV]` is an index (with its
+ * role), so a tree stored before held `[NAV]` names as unclassified until this re-classification.
  */
-export const CLASSIFICATION_VERSION = 'kinds-2';
+export const CLASSIFICATION_VERSION = 'kinds-3';
 
 /** The settings that decide the catalogue fields (and the classification's version), as one comparable string. */
 export function catalogueSettingsKey(t: TreeSettings): string {

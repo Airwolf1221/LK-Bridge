@@ -195,6 +195,8 @@ describe('the registry agrees with the schemas', () => {
       MCP_RESULT_MAX_CHARS: [40000, 4000, 400000],
       // v3 F6a.1 (ADR 0076 amendment 1, ADR 0061 amendment 1): the bulk accept's bound and the hang warnings.
       REFTYPE_BULK_MAX: [500, 1, 5000],
+      // v3 F6b (ADR 0079).
+      INDEX_CLASSIFY_BULK_MAX: [500, 1, 5000],
       // v3 F10 (ADR 0078): the chronology check after an edit (10 minutes).
       CHRONOLOGY_CHECK_DELAY_MS: [600000, 1000, 86400000],
       SLOW_REQUEST_WARN_MS: [30000, 1000, 3600000],

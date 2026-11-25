@@ -136,7 +136,7 @@ export class NameResolver {
       throw new RegistryError('INVALID_INPUT', `Kinds are ${KINDS.join(', ')}.`);
     }
     const trimmed = query.trim();
-    const { name: cleaned, prefix } = cleanPrefixes(trimmed);
+    const { name: cleaned, prefix, rawPrefix } = cleanPrefixes(trimmed);
 
     // An id (or an lk://resources/<id> link) is always accepted, within the scope and kinds asked for.
     const idCandidate = LK_URI.exec(trimmed)?.[1] ?? trimmed;
@@ -170,7 +170,7 @@ export class NameResolver {
     // to one prefix), so "[INDEX] Humans" matches the index's raw name exactly.
     for (const m of this.tree.findByName(cleaned)) take(m.node, m.field);
     if (prefix) {
-      const raw = `${KIND_PREFIX[prefix]}${cleaned}`;
+      const raw = `${rawPrefix ?? KIND_PREFIX[prefix]}${cleaned}`;
       for (const m of this.tree.findByRawName(raw)) take(m.node, 'raw');
     }
     let matches = [...found.values()];

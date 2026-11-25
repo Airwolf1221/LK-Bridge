@@ -5,6 +5,7 @@
  * accents ignored, numbers by value). Pure functions, plus the tree-backed `placementFor` and `outOfOrder`. Nothing
  * here moves anything: it only says where a page belongs.
  */
+import { indexRoleOfName, type IndexRole } from '../tree/classify.js';
 import type { NodeKind, TreeNode } from '../tree/index.js';
 import type { ProjectTree } from './tree-view.js';
 import { RegistryError, type NodeRef, type ResolveKind, type Slot } from './types.js';
@@ -21,23 +22,48 @@ const GROUP: Readonly<Record<NodeKind, number>> = {
   root: 3,
 };
 
+/** What a comparator reads of a sibling: its display name and kind, and (v3 F6b) an index's role or raw name. */
+export type OrderKey = Pick<Orderable, 'displayName' | 'kind' | 'rawName' | 'indexRole'>;
+
 /** A sibling comparator: negative when `a` belongs before `b`. */
-export type SiblingCompare = (
-  a: Pick<Orderable, 'displayName' | 'kind'>,
-  b: Pick<Orderable, 'displayName' | 'kind'>,
-) => number;
+export type SiblingCompare = (a: OrderKey, b: OrderKey) => number;
 
 export interface Orderable {
   readonly id: string;
   readonly displayName: string;
   readonly kind: NodeKind;
+  /** v3 F6b: the raw name (an index's role is read from its prefix when `indexRole` is absent). */
+  readonly rawName?: string;
+  /** v3 F6b: an index's role (`nav` or `subject`). */
+  readonly indexRole?: IndexRole | null;
+}
+
+/** v3 F6b: an index's role as a comparator reads it (the stored role, else its prefix, else `subject`). */
+function roleOf(x: OrderKey): IndexRole {
+  return x.indexRole ?? (x.rawName !== undefined ? indexRoleOfName(x.rawName) : null) ?? 'subject';
+}
+
+// v3 F6b (ADR 0079, T11): `[NAV]` first, then `[INDEX]`, then sources (`[BSRC]`, `[BWRK]`, `[BARC]`), then unclassified.
+const NAV_GROUP: Readonly<Record<NodeKind, number>> = {
+  index: 1,
+  bsrc: 2,
+  bwrk: 2,
+  barc: 2,
+  unclassified: 3,
+  root: 4,
+};
+const navGroup = (x: OrderKey): number => (x.kind === 'index' && roleOf(x) === 'nav' ? 0 : NAV_GROUP[x.kind]);
+
+/**
+ * v3 F6b (ADR 0079, T11): the order once the approved pack carries the new rule: `[NAV]` first, then `[INDEX]`, then
+ * sources, each group alphabetical. It replaces Source Formatting's "INDEX pages first" only where the rule is in force.
+ */
+export function compareSiblingsNav(a: OrderKey, b: OrderKey): number {
+  return navGroup(a) - navGroup(b) || COLLATOR.compare(a.displayName, b.displayName);
 }
 
 /** Negative when `a` belongs before `b`, 0 when the rule does not tell them apart. */
-export function compareSiblings(
-  a: Pick<Orderable, 'displayName' | 'kind'>,
-  b: Pick<Orderable, 'displayName' | 'kind'>,
-): number {
+export function compareSiblings(a: OrderKey, b: OrderKey): number {
   return GROUP[a.kind] - GROUP[b.kind] || COLLATOR.compare(a.displayName, b.displayName);
 }
 
@@ -53,8 +79,10 @@ export function slotAmong(
   kind: ResolveKind,
   /** v3 F4c (ADR 0065): the order of this parent (Narratives' own, E1); default the ordinary rule. */
   compare: SiblingCompare = compareSiblings,
+  /** v3 F6b: the new page's index role, when it is an index (a `[NAV]` sorts before every `[INDEX]` under T11). */
+  role?: IndexRole | null,
 ): Slot {
-  const me = { displayName, kind };
+  const me: OrderKey = { displayName, kind, ...(role ? { indexRole: role } : {}) };
   let after: Orderable | null = null;
   let before: Orderable | null = null;
   for (const s of siblings) {
@@ -122,7 +150,7 @@ export function placementFor(
   parentId: string,
   newDisplayName: string,
   kind: ResolveKind,
-  o: { excludeId?: string; compare?: SiblingCompare | null } = {},
+  o: { excludeId?: string; compare?: SiblingCompare | null; role?: IndexRole | null } = {},
 ): Slot {
   tree.requireUsable();
   if (!tree.node(parentId)) {
@@ -133,7 +161,7 @@ export function placementFor(
   const name = newDisplayName.trim();
   if (name === '') throw new RegistryError('INVALID_INPUT', 'A display name is required.');
   const siblings = tree.children(parentId).filter((c) => c.id !== o.excludeId);
-  return slotAmong(siblings, name, kind, o.compare ?? compareSiblings);
+  return slotAmong(siblings, name, kind, o.compare ?? compareSiblings, o.role ?? null);
 }
 
 export interface OutOfOrderParent {

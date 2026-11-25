@@ -18,7 +18,7 @@
  * alphabetical order (`[INDEX]` first, then pages, then unclassified; a case-insensitive, numeric-aware compare),
  * reported and never moved; the fix is `move_resource` under the same parent.
  */
-import { outOfOrderAmong } from '../../registry/ordering.js';
+import { compareSiblings, compareSiblingsNav, outOfOrderAmong } from '../../registry/ordering.js';
 import { narrativeCompare, parseNarrativeName } from '../../narrative/names.js';
 import { contentPages, isNarrativePage, ownedPages, fact, pathOf, type AuditContext } from '../context.js';
 import type { AuditPage, Ref } from '../model.js';
@@ -154,7 +154,11 @@ export function orderingCheck(ctx: AuditContext): FindingDraft[] {
   const kids = childrenByRank(ctx.model);
   // v3 F4c (ADR 0065, design E1): inside Narratives, the Story Map first, then acts and chapters by NUMBER, plans under
   // their maps by number (a page may be a parent there: the Story Map, an Act Map). Not reported against the ordinary rule.
-  const narrative = ctx.narrative ? narrativeCompare(ctx.narrative.rules) : null;
+  // v3 F6b (ADR 0079, T11): `[NAV]` first, then `[INDEX]`, then sources, ONLY once the approved pack carries the rule;
+  // until then the old rule (`[INDEX]` first). Inside Narratives it orders what the narrative order does not place.
+  const nav = ctx.indexTaxonomy?.navOrdering === true;
+  const ordinary = nav ? compareSiblingsNav : compareSiblings;
+  const narrative = ctx.narrative ? narrativeCompare(ctx.narrative.rules, ordinary) : null;
   for (const parent of ctx.model.pages.values()) {
     const inNarratives = narrative !== null && isNarrativePage(ctx, parent.id);
     if ((parent.kind !== 'index' && !inNarratives) || manual.has(parent.id)) continue;
@@ -164,8 +168,9 @@ export function orderingCheck(ctx: AuditContext): FindingDraft[] {
       id: s.id,
       displayName: s.displayName,
       kind: s.kind as 'index',
+      rawName: s.rawName,
     }));
-    const bad = inNarratives ? outOfOrderAmong(orderable, narrative) : outOfOrderAmong(orderable);
+    const bad = inNarratives ? outOfOrderAmong(orderable, narrative) : outOfOrderAmong(orderable, ordinary);
     const byId = new Map(siblings.map((s) => [s.id, s]));
     for (const b of bad) {
       const page = byId.get(b.node.id) as AuditPage;
@@ -179,7 +184,7 @@ export function orderingCheck(ctx: AuditContext): FindingDraft[] {
       out.push({
         code: 'out_of_order',
         pageId: page.id,
-        message: `“${page.rawName}” is out of ${inNarratives ? 'narrative order (the Story Map first, then acts and chapters by number)' : 'alphabetical order'} under “${parent.displayName}”: it belongs ${b.belongsAfter ? `after “${b.belongsAfter.displayName}”` : 'first'}.`,
+        message: `“${page.rawName}” is out of ${inNarratives ? 'narrative order (the Story Map first, then acts and chapters by number)' : nav ? 'order ([NAV] first, then [INDEX], then sources, each alphabetical)' : 'alphabetical order'} under “${parent.displayName}”: it belongs ${b.belongsAfter ? `after “${b.belongsAfter.displayName}”` : 'first'}.`,
         evidence: {
           parent: { id: parent.id, name: parent.rawName },
           position: now + 1,
@@ -190,7 +195,11 @@ export function orderingCheck(ctx: AuditContext): FindingDraft[] {
         },
         fix: {
           kind: 'move_resource',
-          args: { pageId: page.id, parentId: parent.id, ...(inNarratives ? { order: 'narrative' } : {}) },
+          args: {
+            pageId: page.id,
+            parentId: parent.id,
+            ...(inNarratives ? { order: 'narrative' } : nav ? { order: 'nav' } : {}),
+          },
           summary: inNarratives
             ? `Re-place ${page.displayName} in narrative order under ${parent.displayName}.`
             : `Re-place ${page.displayName} alphabetically under ${parent.displayName}.`,

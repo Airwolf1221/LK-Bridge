@@ -48,6 +48,7 @@ export default defineConfig({
       'test/f6a1/**/*.test.ts', // v3 F6a.1: the Reference Types hang at Arkona's scale (ADR 0076 amendment 1)
       'test/f7d/**/*.test.ts', // v3 F7d: a character's whole art set in one call (ADR 0077)
       'test/f10/**/*.test.ts', // v3 F10: the chronology repaired soon after an edit (ADR 0078)
+      'test/f6b/**/*.test.ts', // v3 F6b: navigation and subject indexes (ADR 0079)
       'test/snapshots-scale/**/*.test.ts', // the Snapshots freeze at Arkona's scale (ADR 0042 amendment 2)
       'test/sandbox-mock/**/*.test.ts', // CR-2026-11-R4 (S): every sandbox check, run against the mock in the ordinary suite
       'test/ui/**/*.test.{ts,tsx}',

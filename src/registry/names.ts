@@ -10,23 +10,32 @@ export function key(name: string): string {
   return nameKey(name.trim().replace(/\s+/g, ' '));
 }
 
-const PREFIX = /^\s*\[(INDEX|BSRC|BWRK|BARC)\]\s*/i;
+const PREFIX = /^\s*\[(INDEX|NAV|BSRC|BWRK|BARC)\]\s*/i;
 
 /** A prefix a name may carry: an index, or one of the page kinds (v2 C2c: `[BWRK]` and `[BARC]` beside `[BSRC]`). */
 export type PrefixKind = 'index' | 'bsrc' | 'bwrk' | 'barc';
 
 /**
- * Removes stray leading `[INDEX]` / `[BSRC]` / `[BWRK]` / `[BARC]` prefixes (any case; repeated ones collapse). Returns
+ * Removes stray leading `[INDEX]` / `[NAV]` / `[BSRC]` / `[BWRK]` / `[BARC]` prefixes (any case; repeated ones collapse). Returns
  * the clean name and the kind of the LAST prefix given (the one next to the name), or null when there was none.
  */
-export function cleanPrefixes(query: string): { name: string; prefix: PrefixKind | null } {
+export function cleanPrefixes(query: string): {
+  name: string;
+  prefix: PrefixKind | null;
+  /** v3 F6b: `[NAV] ` when the last prefix was `[NAV]` (an index of role nav); absent otherwise, so results read as before. */
+  rawPrefix?: string;
+} {
   let name = query.trim();
   let prefix: PrefixKind | null = null;
+  let nav = false;
   for (let m = PREFIX.exec(name); m; m = PREFIX.exec(name)) {
-    prefix = m[1]!.toLowerCase() as PrefixKind;
+    const word = m[1]!.toUpperCase();
+    // v3 F6b: `[NAV]` is an index (role nav), so its kind is `index`.
+    nav = word === 'NAV';
+    prefix = (nav ? 'index' : word.toLowerCase()) as PrefixKind;
     name = name.slice(m[0].length);
   }
-  return { name: name.trim(), prefix };
+  return { name: name.trim(), prefix, ...(nav ? { rawPrefix: '[NAV] ' } : {}) };
 }
 
 export interface SingularGuess {

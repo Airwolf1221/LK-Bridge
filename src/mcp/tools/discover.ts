@@ -1074,7 +1074,7 @@ async function liveSearch(
       ctx.tree.node(ctx.projectId, res.id).data !== null;
     if (!inside) continue;
     seen.add(res.id);
-    const plain = (n: string) => n.replace(/^\s*\[(?:INDEX|BSRC)\]\s*/i, '');
+    const plain = (n: string) => n.replace(/^\s*\[(?:INDEX|NAV|BSRC)\]\s*/i, '');
     hits.push({
       id: res.id,
       name: plain(res.name ?? ''),
