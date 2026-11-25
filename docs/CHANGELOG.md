@@ -21,7 +21,9 @@ live was touched.
   page (a new pack version).
 - **Two audit codes** (taxonomy): `index_prefix` (the prefix renamed only: display name, id and links kept) and
   `index_tags` (exactly Navigation, or the subject's category, never CANON; through the retag engine's write path; once
-  the Tagging Standard's section is published; CANON off an index is always a canonical proposal). Automation:
+  the Tagging Standard's section is published; never under Narratives, where the narrative tag grammar governs story,
+  continuity and act indexes, as the section says (the owner's ruling); CANON off an index is always a canonical
+  proposal). Automation:
   proposal-first, Apply allowed, default Propose. Each proposal one item, before and after shown.
 - **Creation**: `create_index` takes `role` (required with the pack; `[NAV]` from "[NAV] AI Navigation" by name,
   `TEMPLATE_MISSING` while it does not exist); `arkona_create_owner`'s national subindexes and race navigation are

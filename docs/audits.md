@@ -373,7 +373,7 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   Index Classification page: `index_prefix` (warning): the prefix disagrees with the approved role; the fix renames the
   prefix only (`[INDEX] X` ↔ `[NAV] X`; display name, id and links kept). `index_tags` (warning): the tags differ from
   T11 (a `[NAV]` exactly Navigation; an `[INDEX]` exactly its subject's primary category; never CANON), once the Tagging
-  Standard's "Navigation and Subject Index Tags" is published and approved; not under Narratives (the narrative grammar
-  sets those tags); the fix goes through the retag engine's write path, and taking CANON off is always a canonical
+  Standard's "Navigation and Subject Index Tags" is published and approved; not under Narratives (the narrative tag grammar
+  governs story, continuity and act indexes there, the owner's ruling); the fix goes through the retag engine's write path, and taking CANON off is always a canonical
   proposal. Automation: proposal-first, Apply allowed, default Propose. `out_of_order` applies T11's order ([NAV], then
   [INDEX], then sources) once the approved pack carries it.

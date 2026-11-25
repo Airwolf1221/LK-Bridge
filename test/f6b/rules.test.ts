@@ -20,6 +20,7 @@ import {
 import {
   expectedIndexTags,
   indexTagSectionText,
+  NARRATIVE_EXCLUSION_LINE,
   parseIndexTagSection,
   templateNameOf,
 } from '../../src/packs/indextax/rules.js';
@@ -274,10 +275,51 @@ describe('the tag rule and its governance section', () => {
       { kind: 'heading', content: [{ text: 'Navigation and Subject Index Tags' }] },
       ...indexTagSectionText(RULES).map((t) => ({ kind: 'paragraph', content: [{ text: t }] })),
     ];
+    const { story: _story, ...outside } = RULES.subjectTags;
     expect(parseIndexTagSection(blocks)).toEqual({
       ok: true,
       navTag: 'Navigation',
-      subjectTags: RULES.subjectTags,
+      subjectTags: outside,
+      narrativeGrammar: true,
+    });
+    expect(indexTagSectionText(RULES)).toContain(NARRATIVE_EXCLUSION_LINE);
+    expect(indexTagSectionText(RULES).some((l) => /^Story index/.test(l))).toBe(false);
+  });
+  // The owner's ruling at the F6b review: inside Narratives the narrative tag grammar governs story, continuity and act
+  // indexes; the section says so in place of a story's tag.
+  const para = (lines: string[]) =>
+    parseIndexTagSection(lines.map((t) => ({ kind: 'paragraph', content: [{ text: t }] })));
+  const OUTSIDE = [
+    'Navigation index ([NAV]): Navigation.',
+    'Character index: Character.',
+    'Polity index (a nation or polity): Polity.',
+    'Culture index (a culture family): Culture.',
+    'Religion index (a religion family): Religion.',
+    'Place index (a continent, a Realmship or a named Divine Realm): Place.',
+  ];
+  it('with the Narratives line: parsed, read as the Narratives exclusion (no story tag needed)', () => {
+    const r = para([...OUTSIDE, NARRATIVE_EXCLUSION_LINE]);
+    expect(r).toMatchObject({
+      ok: true,
+      narrativeGrammar: true,
+      subjectTags: { character: 'Character', place: 'Place' },
+    });
+    expect(r.ok && r.subjectTags.story).toBeUndefined();
+    // Any wording that starts "Narrative indexes" and names the narrative tag grammar.
+    expect(para([...OUTSIDE, 'Narrative indexes follow the narrative tag grammar.'])).toMatchObject({
+      ok: true,
+      narrativeGrammar: true,
+    });
+  });
+  it('without it: still parsed (Narratives excluded all the same), with or without a story tag', () => {
+    expect(para(OUTSIDE)).toMatchObject({ ok: true, narrativeGrammar: false });
+    const older = para([...OUTSIDE, 'Story index: Story.']);
+    expect(older).toMatchObject({ ok: true, narrativeGrammar: false, subjectTags: { story: 'Story' } });
+  });
+  it('both a story tag and the Narratives line, or the line twice, cannot be read', () => {
+    expect(para([...OUTSIDE, 'Story index: Story.', NARRATIVE_EXCLUSION_LINE])).toMatchObject({ ok: false });
+    expect(para([...OUTSIDE, NARRATIVE_EXCLUSION_LINE, NARRATIVE_EXCLUSION_LINE])).toMatchObject({
+      ok: false,
     });
   });
   it('a section that leaves a kind out, or states one twice, is refused (never guessed)', () => {

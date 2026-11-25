@@ -80,24 +80,55 @@ export const SUBJECT_TEMPLATE = '[INDEX] AI Index';
 const LINE =
   /^\s*(Navigation|Character|Polity|Culture|Religion|Place|Story)\s+index(?:\s*\([^)]*\))?\s*:\s*(.+?)\s*\.?\s*$/i;
 
+/**
+ * The owner's ruling at the F6b review (25 November 2026): inside Narratives the narrative tag grammar (Narrative + kind,
+ * + AU; ADR 0065) governs story, continuity and act indexes, so the section says so in place of a story's tag. Read as
+ * the Narratives exclusion. Any wording that starts "Narrative indexes" and names the narrative tag grammar.
+ */
+const NARRATIVE_LINE = /^\s*Narrative indexes\b.*\bnarrative tag grammar\b/i;
+
+/** The section's line for Narratives, exactly as the report gives it. */
+export const NARRATIVE_EXCLUSION_LINE =
+  'Narrative indexes (stories, continuities and acts, under Narratives) follow the narrative tag grammar instead.';
+
 export type IndexTagSectionParse =
   | {
       readonly ok: true;
       readonly navTag: string;
-      readonly subjectTags: Readonly<Record<SubjectKind, string>>;
+      /** The subjects' tags; `story` only when the section states one (its older form). */
+      readonly subjectTags: Readonly<Record<Exclude<SubjectKind, 'story'>, string>> & {
+        readonly story?: string;
+      };
+      /**
+       * The section states the Narratives exclusion (the narrative tag grammar governs story, continuity and act
+       * indexes). A section without it still parses: Narratives are excluded all the same (the index checks never apply
+       * T11's tags under Narratives, ADR 0079 decision 4).
+       */
+      readonly narrativeGrammar: boolean;
     }
   | { readonly ok: false; readonly reason: string };
 
 /**
  * The tag rule the "Navigation and Subject Index Tags" section states, from its paragraphs. Fails (never guesses) when a
- * kind is missing, stated twice, or its tag does not read as one tag.
+ * kind is missing, stated twice, or its tag does not read as one tag. The story's tag is optional: the section states the
+ * Narratives exclusion in its place (or, in its older form, a story's tag); stating both cannot be read.
  */
 export function parseIndexTagSection(section: readonly Obj[] | null): IndexTagSectionParse {
   if (!section) return { ok: false, reason: 'the section is not in the document exactly once' };
   const found = new Map<string, string>();
+  let narrativeGrammar = false;
   for (const b of section) {
     if (b.kind === 'heading') continue;
     for (const line of runsText(b).split(/\n/)) {
+      if (NARRATIVE_LINE.test(line)) {
+        if (narrativeGrammar)
+          return {
+            ok: false,
+            reason: 'the Narratives line is stated more than once; which one governs cannot be told',
+          };
+        narrativeGrammar = true;
+        continue;
+      }
       const m = LINE.exec(line);
       if (!m) continue;
       const kind = m[1]!.toLowerCase();
@@ -112,20 +143,32 @@ export function parseIndexTagSection(section: readonly Obj[] | null): IndexTagSe
       found.set(kind, tag);
     }
   }
-  const need = ['navigation', ...SUBJECT_KINDS];
+  if (narrativeGrammar && found.has('story'))
+    return {
+      ok: false,
+      reason:
+        'the section states both a story index tag and that narrative indexes follow the narrative tag grammar; which one governs cannot be told',
+    };
+  const need = ['navigation', ...SUBJECT_KINDS.filter((k) => k !== 'story')];
   const missing = need.filter((k) => !found.has(k));
   if (missing.length > 0)
     return {
       ok: false,
       reason: `the section does not state the tag of: ${missing.join(', ')} (one paragraph each, “Character index: Character.”); the bridge reads nothing it cannot read exactly`,
     };
+  const story = found.get('story');
   return {
     ok: true,
     navTag: found.get('navigation')!,
-    subjectTags: Object.fromEntries(SUBJECT_KINDS.map((k) => [k, found.get(k)!])) as Record<
-      SubjectKind,
-      string
-    >,
+    subjectTags: {
+      character: found.get('character')!,
+      polity: found.get('polity')!,
+      culture: found.get('culture')!,
+      religion: found.get('religion')!,
+      place: found.get('place')!,
+      ...(story !== undefined ? { story } : {}),
+    },
+    narrativeGrammar,
   };
 }
 
@@ -140,7 +183,7 @@ export function indexTagSectionText(rules: IndexTaxonomyRules): string[] {
     `Culture index (a culture family): ${t.culture}.`,
     `Religion index (a religion family): ${t.religion}.`,
     `Place index (a continent, a Realmship or a named Divine Realm): ${t.place}.`,
-    `Story index: ${t.story}.`,
+    NARRATIVE_EXCLUSION_LINE,
     'In every parent, [NAV] indexes come first, then [INDEX] indexes, then sources, each group in alphabetical order; inside a story the narrative number order applies.',
   ];
 }

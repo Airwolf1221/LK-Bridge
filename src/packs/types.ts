@@ -927,6 +927,12 @@ export const indexTaxonomyRulesSchema = z
         story: text(100),
       })
       .strict(),
+    /**
+     * The owner's ruling (F6b review, 25 November 2026): the section states that narrative indexes (stories, continuities
+     * and acts, under Narratives) follow the narrative tag grammar (ADR 0065) instead of T11's tags. Recorded from the
+     * published section; Narratives are excluded from `index_tags` either way.
+     */
+    narrativeGrammar: z.boolean().optional(),
     /** The templates, by name (resolved in each project by name, never by id). */
     templates: z.object({ nav: text(200), subject: text(200) }).strict(),
     /** The structural indexes, by exact display name (case and spacing aside), and the category words. */

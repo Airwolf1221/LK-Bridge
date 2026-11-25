@@ -1211,7 +1211,8 @@ continent's or Realmship's category index, a nation subindex, a continuity or ac
 one subject: a character, a nation or polity, a continent, a Realmship, a named Divine Realm, a culture or religion family,
 a story. In every parent `[NAV]` comes first, then `[INDEX]`, then sources, each alphabetical (inside a story the
 narrative number order still applies). A `[NAV]` carries exactly `Navigation`; an `[INDEX]` its subject's primary
-category; neither carries CANON.
+category; neither carries CANON. Inside Narratives the narrative tag grammar governs story, continuity and act indexes
+(only their prefixes follow this rule).
 
 - **Never guess an index's kind from its name or body.** `arkona_index_classify` (read-only, free) lists every index
   with the role a rule proposes (and which rule), or `undecided`; the owner decides each on the dashboard.

@@ -170,7 +170,7 @@ function deriveIndexTaxonomy(
   blocks: ReadonlyMap<string, unknown>,
 ): {
   state: 'draft' | 'same' | 'differs' | 'unreadable';
-  parsed?: { navTag: string; subjectTags: Record<SubjectKind, string> };
+  parsed?: { navTag: string; subjectTags: Record<SubjectKind, string>; narrativeGrammar: boolean };
   reason?: string;
 } | null {
   const it = pack.rules.indexTaxonomy;
@@ -181,10 +181,18 @@ function deriveIndexTaxonomy(
   if (!section) return it.status === 'draft' ? { state: 'draft' } : null;
   const parsed = parseIndexTagSection(section);
   if (!parsed.ok) return { state: 'unreadable', reason: parsed.reason };
+  // A section that states the Narratives exclusion instead of a story's tag keeps the version's story tag (unused:
+  // stories are under Narratives, where the narrative grammar governs).
+  const subjectTags: Record<SubjectKind, string> = { ...it.subjectTags, ...parsed.subjectTags };
   const same =
-    parsed.navTag === it.navTag && SUBJECT_KINDS.every((k) => parsed.subjectTags[k] === it.subjectTags[k]);
+    parsed.navTag === it.navTag &&
+    SUBJECT_KINDS.every((k) => subjectTags[k] === it.subjectTags[k]) &&
+    parsed.narrativeGrammar === (it.narrativeGrammar ?? false);
   if (it.status === 'published' && same) return { state: 'same' };
-  return { state: 'differs', parsed: { navTag: parsed.navTag, subjectTags: { ...parsed.subjectTags } } };
+  return {
+    state: 'differs',
+    parsed: { navTag: parsed.navTag, subjectTags, narrativeGrammar: parsed.narrativeGrammar },
+  };
 }
 
 /**
@@ -512,6 +520,9 @@ export function createPacks(d: PacksDeps): Packs {
                         status: 'published' as const,
                         navTag: stored.rules.indexTaxonomy.navTag,
                         subjectTags: stored.rules.indexTaxonomy.subjectTags,
+                        ...(stored.rules.indexTaxonomy.narrativeGrammar !== undefined
+                          ? { narrativeGrammar: stored.rules.indexTaxonomy.narrativeGrammar }
+                          : {}),
                       }
                     : {}),
                 },
@@ -832,6 +843,7 @@ export function createPacks(d: PacksDeps): Packs {
           status: 'published',
           navTag: indexTags.parsed.navTag,
           subjectTags: indexTags.parsed.subjectTags,
+          ...(indexTags.parsed.narrativeGrammar ? { narrativeGrammar: true } : {}),
         },
       });
       pack = store.newVersion(
@@ -844,7 +856,12 @@ export function createPacks(d: PacksDeps): Packs {
         'pack.derive_index_tags',
         pack.id,
         { status: before.status, navTag: before.navTag, subjectTags: before.subjectTags },
-        { version: pack.version, navTag: indexTags.parsed.navTag, subjectTags: indexTags.parsed.subjectTags },
+        {
+          version: pack.version,
+          navTag: indexTags.parsed.navTag,
+          subjectTags: indexTags.parsed.subjectTags,
+          narrativeGrammar: indexTags.parsed.narrativeGrammar,
+        },
       );
       changed();
     }

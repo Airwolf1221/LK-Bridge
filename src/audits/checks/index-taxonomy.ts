@@ -8,7 +8,8 @@
  *   navigation tag; an `[INDEX]` exactly its subject's primary category; neither carries CANON. Reported only once the
  *   rule is in force: the approved version's tag section is the Tagging Standard's published one (a draft keeps the old
  *   rules in force). A subject index whose subject the owner did not give has no expected tags: no finding. Under
- *   Narratives the narrative grammar sets the tags (ADR 0065, E2), so only the prefix is checked there.
+ *   Narratives the narrative tag grammar governs (the owner's ruling at the F6b review), so only the prefix is checked
+ *   there.
  *
  * T11's ordering is the ordering check's (`out_of_order`), under the same approved version.
  */
@@ -53,8 +54,9 @@ export function indexTaxonomyCheck(ctx: AuditContext): FindingDraft[] {
       });
     }
     if (!it.tagsInForce) continue;
-    // Under Narratives the narrative tools' grammar sets the tags (ADR 0065, E2): T11's tag rule is not applied there
-    // (the prefix is), so the two never undo each other. The owner rules on it (ADR 0079, decision 6).
+    // The owner's ruling (F6b review): under Narratives the narrative tag grammar (Narrative + kind, + AU; ADR 0065)
+    // governs story, continuity and act indexes, so T11's tags are never applied there (the prefix still is). The
+    // Tagging Standard's section says so; without that line Narratives are excluded all the same.
     if (ctx.narrativeIds?.has(pageId)) continue;
     const expected = expectedIndexTags(it.rules, want.role, want.subject);
     if (!expected || sameTags(page.tags, expected)) continue;

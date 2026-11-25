@@ -117,9 +117,13 @@ rows the owner approved or changed:
   marker, so it is always the owner's canonical approval, at every scope and under the automation's Apply (the lifecycle
   guard refuses the removal otherwise; it is never bypassed). Other tag changes are ordinary proposals.
 - `index_tags` reports only once the rule is in force: the approved version's section is the Tagging Standard's
-  published one; while it is a draft the old rules stay in force. **Chosen**: under Narratives the narrative tools'
-  grammar sets the tags (ADR 0065, E2: `Narrative, Story`…), so `index_tags` is not applied there (only the prefix is);
-  otherwise the narrative audit and this code would undo each other. The owner may rule otherwise.
+  published one; while it is a draft the old rules stay in force. **The owner's ruling** (at the F6b review, 25 November
+  2026, on the reviewer's recommendation): inside Narratives the narrative tag grammar (Narrative + kind, + AU; ADR 0065) governs story, continuity and act indexes; T11's index tags apply everywhere else. So `index_tags` is never
+  applied under Narratives (the prefix still is, by `index_prefix`), and the Tagging Standard's section says so in place
+  of a story's tag: "Narrative indexes (stories, continuities and acts, under Narratives) follow the narrative tag
+  grammar instead." The parser reads that line as the Narratives exclusion (recorded as `narrativeGrammar` on the
+  published rule); a section without it still parses (an older form may state a story's tag instead; both together
+  cannot be read), and Narratives are excluded all the same.
 - Both are registered with F5b's automation: proposal-only with Apply allowed (`applyDirect`), **default Propose**, the
   caps as usual. Each finding is its own proposal **as one item** (`index_prefix` / `index_tags`) carrying its before
   and after with F7.1a's display (the name or the tag list, the changed words marked); the automation's caps make the
@@ -200,7 +204,7 @@ put in place of what those sections say about index prefixes and sibling order.
    >
    > Place index (a continent, a Realmship or a named Divine Realm): Place.
    >
-   > Story index: Story.
+   > Narrative indexes (stories, continuities and acts, under Narratives) follow the narrative tag grammar instead.
    >
    > In every parent, [NAV] indexes come first, then [INDEX] indexes, then sources, each group in alphabetical order;
    > inside a story the narrative number order applies.
@@ -221,5 +225,5 @@ and subject indexes" (under the Arkona sections). The creation tools' descriptio
   published and approved, no index is retagged.
 - Nothing is renamed, moved or retagged without the owner's approval of the classification report (rows), and then of
   the proposals (or the owner's own switch to Apply).
-- The narrative tags of story and act indexes stay the narrative grammar's (decision 4); the owner may rule to apply T11
-  there too (a new pack version and a change to the narrative tag grammar).
+- Inside Narratives the narrative tag grammar governs story, continuity and act indexes (the owner's ruling, decision 4);
+  their prefixes follow T11.

@@ -221,6 +221,8 @@ describe('the tag section published, then index_tags', () => {
   it('the pack reads the rule from the section after re-approval', () => {
     expect(rt().packs.approvedRules('arkona')!.indexTaxonomy).toMatchObject({
       status: 'published',
+      // The owner's ruling: the section's Narratives line, recorded.
+      narrativeGrammar: true,
       navTag: 'Navigation',
     });
     expect(svc().auditInput(PROJECT)).toMatchObject({ tagsInForce: true });
