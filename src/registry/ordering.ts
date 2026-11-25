@@ -152,6 +152,10 @@ export function outOfOrder(
 ): OutOfOrderParent[] {
   tree.requireUsable();
   const parents: TreeNode[] = [];
+  // The 25 November 2026 freeze, step 5 (ADR 0061 amendment 2): the whole tree's children come from the one subtree
+  // read, grouped by parent (in sibling order, as the depth-first walk lists them), not one query per node (about
+  // 1,600 at Arkona's scale: 407 ms with the event loop held).
+  let childrenOf: (id: string) => TreeNode[] = (id) => tree.children(id);
   if (parentId !== undefined) {
     const p = tree.node(parentId);
     if (!p)
@@ -159,11 +163,23 @@ export function outOfOrder(
     parents.push(p);
   } else {
     const root = tree.root();
-    if (root) for (const e of tree.subtree(root.id)) parents.push(e.node);
+    if (root) {
+      const kids = new Map<string, TreeNode[]>();
+      for (const e of tree.subtree(root.id)) {
+        parents.push(e.node);
+        const pid = e.node.parentId;
+        if (pid !== null && e.node.id !== root.id) {
+          const l = kids.get(pid);
+          if (l) l.push(e.node);
+          else kids.set(pid, [e.node]);
+        }
+      }
+      childrenOf = (id) => kids.get(id) ?? [];
+    }
   }
   const out: OutOfOrderParent[] = [];
   for (const p of parents) {
-    const kids = tree.children(p.id);
+    const kids = childrenOf(p.id);
     if (kids.length < 2) continue;
     const bad = outOfOrderAmong(kids, orderFor(p.id) ?? compareSiblings);
     if (bad.length === 0) continue;

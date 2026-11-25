@@ -63,10 +63,14 @@ import {
   type SnapshotKind,
 } from './manifest.js';
 import { KeptBytes, SnapshotStore } from './store.js';
+import { SnapshotPageIndex } from './page-index.js';
 import { loggedTask, type TaskLogger } from '../maintenance/task-log.js';
 import { canonicalBytes } from './canonical.js';
 
 type Obj = Record<string, unknown>;
+
+/** ADR 0042 amendment 2: the store is walked again (in the background) when its measurement is this old. */
+const USAGE_MAX_AGE_MS = 6 * 3_600_000;
 
 /** Thrown inside a run when the bridge is stopping: the run stays `running` and continues later. */
 export class StopError extends Error {
@@ -124,6 +128,18 @@ export interface SnapshotServiceOptions {
   /** Test seams: the wait between yields, and no background work at start (runs resumed on demand). */
   readonly sleep?: (ms: number) => Promise<void>;
   readonly background?: boolean;
+  /**
+   * The 25 November 2026 freeze (ADR 0042 amendment 2): the runtime's background runner (F6a.1), which runs the page
+   * index's one-time backfill (aborted and awaited on stop). Without one the backfill runs on the service's own signal.
+   */
+  readonly runner?: {
+    trigger(
+      key: string,
+      label: string,
+      fn: (signal: AbortSignal) => Promise<unknown>,
+      o?: { readonly debounceMs?: number },
+    ): void;
+  };
   /** Called after each page of a run is recorded (tests interrupt a run here). */
   readonly afterPage?: (runId: string, pageId: string) => void | Promise<void>;
   /**
@@ -229,6 +245,8 @@ export function piecesOf(opId: string, params: OpParams, value: unknown): Owed[]
 export class SnapshotService {
   readonly store: SnapshotStore;
   readonly index: SnapshotDb;
+  /** The page index the Snapshots page browses (ADR 0042 amendment 2): kept current as each snapshot is written. */
+  readonly pages: SnapshotPageIndex;
   /** D3's kept bytes, over this store (one store, not two). */
   readonly keptBytes: KeptBytes;
   private readonly stopper = new AbortController();
@@ -244,6 +262,7 @@ export class SnapshotService {
   constructor(readonly o: SnapshotServiceOptions) {
     this.store = new SnapshotStore(snapshotDir(o.settings, o.dbPath));
     this.index = new SnapshotDb(o.db, o.now);
+    this.pages = new SnapshotPageIndex(o.db);
     this.keptBytes = new KeptBytes(this.store);
   }
 
@@ -264,6 +283,8 @@ export class SnapshotService {
     this.started = loggedTask(this.taskLog(), 'snapshot store start', {}, async () => {
       try {
         if (await this.store.exists()) await this.store.cleanTmp();
+        // ADR 0042 amendment 2: the store's first measurement, in the background (the dashboard never walks it).
+        void this.store.primeUsage();
         if (this.o.imageDir) {
           const r = await this.store.adoptKeptBytes(join(this.o.imageDir, 'kept-bytes'));
           if (r.adopted > 0 || r.damaged.length > 0)
@@ -273,6 +294,8 @@ export class SnapshotService {
             );
         }
         await this.reindex();
+        // ADR 0042 amendment 2: the snapshots indexed before the page index (or whose pages a stop interrupted).
+        this.scheduleBackfill();
         // Change snapshots owed when the process stopped: their jobs have ended (or will be resumed and end again).
         for (const j of this.index.owedJobs()) this.queueChange(j.projectId, j.jobId);
       } catch (e) {
@@ -280,6 +303,41 @@ export class SnapshotService {
       }
     });
     return this.started;
+  }
+
+  /**
+   * The page index's one-time backfill (ADR 0042 amendment 2) as background work: the snapshots not in it yet, newest
+   * first, in chunks that yield, pausing while agents' work is queued; then the missing-piece lists of partial snapshots.
+   */
+  scheduleBackfill(): void {
+    if (this.o.background === false) return;
+    if (
+      this.index.db.prepare('SELECT 1 FROM snapshots WHERE paged = 0 OR missing_listed = 0 LIMIT 1').get() ===
+      undefined
+    )
+      return;
+    const run = (signal: AbortSignal) =>
+      loggedTask(this.taskLog(), 'snapshot page index backfill', {}, () => this.backfillIndex(signal));
+    if (this.o.runner)
+      this.o.runner.trigger('snapshot-page-index', 'snapshot page index backfill', run, { debounceMs: 0 });
+    else
+      void run(this.stopper.signal).catch((e: unknown) =>
+        this.o.log?.warn({ err: e }, 'the page index backfill stopped'),
+      );
+  }
+
+  /** The backfill itself (see `scheduleBackfill`; tests call it directly). */
+  backfillIndex(signal: AbortSignal = this.stopper.signal): Promise<{ paged: number; listed: number }> {
+    return this.pages.backfill({
+      signal,
+      busy: () => this.o.projects.activeIds().some((pid) => this.o.busy?.(pid) === true),
+      listMissing: async (id) => {
+        const row = this.index.snapshot(id);
+        const m = row ? await this.store.readManifest(row.path) : null;
+        if (m) this.index.listMissingOf(m);
+        else this.index.markMissingListed(id);
+      },
+    });
   }
 
   /** Runs interrupted by a restart, continued in the background (call once the projects are served). */
@@ -945,6 +1003,9 @@ export class SnapshotService {
   async writeSnapshot(m: Manifest): Promise<SnapshotRow> {
     const rel = await this.store.lock.shared(() => this.store.writeManifest(m));
     this.index.indexManifest(m, rel, summaryOf(m));
+    // ADR 0042 amendment 2: its pages into the page index now, in chunks that yield (a stop before the end leaves the
+    // rest to the backfill).
+    await this.pages.apply(m.id);
     return this.index.snapshot(m.id)!;
   }
 
@@ -1424,6 +1485,8 @@ export class SnapshotService {
       const cutoff = now - this.o.settings.keepDays * DAY;
       drop.push(...this.index.snapshots(pid, { kind: 'change', before: cutoff, limit: 100_000 }));
       for (const s of drop) {
+        // ADR 0042 amendment 2: its pages out of the page index first (in chunks that yield).
+        await this.pages.forget(s.id);
         await this.store.removeManifest(s.path);
         this.index.removeSnapshot(s.id);
         removed++;
@@ -1530,11 +1593,12 @@ export class SnapshotService {
 
   async overview(projectId: string | null): Promise<Record<string, unknown>> {
     const exists = await this.store.exists();
-    const usage = exists
-      ? await this.store.usage()
-      : { objects: 0, objectBytes: 0, manifests: 0, manifestBytes: 0 };
+    // ADR 0042 amendment 2: the store's usage as last measured plus the changes since (measured in the background,
+    // never by this request), and the logical totals the page index keeps (never an aggregate over every piece).
+    const now = exists ? this.store.usageNow(USAGE_MAX_AGE_MS) : null;
+    const usage = now?.usage ?? { objects: 0, objectBytes: 0, manifests: 0, manifestBytes: 0 };
     const disk = await this.store.disk();
-    const totals = this.index.logicalTotals(projectId ?? undefined);
+    const totals = projectId ? this.pages.totals(projectId) : this.index.logicalTotals();
     const storeBytes = usage.objectBytes + usage.manifestBytes;
     const s = this.o.settings;
     const pages = projectId ? this.pagesOf(projectId) : null;
@@ -1543,7 +1607,9 @@ export class SnapshotService {
     return {
       dir: this.store.dir,
       exists,
-      store: { ...usage, bytes: storeBytes },
+      store: { ...usage, bytes: storeBytes, measuredAt: now?.at ?? null, measuring: now?.measuring ?? false },
+      // The page index (ADR 0042 amendment 2): snapshots in it, and still to come while the backfill runs.
+      ...(projectId ? { pageIndex: this.pages.status(projectId) } : {}),
       disk,
       minFreeBytes: s.minFreeBytes,
       headroom: disk ? disk.free - s.minFreeBytes : null,

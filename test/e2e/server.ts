@@ -24,6 +24,12 @@ import { coreTextChanges, reword } from '../../src/packs/engine/core.js';
 import { textChangeWords } from '../../src/jobs/text-change.js';
 import { planPageWrite, sha256 } from '../../src/pages/index.js';
 import { observationFromResource } from '../../src/tree/classify.js';
+import {
+  MANIFEST_FORMAT,
+  MANIFEST_VERSION,
+  newSnapshotId,
+  type Manifest,
+} from '../../src/snapshots/index.js';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const PORT = Number(process.env.E2E_PORT ?? 8799);
@@ -413,6 +419,63 @@ function setUpAutomation(): Promise<void> {
   return automationReady;
 }
 
+/** The snapshot fixture (see `/snapshot-fixture`): ids of the snapshots written. */
+async function seedSnapshots(): Promise<string[]> {
+  const svc = runtime.snapshots;
+  const hash = (s: string) => sha256(s);
+  const page = (i: number, edit: number) => {
+    const id = `e2epg${String(i).padStart(3, '0')}`;
+    const name = `E2E Page ${String(i).padStart(3, '0')}`;
+    return {
+      id,
+      parentId: 'root0001',
+      rank: null,
+      name,
+      kind: 'bsrc',
+      resource: { sha256: hash(`${id}:resource`), size: 400 },
+      sidebar: { sha256: hash(`${id}:sidebar`), size: 900 },
+      documents: [
+        { id: `${id}d`, type: 'page', name: 'Main', sha256: hash(`${id}:main:${edit}`), size: 12_000 },
+      ],
+    };
+  };
+  const manifest = (kind: 'full' | 'change', at: number, pages: Manifest['pages']): Manifest => ({
+    format: MANIFEST_FORMAT,
+    version: MANIFEST_VERSION,
+    id: newSnapshotId(kind, at, randomBytes(3).toString('hex')),
+    project: { id: PROJECT, name: 'test' },
+    kind,
+    takenAt: new Date(at).toISOString(),
+    startedAt: new Date(at - 1000).toISOString(),
+    rootId: 'root0001',
+    complete: true,
+    trigger: kind === 'full' ? { trigger: 'schedule' } : { tool: 'write_page' },
+    pages,
+    library: null,
+    counts: {
+      pages: pages.length,
+      pieces: pages.length * 3,
+      logicalBytes: pages.length * 13_300,
+      reads: 0,
+      downloads: 0,
+      newObjects: 0,
+      newBytes: 0,
+      missing: 0,
+    },
+  });
+  const now = Date.now();
+  const ids: string[] = [];
+  const full = manifest(
+    'full',
+    now - 3_600_000,
+    Array.from({ length: 120 }, (_, i) => page(i, 0)),
+  );
+  ids.push((await svc.writeSnapshot(full)).id);
+  for (let k = 1; k <= 3; k++)
+    ids.push((await svc.writeSnapshot(manifest('change', now - 3_600_000 + k * 60_000, [page(7, k)]))).id);
+  return ids;
+}
+
 // Control server: the test starts work here. Loopback only.
 createServer((req, res) => {
   void (async () => {
@@ -500,6 +563,11 @@ createServer((req, res) => {
       });
       if ('jobId' in r) await engine.wait(PROJECT, r.jobId, 10_000);
       res.end(JSON.stringify(r));
+    } else if (url.pathname === '/snapshot-fixture') {
+      // The 25 November 2026 freeze (ADR 0042 amendment 2): snapshots to browse, written through the real service
+      // (manifests and index; the pieces are hashes only: browsing reads no object). 120 pages in a full snapshot an
+      // hour ago, then three change snapshots of "E2E Page 007".
+      res.end(JSON.stringify({ snapshots: await seedSnapshots() }));
     } else if (url.pathname === '/ready') {
       res.end('{"ready":true}');
     } else {

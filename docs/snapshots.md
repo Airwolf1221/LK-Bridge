@@ -119,3 +119,18 @@ page(s) changed since the proposal and still show the old URL (…); relink them
   bridge never retries it. The new asset's id and URL are in the restore's record.
 - An image that was at the library's root goes back to the root. One whose folder is gone and whose path the snapshot
   does not hold goes to the root too, and the proposal says so.
+
+## The page index (25 November 2026)
+
+The Snapshots page's page list and a page's history come from an index the bridge keeps as each snapshot is written
+([ADR 0042 amendment 2](adr/0042-snapshots-restore-rehearsal.md#amendment-2-25-november-2026-browsing-from-an-index-the-list-never-waits)).
+Before, each request worked them out from every piece of every snapshot kept, and on 25 November 2026 that held the
+bridge for about a minute per click on Arkona.
+
+- **After an upgrade**, the snapshots taken before it are indexed in the background, newest first, a few pages at a time
+  (the log says `snapshot page index backfill` when it starts and finishes). Meanwhile the page list says how many are
+  left and shows the pages indexed so far; a page's history is complete from the start.
+- **The store's size** on the page is the last measurement plus what has been written and removed since; the bridge
+  measures the store again in the background at start-up and every six hours (the page shows "measuring…" before the
+  first measurement).
+- **A partial snapshot's missing pieces** are recorded when it is indexed; for older ones, once the backfill reaches them.

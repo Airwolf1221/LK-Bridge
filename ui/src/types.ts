@@ -1753,7 +1753,18 @@ export interface SnapshotNoticeView {
 export interface SnapshotOverview {
   dir: string;
   exists: boolean;
-  store: { objects: number; objectBytes: number; manifests: number; manifestBytes: number; bytes: number };
+  store: {
+    objects: number;
+    objectBytes: number;
+    manifests: number;
+    manifestBytes: number;
+    bytes: number;
+    /** ADR 0042 amendment 2: when the store was last walked (null before the first walk); updated by puts since. */
+    measuredAt?: number | null;
+    measuring?: boolean;
+  };
+  /** ADR 0042 amendment 2: snapshots in the page index, and those the backfill has still to bring in. */
+  pageIndex?: { indexed: number; pending: number; missingPending: number };
   disk: { total: number; free: number } | null;
   minFreeBytes: number;
   headroom: number | null;
@@ -1849,6 +1860,15 @@ export interface BackupFileView {
 export interface SnapshotsResponse {
   project: string;
   overview: SnapshotOverview;
+  /** ADR 0042 amendment 2: the running full snapshot's progress (pages done of the total), never waited for. */
+  running?: {
+    id: string;
+    trigger: string;
+    done: number;
+    total: number;
+    startedAt: number;
+    updatedAt: number;
+  } | null;
   snapshots: SnapshotRowView[];
   restores: RestoreRecordView[];
   rehearsals: RehearsalView[];
@@ -1867,7 +1887,19 @@ export interface SnapshotsResponse {
 
 export interface SnapshotPagesResponse {
   project: string;
-  pages: { pageId: string; name: string | null; lastAt: number; deleted: boolean }[];
+  pages: {
+    pageId: string;
+    name: string | null;
+    lastAt: number;
+    deleted: boolean;
+    branch?: { id: string; name: string | null } | null;
+    snapshots?: number;
+    bytes?: number;
+  }[];
+  /** ADR 0042 amendment 2: the cursor of the next page of results (older pages), or null at the end. */
+  next?: string | null;
+  branches?: { id: string; name: string | null; pages: number }[];
+  index?: { indexed: number; pending: number; missingPending: number };
 }
 
 export interface SnapshotHistoryEntry {
@@ -1884,7 +1916,8 @@ export interface SnapshotPageResponse {
   project: string;
   page: { id: string; name: string; live: boolean };
   documents: { id: string; name: string | null }[];
-  history: { count: number; snapshots: SnapshotHistoryEntry[]; more?: number };
+  /** ADR 0042 amendment 2: `next` is the cursor of the older snapshots. */
+  history: { count: number; snapshots: SnapshotHistoryEntry[]; more?: number; next?: string };
   restores: RestoreRecordView[];
 }
 

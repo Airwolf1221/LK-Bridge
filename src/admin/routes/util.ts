@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import * as z from 'zod';
 import type { AdminActions } from '../actions.js';
 import type { PrincipalName } from '../../policy/index.js';
@@ -82,4 +82,28 @@ export function projectFor(
       `The request names two projects: “${address.slice(0, 64)}” in the address and “${bodyProject.slice(0, 64)}” in the body. Nothing was done.`,
     );
   return p;
+}
+
+/**
+ * The 25 November 2026 freeze (ADR 0061 amendment 2): a signal aborted when the client closes its connection before
+ * the answer is sent (the dashboard navigated away, or gave up on a poll), so the rest of the request's work stops
+ * where it allows (its LegendKeeper reads leave the queue; its chunks stop between yields).
+ */
+export function closedSignal(reply: FastifyReply): AbortSignal {
+  const c = new AbortController();
+  const raw = reply.raw;
+  const onClose = () => {
+    if (!raw.writableEnded)
+      c.abort(new AdminHttpError(499, 'REQUEST_CLOSED', 'The client closed the request.'));
+  };
+  raw.once('close', onClose);
+  return c.signal;
+}
+
+/** Throws the closed request's error when its client has gone (between chunks of work). */
+export function stopIfClosed(signal: AbortSignal): void {
+  if (signal.aborted)
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new AdminHttpError(499, 'REQUEST_CLOSED', 'The client closed the request.');
 }

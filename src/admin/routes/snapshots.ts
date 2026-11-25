@@ -6,7 +6,14 @@
  *   project's snapshots, runs, findings (missing or damaged pieces) and notices, the next full snapshot's estimate, the
  *   restores proposed, the rehearsals, the snapshot jobs' schedules and the nightly database copies with their age.
  * - `GET /snapshots/pages` and `GET /snapshots/pages/:pageId`: the pages the snapshots hold (a deleted page too) and one
- *   page's history, newest first, piece by piece. Free: the bridge's own index.
+ *   page's history, newest first, piece by piece. Free: the bridge's own index. The 25 November 2026 freeze (ADR 0042
+ *   amendment 2): both from the page index, paged (`limit`, `cursor`: the previous answer's `next`), the list filtered
+ *   on the server (`q`: name contains; `branch`: the first index below the root, by id); never every snapshot.
+ *
+ * `GET /snapshots` never waits on a running snapshot (ADR 0042 amendment 2): the stored list, the store's usage as last
+ * measured (the walk is background work), the missing pieces recorded when each snapshot was indexed, and the running
+ * full snapshot's progress (`running`: pages done of the total). A request whose client has gone stops (ADR 0061
+ * amendment 2).
  * - `GET /snapshots/diff`: one piece's Markdown diff between a snapshot and the page now (a few reads at P1) or between
  *   two snapshots (free).
  * - `POST /snapshots/full`: a full snapshot of the project now (the nightly one runs on its own);
@@ -24,7 +31,6 @@ import { ResumeError } from '../../resume/service.js';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { diffText } from '../../snapshots/diff.js';
 import { documentsOf, historyOf, pieceNow, pieceThen } from '../../snapshots/history.js';
-import { missingPiecesOf } from '../../snapshots/manifest.js';
 
 /** v3 F2: at most this many missing pieces are listed per snapshot (the rest are counted). */
 const MISSING_SHOWN = 200;
@@ -35,12 +41,14 @@ import type { Restores } from '../../snapshots/restores.js';
 import type { SnapshotService } from '../../snapshots/service.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { limitSchema, parseInput, projectParam, type Register } from './util.js';
+import { closedSignal, limitSchema, parseInput, projectParam, stopIfClosed, type Register } from './util.js';
 
 const PAGE_ID = z.string().regex(/^[a-z][0-9a-z]{5,31}$/, 'a LegendKeeper resource id');
 const SNAPSHOT_ID = z.string().regex(/^\d{8}T\d{6}Z-(full|change|daily)-[0-9a-f]{1,32}$/, 'a snapshot id');
 const ASSET_ID = z.string().min(1).max(64);
 const projectQuery = z.object({ project: projectParam });
+/** A keyset cursor (the previous answer's `next`). */
+const CURSOR = z.string().min(1).max(400).optional();
 const pieceQuery = z.object({
   piece: z.enum(['resource', 'sidebar', 'document']).optional(),
   ref: z.string().min(1).max(64).optional(),
@@ -99,7 +107,8 @@ export const registerSnapshots: Register = (api, ctx) => {
       }
     }).filter((j) => j !== null);
 
-  api.get('/snapshots', async (req) => {
+  api.get('/snapshots', async (req, reply) => {
+    const signal = closedSignal(reply);
     const q = parseInput(
       z.object({
         project: projectParam,
@@ -111,25 +120,36 @@ export const registerSnapshots: Register = (api, ctx) => {
     const project = ctx.project(q.project);
     const { svc, restores } = services();
     const [overview, backups] = await Promise.all([svc.overview(project.id), svc.databaseBackups()]);
-    // v3 F2 (ADR 0049 decision 4): a partial snapshot lists its missing pieces (page, piece, reference, reason), from
-    // its manifest, read once per snapshot in this request (snapshots are small; only partial ones are read).
+    stopIfClosed(signal);
+    // v3 F2 (ADR 0049 decision 4): a partial snapshot lists its missing pieces (page, piece, reference, reason). ADR 0042
+    // amendment 2: recorded when it was indexed (before, its gzipped manifest was read and parsed on every list); `null`
+    // with `missingPending` while the backfill has not listed an older snapshot's yet.
     const rows = svc.index.snapshots(project.id, { ...(q.kind ? { kind: q.kind } : {}), limit: q.limit });
-    const snapshots = await Promise.all(
-      rows.map(async (row) => {
-        if (row.missing === 0) return row;
-        const m = await svc.manifest(row.id).catch(() => null);
-        if (!m) return { ...row, missingPieces: null };
-        const pieces = missingPiecesOf(m);
-        return {
-          ...row,
-          missingPieces: pieces.slice(0, MISSING_SHOWN),
-          ...(pieces.length > MISSING_SHOWN ? { missingMore: pieces.length - MISSING_SHOWN } : {}),
-        };
-      }),
-    );
+    const snapshots = rows.map((row) => {
+      if (row.missing === 0) return row;
+      const m = svc.index.missingOf(row.id, { limit: MISSING_SHOWN });
+      if (!m) return { ...row, missingPieces: null, missingPending: true };
+      return {
+        ...row,
+        missingPieces: m.pieces,
+        ...(m.total > MISSING_SHOWN ? { missingMore: m.total - MISSING_SHOWN } : {}),
+      };
+    });
+    // The running full snapshot's progress (pages done of the total), from its run row: it never waits on the run.
+    const run = svc.index.runningRun(project.id, 'full');
     return {
       project: project.name,
       overview,
+      running: run
+        ? {
+            id: run.id,
+            trigger: run.trigger,
+            done: run.done,
+            total: run.total,
+            startedAt: run.startedAt,
+            updatedAt: run.updatedAt,
+          }
+        : null,
       snapshots,
       restores: restores.list(project.id, { limit: 50 }),
       rehearsals: svc.index.rehearsals(project.id, 50),
@@ -140,44 +160,74 @@ export const registerSnapshots: Register = (api, ctx) => {
     };
   });
 
-  /** The pages the snapshots hold (by name), newest first. A page deleted since is listed with `deleted`. */
+  /**
+   * The pages the snapshots hold (by name), newest first, one page of results at a time (`next`: the cursor of the
+   * following one). A page deleted since is listed with `deleted`. From the page index (ADR 0042 amendment 2).
+   */
   api.get('/snapshots/pages', (req) => {
     const q = parseInput(
-      z.object({ project: projectParam, q: z.string().max(200).optional(), limit: limitSchema(200, 2000) }),
+      z.object({
+        project: projectParam,
+        q: z.string().max(200).optional(),
+        branch: PAGE_ID.optional(),
+        limit: limitSchema(50, 200),
+        cursor: CURSOR,
+      }),
       req.query,
     );
     const project = ctx.project(q.project);
     const { svc } = services();
+    const r = svc.pages.list(project.id, {
+      ...(q.q?.trim() ? { query: q.q.trim() } : {}),
+      ...(q.branch ? { branch: q.branch } : {}),
+      limit: q.limit,
+      ...(q.cursor ? { cursor: q.cursor } : {}),
+    });
     return {
       project: project.name,
-      pages: svc.index.pagesWithHistory(project.id, {
-        ...(q.q?.trim() ? { query: q.q.trim() } : {}),
-        limit: q.limit,
-      }),
+      pages: r.pages,
+      next: r.next,
+      branches: svc.pages.branches(project.id),
+      index: svc.pages.status(project.id),
     };
   });
 
-  /** One page's snapshots, newest first, piece by piece (free), and the documents its snapshots know. */
+  /**
+   * One page's snapshots, newest first, piece by piece (free), `limit` at a time (`next`: the cursor of the older ones),
+   * and the documents its snapshots know. Reads only this page's rows of the snapshots shown (ADR 0042 amendment 2).
+   */
   api.get('/snapshots/pages/:pageId', (req) => {
     const { pageId } = parseInput(z.object({ pageId: PAGE_ID }), req.params);
-    const q = parseInput(projectQuery.merge(pieceQuery).extend({ limit: limitSchema(50, 500) }), req.query);
+    const q = parseInput(
+      projectQuery.merge(pieceQuery).extend({ limit: limitSchema(50, 500), cursor: CURSOR }),
+      req.query,
+    );
     const project = ctx.project(q.project);
     const { svc, restores } = services();
     const live = pageName(project.id, pageId);
-    const known = svc.index.pagesWithHistory(project.id, { limit: 100_000 }).find((p) => p.pageId === pageId);
-    if (!live && !known) throw new AdminHttpError(404, 'NOT_FOUND', `No snapshot holds the page ${pageId}.`);
+    const known = svc.pages.page(project.id, pageId);
+    // A page the backfill has not reached yet: its latest named row, from this page's own rows.
+    const named =
+      known || live
+        ? null
+        : (svc.index
+            .pageHistory(project.id, pageId, { limit: 50 })
+            .find((r) => r.name && r.piece !== 'document') ?? null);
+    if (!live && !known && !named)
+      throw new AdminHttpError(404, 'NOT_FOUND', `No snapshot holds the page ${pageId}.`);
     const f = q.piece ? { piece: q.piece, ...(q.ref ? { ref: q.ref } : {}) } : {};
     return {
       project: project.name,
-      page: { id: pageId, name: live ?? known?.name ?? pageId, live: live !== null },
+      page: { id: pageId, name: live ?? known?.name ?? named?.name ?? pageId, live: live !== null },
       documents: [...documentsOf(svc, project.id, pageId)].map(([id, name]) => ({ id, name })),
-      history: historyOf(svc, project.id, pageId, f, q.limit),
+      history: historyOf(svc, project.id, pageId, f, q.limit, q.cursor),
       restores: restores.list(project.id, { pageId, limit: 20 }),
     };
   });
 
   /** A piece's diff: `from` a snapshot `to` another (free) or to the page now (`to` left out: a few reads at P1). */
-  api.get('/snapshots/diff', async (req) => {
+  api.get('/snapshots/diff', async (req, reply) => {
+    const signal = closedSignal(reply);
     const q = parseInput(
       z
         .object({ project: projectParam, page: PAGE_ID, from: SNAPSHOT_ID, to: SNAPSHOT_ID.optional() })
@@ -195,10 +245,12 @@ export const registerSnapshots: Register = (api, ctx) => {
       let reads = 0;
       if (q.to) after = await pieceThen(svc, project.id, q.page, f, q.to);
       else {
-        const now = await pieceNow(svc, project.id, q.page, f);
+        // ADR 0061 amendment 2: a closed request's reads leave the governor's queue.
+        const now = await pieceNow(svc, project.id, q.page, f, signal);
         after = now.text;
         reads = now.reads;
       }
+      stopIfClosed(signal);
       const d = diffText(before, after);
       return {
         project: project.name,

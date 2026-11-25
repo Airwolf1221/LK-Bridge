@@ -141,14 +141,19 @@ export interface DryRun {
   readonly stopped: boolean;
 }
 
+/** The longest the card waits for a project's candidates before answering from the last scan. */
+const CARD_WAIT_MS = 250;
+
 export interface ProjectCard {
   readonly project: string;
   readonly projectId: string;
   readonly snapshot: CandidateScan['snapshot'];
-  /** Candidates the latest snapshot shows. */
-  readonly candidates: number;
+  /** Candidates the latest snapshot shows (null: not counted yet; see `counting`). */
+  readonly candidates: number | null;
   /** Of those, still to do (less what the sweep did since that snapshot). */
-  readonly remaining: number;
+  readonly remaining: number | null;
+  /** The latest snapshot's candidates are still being read (in the background); the numbers are the last scan's. */
+  readonly counting?: true;
   readonly unreadable: number;
   readonly counts: Readonly<Record<DocRecord['status'], number>>;
 }
@@ -197,6 +202,8 @@ export class BlockIdSweep {
   readonly store: BlockIdStore;
   private readonly onStopFns = new Set<(s: StopRecord) => void>();
   private readonly scans = new Map<string, { stamp: string; scan: Promise<CandidateScan> }>();
+  /** The last scan that finished, per project (the card shows it while a newer one is still being read). */
+  private readonly lastScans = new Map<string, CandidateScan>();
 
   constructor(private readonly d: BlockIdSweepDeps) {
     this.store = new BlockIdStore(d.db, d.now);
@@ -297,7 +304,10 @@ export class BlockIdSweep {
     if (hit && hit.stamp === snap.stamp) return hit.scan;
     const scan = scanCandidates(this.d.overlay, projectId);
     this.scans.set(projectId, { stamp: snap.stamp, scan });
-    scan.catch(() => this.scans.delete(projectId));
+    scan.then(
+      (x) => this.lastScans.set(projectId, x),
+      () => this.scans.delete(projectId),
+    );
     return scan;
   }
 
@@ -349,27 +359,42 @@ export class BlockIdSweep {
 
   // ============================================================================================ the card and the dry run
 
+  /**
+   * The Maintenance page's card. The 25 November 2026 freeze, step 5 (ADR 0061 amendment 2): it waits at most
+   * `CARD_WAIT_MS` for a project's candidates. Reading them after new snapshots means bringing the overlay up to date
+   * (every change snapshot since the full one) and scanning every document of it: 3.4 s at Arkona's scale, inside the
+   * request. Past the wait, the card shows the last scan that finished (`counting`: a newer one is being read) or none
+   * yet, and the scan finishes in the background (cached for the next request).
+   */
   async card(): Promise<SweepCard> {
     const st = this.store.state();
     const projects: ProjectCard[] = [];
     for (const projectId of this.d.projects.activeIds()) {
-      let scan: CandidateScan;
+      let scan: CandidateScan | null;
+      const reading = this.candidates(projectId);
+      reading.catch(() => undefined);
       try {
-        scan = await this.candidates(projectId);
+        scan = await Promise.race([
+          reading,
+          new Promise<null>((r) => setTimeout(() => r(null), CARD_WAIT_MS).unref?.()),
+        ]);
       } catch (e) {
         this.d.log?.warn({ err: e, projectId }, 'the block-id sweep could not read its candidates');
         scan = { snapshot: null, candidates: [], documents: 0, unreadable: 0 };
       }
+      const counting = scan === null;
+      const shown = scan ?? this.lastScans.get(projectId) ?? null;
       const counts = { done: 0, already: 0, moved: 0, unverified: 0, failed: 0, gone: 0, error: 0 };
       for (const r of this.store.docs(projectId)) counts[r.status]++;
       projects.push({
         project: this.d.projects.nameOf(projectId),
         projectId,
-        snapshot: scan.snapshot,
-        candidates: scan.candidates.length,
-        remaining: this.remaining(projectId, scan).length,
-        unreadable: scan.unreadable,
+        snapshot: shown?.snapshot ?? null,
+        candidates: shown ? shown.candidates.length : null,
+        remaining: shown ? this.remaining(projectId, shown).length : null,
+        unreadable: shown?.unreadable ?? 0,
         counts,
+        ...(counting ? { counting: true as const } : {}),
       });
     }
     return {

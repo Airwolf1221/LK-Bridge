@@ -15,7 +15,9 @@ import {
   type ResourcePiece,
   type SidebarPiece,
 } from './canonical.js';
+import { prepared } from '../db/statements.js';
 import type { PieceRow } from './db.js';
+import { decodeCursor, encodeCursor } from './page-index.js';
 import { renderDocument, renderResource, renderSidebar } from './diff.js';
 import { RestoreError, stateAt } from './restore.js';
 import type { SnapshotService } from './service.js';
@@ -114,47 +116,139 @@ function rowView(r: PieceRow, prev: PieceRow | undefined): HistoryPiece {
   };
 }
 
-/** The page's snapshots (of one piece, or of everything), newest first. */
+/** The SQL (and its arguments) selecting one piece of a page's rows, page deletions included (as `pageHistory`). */
+function pieceWhere(f: Pick<PieceFilter, 'piece' | 'ref'>): { sql: string; args: unknown[] } {
+  const sql: string[] = [];
+  const args: unknown[] = [];
+  if (f.piece === 'document') sql.push(`piece IN ('document', 'document-deleted', 'deleted')`);
+  else if (f.piece) {
+    sql.push(`piece IN (?, 'deleted')`);
+    args.push(f.piece);
+  }
+  if (f.ref !== undefined) {
+    sql.push(`(ref = ? OR piece = 'deleted')`);
+    args.push(f.ref);
+  }
+  return { sql: sql.map((x) => ` AND ${x}`).join(''), args };
+}
+
+const keyOf = (r: Pick<PieceRow, 'piece' | 'ref'>): string =>
+  r.piece === 'deleted' ? '*' : `${r.piece === 'document-deleted' ? 'document' : r.piece}:${r.ref}`;
+
+/** Whether `a` is newer than `b` in history order (taken_at, then snapshot id). */
+const newer = (a: PieceRow, b: PieceRow): boolean =>
+  a.takenAt !== b.takenAt ? a.takenAt > b.takenAt : a.snapshotId > b.snapshotId;
+
+/**
+ * The page's snapshots (of one piece, or of everything), newest first, `limit` at a time: `cursor` is the previous
+ * page's `next`. The 25 November 2026 freeze (ADR 0042 amendment 2): only this page's rows are read, through the page
+ * index (`snapshot_pieces_page`), and only those of the snapshots shown, each piece compared with its state just
+ * before them (one indexed lookup per piece); never every snapshot of the project.
+ */
 export function historyOf(
   svc: SnapshotService,
   projectId: string,
   pageId: string,
   f: Pick<PieceFilter, 'piece' | 'ref'>,
   limit: number,
-): { count: number; snapshots: HistoryEntry[]; more?: number } {
-  const rows = svc.index.pageHistory(projectId, pageId, {
-    ...(f.piece ? { piece: f.piece } : {}),
-    ...(f.ref !== undefined ? { ref: f.ref } : {}),
-    limit: 5000,
-  });
-  // Each piece compared with the same piece's previous row (oldest first); a page deletion resets them all.
-  const asc = [...rows].reverse();
-  const prevOf = new Map<PieceRow, PieceRow | undefined>();
+  cursor?: string,
+): { count: number; snapshots: HistoryEntry[]; more?: number; next?: string } {
+  const db = svc.index.db;
+  const w = pieceWhere(f);
+  const base = `FROM snapshot_pieces INDEXED BY snapshot_pieces_page WHERE project_id = ? AND page_id = ?${w.sql}`;
+  const args = [projectId, pageId, ...w.args];
+  const count = (
+    prepared(db, `SELECT COUNT(DISTINCT snapshot_id) AS n ${base}`).get(...args) as { n: number }
+  ).n;
+  const c = decodeCursor(cursor);
+  const shown = db
+    .prepare(
+      `SELECT snapshot_id, MAX(taken_at) AS t ${base} GROUP BY snapshot_id
+       ${c ? 'HAVING (t < ? OR (t = ? AND snapshot_id < ?))' : ''} ORDER BY t DESC, snapshot_id DESC LIMIT ?`,
+    )
+    .all(...args, ...(c ? [c.at, c.at, c.id] : []), limit + 1) as { snapshot_id: string; t: number }[];
+  const page = shown.slice(0, limit);
+  if (page.length === 0) return { count, snapshots: [] };
+  // The rows of the snapshots shown (each by its primary key), this piece only, oldest first.
+  const want = (r: PieceRow) =>
+    (f.piece === undefined ||
+      r.piece === 'deleted' ||
+      (f.piece === 'document'
+        ? r.piece === 'document' || r.piece === 'document-deleted'
+        : r.piece === f.piece)) &&
+    (f.ref === undefined || r.ref === f.ref || r.piece === 'deleted');
+  const bySnap = new Map<string, PieceRow[]>();
+  for (const s of page) bySnap.set(s.snapshot_id, svc.index.piecesOf(s.snapshot_id, pageId).filter(want));
+  const asc = [...page].reverse().flatMap((s) => bySnap.get(s.snapshot_id) ?? []);
+  // Each piece's state just before the oldest snapshot shown, and the page's last deletion before it.
+  const oldest = page.at(-1)!;
+  const before = (pieceSql: string, pieceArgs: unknown[]): PieceRow | undefined => {
+    const r = prepared(
+      db,
+      `SELECT p.*, s.kind, s.state FROM snapshot_pieces p INDEXED BY snapshot_pieces_page JOIN snapshots s ON s.id = p.snapshot_id
+          WHERE p.project_id = ? AND p.page_id = ? AND ${pieceSql}
+            AND (p.taken_at < ? OR (p.taken_at = ? AND p.snapshot_id < ?))
+          ORDER BY p.taken_at DESC, p.snapshot_id DESC LIMIT 1`,
+    ).get(projectId, pageId, ...pieceArgs, oldest.t, oldest.t, oldest.snapshot_id) as
+      Record<string, unknown> | undefined;
+    return r ? svc.index.pieceRowOf(r) : undefined;
+  };
+  const lastDeleted = before(`p.piece = 'deleted' AND p.ref = ''`, []);
   const lastBy = new Map<string, PieceRow>();
+  if (lastDeleted) lastBy.set('*', lastDeleted);
   for (const r of asc) {
-    const k =
-      r.piece === 'deleted' ? '*' : `${r.piece === 'document-deleted' ? 'document' : r.piece}:${r.ref}`;
+    const k = keyOf(r);
+    if (k === '*' || lastBy.has(k)) continue;
+    const prev =
+      r.piece === 'document' || r.piece === 'document-deleted'
+        ? before(`p.piece IN ('document', 'document-deleted') AND p.ref = ?`, [r.ref])
+        : before(`p.piece = ? AND p.ref = ?`, [r.piece, r.ref]);
+    const seed =
+      prev && lastDeleted ? (newer(prev, lastDeleted) ? prev : lastDeleted) : (prev ?? lastDeleted);
+    if (seed) lastBy.set(k, seed);
+  }
+  // Each piece compared with the same piece's previous row; a page deletion resets them all.
+  const prevOf = new Map<PieceRow, PieceRow | undefined>();
+  for (const r of asc) {
+    const k = keyOf(r);
     const prev = r.piece === 'deleted' ? undefined : (lastBy.get(k) ?? lastBy.get('*'));
     prevOf.set(r, prev);
     lastBy.set(k, r);
     if (r.piece === 'deleted') for (const key of [...lastBy.keys()]) lastBy.set(key, r);
   }
-  const bySnap = new Map<string, PieceRow[]>();
-  for (const r of rows) bySnap.set(r.snapshotId, [...(bySnap.get(r.snapshotId) ?? []), r]);
-  const snapshots = [...bySnap.entries()].slice(0, limit).map(([id, list]): HistoryEntry => {
+  const snapshots = page.map(({ snapshot_id: id }): HistoryEntry => {
+    // Its pieces in a fixed order: by piece, then reference (the snapshot's primary key).
+    const list = bySnap.get(id) ?? [];
     const s = svc.index.snapshot(id);
+    const first = list[0];
     return {
       snapshot: id,
-      takenAt: new Date(list[0]!.takenAt).toISOString(),
-      kind: list[0]!.kind,
-      ...(list[0]!.state === 'partial'
+      takenAt: new Date(first?.takenAt ?? s?.takenAt ?? 0).toISOString(),
+      kind: first?.kind ?? s?.kind ?? 'change',
+      ...((first?.state ?? s?.state) === 'partial'
         ? { partial: true as const, ...(s?.damaged ? { damaged: s.damaged } : {}) }
         : {}),
       ...(s?.trigger && typeof s.trigger.tool === 'string' ? { madeBy: s.trigger.tool } : {}),
       pieces: list.map((r) => rowView(r, prevOf.get(r))),
     };
   });
-  return { count: bySnap.size, snapshots, ...(bySnap.size > limit ? { more: bySnap.size - limit } : {}) };
+  const last = page.at(-1)!;
+  const older =
+    shown.length > limit
+      ? (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS n FROM (SELECT snapshot_id, MAX(taken_at) AS t ${base} GROUP BY snapshot_id
+                 HAVING (t < ? OR (t = ? AND snapshot_id < ?)))`,
+            )
+            .get(...args, last.t, last.t, last.snapshot_id) as { n: number }
+        ).n
+      : 0;
+  return {
+    count,
+    snapshots,
+    ...(older > 0 ? { more: older, next: encodeCursor(last.t, last.snapshot_id) } : {}),
+  };
 }
 
 /** One piece of the page as it is now, rendered as text (1 read, plus the document's own). */
@@ -163,8 +257,9 @@ export async function pieceNow(
   projectId: string,
   pageId: string,
   f: Pick<PieceFilter, 'piece' | 'ref'>,
+  signal?: AbortSignal,
 ): Promise<{ text: string; reads: number }> {
-  const read = svc.reader(projectId, 'P1');
+  const read = svc.reader(projectId, 'P1', signal ? { signal } : {});
   let reads = 1;
   const res = (await read('getResource', { path: { resourceId: pageId } })) as Obj | undefined;
   if (!res) return { text: '(the page is deleted)', reads };

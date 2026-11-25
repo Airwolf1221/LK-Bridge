@@ -526,8 +526,18 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   }
   // v3 F4c (ADR 0065, design E1): inside Narratives, the Story Map comes first and acts and chapters follow by number
   // (never alphabetically): every tool that places a page there asks the registry for the parent's order.
+  // The 25 November 2026 freeze, step 5 (ADR 0061 amendment 2): the project's narrative scope is worked out once per
+  // synchronous pass (a whole-tree out-of-order report asks for every parent: about 240 ms at Arkona's scale when each
+  // asked afresh), and forgotten at the next turn of the event loop, so a change is seen by the next request.
+  let scopeMemo: { projectId: string; scope: ReturnType<typeof narrativeScope> } | null = null;
   registry.setSiblingOrder((projectId, parentId) => {
-    const scope = narrativeScope(packs, tree.queries, projectId);
+    if (scopeMemo?.projectId !== projectId) {
+      scopeMemo = { projectId, scope: narrativeScope(packs, tree.queries, projectId) };
+      setImmediate(() => {
+        scopeMemo = null;
+      });
+    }
+    const scope = scopeMemo.scope;
     if (!scope) return null;
     return inNarratives(scope, tree.queries.node(projectId, parentId).data)
       ? narrativeCompare(scope.rules)
@@ -893,8 +903,16 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const afterEditRef: { current: ((projectId: string, change: ChangeTaken) => boolean) | null } = {
     current: null,
   };
+  // v3 F6a.1 (ADR 0076 amendment 1): background work an action starts, owned here: debounced where it is a re-check,
+  // one run at a time per key, and aborted and awaited before the engine and the database stop. Made before the
+  // snapshots: the page index's backfill (ADR 0042 amendment 2) is its work too.
+  const background = new BackgroundRunner({
+    log: { warn: (obj, msg) => log.warn(obj, msg), debug: (obj, msg) => log.debug(obj, msg) },
+    debounceMs: 2_000,
+  });
   const snapshots = new SnapshotService({
     db: o.db,
+    runner: background,
     engine,
     projects,
     tree,
@@ -937,12 +955,6 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const consistencyRef: { current: Consistency | null } = { current: null };
   // v3 F6a (ADR 0076): the Reference Type vocabulary: the report, the owner's decisions, the publication, and the two
   // checks' input (from the approved pack and the decisions).
-  // v3 F6a.1 (ADR 0076 amendment 1): background work an action starts, owned here: debounced where it is a re-check,
-  // one run at a time per key, and aborted and awaited before the engine and the database stop.
-  const background = new BackgroundRunner({
-    log: { warn: (obj, msg) => log.warn(obj, msg), debug: (obj, msg) => log.debug(obj, msg) },
-    debounceMs: 2_000,
-  });
   const referenceTypes = new ReferenceTypeService({
     background,
     db: o.db,

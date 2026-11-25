@@ -310,3 +310,89 @@ reason, and the snapshot is partial. A rehearsal's comparison turns any read err
 piece, finishes, and deletes its root. A sampled rehearsal copies at most 25 events of a timeline (with the lanes they
 use) and 40 features of a map (with their folders), and its plan lists what was cut (`cuts`). Its estimate is paced at
 P3's write and request rates. The dashboard preselects the newest complete full snapshot.
+
+## Amendment 2 (25 November 2026): browsing from an index; the list never waits
+
+- Status: **Proposed** (the Snapshots freeze of 25 November 2026). The request handling it shares with every page:
+  [ADR 0061 amendment 2](0061-cr-2026-11-r3-decisions.md#amendment-2-25-november-2026-one-request-in-flight-a-closed-request-stops-a-guard-for-the-next-one).
+- Why: on 25 November 2026, while a manual full snapshot of Arkona ran and the owner browsed the Snapshots page, the
+  bridge froze for 62–67 s at a time, five times in a row (F6a.1's watchdog: `blockedMs` about 62,000; the main thread's
+  lag lines named `GET /api/admin/snapshots/pages` and `GET /api/admin/snapshots/pages/qm0hfxti`, 67 s each). Memory was
+  normal. Nine `GET /api/admin/snapshots` were meanwhile still running after 258 to 528 s.
+
+### The cause
+
+1. **`GET /snapshots/pages` and `GET /snapshots/pages/:id`: `SnapshotDb.pagesWithHistory`**, one synchronous SQLite
+   statement inside the request. It grouped every piece row of the project by page and named each page with a
+   correlated subquery (`… WHERE q.project_id = p.project_id AND q.page_id = p.page_id AND q.name IS NOT NULL AND q.piece
+IN ('resource','sidebar','deleted') ORDER BY q.taken_at DESC LIMIT 1`). SQLite has no statistics for this table, and
+   its planner answered that subquery from `snapshot_pieces_name (project_id, piece, name)`: for **each** page it read
+   **every** settings and sidebar row of the project and sorted them. Pages × rows: quadratic, and it grows with every
+   snapshot retention keeps. `/snapshots/pages/:id` ran the same statement (with a limit of 100,000) only to check that
+   the page was known. better-sqlite3 is synchronous, so the event loop was held for all of it. Measured on the mock (the
+   same schema): 1,500 pages with one full snapshot and 300 change snapshots, 2.0–2.5 s; with 13 nightly full snapshots,
+   34–40 s; at the retention's steady state (30 full snapshots, 9,000 change snapshots), 71 s. Arkona's nightly full
+   snapshots since 13 November put it at the live 62–67 s.
+2. **`GET /snapshots` waited on the running snapshot**: not a lock, but `SnapshotService.overview` → `SnapshotStore.usage`,
+   a walk of the whole object store (a `readdir` per directory and a `stat` per object) in every request. Each `stat`
+   goes through libuv's thread pool, which the running full snapshot's file writes and gzips were using, so each request
+   queued behind them: 0.3–0.5 s alone, 4.1–4.7 s during a full snapshot on the mock, minutes live, where nine walks
+   competed with each other and the run. Two more costs in the same request: the logical totals (two aggregates over
+   every piece row: about 200 ms of synchronous SQL at the steady state) and, for each partial snapshot listed, its
+   gzipped manifest read and parsed (a full one is several megabytes).
+3. **The dashboard kept polling** (every 3 s while a run is active) without regard to the request still pending, so the
+   slow requests piled up (decision 4 of the ADR 0061 amendment).
+
+### Decisions
+
+1. **A page index, kept current as each snapshot is written** (migration `4600`, `src/snapshots/page-index.ts`):
+   `snapshot_page_snapshots` (page → each snapshot holding it: its time, kind, pieces, bytes, the name it had, whether it
+   was deleted) and `snapshot_pages` (one row per page: latest name and its lower-cased key, deleted or not, its branch,
+   how many snapshots hold it and their bytes, first and last time, newest snapshot), with indexes for the list newest
+   first, by branch. `writeSnapshot` applies each new snapshot (`apply`) after indexing its manifest; retention takes a
+   snapshot out (`forget`) before removing it, and each page it held is worked out again from the snapshots still
+   holding it (or leaves the list). Both run in transactions of 25 pages and yield to the event loop whenever 20 ms of
+   work has been done; both are idempotent, so a stop part-way is finished by the backfill.
+2. **A one-time backfill** for the snapshots indexed before (`snapshots.paged = 0`), newest first, through the same
+   `apply`, then the missing-piece lists of older partial snapshots (one manifest read each): background work on the
+   runtime's runner (F6a.1), started after the store's start-up, pausing while agents' work (P1 or P2) is queued, as the
+   full snapshot does, i.e. at the bulk class's place. While it runs, the page list shows what is indexed and says how
+   many snapshots are still to come; a page's history is unaffected (it reads the page's own rows).
+3. **Paged, filtered on the server**: `GET /snapshots/pages?q=&branch=&limit=&cursor=` (default 50, at most 200; keyset
+   on (last time, page id), so ties never skip or repeat a page; `q` is "name contains", any case; `branch` is the first
+   index below the AI REPOSITORY root, by id, taken from the repository tree when the page is indexed). The answer adds
+   `next`, the branches with their page counts, and the index's progress. The UI asks for one page of results at a time
+   (Older and Newer), with a branch filter.
+4. **A page's history reads only that page, only the snapshots shown**: `GET /snapshots/pages/:id?limit=&cursor=`
+   (default 50) pages its snapshots newest first through `snapshot_pieces_page` (`INDEXED BY`, so no piece filter can
+   send SQLite to a project-wide index again), reads each shown snapshot's rows of the page by primary key, and compares
+   each piece with its state just before them (one indexed lookup per piece). The result is the old history exactly
+   (tested for every page and piece filter, paged by 1, 2 and 500). `pageHistory`, which many tools use for one page,
+   also forces the page index. The page's name and whether it is known come from `snapshot_pages` by key. No decoding is
+   involved; the diff (`GET /snapshots/diff`) still reads two objects, as before.
+5. **`GET /snapshots` answers at once**: the store's usage is the last measurement plus every put and removal since
+   (`SnapshotStore.usageNow`; the walk runs in the background at start-up and when the measurement is six hours old, one
+   at a time; `measuredAt` and `measuring` say which); the logical totals are kept with the index (each hash's reference
+   count, `snapshot_hash_refs`, and the project's sums, `snapshot_totals`); a partial snapshot's missing pieces are
+   recorded when it is indexed (`snapshot_missing`; `missingPending` while the backfill has not listed an older one), and
+   `list_snapshots` reads them there too. The answer adds `running`: the running full snapshot's id, trigger, pages done
+   and total, from its run row. Nothing in it waits on the run.
+
+### Measured (the mock at Arkona's scale; `test/snapshots-scale/`)
+
+| Route                      | Before (1 full, 300 changes)                | Before (13 fulls)            | After (1 full)            | After (13 fulls)          |
+| -------------------------- | ------------------------------------------- | ---------------------------- | ------------------------- | ------------------------- |
+| `GET /snapshots/pages`     | 1,974–2,467 ms, loop held throughout        | 33.9–39.9 s, held throughout | 4–9 ms, lag 0             | 4–14 ms, lag ≤ 4 ms       |
+| `GET /snapshots/pages/:id` | 1,939–2,418 ms, held throughout             | 33.9–36.4 s, held throughout | 4–10 ms, lag 0            | 7–20 ms, lag ≤ 19 ms      |
+| `GET /snapshots`           | 278–537 ms; 4,130 ms during a full snapshot | 451–508 ms; 4,674 ms during  | 18–36 ms; 26–33 ms during | 19–42 ms; 20–24 ms during |
+
+Repeated browsing (15 rounds of the three routes) leaves the heap where it started.
+
+### Consequences
+
+- The page list's order and fields are as before (plus `branch`, `snapshots`, `bytes`); an old client reading `pages`
+  still works. A page's history pieces are listed in a fixed order (by piece, then reference).
+- The index costs about three rows per page per snapshot (`snapshot_page_snapshots`) and one per distinct object; a full
+  snapshot of 1,500 pages applies in about 60 chunks.
+- The store's usage between walks is an approximation (puts and removals by this process, counted as they happen); the
+  dashboard says when it was measured.
