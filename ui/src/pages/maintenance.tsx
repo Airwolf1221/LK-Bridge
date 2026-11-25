@@ -215,8 +215,11 @@ interface SweepProject {
   project: string;
   projectId: string;
   snapshot: { id: string; takenAt: number } | null;
-  candidates: number;
-  remaining: number;
+  /** Null while the latest snapshot's candidates are first being counted (ADR 0061 amendment 2). */
+  candidates: number | null;
+  remaining: number | null;
+  /** A newer scan is being read in the background; the numbers shown are the last one's. */
+  counting?: boolean;
   unreadable: number;
   counts: Record<'done' | 'already' | 'moved' | 'unverified' | 'failed' | 'gone' | 'error', number>;
 }
@@ -427,8 +430,11 @@ function BlockIdSweepCard({
                   <td>
                     {p.snapshot ? fmtAgo(p.snapshot.takenAt, now) : <span className="muted">none yet</span>}
                   </td>
-                  <td>{p.candidates}</td>
-                  <td>{p.remaining}</td>
+                  <td>
+                    {p.candidates ?? <span className="muted">counting…</span>}
+                    {p.counting && p.candidates !== null && <span className="muted"> (counting again)</span>}
+                  </td>
+                  <td>{p.remaining ?? <span className="muted">counting…</span>}</td>
                   <td>{p.counts.done}</td>
                   <td>{p.counts.moved}</td>
                   <td>{p.counts.unverified}</td>

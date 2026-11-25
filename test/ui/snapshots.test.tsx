@@ -4,12 +4,13 @@
  * page's history with its diff, "Propose a restore" with a dry run first, a deleted image, the rehearsal, the database
  * copies), the schedule on the Maintenance Jobs page, and a restore proposal on the Proposals page.
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api, inflightPaths } from '../../ui/src/api';
 import { figuresText, rehearsalProgress } from '../../ui/src/pages/snapshots';
 import type { RehearsalView } from '../../ui/src/types';
-import { baseRoutes, installApi, projectOf, renderApp, useDom, type Call } from './helpers';
+import { baseRoutes, installApi, navLink, projectOf, renderApp, useDom, type Call } from './helpers';
 
 useDom();
 
@@ -793,5 +794,184 @@ describe('a restore proposal', () => {
     expect(within(card).getByText('First notes.')).toBeInTheDocument();
     expect(card).toHaveTextContent('Cannot be restored exactly');
     expect(card).toHaveTextContent('document Plot: added since the snapshot');
+  });
+});
+
+// ------------------------------------------------------------------------- the 25 November 2026 freeze
+
+/**
+ * Holds every GET of `path` (after the first `pass` ones) until the test releases it; a held request whose signal is
+ * aborted rejects as `fetch` does. Each held request is recorded (`aborted` once its signal fired).
+ */
+function holdGets(path: string, pass = 0) {
+  const inner = globalThis.fetch;
+  const held: { release: () => void; aborted: boolean }[] = [];
+  let seen = 0;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+        'https://lk.example.test',
+      );
+      if (url.pathname !== `/api/admin${path}` || (init?.method ?? 'GET') !== 'GET' || seen++ < pass)
+        return inner(input, init);
+      return new Promise<Response>((resolve, reject) => {
+        const h = { aborted: false, release: () => resolve(inner(input, init)) };
+        init?.signal?.addEventListener('abort', () => {
+          h.aborted = true;
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        });
+        held.push(h);
+      });
+    }),
+  );
+  return held;
+}
+
+describe('the 25 November 2026 freeze (ADR 0042 amendment 2, ADR 0061 amendment 2)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('polls with at most one GET /snapshots in flight: a poll while one is pending is skipped', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    installApi(routes()); // a full snapshot is running: the page polls every 3 seconds
+    const held = holdGets('/snapshots', 1);
+    renderApp('/ui/snapshots');
+    expect(await screen.findByTestId('store-size')).toBeInTheDocument();
+    // The first poll is sent and does not answer (the bridge is busy): five more polls are skipped, not piled up.
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(held).toHaveLength(1));
+    for (let i = 0; i < 5; i++)
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+        await Promise.resolve();
+      });
+    expect(held).toHaveLength(1);
+    expect(inflightPaths().filter((p) => p.startsWith('/snapshots?'))).toHaveLength(1);
+    // Once it answers, the next poll is sent.
+    await act(async () => {
+      held[0]!.release();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(inflightPaths().filter((p) => p.startsWith('/snapshots?'))).toHaveLength(0));
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(held).toHaveLength(2));
+    expect(held.filter((h) => h.aborted)).toHaveLength(0);
+  });
+
+  it('aborts its requests when the owner navigates away', async () => {
+    const user = userEvent.setup();
+    installApi({ ...routes(), 'GET /maintenance': { jobs: [], schedulerEnabled: true, now: NOW } });
+    const held = holdGets('/snapshots/pages');
+    renderApp('/ui/snapshots');
+    expect(await screen.findByTestId('store-size')).toBeInTheDocument();
+    await waitFor(() => expect(held).toHaveLength(1));
+    expect(held[0]!.aborted).toBe(false);
+    await user.click(await navLink(user, 'Maintenance Jobs'));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Maintenance Jobs' })).toBeInTheDocument();
+    await waitFor(() => expect(held[0]!.aborted).toBe(true));
+    expect(inflightPaths().filter((p) => p.startsWith('/snapshots'))).toEqual([]);
+  });
+
+  it('api.get shares one request per path; it is aborted only once every caller has let go', async () => {
+    installApi(routes());
+    const held = holdGets('/snapshots/pages');
+    const a = new AbortController();
+    const b = new AbortController();
+    const first = api.get('/snapshots/pages', { signal: a.signal });
+    const second = api.get('/snapshots/pages', { signal: b.signal });
+    await waitFor(() => expect(held).toHaveLength(1));
+    a.abort();
+    await expect(first).rejects.toMatchObject({ code: 'ABORTED' });
+    expect(held[0]!.aborted).toBe(false);
+    held[0]!.release();
+    await expect(second).resolves.toMatchObject({ project: 'baisheng' });
+    // A caller alone, then gone: the request is aborted.
+    const third = api.get('/snapshots/pages', {
+      signal: b.signal.aborted ? new AbortController().signal : b.signal,
+    });
+    await waitFor(() => expect(held).toHaveLength(2));
+    const c = new AbortController();
+    const fourth = api.get('/snapshots/pages?x=1', { signal: c.signal });
+    c.abort();
+    await expect(fourth).rejects.toMatchObject({ code: 'ABORTED' });
+    held[1]!.release();
+    await expect(third).resolves.toMatchObject({ project: 'baisheng' });
+  });
+
+  it('the page finder asks for one page of results at a time, filtered by name and branch on the server', async () => {
+    const user = userEvent.setup();
+    const page = (n: number) => ({
+      pageId: `pg${String(n).padStart(6, '0')}`,
+      name: `Page ${n}`,
+      lastAt: NOW - n * 1000,
+      deleted: false,
+    });
+    const a = installApi(
+      routes({
+        'GET /snapshots/pages': (c: Call) => {
+          const q = new URLSearchParams(c.query);
+          const at = q.get('cursor') === 'c2' ? 50 : 0;
+          return {
+            project: 'baisheng',
+            pages: Array.from({ length: q.get('cursor') === 'c2' ? 3 : 50 }, (_, i) => page(at + i)),
+            next: q.get('cursor') === 'c2' ? null : 'c2',
+            branches: [
+              { id: 'brlocs01', name: '[INDEX] Locations', pages: 40 },
+              { id: 'brpeop01', name: '[INDEX] People', pages: 13 },
+            ],
+            index: { indexed: 300, pending: 12, missingPending: 0 },
+          };
+        },
+      }),
+    );
+    renderApp('/ui/snapshots');
+    const list = await screen.findByRole('list', { name: 'Pages in the snapshots' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(50);
+    expect(screen.getByText(/Indexing older snapshots: 12 still to index/)).toHaveAttribute('role', 'status');
+    const query = () => new URLSearchParams(a.find('GET', '/snapshots/pages').at(-1)!.query);
+    expect(query().get('limit')).toBe('50');
+    expect(query().get('cursor')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Older' }));
+    await waitFor(() => expect(query().get('cursor')).toBe('c2'));
+    expect(await screen.findByText('Page 52')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Older' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Newer' }));
+    await waitFor(() => expect(query().get('cursor')).toBeNull());
+    await user.selectOptions(screen.getByLabelText('Branch'), 'brpeop01');
+    await waitFor(() => expect(query().get('branch')).toBe('brpeop01'));
+    await user.type(screen.getByLabelText('Page name'), 'harbour');
+    await user.click(screen.getByRole('button', { name: 'Find' }));
+    await waitFor(() => expect(query().get('q')).toBe('harbour'));
+    expect(query().get('branch')).toBe('brpeop01');
+    expect(query().get('cursor')).toBeNull();
+  });
+
+  it('a page’s history pages back through older snapshots', async () => {
+    const user = userEvent.setup();
+    const a = installApi(
+      routes({
+        'GET /snapshots/pages/atlas5np': (c: Call) =>
+          new URLSearchParams(c.query).get('cursor') === 'older1'
+            ? { ...pageResponse, history: { ...pageResponse.history, count: 51 } }
+            : { ...pageResponse, history: { ...pageResponse.history, count: 51, more: 50, next: 'older1' } },
+      }),
+    );
+    renderApp('/ui/snapshots?page=atlas5np');
+    expect(await screen.findByRole('table', { name: 'Page history' })).toBeInTheDocument();
+    expect(screen.getByText('50 older snapshots not shown.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Older snapshots' }));
+    await waitFor(() =>
+      expect(
+        new URLSearchParams(a.find('GET', '/snapshots/pages/atlas5np').at(-1)!.query).get('cursor'),
+      ).toBe('older1'),
+    );
+    expect(await screen.findByRole('button', { name: 'Newer snapshots' })).toBeInTheDocument();
   });
 });

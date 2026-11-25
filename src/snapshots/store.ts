@@ -59,6 +59,13 @@ export interface PutResult {
 
 export type ObjectCheck = 'ok' | 'missing' | 'corrupt';
 
+export interface StoreUsage {
+  readonly objects: number;
+  readonly objectBytes: number;
+  readonly manifests: number;
+  readonly manifestBytes: number;
+}
+
 /** A shared/exclusive lock: writers share it, the garbage collector takes it alone. In-process (one bridge per store). */
 class RwLock {
   private readers = 0;
@@ -129,8 +136,88 @@ export class SnapshotStore {
    */
   private recentPrunedAt = 0;
 
+  /**
+   * The 25 November 2026 freeze (ADR 0042 amendment 2): what the store takes on disk, as last measured by a walk of
+   * every object and manifest, plus what this process has put and removed since. The dashboard reads it at once
+   * (`usageNow`); the walk (`usage`) runs only in the background, one at a time. Before, every `GET /snapshots` walked
+   * the whole store itself (a `stat` per object), so while a full snapshot wrote, each request queued behind its file
+   * work for seconds, and the dashboard's polls piled up.
+   */
+  private measured: (StoreUsage & { at: number }) | null = null;
+  private measuring: Promise<void> | null = null;
+
   /** `dir` is created by the first write (not here): a runtime that never snapshots touches no folder. */
   constructor(readonly dir: string) {}
+
+  /**
+   * The store's usage now, without waiting: the last measurement and the changes since (`at`: when it was measured;
+   * null with `measuring` before the first walk has finished). Starts a walk in the background when there is none yet
+   * or it is older than `maxAgeMs`.
+   */
+  usageNow(
+    maxAgeMs: number,
+    now = Date.now(),
+  ): { usage: StoreUsage | null; at: number | null; measuring: boolean } {
+    if (!this.measuring && (!this.measured || now - this.measured.at > maxAgeMs)) {
+      this.measuring = this.usage()
+        .then((u) => {
+          this.measured = { ...u, at: Date.now() };
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          this.measuring = null;
+        });
+    }
+    const m = this.measured;
+    return {
+      usage: m
+        ? {
+            objects: m.objects,
+            objectBytes: m.objectBytes,
+            manifests: m.manifests,
+            manifestBytes: m.manifestBytes,
+          }
+        : null,
+      at: m?.at ?? null,
+      measuring: this.measuring !== null,
+    };
+  }
+
+  /**
+   * The first measurement, at start-up (background work): a store not created yet is empty, so what is put from now on
+   * is counted from zero; an existing one is walked.
+   */
+  async primeUsage(): Promise<void> {
+    if (this.measured || this.measuring) return;
+    if (!(await this.exists())) {
+      this.measured ??= { objects: 0, objectBytes: 0, manifests: 0, manifestBytes: 0, at: Date.now() };
+      return;
+    }
+    this.usageNow(0);
+    await this.settledUsage();
+  }
+
+  /** Waits for a background measurement in progress (tests). */
+  async settledUsage(): Promise<void> {
+    await this.measuring;
+  }
+
+  /** A measured usage is out of date: the next `usageNow` measures again (after the collector). */
+  forgetUsage(): void {
+    this.measured = null;
+  }
+
+  private noteUsage(d: Partial<StoreUsage>): void {
+    const m = this.measured;
+    if (!m) return;
+    this.measured = {
+      at: m.at,
+      objects: Math.max(0, m.objects + (d.objects ?? 0)),
+      objectBytes: Math.max(0, m.objectBytes + (d.objectBytes ?? 0)),
+      manifests: Math.max(0, m.manifests + (d.manifests ?? 0)),
+      manifestBytes: Math.max(0, m.manifestBytes + (d.manifestBytes ?? 0)),
+    };
+  }
 
   objectPath(sha256: string): string {
     if (!SHA.test(sha256)) throw new Error('not a SHA-256');
@@ -237,6 +324,7 @@ export class SnapshotStore {
     const level = o.compress === 'binary' ? zc.Z_BEST_SPEED : 6;
     const data = await gz(bytes, { level });
     await this.writeAtomic(path, data);
+    this.noteUsage({ objects: 1, objectBytes: data.length });
     return { sha256: sha, size: bytes.length, stored: data.length, created: true };
   }
 
@@ -277,7 +365,12 @@ export class SnapshotStore {
   }
 
   async remove(sha256: string): Promise<void> {
+    const size = await stat(this.objectPath(sha256)).then(
+      (st) => st.size,
+      () => null,
+    );
     await rm(this.objectPath(sha256), { force: true });
+    if (size !== null) this.noteUsage({ objects: -1, objectBytes: -size });
   }
 
   private noteRecent(sha256: string, now: number): void {
@@ -335,6 +428,7 @@ export class SnapshotStore {
     const rel = this.manifestRelPath(manifest.project.id, manifest.id);
     const data = await gz(Buffer.from(`${stableJson(manifest)}\n`, 'utf8'), { level: 9 });
     await this.writeAtomic(join(this.dir, rel), data);
+    this.noteUsage({ manifests: 1, manifestBytes: data.length });
     return rel;
   }
 
@@ -351,7 +445,12 @@ export class SnapshotStore {
 
   async removeManifest(rel: string): Promise<void> {
     if (!rel.startsWith('manifests/')) return;
+    const size = await stat(join(this.dir, rel)).then(
+      (st) => st.size,
+      () => null,
+    );
     await rm(join(this.dir, rel), { force: true });
+    if (size !== null) this.noteUsage({ manifests: -1, manifestBytes: -size });
     try {
       await rmdir(join(this.dir, rel, '..'));
     } catch {
@@ -390,8 +489,8 @@ export class SnapshotStore {
 
   // ------------------------------------------------------------------------------------------ disk
 
-  /** What the store takes on disk. */
-  async usage(): Promise<{ objects: number; objectBytes: number; manifests: number; manifestBytes: number }> {
+  /** What the store takes on disk: a walk of every object and manifest (background work; see `usageNow`). */
+  async usage(): Promise<StoreUsage> {
     const objs = await this.objects();
     const mans = await this.manifests();
     return {

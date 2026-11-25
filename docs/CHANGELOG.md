@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased: the Snapshots freeze of 25 November 2026
+
+[ADR 0042 amendment 2](adr/0042-snapshots-restore-rehearsal.md#amendment-2-25-november-2026-browsing-from-an-index-the-list-never-waits),
+[ADR 0061 amendment 2](adr/0061-cr-2026-11-r3-decisions.md#amendment-2-25-november-2026-one-request-in-flight-a-closed-request-stops-a-guard-for-the-next-one).
+Migration `4600`. No new settings. Built and tested against the mock at Arkona's scale; nothing live was touched.
+
+- **The cause**: `SnapshotDb.pagesWithHistory` (both `GET /snapshots/pages` and `GET /snapshots/pages/:id`), one
+  synchronous SQLite statement grouping every piece row of the project, whose per-page name subquery SQLite answered from
+  `snapshot_pieces_name`: every page scanned every settings and sidebar row (pages × rows). On the mock: 2.0–2.5 s with one
+  full snapshot, 34–40 s with 13, 71 s at the retention's steady state; live, 62–67 s. `GET /snapshots` walked the whole
+  object store (a `stat` per object) in every request, queueing behind the running snapshot's file work.
+- **The page index** (`src/snapshots/page-index.ts`): kept current by each snapshot written and each removed, in chunks
+  that yield; a one-time backfill in the background for older snapshots. The page list is paged (`limit`, `cursor`) and
+  filtered on the server (`q`, `branch`); a page's history is paged and reads only that page's rows. After: 4–20 ms, the
+  loop never held for more than 20 ms, alone or during a full snapshot.
+- **`GET /snapshots` answers at once** (18–42 ms): the store's usage measured in the background and kept by puts and
+  removals; the logical totals and missing pieces kept with the index; `running` gives the full snapshot's progress.
+- **The dashboard**: one request in flight per address (`api.get` shares; `useApi` skips a poll while one is pending and
+  aborts on leaving the page); the Snapshots page's finder and history page through results (Older, Newer) with a branch
+  filter. **The bridge**: a closed request stops (`closedSignal`).
+- **A guard**: every admin GET timed at Arkona's scale in the tests (`test/snapshots-scale/admin-gets.test.ts`, 500 ms
+  each). Fixed on the way: `GET /registry/out-of-order` (407 → 27 ms) and the block-id sweep card (3.4 s → at most 250 ms
+  of waiting, then the last scan while a new one runs).
+
 ## Unreleased: v3 F10, the chronology repaired soon after an edit (25 November 2026)
 
 [ADR 0078](adr/0078-v3-f10-chronology-repair.md). No migration. Built and tested against the mock; nothing live was

@@ -317,7 +317,11 @@ function DiffPanel({
 }
 
 function PageHistory({ pageId, onClose }: { pageId: string; onClose: () => void }) {
-  const r = useScopedApi<SnapshotPageResponse>(`/snapshots/pages/${pageId}${qs({ limit: 50 })}`);
+  // ADR 0042 amendment 2: 50 snapshots at a time, newest first; "Older snapshots" asks for the next 50.
+  const [cursors, setCursors] = useState<string[]>([]);
+  const r = useScopedApi<SnapshotPageResponse>(
+    `/snapshots/pages/${pageId}${qs({ limit: 50, cursor: cursors.at(-1) })}`,
+  );
   const [diff, setDiff] = useState<{
     snapshot: string;
     piece: 'resource' | 'sidebar' | 'document';
@@ -421,7 +425,25 @@ function PageHistory({ pageId, onClose }: { pageId: string; onClose: () => void 
           </tbody>
         </table>
       )}
-      {d.history.more ? <p className="muted">{d.history.more} older snapshots not shown.</p> : null}
+      {(d.history.next || cursors.length > 0) && (
+        <div className="row" aria-label="History pages">
+          {cursors.length > 0 && (
+            <button type="button" className="small" onClick={() => setCursors((c) => c.slice(0, -1))}>
+              Newer snapshots
+            </button>
+          )}
+          {d.history.next && (
+            <button
+              type="button"
+              className="small"
+              onClick={() => setCursors((c) => [...c, d.history.next!])}
+            >
+              Older snapshots
+            </button>
+          )}
+          {d.history.more ? <span className="muted">{d.history.more} older snapshots not shown.</span> : null}
+        </div>
+      )}
       {diff && (
         <div className="stack">
           <DiffPanel
@@ -455,7 +477,14 @@ function PageFinder() {
   // v2 E2: the Audits page links a finding to its page's history as `/snapshots?page=<id>`.
   const { query } = useRoute();
   const [open, setOpen] = useState<string | null>(query.get('page'));
-  const r = useScopedApi<SnapshotPagesResponse>(`/snapshots/pages${qs({ q: term, limit: 50 })}`);
+  // ADR 0042 amendment 2: one page of results at a time (50 pages, newest first), filtered on the server by name and
+  // branch; `cursors` are the pages of results visited ("Older" pushes the answer's `next`, "Newer" goes back).
+  const [branch, setBranch] = useState('');
+  const [cursors, setCursors] = useState<string[]>([]);
+  const r = useScopedApi<SnapshotPagesResponse>(
+    `/snapshots/pages${qs({ q: term, branch, limit: 50, cursor: cursors.at(-1) })}`,
+  );
+  const pending = r.data?.index?.pending ?? 0;
   return (
     <section className="card" aria-labelledby="snap-pages-h">
       <h2 id="snap-pages-h">Page history</h2>
@@ -464,6 +493,7 @@ function PageFinder() {
         onSubmit={(e) => {
           e.preventDefault();
           setTerm(q.trim());
+          setCursors([]);
         }}
       >
         <label htmlFor="snap-page-q" className="offscreen">
@@ -475,8 +505,32 @@ function PageFinder() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        <label htmlFor="snap-page-branch" className="offscreen">
+          Branch
+        </label>
+        <select
+          id="snap-page-branch"
+          value={branch}
+          onChange={(e) => {
+            setBranch(e.target.value);
+            setCursors([]);
+          }}
+        >
+          <option value="">Every branch</option>
+          {(r.data?.branches ?? []).map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name ?? b.id} ({fmtInt(b.pages)})
+            </option>
+          ))}
+        </select>
         <button type="submit">Find</button>
       </form>
+      {pending > 0 && (
+        <p className="muted" role="status">
+          Indexing older snapshots: {fmtInt(pending)} still to index. Their pages appear here as they are
+          indexed.
+        </p>
+      )}
       {!r.data ? (
         r.error ? (
           <ErrorNote error={r.error} onRetry={r.reload} />
@@ -486,17 +540,40 @@ function PageFinder() {
       ) : r.data.pages.length === 0 ? (
         <Empty>No page in the snapshots{term ? ` matches “${term}”` : ''}.</Empty>
       ) : (
-        <ul className="plain" aria-label="Pages in the snapshots">
-          {r.data.pages.map((p) => (
-            <li key={p.pageId}>
-              <button type="button" className="link" onClick={() => setOpen(p.pageId)}>
-                {p.name ?? p.pageId}
-              </button>{' '}
-              {p.deleted && <Badge tone="warn">deleted</Badge>}{' '}
-              <span className="muted small-text">last snapshot {fmtTime(p.lastAt)}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="plain" aria-label="Pages in the snapshots">
+            {r.data.pages.map((p) => (
+              <li key={p.pageId}>
+                <button type="button" className="link" onClick={() => setOpen(p.pageId)}>
+                  {p.name ?? p.pageId}
+                </button>{' '}
+                {p.deleted && <Badge tone="warn">deleted</Badge>}{' '}
+                <span className="muted small-text">last snapshot {fmtTime(p.lastAt)}</span>
+              </li>
+            ))}
+          </ul>
+          {(r.data.next || cursors.length > 0) && (
+            <div className="row" aria-label="Result pages">
+              <button
+                type="button"
+                className="small"
+                disabled={cursors.length === 0}
+                onClick={() => setCursors((c) => c.slice(0, -1))}
+              >
+                Newer
+              </button>
+              <span className="muted small-text">Results page {cursors.length + 1}</span>
+              <button
+                type="button"
+                className="small"
+                disabled={!r.data.next}
+                onClick={() => setCursors((c) => [...c, r.data!.next!])}
+              >
+                Older
+              </button>
+            </div>
+          )}
+        </>
       )}
       {open && <PageHistory key={open} pageId={open} onClose={() => setOpen(null)} />}
     </section>
@@ -1004,7 +1081,14 @@ function StoreCard({ d }: { d: SnapshotsResponse }) {
       <dl className="settings-list" aria-label="Snapshot store">
         <dt>Size on disk</dt>
         <dd data-testid="store-size">
-          {fmtBytes(o.store.bytes)} ({fmtInt(o.store.objects)} pieces, {fmtInt(o.store.manifests)} manifests)
+          {o.store.measuredAt === null && o.store.measuring ? (
+            'measuring…'
+          ) : (
+            <>
+              {fmtBytes(o.store.bytes)} ({fmtInt(o.store.objects)} pieces, {fmtInt(o.store.manifests)}{' '}
+              manifests)
+            </>
+          )}
         </dd>
         <dt>Deduplication</dt>
         <dd data-testid="dedup">

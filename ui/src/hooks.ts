@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError, inBackground, inBackgroundNow } from './api';
+import { ABORTED, api, ApiError, inBackground, inBackgroundNow } from './api';
 import { useStream } from './stream';
 
 export interface Resource<T> {
@@ -19,6 +19,11 @@ export interface Resource<T> {
  * Loads `path` (null: nothing yet). Reloads when `path` changes and whenever the live stream starts afresh.
  * CR-2026-11-R4: a reload because the stream started afresh, or one asked for by the dashboard's own work, is sent as
  * the dashboard's own request (not a use of the session); a new path or the owner's reload is the owner's.
+ *
+ * The 25 November 2026 freeze (ADR 0061 amendment 2): at most ONE request in flight. A reload of the dashboard's own (a
+ * poll on a timer, a live event, the stream starting afresh) while the previous request is still pending is skipped;
+ * the owner's reload, or a new path, aborts the pending request and sends one afresh; leaving the page (the component
+ * unmounting, as navigation does) aborts it. `api.get` also shares one request between hooks asking for the same path.
  */
 export function useApi<T>(path: string | null): Resource<T> {
   const [data, setData] = useState<T | undefined>(undefined);
@@ -31,32 +36,60 @@ export function useApi<T>(path: string | null): Resource<T> {
   const loaded = useRef<string | undefined>(undefined);
   /** Who asked for the reload now due: the owner wins over the dashboard's own when both did. */
   const asked = useRef<'owner' | 'own' | null>(null);
+  /** The request in flight, if any: its path and how to abort it. */
+  const pending = useRef<{ path: string; controller: AbortController } | null>(null);
 
   useEffect(() => {
     if (path === null) {
+      pending.current?.controller.abort();
+      pending.current = null;
       loaded.current = undefined;
       setLoading(false);
       return;
     }
     const own = loaded.current === path && asked.current !== 'owner';
+    // The dashboard's own reload while the last request for this path is still pending: skipped (never a pile-up).
+    if (own && pending.current?.path === path) {
+      asked.current = null;
+      return;
+    }
+    pending.current?.controller.abort();
     loaded.current = path;
     asked.current = null;
     const mine = ++latest.current;
+    const controller = new AbortController();
+    const entry = { path, controller };
+    pending.current = entry;
     setLoading(true);
-    api.get<T>(path, { own }).then(
+    const settle = () => {
+      if (pending.current === entry) pending.current = null;
+    };
+    api.get<T>(path, { own, signal: controller.signal }).then(
       (d) => {
+        settle();
         if (mine !== latest.current) return;
         setData(d);
         setError(undefined);
         setLoading(false);
       },
       (e: unknown) => {
-        if (mine !== latest.current) return;
+        settle();
+        if (mine !== latest.current || (e instanceof ApiError && e.code === ABORTED)) return;
         setError(e instanceof ApiError ? e : new ApiError(0, 'ERROR', String(e)));
         setLoading(false);
       },
     );
   }, [path, tick, epoch]);
+
+  // Leaving the page: whatever is still in flight is aborted (and its answer ignored).
+  useEffect(
+    () => () => {
+      latest.current++;
+      pending.current?.controller.abort();
+      pending.current = null;
+    },
+    [],
+  );
 
   const reload = useCallback(() => {
     if (asked.current !== 'owner') asked.current = inBackgroundNow() ? 'own' : 'owner';

@@ -102,23 +102,98 @@ async function request<T>(
   body?: unknown,
   binary?: Blob,
   own = false,
+  signal?: AbortSignal,
 ): Promise<T> {
   // Decided when the request is made (a request sent from inside `inBackground` keeps its mark through the step-up).
   const mark = isOwn(own);
   try {
-    return await send<T>(method, path, body, binary, mark);
+    return await send<T>(method, path, body, binary, mark, signal);
   } catch (e) {
     // ADR 0062: any change may need the step-up; ask once, then send it again (the owner has just confirmed it).
     if (!(e instanceof ApiError && e.code === 'REAUTH_REQUIRED') || !apiConfig.onReauthRequired) throw e;
     await apiConfig.onReauthRequired();
-    return send<T>(method, path, body, binary, isOwn(false));
+    return send<T>(method, path, body, binary, isOwn(false), signal);
   }
+}
+
+/** The code of a request its caller aborted (`useApi` on a new path, or the page left): never shown as an error. */
+export const ABORTED = 'ABORTED';
+
+const aborted = (): ApiError => new ApiError(0, ABORTED, 'The request was cancelled.');
+
+/**
+ * The 25 November 2026 freeze (ADR 0061 amendment 2): at most ONE request in flight per GET endpoint. A GET for a path
+ * already being fetched joins that request instead of sending another; each caller may abort its own interest
+ * (`signal`), and the request itself is aborted once every caller has. Before, a page polling every few seconds sent a
+ * new request each time whatever was still pending, so on 25 November nine `GET /snapshots` piled up, each waiting.
+ */
+interface Shared {
+  readonly promise: Promise<unknown>;
+  readonly controller: AbortController;
+  callers: number;
+}
+const inflight = new Map<string, Shared>();
+
+/** How many GETs are in flight now, by path (tests). */
+export const inflightPaths = (): string[] => [...inflight.keys()];
+
+function sharedGet<T>(path: string, own: boolean, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(aborted());
+  let entry = inflight.get(path);
+  if (!entry) {
+    const controller = new AbortController();
+    const promise = request<T>('GET', path, undefined, undefined, own, controller.signal).finally(() => {
+      if (inflight.get(path) === entry) inflight.delete(path);
+    });
+    // Nobody may be left listening when it settles: never an unhandled rejection.
+    promise.catch(() => undefined);
+    entry = { promise, controller, callers: 0 };
+    inflight.set(path, entry);
+  }
+  const e = entry;
+  e.callers++;
+  return new Promise<T>((resolve, reject) => {
+    let done = false;
+    const onAbort = () => {
+      if (done) return;
+      done = true;
+      reject(aborted());
+      if (--e.callers === 0) {
+        if (inflight.get(path) === e) inflight.delete(path);
+        e.controller.abort();
+      }
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    e.promise.then(
+      (v) => {
+        if (done) return;
+        done = true;
+        e.callers--;
+        signal?.removeEventListener('abort', onAbort);
+        resolve(v as T);
+      },
+      (err: unknown) => {
+        if (done) return;
+        done = true;
+        e.callers--;
+        signal?.removeEventListener('abort', onAbort);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
 }
 
 /** The 401 answers of a check the signed-in owner failed: not a signed-out session. */
 const OWNER_CHECK_FAILED: ReadonlySet<string> = new Set(['REAUTH_FAILED', 'WRONG_PASSWORD']);
 
-async function send<T>(method: string, path: string, body?: unknown, binary?: Blob, own = false): Promise<T> {
+async function send<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  binary?: Blob,
+  own = false,
+  signal?: AbortSignal,
+): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
   if (own) headers[BACKGROUND_HEADER] = '1';
   if (method !== 'GET') {
@@ -133,9 +208,11 @@ async function send<T>(method: string, path: string, body?: unknown, binary?: Bl
       headers,
       credentials: 'same-origin',
       cache: 'no-store',
+      ...(signal ? { signal } : {}),
       ...(method !== 'GET' ? { body: binary ?? JSON.stringify(body ?? {}) } : {}),
     });
   } catch {
+    if (signal?.aborted) throw aborted();
     throw new ApiError(0, 'NETWORK', 'The bridge could not be reached. Check your connection.');
   }
   let json: unknown;
@@ -163,9 +240,12 @@ async function send<T>(method: string, path: string, body?: unknown, binary?: Bl
 }
 
 export const api = {
-  /** `own`: the dashboard's own request (`BACKGROUND_HEADER`), whatever runs now (`useApi`'s refreshes say so). */
-  get: <T>(path: string, o: { readonly own?: boolean } = {}) =>
-    request<T>('GET', path, undefined, undefined, o.own === true),
+  /**
+   * `own`: the dashboard's own request (`BACKGROUND_HEADER`), whatever runs now (`useApi`'s refreshes say so).
+   * `signal`: the caller's interest ends (ADR 0061 amendment 2). A GET of a path already in flight joins it.
+   */
+  get: <T>(path: string, o: { readonly own?: boolean; readonly signal?: AbortSignal } = {}) =>
+    sharedGet<T>(path, o.own === true, o.signal),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   /** v2 D3: POSTs a file as the raw body (`application/octet-stream`), with the CSRF token. */

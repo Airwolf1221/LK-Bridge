@@ -95,6 +95,9 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   drops, anything sent more than a minute after the owner's last key, click or touch), and opening the live stream is
   never one; the bridge checks such a request's session without moving its end or renewing its cookie. An idle open tab
   therefore ends 30 days after the owner last used it.
+- **One request at a time per address (25 November 2026, ADR 0061 amendment 2).** A page that refreshes itself never
+  sends a request while its previous one is still pending (that refresh is skipped), and leaving a page cancels what it
+  was still waiting for. Two parts of a page asking for the same address share one request.
 - **No secrets shown or logged.** An API key goes to the bridge once, from a write-only field; afterwards only its last
   four characters are shown (OPS2). The authenticator secret (while it is set up) and recovery codes are in one response
   each, marked `shownOnce`. A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
@@ -866,7 +869,11 @@ the bridge's own copies of the selected project's pages.
   changed-pages pass**: LegendKeeper's `updatedAt` does not track content, so the nightly full snapshot is what catches
   edits made in the app (an unchanged image is not downloaded again, so a night adds only what changed). The runs (pages done of the total, requests, new pieces, time), with **Abandon** for a run that should not be
   continued. **Take a full snapshot now** starts one in the background.
-- **Page history**: find a page by name (a deleted one too); its snapshots, newest first, piece by piece (first seen,
+- **Page history** (paged since 25 November 2026, [ADR 0042 amendment 2](adr/0042-snapshots-restore-rehearsal.md#amendment-2-25-november-2026-browsing-from-an-index-the-list-never-waits)):
+  the pages the snapshots hold, 50 at a time, newest first (**Older** and **Newer**), found by name (a deleted one too)
+  and narrowed to a **branch** (the first index below the AI REPOSITORY root); while older snapshots are still being
+  indexed after the upgrade, the page says how many are left. A page's snapshots, 50 at a time (**Older snapshots**),
+  newest first, piece by piece (first seen,
   changed, unchanged, deleted, back); **Diff with now** for any piece (a few reads); **Propose a restore** from any
   snapshot: the page's documents, its sidebar, one document, or a deleted page (undelete, or recreate with its original
   or new ids). **Preview** shows the plan (each piece's diff, what cannot be restored exactly, what is left alone, new ids,
@@ -905,7 +912,9 @@ The **Proposals** page shows a restore proposal with its snapshot, the diff (now
 cannot restore, keeps or leaves alone; an image restore with its new asset and the pages it updates.
 
 API: `GET /api/admin/snapshots?project=&kind=&limit=` (the overview, snapshots, restores, rehearsals, sandboxes, jobs and
-database copies), `GET /api/admin/snapshots/pages?project=&q=`, `GET /api/admin/snapshots/pages/<page id>?project=&piece=&ref=`,
+database copies; `running`: the running full snapshot's pages done of the total; never waits on it),
+`GET /api/admin/snapshots/pages?project=&q=&branch=&limit=&cursor=` (one page of results and `next`, the branches, the
+index's progress), `GET /api/admin/snapshots/pages/<page id>?project=&piece=&ref=&limit=&cursor=` (`history.next`),
 `GET /api/admin/snapshots/diff?project=&page=&piece=&ref=&from=&to=`, `POST /api/admin/snapshots/full?project=` (202),
 `POST /api/admin/snapshots/runs/<run id>/abandon` `{ confirm: true }`, `POST /api/admin/snapshots/restore?project=`
 `{ page, snapshot, scope, document?, mode?, ids?, parent?, dryRun? }`, `POST /api/admin/snapshots/restore-image?project=`

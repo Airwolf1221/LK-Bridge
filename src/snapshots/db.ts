@@ -4,7 +4,14 @@
  * the state of runs, owed change snapshots, verify findings, notices and rehearsals.
  */
 import type { Db } from '../db/open.js';
-import { manifestPieces, type Manifest, type PageEntry, type SnapshotKind } from './manifest.js';
+import {
+  manifestPieces,
+  missingPiecesOf,
+  type Manifest,
+  type MissingPieceView,
+  type PageEntry,
+  type SnapshotKind,
+} from './manifest.js';
 
 export interface SnapshotRow {
   readonly id: string;
@@ -279,7 +286,63 @@ export class SnapshotDb {
           p.size,
           at.get(p.pageId) ?? takenAt,
         );
+      // The 25 November 2026 freeze (ADR 0042 amendment 2): a partial snapshot's missing pieces, recorded once here
+      // instead of read from its gzipped manifest on every list.
+      this.listMissingOf(m);
     })();
+  }
+
+  /** Records a manifest's missing pieces (`snapshot_missing`) and marks them listed. Idempotent. */
+  listMissingOf(m: Manifest): void {
+    const missing = m.counts.missing > 0 ? missingPiecesOf(m) : [];
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM snapshot_missing WHERE snapshot_id = ?').run(m.id);
+      const add = this.db.prepare(
+        `INSERT INTO snapshot_missing (snapshot_id, seq, page_id, page_name, piece, ref, reason) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      missing.forEach((x, i) =>
+        add.run(m.id, i, x.pageId, x.pageName, x.piece, x.ref ?? null, x.reason.slice(0, 2000)),
+      );
+      this.db.prepare('UPDATE snapshots SET missing_listed = 1 WHERE id = ?').run(m.id);
+    })();
+  }
+
+  /** A snapshot unreadable for its missing list: marked listed with none (the verify reports the manifest). */
+  markMissingListed(snapshotId: string): void {
+    this.db.prepare('UPDATE snapshots SET missing_listed = 1 WHERE id = ?').run(snapshotId);
+  }
+
+  /**
+   * A snapshot's missing pieces, at most `limit` (manifest order), optionally one page's, with how many there are in
+   * all; `null` while the backfill has not listed them yet.
+   */
+  missingOf(
+    snapshotId: string,
+    o: { readonly limit: number; readonly pageId?: string },
+  ): { pieces: MissingPieceView[]; total: number } | null {
+    const listed = this.db.prepare('SELECT missing_listed FROM snapshots WHERE id = ?').get(snapshotId) as
+      { missing_listed: number } | undefined;
+    if (!listed || listed.missing_listed !== 1) return null;
+    const where = o.pageId === undefined ? 'snapshot_id = ?' : 'snapshot_id = ? AND page_id = ?';
+    const args = o.pageId === undefined ? [snapshotId] : [snapshotId, o.pageId];
+    const total = (
+      this.db.prepare(`SELECT COUNT(*) AS n FROM snapshot_missing WHERE ${where}`).get(...args) as {
+        n: number;
+      }
+    ).n;
+    const rows = this.db
+      .prepare(`SELECT * FROM snapshot_missing WHERE ${where} ORDER BY seq LIMIT ?`)
+      .all(...args, o.limit) as Raw[];
+    return {
+      total,
+      pieces: rows.map((r) => ({
+        pageId: strOrNull(r.page_id),
+        pageName: strOrNull(r.page_name),
+        piece: String(r.piece),
+        ...(typeof r.ref === 'string' ? { ref: r.ref } : {}),
+        reason: String(r.reason),
+      })),
+    };
   }
 
   hasSnapshot(id: string): boolean {
@@ -329,6 +392,11 @@ export class SnapshotDb {
     return n;
   }
 
+  /** A raw `snapshot_pieces` row (joined with its snapshot's kind and state) as a PieceRow. */
+  pieceRowOf(r: Record<string, unknown>): PieceRow {
+    return pieceRow(r);
+  }
+
   /** The pieces of one snapshot (optionally of one page). */
   piecesOf(snapshotId: string, pageId?: string): PieceRow[] {
     const rows = (
@@ -370,46 +438,13 @@ export class SnapshotDb {
     return (
       this.db
         .prepare(
-          `SELECT p.*, s.kind, s.state FROM snapshot_pieces p JOIN snapshots s ON s.id = p.snapshot_id
+          // The 25 November 2026 freeze: one page's rows, from the page index, whatever the piece filter (left to itself
+          // SQLite may answer a piece filter from the name or ref index: every such row of the project).
+          `SELECT p.*, s.kind, s.state FROM snapshot_pieces p INDEXED BY snapshot_pieces_page JOIN snapshots s ON s.id = p.snapshot_id
            WHERE ${where.join(' AND ')} ORDER BY p.taken_at DESC, p.snapshot_id DESC LIMIT ?`,
         )
         .all(...args, o.limit ?? 500) as Raw[]
     ).map(pieceRow);
-  }
-
-  /** Pages that have any snapshot, with their last known name (for the dashboard's page picker and deleted pages). */
-  pagesWithHistory(
-    projectId: string,
-    o: { readonly query?: string; readonly limit?: number } = {},
-  ): {
-    pageId: string;
-    name: string | null;
-    lastAt: number;
-    deleted: boolean;
-  }[] {
-    const like = o.query ? `%${o.query.replace(/[%_]/g, (c) => `\\${c}`)}%` : null;
-    const rows = this.db
-      .prepare(
-        // The page's latest name is a subquery's; it is filtered in an outer query, because inside the grouped one
-        // `name` would be the table's own column (a document's name, of an arbitrary row).
-        `SELECT * FROM (
-           SELECT page_id, MAX(taken_at) AS last_at,
-             (SELECT name FROM snapshot_pieces q WHERE q.project_id = p.project_id AND q.page_id = p.page_id AND q.name IS NOT NULL
-                AND q.piece IN ('resource', 'sidebar', 'deleted') ORDER BY q.taken_at DESC LIMIT 1) AS page_name,
-             (SELECT piece FROM snapshot_pieces q WHERE q.project_id = p.project_id AND q.page_id = p.page_id
-                AND q.piece IN ('resource', 'deleted') ORDER BY q.taken_at DESC LIMIT 1) AS last_piece
-           FROM snapshot_pieces p WHERE project_id = ? AND page_id <> '*'
-           GROUP BY page_id)
-         ${like ? `WHERE page_name LIKE ? ESCAPE '\\'` : ''}
-         ORDER BY last_at DESC LIMIT ?`,
-      )
-      .all(...(like ? [projectId, like] : [projectId]), o.limit ?? 200) as Raw[];
-    return rows.map((r) => ({
-      pageId: String(r.page_id),
-      name: strOrNull(r.page_name),
-      lastAt: num(r.last_at),
-      deleted: r.last_piece === 'deleted',
-    }));
   }
 
   /** Every hash any snapshot refers to. */

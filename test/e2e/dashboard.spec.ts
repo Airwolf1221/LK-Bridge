@@ -550,3 +550,63 @@ test('v3 F8: every setting by group; an edit and a reset with the step-up; searc
   expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
   expect(problems.filter((p) => !expected(p))).toEqual([]);
 });
+
+test('the 25 November 2026 freeze: the Snapshots page browses pages a page of results at a time, and a page’s history', async ({
+  page,
+  request,
+}) => {
+  const problems = watch(page);
+  await request.get(`${CONTROL}/snapshot-fixture`);
+  // Every request the page sends, to check it never has two of one endpoint in flight.
+  const inFlight = new Map<string, number>();
+  let most = 0;
+  const key = (u: string) => new URL(u).pathname;
+  page.on('request', (r) => {
+    if (!r.url().includes('/api/admin/snapshots')) return;
+    const n = (inFlight.get(key(r.url())) ?? 0) + 1;
+    inFlight.set(key(r.url()), n);
+    most = Math.max(most, n);
+  });
+  const done = (r: { url(): string }) => {
+    if (!r.url().includes('/api/admin/snapshots')) return;
+    inFlight.set(key(r.url()), Math.max(0, (inFlight.get(key(r.url())) ?? 1) - 1));
+  };
+  page.on('requestfinished', done);
+  page.on('requestfailed', done);
+  await signIn(page, '/ui/snapshots');
+  await expect(page.getByRole('heading', { name: 'Snapshots', level: 1 })).toBeVisible();
+  const list = page.getByRole('list', { name: 'Pages in the snapshots' });
+  await expect(list).toBeVisible();
+  // The fixture's 120 pages (other tests' writes snapshot pages too): 50 a page of results, newest first (the page the
+  // change snapshots took first), filtered by name on the server.
+  await page.getByLabel('Page name').fill('e2e page');
+  await page.getByRole('button', { name: 'Find' }).click();
+  await expect(list.getByRole('listitem')).toHaveCount(50);
+  await expect(list.getByRole('listitem').first()).toContainText('E2E Page 007');
+  await page.getByRole('button', { name: 'Older', exact: true }).click();
+  await expect(page.getByText('Results page 2')).toBeVisible();
+  await expect(list.getByRole('listitem')).toHaveCount(50);
+  await page.getByRole('button', { name: 'Older', exact: true }).click();
+  await expect(page.getByText('Results page 3')).toBeVisible();
+  await expect(list.getByRole('listitem')).toHaveCount(20);
+  await expect(page.getByRole('button', { name: 'Older', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Newer', exact: true }).click();
+  await expect(page.getByText('Results page 2')).toBeVisible();
+  // Filtered by name on the server.
+  await page.getByLabel('Page name').fill('page 11');
+  await page.getByRole('button', { name: 'Find' }).click();
+  await expect(list.getByRole('listitem')).toHaveCount(10); // 110 to 119
+  await page.getByLabel('Page name').fill('page 007');
+  await page.getByRole('button', { name: 'Find' }).click();
+  await expect(list.getByRole('listitem')).toHaveCount(1);
+  await list.getByRole('button', { name: 'E2E Page 007' }).click();
+  const history = page.getByRole('table', { name: 'Page history' });
+  await expect(history.locator('tbody tr')).toHaveCount(4);
+  await expect(history.locator('tbody tr').first()).toContainText('document Main: changed');
+  await expect(history.locator('tbody tr').last()).toContainText('first seen');
+  // Away and back: nothing left pending, and never two requests of one endpoint at once.
+  await goTo(page, 'Overview', true);
+  await expect(page.getByRole('heading', { name: 'Overview', level: 1 })).toBeVisible();
+  expect(most).toBe(1);
+  expect(problems).toEqual([]);
+});

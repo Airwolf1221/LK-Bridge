@@ -201,3 +201,41 @@ running`, again every `SLOW_REQUEST_REPEAT_MS` while it runs (`repeat: true`).
    a full snapshot started is awaited (bounded), and the watchdog stops in the wind-down.
 
 The lines the owner will see are in docs/runbook-deploy.md ("When the bridge hangs").
+
+## Amendment 2 (25 November 2026): one request in flight, a closed request stops, a guard for the next one
+
+- Status: **Proposed** (the Snapshots freeze of 25 November 2026). The freeze itself and the snapshot index:
+  [ADR 0042 amendment 2](0042-snapshots-restore-rehearsal.md#amendment-2-25-november-2026-browsing-from-an-index-the-list-never-waits).
+- Why: amendment 1 named the freeze (the watchdog thread's `blockedMs`, the main thread's lag lines). What it named also
+  showed two habits of the request handling that turn one slow route into a pile-up: the dashboard polled whatever was
+  still pending (nine `GET /snapshots` were running at once, the oldest for 528 s), and the bridge went on with a
+  request whose client had long gone.
+- No new settings.
+
+1. **One request in flight per endpoint** (`ui/src/api.ts`, the dashboard's only fetch helper): a GET of a path already
+   being fetched joins that request; each caller can abort its own interest (`signal`), and the request is aborted once
+   every caller has. `useApi` (`ui/src/hooks.ts`, which every page's data goes through) holds at most one request: a
+   reload of the dashboard's own (a poll on a timer, a live event, the stream starting afresh) while one is pending is
+   skipped; the owner's reload or a new path aborts the pending one and sends afresh; leaving the page (the component
+   unmounting) aborts it. An aborted request is never shown as an error. Every page that polls or reloads is covered:
+   Snapshots (3 s while a run or rehearsal is active, else 60 s), Audits (3 s), Tree and Asset Tree (2 s while busy, else
+   30 s), Off-site (5 s), Archives (3 s while active, else 30 s), Maintenance Jobs (15 s), Budgets (60 s), Chronology (2 s
+   while its check runs), and every page's reloads on live events.
+2. **A closed request stops** (`closedSignal` and `stopIfClosed`, `src/admin/routes/util.ts`): a signal aborted when the
+   client closes the connection before the answer is sent. `GET /snapshots` stops between its stages;
+   `GET /snapshots/diff` passes it to its reads of the page now, so they leave the governor's queue (P1). Synchronous
+   routes are short now (decision 3) and need none.
+3. **A guard for the next one** (`test/snapshots-scale/admin-gets.test.ts`): every admin GET, found in the source (so a
+   new route is timed without anyone adding it), is called at Arkona's scale (1,500 pages, a full snapshot and its
+   audit, 300 change snapshots) with the event loop's lag measured; each must answer within 500 ms and never hold the
+   loop for 500 ms. 73 are timed; 20 take an id and do one item's work. Two needed a fix:
+   - `GET /registry/out-of-order` (407 ms, the loop held 393 ms): one `children` query per node of the tree (about 1,600),
+     and the project's narrative scope worked out again for every parent. Now the children come from the one subtree
+     read, grouped by parent, and the scope is worked out once per synchronous pass (forgotten at the next turn of the
+     loop): 25–27 ms.
+   - `GET /maintenance/assign-block-ids-sweep/card` (3.4 s, not blocking: it awaited the overlay's catch-up on every
+     change snapshot since the full one and a scan of every document, on the first call after new snapshots): it waits
+     at most 250 ms, then shows the last finished scan (`counting`) or "counting…", and the scan finishes in the
+     background, cached for the next request.
+     Every other admin GET was already under 100 ms at this scale (the slowest: `/reference-types`, 86–100 ms, cached on
+     the tree's version since F6a.1; `/snapshots`, 21–39 ms, after ADR 0042 amendment 2).
