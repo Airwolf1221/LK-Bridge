@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased: v3 F7d, a character's whole art set in one call (24 November 2026)
+
+[ADR 0077](adr/0077-v3-f7d-one-call-art.md). No migration. Nothing was run against a live system: the mock only (the
+sandbox check `f7d-art-set` is the owner's to run).
+
+- **`groups`** (A1): `arkona_add_character_art { character, groups: [{ outfit?, newOutfit?, images }], artPage? }`, the
+  design pieces and every outfit in one call; the single-target form unchanged; one form or the other
+  (`ART_FORMS_MIXED`). New settings (group Art, apply now): `ART_CALL_MAX_IMAGES` (120) and `ART_CALL_MAX_GROUPS` (40),
+  `ART_CALL_TOO_LARGE` past either.
+- **Planned together** (A2): the folders, the outfit record and the identity page read once; each group matched (near
+  matches refused unless `newOutfit`), groups naming one outfit merged, placement counting the recorded pieces plus all
+  of this call's; every problem of every group refused at once (`ART_GROUPS_REFUSED`, `problems`); the Core rule as
+  before.
+- **One proposal, item by item** (A3): "Art page" (when new, with the Core upgrade), "Design pieces", one item per
+  outfit, each needing "Art page"; an unapproved group is not placed and its images stay staged. The item filter treats
+  an image binding that can drop its blocks as soft.
+- **One job** (A4, A5): page and upgrade, folders and moves, uploads, ONE Art-page write (`pack.art_groups`), records,
+  sidebar, read-back; a failed image is withdrawn (new step options `withdrawWith`, `withdrawAs`), never the job; the
+  per-group report on the job (`artGroups`, `withdrawn`) and in `bridge_workstream_report` (`artSets`, not-placed
+  images under excluded and still to do); the dry run's `cost`.
+- **The sidebar** (A8, A9): identity copies (Subject, Canonical Display Name, Family / Surname, Personal / Given Name,
+  Naming Culture, Aliases) into empty rows only, a differing value reported (`IDENTITY_COPY_DIFFERS`); `artPage`'s Scope,
+  Temporal Scope, Visual State / Period, Dependencies, Related Sources; Temporal Scope and Visual State never copied
+  ("still to fill"); the identity page always in Dependencies; the identity page's rows checked inside the job.
+- **The audit** (A10): `owner_identity_copy_drift` (taxonomy), fix `identity_copy` (one governed set_facts, FIX_STALE
+  when either page changed), automation default Propose, Apply allowed.
+- **Guidance** (A6, A7): the tool description, `upload_image_archive`'s and the guide's art section lead with `groups`
+  and the archive path for a whole character.
+- **Sandbox**: `f7d-art-set` (D0 to D4), and its run on the mock.
+- **Review (ADR 0077 amendment 1)**: the single-target form is planned as a one-group call (the sidebar copies, the
+  identity page in Dependencies, `artPage`; `ART_PAGE_FIELD_TWICE`), its answers otherwise unchanged; the tool's
+  description and the guide say what the pack's switch does (default "follow the scope": a job at scope `write`, a
+  canonical proposal for a new Authoritative Art page or an Authoritative upgrade, one proposal at `propose` or when the
+  owner sets "always propose"), and `arkona_create_character`'s names its switch.
+- **Tests**: `test/f7d/` (groups, items, job, sidebar, core-upgrade, identity-copy-drift),
+  `test/sandbox-mock/f7d-art-set.test.ts`; the settings' frozen table.
+
 ## Unreleased: v3 F6a, the Reference Type vocabulary (24 November 2026)
 
 [ADR 0076](adr/0076-v3-f6a-reference-type-vocabulary.md). Migration `4500_reference_types.sql`. Pack seed

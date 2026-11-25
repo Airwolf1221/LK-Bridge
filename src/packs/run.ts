@@ -18,6 +18,7 @@ import { runWriteJob } from '../mcp/tools/write-job.js';
 import type { LifecycleConfig } from '../lifecycle/settings.js';
 import { buildPackJob, type PackJob } from './engine/job.js';
 import { itemizePackage } from './engine/items.js';
+import { artJobCost, itemizeArtGroups } from './art-items.js';
 import { lmrSummary } from './engine/lmr.js';
 import { planOwner, type OwnerInput } from './engine/owner.js';
 import { planPackage, type PackageInput, type PackPlan, type PlanEnv } from './engine/plan.js';
@@ -343,6 +344,11 @@ export async function finishPackage(
         `${env.lifecycle.fields.lastMajorRevision} is not changed on the existing pages this package changes: the project's switch for setting-pack tools (lmrPackTools) is off. The pages it creates get it.`,
       );
   }
+  // v3 F7d (ADR 0077, A5): a groups call's totals (planning reads, the job's reads, writes and uploads).
+  if (job && plan.art?.groupOf) {
+    const planReads = typeof plan.extra?.planReads === 'number' ? plan.extra.planReads : 0;
+    plan = { ...plan, extra: { ...(plan.extra ?? {}), cost: artJobCost(job, planReads) } };
+  }
   const preview = previewOf(plan, job, ctx.tree.node.bind(ctx.tree), ctx.projectId);
   if (plan.refusals.length > 0) {
     const first = plan.refusals[0]!;
@@ -403,7 +409,8 @@ export async function finishPackage(
         lastMajorRevision: lmrView(j),
       };
       // v3 F3d (ADR 0058): the package as items the owner can approve one by one (everything ticked: as before).
-      const itemized = itemizePackage(plan, j);
+      // v3 F7d (ADR 0077, A3): a groups call's items: "Art page", "Design pieces", one per outfit.
+      const itemized = plan.art?.groupOf ? itemizeArtGroups(plan, j) : itemizePackage(plan, j);
       const out = await runWriteJob(pd, mctx, o.tool, {
         steps: itemized.steps,
         labels: j.labels,

@@ -142,12 +142,15 @@ describe('G7: the findings', () => {
       // v3 F7.1 (ADR 0072): also Propose by default, and its Apply is the owner's switch (`applyDirect`).
       'character_core_missing',
       'core_compact_wording',
+      // v3 F7d (ADR 0077): Propose by default, Apply the owner's switch.
+      'owner_identity_copy_drift',
       // v3 F6a (ADR 0076): Apply allowed, but default Off (no defaultMode).
       'reference_type_noncanonical',
     ]);
     expect(PROPOSE_ONLY.filter((e) => e.applyDirect === true).map((e) => e.code)).toEqual([
       'character_core_missing',
       'core_compact_wording',
+      'owner_identity_copy_drift',
       'reference_type_noncanonical',
     ]);
     for (const e of PROPOSE_ONLY.filter((x) => x.code !== 'reference_type_noncanonical'))

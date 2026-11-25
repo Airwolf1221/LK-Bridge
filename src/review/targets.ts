@@ -354,7 +354,10 @@ function expectChecks(steps: readonly StepRecord[]): Obj[] {
   for (const s of steps) {
     if (s.opId !== EXPECT_STEP) continue;
     const checks = bodyOf(s.params).checks;
-    for (const c of Array.isArray(checks) ? checks : []) if (isObj(c)) out.push(c);
+    for (const c of Array.isArray(checks) ? checks : [])
+      // v3 F7d (ADR 0077, A8): the check of the identity page an Art page copies from writes nothing and explains no
+      // write: it is not the identity page's own facts check (an upgrade's), which a revert works from.
+      if (isObj(c) && !(typeof c.label === 'string' && c.label.endsWith(': identity'))) out.push(c);
   }
   return out;
 }

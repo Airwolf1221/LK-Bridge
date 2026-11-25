@@ -154,6 +154,8 @@ export const LIVE_TOOL_SETTINGS: Readonly<Record<string, readonly [Section, stri
   SNAPSHOT_KEEP_DAYS: ['snapshots', 'keepDays'],
   SNAPSHOT_SOFT_DELETE_DAYS: ['snapshots', 'softDeleteDays'],
   MCP_RESULT_MAX_CHARS: [null, 'resultMaxChars'],
+  ART_CALL_MAX_IMAGES: [null, 'artCallMaxImages'],
+  ART_CALL_MAX_GROUPS: [null, 'artCallMaxGroups'],
 };
 
 /** The registry's `now` settings that are read through {@link liveToolsSettings} (the rest are the pre-F8 ones). */

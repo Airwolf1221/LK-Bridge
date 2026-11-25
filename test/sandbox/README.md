@@ -534,6 +534,21 @@ run of 23 November 2026). C1 a throwaway Working compact character; C2 one art p
 mock: `test/sandbox-mock/f7-1-core.test.ts`, and `test/sandbox-mock/pack-governance.test.ts` with the governance in
 `arkona`, as on the server.
 
+## A whole art set in one call (v3 F7d)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7d-art-set` (`f7d-art-set.ts`; ADR
+0077). WRITES, then cleans up (about 45 writes and 70 reads). D0 the Arkona pack attached, the asset tree built, the
+pack's governance current in the temporary database (the throwaway governance page, as f7-1-core's C0); D1 a throwaway
+Working compact character `Probe <Letters>`; D2 a zip of 4 tiny images taken in as an archive (`portrait.png` at the top,
+`Probe Gala/front.png` and `Probe Gala/back.png`, `Probe Hunt/front.png`); D3 ONE `arkona_add_character_art` call with
+`groups` naming the entries, ONE proposal of four items, printed as `F7D PLAN items=Art page | Design pieces |
+Outfits(Probe Gala) | Outfits(Probe Hunt)`, approved whole, its job succeeded and verified (`placed Design pieces 1, Outfit
+Probe Gala 2, Outfit Probe Hunt 1`); D4 read back LIVE and printed as `F7D SET …`: `core=[BWRK] Probe <Letters> -
+Character Core referenceType=Character Core`, `folders=Wardrobe, Wardrobe / Probe Gala (2) looseInWardrobe=1
+designPieces=1`, the Art page's `headings=` holding Reference Images, Probe Gala and Probe Hunt, `images=4`, `copies=`
+with the Core's values, `dependsOnCore=true`. Clean-up: the throwaway index, the character's asset folder, the archive
+and the governance page. On the mock: `test/sandbox-mock/f7d-art-set.test.ts`.
+
 **Any check that runs a pack's tag-computing tools** (`arkona_create_*`, `arkona_identity_reconcile`, `arkona_rename`,
 `arkona_split_owner`, `arkona_retag_apply`) on a copy of the bridge's state must opt in the same way, or point the
 governance itself; `copyBridgeState`'s report lists, in `governanceMissing`, each pack whose sources are in a project
@@ -585,6 +600,7 @@ always skips it and the run asserts its reason (the smoke's (c)).
 | f7-art                         | `test/sandbox-mock/f7-art.test.ts`                          |
 | f7c-archive                    | `test/sandbox-mock/f7c-archive.test.ts`                     |
 | f7-1-core                      | `test/sandbox-mock/f7-1-core.test.ts`, `…/pack-governance…` |
+| f7d-art-set                    | `test/sandbox-mock/f7d-art-set.test.ts`                     |
 
 The mock answers as LegendKeeper does only with its **faithful** setting on (`test/sandbox-mock/faithful.ts`, which
 these runs turn on and nothing else does): each behaviour there names the owner's run or the part of the spec it comes

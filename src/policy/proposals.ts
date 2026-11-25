@@ -2448,6 +2448,9 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.bindAssetUrls ? { bindAssetUrls: o.bindAssetUrls } : {}),
     // v3 F7c (ADR 0075): an archive entry's staged image, bound (or withdrawn) when the approved job runs.
     ...(o.bindStaged ? { bindStaged: o.bindStaged } : {}),
+    // v3 F7d (ADR 0077, A4): an art set's image (or group) withdrawn, with why, instead of failing the job.
+    ...(o.withdrawWith ? { withdrawWith: o.withdrawWith } : {}),
+    ...(o.withdrawAs ? { withdrawAs: o.withdrawAs } : {}),
     ...(o.fill ? { fill: o.fill } : {}),
     // v3 F3d (ADR 0058): the items each step belongs to, for the owner's selection (left out when the job runs).
     ...(o.items && o.items.length > 0 ? { items: o.items } : {}),

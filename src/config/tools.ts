@@ -82,6 +82,11 @@ export const TOOLS_ENV_SCHEMA = z.object({
   ART_CACHE_DIR: z.string().min(1).optional(),
   /** The most the art cache holds, in MB; the least recently used entries go first. */
   ART_CACHE_MAX_MB: intFrom(500, 1, 1_000_000),
+  // ---- v3 F7d (ADR 0077, A1): one arkona_add_character_art call with `groups`
+  /** The most images one groups call may carry, every group together. */
+  ART_CALL_MAX_IMAGES: intFrom(120, 1, 1000),
+  /** The most groups (design pieces, outfits) one groups call may carry. */
+  ART_CALL_MAX_GROUPS: intFrom(40, 1, 200),
   // ---- v2 E1a (ADR 0042): the snapshot store
   /** The snapshot store's directory (objects, manifests). Default: `snapshots/` next to the database. */
   SNAPSHOT_DIR: z.string().min(1).optional(),
@@ -121,7 +126,15 @@ export interface ToolsSettings {
   readonly snapshots?: SnapshotStoreSettings;
   /** v3 F7b (ADR 0071, D6): the art cache (ART_CACHE_DIR, ART_CACHE_MAX_MB). Optional: the defaults apply. */
   readonly artCache?: ArtCacheSettings;
+  /** v3 F7d (ADR 0077, A1): ART_CALL_MAX_IMAGES. Optional: the default (120) applies. */
+  readonly artCallMaxImages?: number;
+  /** v3 F7d (A1): ART_CALL_MAX_GROUPS. Optional: the default (40) applies. */
+  readonly artCallMaxGroups?: number;
 }
+
+/** v3 F7d (ADR 0077, A1): the defaults of ART_CALL_MAX_IMAGES and ART_CALL_MAX_GROUPS. */
+export const DEFAULT_ART_CALL_MAX_IMAGES = 120;
+export const DEFAULT_ART_CALL_MAX_GROUPS = 40;
 
 /** v3 F7b (ADR 0071, D6): the art cache's settings. */
 export interface ArtCacheSettings {
@@ -213,6 +226,8 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   images: DEFAULT_IMAGE_SETTINGS,
   snapshots: DEFAULT_SNAPSHOT_SETTINGS,
   artCache: DEFAULT_ART_CACHE_SETTINGS,
+  artCallMaxImages: DEFAULT_ART_CALL_MAX_IMAGES,
+  artCallMaxGroups: DEFAULT_ART_CALL_MAX_GROUPS,
 };
 
 /** Parses and validates the tool-layer environment variables. Never echoes values, only names. */
@@ -265,6 +280,8 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       softDeleteDays: e.SNAPSHOT_SOFT_DELETE_DAYS,
     },
     artCache: { dir: e.ART_CACHE_DIR ?? null, maxBytes: e.ART_CACHE_MAX_MB * 1024 * 1024 },
+    artCallMaxImages: e.ART_CALL_MAX_IMAGES,
+    artCallMaxGroups: e.ART_CALL_MAX_GROUPS,
   };
 }
 

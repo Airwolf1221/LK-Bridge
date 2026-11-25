@@ -86,6 +86,17 @@ identity facts, links and prose kept. An Authoritative page's rename is a canoni
 automation the code defaults to **Propose** (each finding its own proposal); the owner may switch it to Apply, which
 submits the same job with every guard judging it (ADR 0072).
 
+## Identity copies out of step (`owner_identity_copy_drift`, category Taxonomy; v3 F7d)
+
+A page of a character's set (every page under its index other than the identity page, its Core or Compact Reference;
+a relationship page left out) whose copyable identity fields are empty or differ from the identity page's: Subject,
+Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture and Aliases, only those the page's own
+sidebar has (its template's rows), each reported with both values. Never Temporal Scope, Race / Species or Life State
+(not copies). The motivating case: Iuno - Character Art, made by the bridge before F7d with every copy empty. "Propose a
+fix" is ONE governed `set_facts` per page copying the identity page's values, both pages read live first (`FIX_STALE`
+when either changed since the audit). In the automation the code defaults to **Propose**; the owner may switch it to
+Apply, which submits the same job with every guard judging it (ADR 0077).
+
 ## A Character Core still called compact (`core_compact_wording`, category Taxonomy; v3 F7.1)
 
 A Character Core whose text still says it is a compact reference (a Core upgraded before F7.1, or by hand), by exactly

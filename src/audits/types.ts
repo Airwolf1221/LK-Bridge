@@ -109,7 +109,13 @@ export type FixKind =
    * v3 F7.1 (ADR 0072): a Core's compact wording replaced by the upgrade's own rules (src/packs/engine/core.ts), on its
    * Art page first, then on the Core, inside the lock; both pages read live first (FIX_STALE when they changed).
    */
-  | 'core_wording';
+  | 'core_wording'
+  /**
+   * v3 F7d (ADR 0077, A10): a page of a character's set given its identity page's values (the copyable fields only),
+   * read live from both pages (FIX_STALE when either changed since the audit), through the governed facts path; a
+   * proposal, or a job when the automation's Apply asks (every guard judging it).
+   */
+  | 'identity_copy';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -305,6 +311,13 @@ export const CODES = {
     severity: 'info',
     title: 'A page’s Reference Type is not in the vocabulary',
     fix: 'reference_type',
+  },
+  // v3 F7d (ADR 0077, A10): a page of a character's set whose identity copies are empty or differ from its identity page.
+  owner_identity_copy_drift: {
+    category: 'taxonomy',
+    severity: 'warning',
+    title: 'A page of a character’s set whose identity copies are empty or differ from its identity page',
+    fix: 'identity_copy',
   },
   reference_type_category_mismatch: {
     category: 'taxonomy',

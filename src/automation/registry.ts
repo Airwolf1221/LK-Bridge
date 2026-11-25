@@ -523,6 +523,22 @@ export const CATALOGUE: readonly CodeEntry[] = [
     defaultMode: 'propose',
     applyDirect: true,
   }),
+  // ======================================================================== v3 F7d (ADR 0077, A10): default Propose, Apply allowed
+  defineCode({
+    code: 'owner_identity_copy_drift',
+    source: 'audit',
+    name: 'Identity copies empty or out of step',
+    example:
+      'Iuno - Character Art, its Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture and Aliases empty, gets “Iuno”, “Aela”, “Iunoreuna”, “Vitran” and “Iunoreuna Aela” from her Character Core.',
+    transformation:
+      'ONE proposal per page: set_facts of the copyable identity fields (Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture, Aliases; only the rows the page has, never Temporal Scope, Race / Species or Life State) to the identity page’s values, both pages read live first (FIX_STALE when either changed since the audit), the rows checked in the lock, the writes If-Match chained, journalled and read back. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s change is what the canon guard decides',
+    traits: ['fact', 'canon'],
+    target: 'resource',
+    changes: ['properties'],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+  }),
   // ======================================================================== v3 F6a (ADR 0076): default Off, Apply allowed
   defineCode({
     code: 'reference_type_noncanonical',

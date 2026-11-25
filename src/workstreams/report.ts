@@ -518,6 +518,24 @@ export class WorkstreamReports {
         excluded.push({ kind: 'refused', jobId: j.id, code: e.code, why: e.message ?? e.code });
     }
 
+    // v3 F7d (ADR 0077, A4): an art set's job lists, per group, what it placed and what it did not (an image withdrawn,
+    // with why; one left out of the approval, still staged).
+    const artSets: Obj[] = [];
+    for (const j of jobs) {
+      const r = parse(j.result) as Obj | null;
+      if (!r || !Array.isArray(r.artGroups)) continue;
+      artSets.push({ jobId: j.id, title: j.title, groups: r.artGroups });
+      for (const g of r.artGroups as Obj[])
+        for (const n of Array.isArray(g.notPlaced) ? (g.notPlaced as Obj[]) : [])
+          excluded.push({
+            kind: 'not_placed',
+            jobId: j.id,
+            group: g.group,
+            image: n.name,
+            ...(n.stagedId !== undefined ? { stagedId: n.stagedId } : {}),
+            why: n.why ?? 'not placed',
+          });
+    }
     // Refusals that made no job (FIX_STALE, an unmapped value, a rename steered elsewhere): the tool-call log keeps the
     // label each write tool's result echoed.
     const projectName = this.d.projectName?.(projectId) ?? null;
@@ -723,6 +741,8 @@ export class WorkstreamReports {
         todo.push(
           `${e.kind === 'skipped' ? 'Skipped' : 'Refused'}: ${t(e.character, t(e.item, t(e.tool, t(e.jobId))))}: ${t(e.why)}`,
         );
+      else if (e.kind === 'not_placed')
+        todo.push(`Not placed (job ${t(e.jobId)}, ${t(e.group)}): ${t(e.image)}: ${t(e.why)}`);
     for (const f of findings) todo.push(`Open ${t(f.severity)} finding ${t(f.code)} on ${nameOfObj(f.page)}`);
     for (const f of followUps.slice(0, 50))
       todo.push(`Consistency on ${t(f.character)}: ${t(f.message, t(f.code, 'a disagreement'))}`);
@@ -752,6 +772,7 @@ export class WorkstreamReports {
       },
       groups: {
         writtenAndVerified: written.slice(0, LIST_MAX),
+        ...(artSets.length > 0 ? { artSets: artSets.slice(0, LIST_MAX) } : {}),
         acceptedNotYetRun: notRun.slice(0, LIST_MAX),
         deliberatelyExcluded: excluded.slice(0, LIST_MAX),
         awaitingJudgement: awaiting.slice(0, LIST_MAX),

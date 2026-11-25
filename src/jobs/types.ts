@@ -232,6 +232,18 @@ export interface StepOptions {
    */
   readonly bindStaged?: { readonly stagedId: string };
   /**
+   * v3 F7d (ADR 0077, A4), set by bridge code only: the step is withdrawn (recorded as succeeded with
+   * `{ skipped, withdrawn: { keys, reason } }`, nothing sent) when an earlier step of the job withdrew one of these keys
+   * (an image of an art set whose upload failed: its later steps, its blocks on the page and its read-back are left out).
+   */
+  readonly withdrawWith?: readonly string[];
+  /**
+   * v3 F7d (A4), set by bridge code only: when this step fails for certain (nothing may have been written: never an
+   * uncertain outcome), it is withdrawn under these keys instead of failing the job, with the error as the reason, so
+   * the art set's other images and groups go ahead.
+   */
+  readonly withdrawAs?: readonly string[];
+  /**
    * v3 F3a (ADR 0050), set by bridge code only, on a `replaceDocumentBlocks` of a page the same job made from a template
    * (whose copy already holds the template's content): inside the lock, after the read that gives the If-Match, the
    * registered filler named here works out the blocks to send from the document as it is then and the planned blocks
