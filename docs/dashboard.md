@@ -271,6 +271,17 @@ or published. **Accept all confident suggestions in this filter** takes every op
 for the step-up and is in the audit log (`reftypes.decide`, `reftypes.undo`, `reftypes.publish`). Decisions the
 published section contradicts are listed under "The published section and your decisions disagree": the section wins.
 
+v3 F6a.1 ([ADR 0076 amendment 1](adr/0076-v3-f6a-reference-type-vocabulary.md#amendment-1-v3-f6a1-25-november-2026-the-live-hang-of-24-november-a-decision-is-cheap-the-report-is-cached)):
+the table is paged (100 rows a page, **Previous** and **Next**), every filter applied by the server. **Accept all
+confident suggestions in this filter** covers the whole filter, not only the page shown: it sends the rows' ids in ONE
+request, decided in one transaction, at most `REFTYPE_BULK_MAX` (500) at a time (the button then says "Accept the first
+500 of N"; press it again for the rest). It is safe to run again: rows already decided are left as they are, so after an
+interrupted run it decides only the rows still open. The report is cached on the repository tree's version, so a reload
+after a decision rebuilds nothing from the tree. Routes: `GET /api/admin/reference-types` (now with `confident: { count,
+ids, sample }`, `bulkMax`, `value`, `offset`), `POST /api/admin/reference-types/decide` (returns `{ decision, row }`),
+`POST /api/admin/reference-types/bulk-accept` (`{ ids, confirm }`; returns the rows it changed, the rows skipped with
+their reasons, and `remaining`; `BULK_TOO_LARGE` over the bound).
+
 ## Asset Tree (v2 A4)
 
 The **Asset Tree** page shows the selected project's asset library as the bridge knows it: status, counts, the build

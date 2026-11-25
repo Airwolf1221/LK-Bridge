@@ -154,6 +154,12 @@ export const LIVE_TOOL_SETTINGS: Readonly<Record<string, readonly [Section, stri
   SNAPSHOT_KEEP_DAYS: ['snapshots', 'keepDays'],
   SNAPSHOT_SOFT_DELETE_DAYS: ['snapshots', 'softDeleteDays'],
   MCP_RESULT_MAX_CHARS: [null, 'resultMaxChars'],
+  // v3 F6a.1 (ADR 0076 amendment 1): read on each use by the Reference Type service and the watchdog.
+  REFTYPE_BULK_MAX: [null, 'reftypeBulkMax'],
+  SLOW_REQUEST_WARN_MS: [null, 'slowRequestWarnMs'],
+  SLOW_REQUEST_REPEAT_MS: [null, 'slowRequestRepeatMs'],
+  EVENT_LOOP_LAG_WARN_MS: [null, 'eventLoopLagWarnMs'],
+  MEMORY_WARN_FRACTION: [null, 'memoryWarnFraction'],
 };
 
 /** The registry's `now` settings that are read through {@link liveToolsSettings} (the rest are the pre-F8 ones). */

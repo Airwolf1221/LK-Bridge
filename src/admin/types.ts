@@ -1,3 +1,4 @@
+import type { BackgroundRunner } from '../background.js';
 import type { Packs } from '../packs/service.js';
 import type { Appraisal } from '../appraisal/index.js';
 import type { Consistency } from '../consistency/service.js';
@@ -40,6 +41,11 @@ import type { ConfigSettingsRuntime } from './config-settings.js';
 
 export interface AdminRuntime {
   readonly engine: JobEngine;
+  /**
+   * v3 F6a.1 (ADR 0076 amendment 1): background work an action starts ("Run audit now", "Check now"), owned by the
+   * runtime so a stop waits for it (or aborts it) before the database closes.
+   */
+  readonly background?: BackgroundRunner;
   /** The projects this bridge serves (v2 A1): each one's governor, flags and whether it is served now. */
   readonly projects: ProjectRegistry;
   /** OPS2: the encrypted secret store (its state is shown; values never leave it here). */

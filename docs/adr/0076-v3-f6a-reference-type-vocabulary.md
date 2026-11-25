@@ -173,3 +173,107 @@ pages leave the draft vocabulary's section out, so it stays unpublished there.
 - Agents are told (the guide, the tool descriptions): use the vocabulary, never invent a type; the owner decides.
 - Reminder for the owner (not this session): before F6b, create the template "[NAV] AI Navigation" as a copy of
   "[INDEX] AI Index".
+
+## Amendment 1 (v3 F6a.1, 25 November 2026): the live hang of 24 November; a decision is cheap, the report is cached
+
+- Status: **Proposed** (v3 F6a.1). Reproduced and fixed against the mock LegendKeeper only, at Arkona's scale; nothing in
+  this session touched a live system. The owner's evidence: the journal and the unit's cgroup samples of 24 November.
+- Amends decisions 3 (the report: cached and paged), 4 (the decisions: a bulk accept is one request by ids, one
+  transaction, bounded) and 5 (the governance check after a publication: owned by the runtime). The logging that names a
+  hang is [ADR 0061 amendment 1](0061-cr-2026-11-r3-decisions.md#amendment-1-v3-f6a1-25-november-2026-a-hang-names-itself).
+- Migration `4510_tree_versions.sql` (a version per project's tree, bumped by triggers). New setting `REFTYPE_BULK_MAX`
+  (default 500, `applies: now`), in `src/config/registry.ts`.
+
+### What happened
+
+On live Arkona (1,493 pages, about 150 values), "Accept all confident suggestions" hung the bridge: the journal's last
+line 23:01:34, nothing for 20 minutes, the process throttled at MemoryHigh (1.4 GB) with 2.8 GiB in swap and growing.
+
+### The cause, named
+
+`ReferenceTypeService.bulkAccept` was ONE synchronous loop calling `decide` per row, and `decide` began with
+`this.rows(projectId)`: the whole report rebuilt for every row (**repeated**, O(rows × pages)). Each build ran `scopeOf`,
+whose `kindOf` asked `TreeQueries.node()` for every id on every page's path, the page itself included: **1,703 calls per
+build** at 1,500 pages, each running `TreeService.meta()` with five freshly prepared SQLite statements (plus the project's
+settings read). better-sqlite3 frees a statement's native memory only when V8 collects its wrapper AND runs the weak
+callback, on a later turn of the event loop; inside one synchronous loop none was freed (**retained until the loop
+yields, which it never did**): about 116 MB per build, so the V8 heap stayed flat (65 MB in the journal's last line)
+while RSS climbed past MemoryHigh, the kernel throttled and swapped the process, and nothing else could run (the
+scheduler included). The `decide` and reload timings (1.3 to 1.8 s) were the same builds, one at a time.
+
+Measured on the mock (test/f6a1, 1,500 pages, 208 values, 131 confident):
+
+|                      | before                                   | after                                         |
+| -------------------- | ---------------------------------------- | --------------------------------------------- |
+| a report build       | 500 ms, 1,703 tree status reads          | 68 ms, 3 queries (cached after)               |
+| the page's load      | 921 ms, loop held 497 ms                 | 93 ms, 62 ms                                  |
+| a reload             | 514 ms, loop held ~500 ms                | 19 to 24 ms                                   |
+| Accept all, 10 rows  | 6.7 s, loop held 6.7 s, RSS +955 MB      | —                                             |
+| Accept all, 131 rows | the test process at 13 GB in 3 s, killed | 124 ms, loop held 118 ms, RSS ±0              |
+| 20 reloads after it  | —                                        | RSS 588.2 MB flat, heap +6 MB (flat over 200) |
+
+At 300 pages the old code took 26.9 s for "Accept all", the loop held throughout, RSS 491 MB → 4,627 MB; the new test
+(`test/f6a1/scale.test.ts`) fails there on its lag bound.
+
+### Decision A: the report in two cached layers, built without a status read per node
+
+- **The base** (every page in scope with its value, category, lifecycle and read times): ONE light scan of the tree
+  (`TreeQueries.pageScan`, without the stored sidebars) and ONE query of every node's kind (`TreeQueries.kinds`). Cached on
+  the tree's version (migration 4510's triggers bump it on any node's insert, update or delete), the pack's
+  approved version and the project's settings. Built by `prepare` in chunks of 250 pages that yield to the event loop
+  (every route and the tool await it; one build at a time per project), or at once by a synchronous caller.
+- **The rows** (grouped, suggested, statused): from the base in memory, cached on the base and the decisions' version
+  (each write of the decisions store moves it) and the minute (the coverage's "stale" moves with the clock).
+- The mappings' applied counts: ONE scan of the write journal, only when the journal's newest entries moved (it was one
+  `LIKE` scan per mapping per build).
+- Hot SQL is prepared once per connection (`src/db/statements.ts`: the tree's status queries, a node, a project).
+
+### Decision B: a decision is cheap
+
+`decide` reads the cached base, computes its one row's suggestion under the vocabulary in force, writes its decision and
+audit row, and returns the decision and its row as it now stands (`POST /reference-types/decide` → `{ decision, row }`).
+It never rebuilds the report, re-runs an audit or reads a snapshot. A decision starts no background work (the
+`reference_type_*` findings follow at the next audit, as before; the fix re-checks the decision live).
+
+### Decision C: "Accept all" is one request, ids in, rows out, one transaction, bounded
+
+- `POST /reference-types/bulk-accept { ids: [rtr_…], confirm: true }` (the step-up): the page sends the ids of the
+  confident open rows of its whole filter (the GET lists them as `confident: { count, ids, sample }`, with `bulkMax`).
+  The filter form (no ids) is kept: the first `REFTYPE_BULK_MAX` rows, the rest counted as `remaining`.
+- A row id is stable: `rowIdOf(value, category)`, `rtr_` and 16 hex of a SHA-256 of the value and the category's key.
+- ONE transaction: every decision and its `reftypes.decide` audit row, or none.
+- Bounded: more ids than `REFTYPE_BULK_MAX` (default 500, 1 to 5,000) is refused, `BULK_TOO_LARGE` (413), nothing written.
+- Idempotent: each row is checked inside the transaction; one already decided (`already_decided`), canonical now, not
+  open, with no confident suggestion or not in use is skipped with its reason. Running it again touches only the rows
+  still open (**the owner's recovery**: the decisions recorded before the hang are intact, each a committed row; "Accept
+  all" again decides the five left).
+- It returns `{ accepted, skipped, remaining, max, decisions, rows, skippedRows }`: the rows it changed, not a report.
+
+### Decision D: the page fetches what it shows
+
+The table is paged (100 rows a page, Previous and Next); "Value contains" is a server filter (`value`), so paging holds.
+
+### Decision E: background work an action starts is the runtime's
+
+`src/background.ts` `BackgroundRunner`, made by the runtime: `trigger(key, …)` is debounced (2 s) and runs one at a time
+per key (a trigger during a run makes one more after it); `track(label, promise)` keeps work already started; `stop()`
+drops pending debounces, aborts every signal and awaits every run (bounded), before the engine and the database stop.
+An aborted run is logged at debug, never as an error.
+
+- The governance check after "Publish vocabulary" (the sandbox's race: `TypeError: The database connection is not open`
+  from `governance` → `PackStore.newVersion` after the stop closed the database) and after "Allow this tag everywhere":
+  `trigger('governance:<pack>')`, reading at **P3** (it is background work), with the stop's signal; a check whose signal
+  is aborted writes nothing (`governance` stops before deriving a version).
+- The other admin-started background work with the same `void …catch()` shape, now tracked: "Run audit now", the
+  chronology's "Check now", and the job follow-ups an owner's action sets off (Revert's automation follow-up, its images
+  back on Staging, a reverted split's deletion proposal; a split's phase 2; a rename's leftovers; an identity reconcile's
+  outcome; block-by-block undo; a restore's second proposal). The audit a full snapshot starts is awaited (bounded) too.
+- The audit run yields to the event loop between its checks (each a synchronous pass over every page).
+
+### Tests
+
+`test/f6a1/`: `scale.test.ts` (Arkona's scale: Accept all plus 20 reloads, heap within 64 MB of its start, RSS step under
+128 MB and flat across reloads, lag under 500 ms on every request; fails on the old code), `bulk.test.ts` (one
+transaction, bounded, idempotent, the rows returned, a decide without a tree read, the cache's hits and invalidations,
+paging, the debug start line), `background.test.ts`, `publish-race.test.ts` (fails on the old code with the sandbox's
+error), `watchdog.test.ts` (ADR 0061 amendment 1).

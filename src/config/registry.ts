@@ -725,6 +725,56 @@ const SPECS: readonly Spec[] = [
     applies: 'now',
   },
 
+  {
+    key: 'REFTYPE_BULK_MAX',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Reference Types: most rows one “Accept all” decides',
+    description:
+      'The Reference Types page’s “Accept all confident suggestions” decides at most this many rows in one request and one transaction; the page asks again for the rest.',
+    unit: UNITS.count,
+    applies: 'now',
+  },
+  {
+    key: 'SLOW_REQUEST_WARN_MS',
+    schema: 'tools',
+    group: 'general',
+    label: 'Slow request warning',
+    description:
+      'A dashboard request or MCP tool call still running after this long is logged as a warning (method, URL and tool name; never the body), so a hang names itself.',
+    unit: UNITS.msAsSeconds,
+    applies: 'now',
+  },
+  {
+    key: 'SLOW_REQUEST_REPEAT_MS',
+    schema: 'tools',
+    group: 'general',
+    label: 'Slow request warning: repeat every',
+    description: 'While a slow request keeps running, its warning is logged again this often.',
+    unit: UNITS.msAsSeconds,
+    applies: 'now',
+  },
+  {
+    key: 'EVENT_LOOP_LAG_WARN_MS',
+    schema: 'tools',
+    group: 'general',
+    label: 'Event-loop lag warning',
+    description:
+      'When the bridge’s event loop is blocked for longer than this, a warning is logged with the task or request running, the heap and the RSS.',
+    unit: UNITS.msAsSeconds,
+    applies: 'now',
+  },
+  {
+    key: 'MEMORY_WARN_FRACTION',
+    schema: 'tools',
+    group: 'general',
+    label: 'Memory pressure warning',
+    description:
+      'RSS above this share of the service’s soft memory cap (MemoryHigh, read from /sys/fs/cgroup/memory.high) is logged as a warning naming the running tasks. A report only: nothing is stopped.',
+    unit: UNITS.percent,
+    applies: 'now',
+  },
+
   // ---------------------------------------------------------------- Dashboard and auth
   {
     key: 'AUTH_ACCESS_TOKEN_TTL_SECONDS',

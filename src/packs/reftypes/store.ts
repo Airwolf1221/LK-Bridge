@@ -116,10 +116,18 @@ const publicationOf = (r: PublicationRow): Publication => ({
 export const newId = (prefix: string): string => `${prefix}_${randomBytes(8).toString('hex')}`;
 
 export class ReferenceTypeStore {
+  /** v3 F6a.1: moves on with every change to the decisions (the report's rows are cached on it). */
+  private changes = 0;
+
   constructor(
     private readonly db: Db,
     private readonly now: () => number,
   ) {}
+
+  /** v3 F6a.1: the decisions' version in this process (every write here moves it). */
+  version(): number {
+    return this.changes;
+  }
 
   decisions(projectId: string): ReferenceTypeDecision[] {
     return (
@@ -150,6 +158,7 @@ export class ReferenceTypeStore {
     d: Omit<ReferenceTypeDecision, 'id' | 'at' | 'publishedAt' | 'appliedCount' | 'appliedAt'>,
   ): ReferenceTypeDecision {
     const id = newId('rtd');
+    this.changes++;
     this.db
       .prepare(
         `INSERT INTO reference_type_decisions
@@ -178,6 +187,7 @@ export class ReferenceTypeStore {
   }
 
   remove(projectId: string, id: string): boolean {
+    this.changes++;
     return (
       this.db
         .prepare('DELETE FROM reference_type_decisions WHERE project_id = ? AND id = ?')
@@ -186,6 +196,7 @@ export class ReferenceTypeStore {
   }
 
   markApplied(projectId: string, id: string): void {
+    this.changes++;
     this.db
       .prepare(
         'UPDATE reference_type_decisions SET applied_count = applied_count + 1, applied_at = ? WHERE project_id = ? AND id = ?',
@@ -194,6 +205,7 @@ export class ReferenceTypeStore {
   }
 
   markPublished(projectId: string, ids: readonly string[], at: number): void {
+    this.changes++;
     const stmt = this.db.prepare(
       'UPDATE reference_type_decisions SET published_at = COALESCE(published_at, ?) WHERE project_id = ? AND id = ?',
     );

@@ -790,6 +790,48 @@ appear with the default `LOG_LEVEL=info` (chunk 8). Auth events keep their level
 | `deploy.sh` says "Run this as root, from the installed copy" | since v1.0.1: `sudo /opt/lk-bridge/bin/deploy.sh` (not `sudo -u lkbridge …`, not the copy in the checkout)                                      |
 | a health-check permission line FAILs                         | it names the path and the fix; then run the health check again                                                                                  |
 
+## When the bridge hangs (v3 F6a.1)
+
+Since v3 F6a.1 ([ADR 0061 amendment 1](adr/0061-cr-2026-11-r3-decisions.md#amendment-1-v3-f6a1-25-november-2026-a-hang-names-itself))
+a hang names itself in the journal, as warnings (`-p warning` shows them). The thresholds are settings on the Settings
+page (General): `SLOW_REQUEST_WARN_MS` (30 s), `SLOW_REQUEST_REPEAT_MS` (60 s), `EVENT_LOOP_LAG_WARN_MS` (2 s) and
+`MEMORY_WARN_FRACTION` (0.7 of MemoryHigh). Nothing is stopped or killed by them: they report.
+
+A request still running after 30 seconds (and again every 60 seconds while it runs); for an MCP call, `url` is `/mcp`
+and `tool` names the tool. Never a body or a query string:
+
+```json
+{"level":40,"time":1795566606786,"component":"engine","kind":"request","method":"POST","url":"/api/admin/reference-types/bulk-accept","runningMs":30000,"msg":"request still running"}
+{"level":40,"time":1795566606786,"component":"engine","kind":"tool","method":"POST","url":"/mcp","tool":"arkona_reference_types","runningMs":30000,"msg":"request still running"}
+```
+
+The event loop held for longer than 2 seconds, once it is free again: what is running, what finished since the last
+sample (the block's likely author), heap and RSS:
+
+```json
+{"level":40,"time":1795566618377,"component":"engine","lagMs":6690,"running":[{"kind":"request","name":"POST /api/admin/reference-types/bulk-accept","ms":30000,"method":"POST","url":"/api/admin/reference-types/bulk-accept"}],"finished":[],"memory":{"heapUsedMb":66,"rssMb":1100},"msg":"event loop blocked"}
+```
+
+While it is still held, the watchdog thread writes this itself (the main thread cannot), again every 60 seconds; `blockedMs` counts from the main thread's last heartbeat:
+
+```json
+{"level":40,"time":1795566707265,"component":"engine","source":"watchdog-thread","blockedMs":2003,"running":[{"kind":"request","name":"POST /api/admin/reference-types/bulk-accept","ms":1547,"method":"POST","url":"/api/admin/reference-types/bulk-accept"}],"memory":{"rssMb":92},"memoryHighMb":1400,"msg":"event loop blocked: the main thread has not answered"}
+```
+
+RSS above 70% of the unit's MemoryHigh (read from the bridge's cgroup, `memory.high`), naming what runs (again every
+five minutes while it stays above; `memory pressure eased` at info when it drops):
+
+```json
+{"level":40,"time":1795566606786,"component":"engine","rssMb":1100,"heapUsedMb":66,"memoryHighMb":1400,"fraction":0.7,"running":[{"kind":"request","name":"POST /api/admin/reference-types/bulk-accept","ms":30000,"method":"POST","url":"/api/admin/reference-types/bulk-accept"}],"msg":"memory pressure: RSS above 70% of MemoryHigh"}
+```
+
+At `LOG_LEVEL=debug` each dashboard action and tool call is also logged when it starts (`request started`, `tool call
+started`), so a request that never completes is still in the journal. To find them:
+
+```bash
+sudo journalctl -u lk-bridge -o cat | grep -E 'request still running|event loop blocked|memory pressure'
+```
+
 ## Soak test ✋
 
 PLAN §9.7 and §10: about 1,000 writes and a matching mix of reads against the **test world**, through the bridge's real

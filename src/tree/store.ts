@@ -8,6 +8,7 @@
  * made after T, never deletes a node the bridge created after T, and never brings back one the bridge deleted after T.
  */
 import type { Db } from '../db/open.js';
+import { prepared } from '../db/statements.js';
 import { catalogueFrom, classifyName, nameKey, type TreeSettings } from './classify.js';
 import type {
   BuildEstimate,
@@ -204,7 +205,7 @@ export class TreeStore {
   // ============================================================================================== state
 
   state(projectId: string): StateRow | undefined {
-    return this.db.prepare('SELECT * FROM tree_state WHERE project_id = ?').get(projectId) as
+    return prepared(this.db, 'SELECT * FROM tree_state WHERE project_id = ?').get(projectId) as
       StateRow | undefined;
   }
 
@@ -281,8 +282,10 @@ export class TreeStore {
   // ============================================================================================== nodes
 
   node(projectId: string, id: string): NodeRow | undefined {
-    return this.db.prepare('SELECT * FROM tree_nodes WHERE project_id = ? AND id = ?').get(projectId, id) as
-      NodeRow | undefined;
+    return prepared(this.db, 'SELECT * FROM tree_nodes WHERE project_id = ? AND id = ?').get(
+      projectId,
+      id,
+    ) as NodeRow | undefined;
   }
 
   has(projectId: string, id: string): boolean {
@@ -316,9 +319,9 @@ export class TreeStore {
 
   staleCount(projectId: string): number {
     return (
-      this.db
-        .prepare('SELECT COUNT(*) AS n FROM tree_nodes WHERE project_id = ? AND stale = 1')
-        .get(projectId) as {
+      prepared(this.db, 'SELECT COUNT(*) AS n FROM tree_nodes WHERE project_id = ? AND stale = 1').get(
+        projectId,
+      ) as {
         n: number;
       }
     ).n;
@@ -1093,11 +1096,10 @@ export class TreeStore {
   }
 
   activePass(projectId: string): PassView | undefined {
-    const r = this.db
-      .prepare(
-        `SELECT * FROM tree_passes WHERE project_id = ? AND status IN ('listing', 'awaiting_confirmation', 'reading')`,
-      )
-      .get(projectId) as PassRow | undefined;
+    const r = prepared(
+      this.db,
+      `SELECT * FROM tree_passes WHERE project_id = ? AND status IN ('listing', 'awaiting_confirmation', 'reading')`,
+    ).get(projectId) as PassRow | undefined;
     return r ? toPassView(r) : undefined;
   }
 
@@ -1192,7 +1194,7 @@ export class TreeStore {
 
   pendingCount(projectId: string): number {
     return (
-      this.db.prepare('SELECT COUNT(*) AS n FROM tree_pending WHERE project_id = ?').get(projectId) as {
+      prepared(this.db, 'SELECT COUNT(*) AS n FROM tree_pending WHERE project_id = ?').get(projectId) as {
         n: number;
       }
     ).n;
@@ -1200,9 +1202,10 @@ export class TreeStore {
 
   failedPendingCount(projectId: string): number {
     return (
-      this.db
-        .prepare(`SELECT COUNT(*) AS n FROM tree_pending WHERE project_id = ? AND status = 'retry'`)
-        .get(projectId) as { n: number }
+      prepared(
+        this.db,
+        `SELECT COUNT(*) AS n FROM tree_pending WHERE project_id = ? AND status = 'retry'`,
+      ).get(projectId) as { n: number }
     ).n;
   }
 

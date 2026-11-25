@@ -10,6 +10,7 @@
  *
  * The approved pack version lists `Imported` as an Excluded Routine Tag and makes the lifecycle tag lead on this project.
  */
+import type { Writable } from 'node:stream';
 import { ROOT, type DiscoverWorld } from '../discover/world.js';
 import { appraisalWorld, type AppraisalWorld } from '../appraisal/world.js';
 import { PROJECT } from '../tools/helpers.js';
@@ -73,10 +74,23 @@ export async function retagWorld(
   o: {
     /** v3 F5a: more fixture pages, seeded with the world's own (so the tree and the first snapshot hold them). */
     readonly seed?: (world: DiscoverWorld) => void;
+    /** v3 F6a.1: the discover world's bulk sources (default 1,200; the Arkona-scale world seeds its own). */
+    readonly bulk?: number;
+    /** v3 F6a.1: the mock's and the bridge's tier limits (the Arkona-scale world reads 1,500 pages). */
+    readonly env?: Record<string, string>;
+    readonly limits?: Record<string, number>;
+    /** v3 F6a.1: the bridge's requests to the mock (to hold one), and its log (to read what it said). */
+    readonly lkTransport?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+    readonly logStream?: Writable;
   } = {},
 ): Promise<RetagWorld> {
   const w = await appraisalWorld({
     retag: true,
+    ...(o.bulk !== undefined ? { bulk: o.bulk } : {}),
+    ...(o.env ? { env: o.env } : {}),
+    ...(o.limits ? { limits: o.limits } : {}),
+    ...(o.lkTransport ? { lkTransport: o.lkTransport } : {}),
+    ...(o.logStream ? { logStream: o.logStream } : {}),
     seed: (world) => {
       const r = world.repo;
       const page = (

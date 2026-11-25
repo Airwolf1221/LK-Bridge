@@ -16,6 +16,7 @@
  * - **Reconciliation**: a named record across batches; resuming it audits what remains afresh and proposes the next
  *   batch. A page whose inputs changed in the snapshots since its verdict is stale, never current truth.
  */
+import type { BackgroundRunner } from '../../background.js';
 import type { Db } from '../../db/open.js';
 import type { RetagAuditHook } from '../../audits/context.js';
 import { extractResource } from '../../audits/model.js';
@@ -131,6 +132,8 @@ export interface RetagDeps {
   ) => void;
   readonly now: () => number;
   readonly log?: { warn(o: unknown, m: string): void };
+  /** v3 F6a.1: the runtime's background work (the governance check after an edit: debounced, awaited on stop). */
+  readonly background?: BackgroundRunner;
 }
 
 /** What an audit covers. */
@@ -1337,6 +1340,15 @@ export class RetagService {
     if (job.status !== 'succeeded' || job.origin.tool !== ALLOW_TOOL || this.followedEdits.has(job.id))
       return;
     this.followedEdits.add(job.id);
+    // v3 F6a.1: owned by the runtime (debounced, one at a time per pack, at P3, aborted and awaited on stop).
+    if (this.d.background) {
+      this.d.background.trigger(
+        `governance:${RETAG_PACK}`,
+        'the governance check after an Approved Supplementary Tags edit',
+        (signal) => this.d.packs.governance(RETAG_PACK, { signal, priority: 'P3' }),
+      );
+      return;
+    }
     void this.d.packs.governance(RETAG_PACK).catch((err: unknown) => {
       this.d.log?.warn(
         { err, jobId: job.id },

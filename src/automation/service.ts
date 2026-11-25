@@ -16,6 +16,7 @@
  *   job per page as the Automation principal at P3, and reads every page back. The caps, the stop conditions and the
  *   brakes are the design's; see ADR 0068.
  */
+import type { BackgroundRunner } from '../background.js';
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { Appraisal } from '../appraisal/service.js';
@@ -78,6 +79,8 @@ export class AutomationError extends Error {
 }
 
 export interface AutomationDeps {
+  /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
+  readonly background?: Pick<BackgroundRunner, 'track'>;
   readonly db: Db;
   readonly engine: Pick<JobEngine, 'submit' | 'internalRead' | 'queries' | 'events' | 'stepRecords' | 'wait'>;
   readonly packs: Pick<Packs, 'get' | 'approvedRules' | 'attachment' | 'governance' | 'carryApproval'>;
@@ -234,12 +237,16 @@ export class AutomationService {
     this.stopping = false;
     const off = this.d.engine.events.on('job', (e: { type: string; job: JobView }) => {
       if (e.job.status !== 'succeeded' || e.job.origin.tool !== REVERT_TOOL) return;
-      void this.afterRevert(e.job).catch((err: unknown) =>
+      // v3 F6a.1: tracked by the runtime's background work (a stop waits for it before the database closes).
+      const followUp = this.afterRevert(e.job).catch((err: unknown) =>
         this.d.log?.warn(
           { err, jobId: e.job.id },
           'automation: a revert of a governance write was not followed',
         ),
       );
+      void (this.d.background
+        ? this.d.background.track('automation: following a revert of a governance write', followUp)
+        : followUp);
     });
     this.offs.push(off);
     return () => this.detach();

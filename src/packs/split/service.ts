@@ -15,6 +15,7 @@
  *   proposal; an Authoritative page's is canonical), each only while it is exactly as the job made it; one changed
  *   since is kept and listed.
  */
+import type { BackgroundRunner } from '../../background.js';
 import type { Db } from '../../db/open.js';
 import type { JobEngine } from '../../jobs/engine.js';
 import { SYSTEM_PRINCIPAL, type JobView, type StepSpec } from '../../jobs/types.js';
@@ -160,6 +161,8 @@ export type Archiver = (
 >;
 
 export interface SplitServiceDeps {
+  /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
+  readonly background?: Pick<BackgroundRunner, 'track'>;
   readonly db: Db;
   readonly engine: Pick<JobEngine, 'events' | 'submit' | 'internalRead' | 'queries' | 'stepRecords'> &
     Partial<Pick<JobEngine, 'skippedItems'>>;
@@ -402,9 +405,11 @@ export class SplitService {
         this.d.audit('system', 'split.unverified', rec.id, null, { job: job.id });
         return;
       }
-      void this.afterVerified(rec, job).catch((err: unknown) =>
+      // v3 F6a.1: tracked by the runtime's background work (a stop waits for it before the database closes).
+      const followUp = this.afterVerified(rec, job).catch((err: unknown) =>
         this.d.log?.warn({ err, split: rec.id }, 'phase 2 of a split could not be proposed'),
       );
+      void (this.d.background ? this.d.background.track('proposing phase 2 of a split', followUp) : followUp);
       return;
     }
     // Phase 2's job ended: the source retired (archived), or not.

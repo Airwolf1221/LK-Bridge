@@ -158,7 +158,11 @@ export const registerAudits: Register = (api, ctx) => {
     const a = audits();
     if (a.store.runningRun(p.id))
       throw new AdminHttpError(409, 'AUDIT_RUNNING', 'An audit of this project is already running.');
-    void a.run(p.id, 'manual').catch(() => undefined);
+    // v3 F6a.1: owned by the runtime (a stop waits for it before the database closes).
+    const run = a.run(p.id, 'manual');
+    if (ctx.deps.runtime.background)
+      void ctx.deps.runtime.background.track('the audit run (Run audit now)', run);
+    else void run.catch(() => undefined);
     return { started: true };
   });
 

@@ -9,7 +9,7 @@ import * as z from 'zod';
 import { ConfigError } from './index.js';
 import { DEFAULT_LK_ASSET_HOSTS } from '../lk/constants.js';
 import { type OutboundPortAllowlist, parseOutboundPortAllowlist } from '../auth/ports.js';
-import { bool, intFrom, numberFrom } from './schema-helpers.js';
+import { bool, fraction, intFrom, numberFrom } from './schema-helpers.js';
 
 /** The tool layer's schema (`loadToolsConfig`). Exported for the settings registry (v3 F8, ADR 0073). */
 export const TOOLS_ENV_SCHEMA = z.object({
@@ -98,7 +98,27 @@ export const TOOLS_ENV_SCHEMA = z.object({
    * recently than this undeletes it; an older one is recreated from the snapshot. LegendKeeper does not publish it.
    */
   SNAPSHOT_SOFT_DELETE_DAYS: intFrom(30, 1, 3650),
+  // ---- v3 F6a.1 (ADR 0076 amendment 1, ADR 0061 amendment 1): bounds, and the warnings that name a hang
+  /** The most Reference Type rows one "Accept all confident suggestions" decides (one request, one transaction). */
+  REFTYPE_BULK_MAX: intFrom(500, 1, 5000),
+  /** A request still running after this long is logged as a warning (method, URL, tool name; never the body). */
+  SLOW_REQUEST_WARN_MS: intFrom(30_000, 1_000, 3_600_000),
+  /** ...and again every this long while it runs. */
+  SLOW_REQUEST_REPEAT_MS: intFrom(60_000, 1_000, 3_600_000),
+  /** The event loop's delay above which a warning is logged (with the task or request running, heap and RSS). */
+  EVENT_LOOP_LAG_WARN_MS: intFrom(2_000, 50, 600_000),
+  /** RSS above this fraction of the unit's MemoryHigh (memory.high) is logged as a warning, naming the running tasks. */
+  MEMORY_WARN_FRACTION: fraction(0.7),
 });
+
+/** v3 F6a.1: the defaults of the watchdog settings (callers built before F6a.1 omit them). */
+export const DEFAULT_WATCHDOG_SETTINGS = {
+  slowRequestWarnMs: 30_000,
+  slowRequestRepeatMs: 60_000,
+  eventLoopLagWarnMs: 2_000,
+  memoryWarnFraction: 0.7,
+} as const;
+export const DEFAULT_REFTYPE_BULK_MAX = 500;
 
 export interface ToolsSettings {
   readonly upload: {
@@ -121,6 +141,16 @@ export interface ToolsSettings {
   readonly snapshots?: SnapshotStoreSettings;
   /** v3 F7b (ADR 0071, D6): the art cache (ART_CACHE_DIR, ART_CACHE_MAX_MB). Optional: the defaults apply. */
   readonly artCache?: ArtCacheSettings;
+  /** v3 F6a.1: REFTYPE_BULK_MAX (optional for callers built before F6a.1: the default applies). */
+  readonly reftypeBulkMax?: number;
+  /** v3 F6a.1: SLOW_REQUEST_WARN_MS. */
+  readonly slowRequestWarnMs?: number;
+  /** v3 F6a.1: SLOW_REQUEST_REPEAT_MS. */
+  readonly slowRequestRepeatMs?: number;
+  /** v3 F6a.1: EVENT_LOOP_LAG_WARN_MS. */
+  readonly eventLoopLagWarnMs?: number;
+  /** v3 F6a.1: MEMORY_WARN_FRACTION. */
+  readonly memoryWarnFraction?: number;
 }
 
 /** v3 F7b (ADR 0071, D6): the art cache's settings. */
@@ -213,6 +243,8 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   images: DEFAULT_IMAGE_SETTINGS,
   snapshots: DEFAULT_SNAPSHOT_SETTINGS,
   artCache: DEFAULT_ART_CACHE_SETTINGS,
+  reftypeBulkMax: DEFAULT_REFTYPE_BULK_MAX,
+  ...DEFAULT_WATCHDOG_SETTINGS,
 };
 
 /** Parses and validates the tool-layer environment variables. Never echoes values, only names. */
@@ -265,6 +297,11 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       softDeleteDays: e.SNAPSHOT_SOFT_DELETE_DAYS,
     },
     artCache: { dir: e.ART_CACHE_DIR ?? null, maxBytes: e.ART_CACHE_MAX_MB * 1024 * 1024 },
+    reftypeBulkMax: e.REFTYPE_BULK_MAX,
+    slowRequestWarnMs: e.SLOW_REQUEST_WARN_MS,
+    slowRequestRepeatMs: e.SLOW_REQUEST_REPEAT_MS,
+    eventLoopLagWarnMs: e.EVENT_LOOP_LAG_WARN_MS,
+    memoryWarnFraction: e.MEMORY_WARN_FRACTION,
   };
 }
 

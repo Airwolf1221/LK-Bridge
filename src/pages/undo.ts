@@ -18,6 +18,7 @@
  * An undo is never undone: if it stops too, the error says so and the owner restores from the journal or a snapshot.
  * It runs once per job (the tool that waited for the job and the job listener share one attempt).
  */
+import type { BackgroundRunner } from '../background.js';
 import { SYSTEM_PRINCIPAL, type JobEngine, type JobOrigin, type JobView } from '../jobs/index.js';
 import { EXPECT_STEP } from '../jobs/internal-steps.js';
 import {
@@ -50,6 +51,8 @@ export type UndoOutcome =
   | { readonly status: 'failed'; readonly message: string };
 
 export interface BlockwiseUndoDeps {
+  /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
+  readonly background?: Pick<BackgroundRunner, 'track'>;
   readonly engine: Pick<JobEngine, 'stepPlans' | 'internalRead' | 'submit' | 'events' | 'queries'>;
   readonly log?: { warn(obj: unknown, msg: string): void };
 }
@@ -95,9 +98,11 @@ export class BlockwiseUndo {
   start(): () => void {
     this.off = this.d.engine.events.on('job', (e: { job: JobView }) => {
       if (e.job.status !== 'failed' && e.job.status !== 'cancelled') return;
-      void this.consider(e.job).catch((err: unknown) =>
+      // v3 F6a.1: tracked by the runtime's background work (a stop waits for it before the database closes).
+      const followUp = this.consider(e.job).catch((err: unknown) =>
         this.d.log?.warn({ err, jobId: e.job.id }, 'block-by-block undo could not run'),
       );
+      void (this.d.background ? this.d.background.track('block-by-block undo', followUp) : followUp);
     });
     return () => this.stop();
   }

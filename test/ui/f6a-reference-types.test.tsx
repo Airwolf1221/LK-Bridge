@@ -252,4 +252,65 @@ describe('the Reference Types page', () => {
     await screen.findByText('Published: approve the pack again on the Packs page.');
     expect(api.find('POST', '/reference-types/publish').at(-1)!.body).toEqual({ confirm: true });
   });
+
+  it('v3 F6a.1: Accept all sends the ids of the whole filter’s confident rows, at most bulkMax, in one request', async () => {
+    const gate = needsReauth(() => ({
+      accepted: 2,
+      skipped: 0,
+      remaining: 0,
+      max: 2,
+      decisions: [],
+      rows: [],
+      skippedRows: [],
+    }));
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /reference-types': {
+        ...response,
+        confident: {
+          count: 3,
+          ids: ['rtr_00000000000000a1', 'rtr_00000000000000a2', 'rtr_00000000000000a3'],
+          sample: [{ value: 'Historical Cultural Reference', suggestion: 'Culture Reference', count: 2 }],
+        },
+        bulkMax: 2,
+      },
+      'POST /reference-types/bulk-accept': gate.route,
+      'POST /security/reauth': gate.reauth,
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/reference-types');
+    const button = await screen.findByRole('button', {
+      name: 'Accept the first 2 of 3 confident suggestions in this filter',
+    });
+    await user.click(button);
+    const confirm = await screen.findByRole('alertdialog');
+    expect(confirm).toHaveTextContent('Accept the first 2 of 3 confident suggestions?');
+    expect(confirm).toHaveTextContent('Historical Cultural Reference → Culture Reference (2 page(s))');
+    expect(confirm).toHaveTextContent('At most 2 are accepted at once');
+    await user.click(within(confirm).getByRole('button', { name: 'Accept all' }));
+    await passwordDialog(user);
+    await screen.findByText('Accepted.');
+    expect(api.find('POST', '/reference-types/bulk-accept').at(-1)!.body).toEqual({
+      ids: ['rtr_00000000000000a1', 'rtr_00000000000000a2'],
+      confirm: true,
+    });
+  });
+
+  it('v3 F6a.1: the table is paged (100 rows a page) and "Value contains" goes to the server', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /reference-types': { ...response, report: { ...response.report, totalRows: 250 } },
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/reference-types');
+    await rowEl('Historical Cultural Reference');
+    expect(api.find('GET', '/reference-types')[0]!.query).toContain('limit=100');
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(api.find('GET', '/reference-types').at(-1)!.query).toContain('offset=100'));
+    expect(screen.getByText('Rows 101 to 200 of 250')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Value contains'), 'hist');
+    await waitFor(() => expect(api.find('GET', '/reference-types').at(-1)!.query).toContain('value=hist'));
+    // A new filter starts at its first page.
+    expect(api.find('GET', '/reference-types').at(-1)!.query).not.toContain('offset=');
+  });
 });

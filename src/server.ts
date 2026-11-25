@@ -57,6 +57,7 @@ import {
   type RuntimeOptions,
 } from './runtime.js';
 import type { SecretStore } from './secrets/store.js';
+import { processActivities } from './observability/watchdog.js';
 
 /**
  * Composition root. Chunk 4 wires the authorization server and the MCP transport; later chunks
@@ -131,6 +132,33 @@ function withPolicyTools(
   return missing.length === 0 ? (tools as McpToolProvider[]) : [...tools, ...missing];
 }
 
+/**
+ * v3 F6a.1 (ADR 0061 amendment 1): a tool call registers with the process's activities while it runs (the watchdog's
+ * "request still running" names the tool) and is logged at debug when it starts (its name only, never its arguments).
+ */
+export function activityObserver(
+  inner: McpToolCallObserver | undefined,
+  log: { debug(obj: Record<string, unknown>, msg: string): void },
+): McpToolCallObserver {
+  return {
+    begin(tool, args, caller) {
+      log.debug({ tool }, 'tool call started');
+      const done = processActivities.begin('tool', `tool ${tool}`, { method: 'POST', url: '/mcp', tool });
+      let record: ReturnType<McpToolCallObserver['begin']> | null = null;
+      try {
+        record = inner ? inner.begin(tool, args, caller) : null;
+      } catch (err) {
+        done();
+        throw err;
+      }
+      return (end) => {
+        done();
+        record?.(end);
+      };
+    },
+  };
+}
+
 /** Strips query strings from logged URLs: no code, state or stray token ever reaches the log. */
 function pathOnly(url: string): string {
   return url.split('?')[0] ?? '';
@@ -198,6 +226,35 @@ export async function buildServer(
     return503OnClosing: true,
     // Chunk 8 (F-09): one compact line per request instead of Fastify's two, and scanner probes at debug only.
     logController: new CompactRequestLog(),
+  });
+
+  // v3 F6a.1 (ADR 0061 amendment 1): every request is registered while it runs, so the watchdog can say what is still
+  // running (src/observability/watchdog.ts: method and path only, never a query string, header or body). MCP requests
+  // are registered per tool call instead (`activityObserver`), with the tool's name. A dashboard action (a POST, PUT or
+  // DELETE under /api/admin) is also logged when it starts, at debug: the journal logs a request when it completes.
+  const activityEnds = new WeakMap<FastifyRequest, () => void>();
+  const endActivity = (req: FastifyRequest) => {
+    activityEnds.get(req)?.();
+    activityEnds.delete(req);
+  };
+  app.addHook('onRequest', (req, _reply, done) => {
+    const url = pathOnly(req.url);
+    if (url !== '/mcp' && !url.startsWith('/mcp/'))
+      activityEnds.set(
+        req,
+        processActivities.begin('request', `${req.method} ${url}`, { method: req.method, url }),
+      );
+    if (req.method !== 'GET' && req.method !== 'HEAD' && url.startsWith('/api/admin/'))
+      req.log.debug({ method: req.method, url }, 'request started');
+    done();
+  });
+  app.addHook('onResponse', (req, _reply, done) => {
+    endActivity(req);
+    done();
+  });
+  app.addHook('onRequestAbort', (req, done) => {
+    endActivity(req);
+    done();
   });
 
   app.setNotFoundHandler((_req, reply) =>
@@ -268,7 +325,8 @@ export async function buildServer(
     // The policy layer's proposal tools, unless the caller's list has them already (the runtime's does).
     tools: withPolicyTools(o.tools ?? [bridgeInfoStub(bridgeInfo)], policy.tools),
     access: policy.access,
-    ...(o.toolCalls ? { observer: o.toolCalls } : {}),
+    // v3 F6a.1: every tool call is registered (and logged at debug when it starts), whatever else observes it.
+    observer: activityObserver(o.toolCalls, app.log),
     ...(o.toolsChanged ? { toolsChanged: o.toolsChanged } : {}),
     ...(o.resources ? { resources: o.resources } : {}),
     ...(o.mcpMaxBodyBytes !== undefined ? { maxBodyBytes: o.mcpMaxBodyBytes } : {}),
@@ -314,6 +372,8 @@ export interface CreateBridgeOptions {
   readonly logLevel?: string;
   readonly logStream?: Writable;
   readonly pruneIntervalMs?: number;
+  /** v3 F6a.1: start the watchdog's thread, which still speaks while the event loop is blocked (the bridge's own start). */
+  readonly watchdogThread?: boolean;
   /** Test seams, passed to `createRuntime`. */
   readonly clock?: RuntimeOptions['clock'];
   readonly lkTransport?: RuntimeOptions['lkTransport'];
@@ -363,6 +423,7 @@ export async function createBridge(
     // The runtime logs (project checks, start-up warnings) go where the server's do.
     ...(o.logLevel ? { logLevel: o.logLevel } : {}),
     ...(o.logStream ? { logStream: o.logStream } : {}),
+    ...(o.watchdogThread === true ? { watchdog: { thread: true } } : {}),
   });
   if (o.awaitProjects !== false) await runtime.ready;
   const { app, services } = await buildServer({
@@ -520,6 +581,7 @@ async function main(): Promise<void> {
       config,
       authConfig,
       toolsSettings,
+      watchdogThread: true,
       policySettings,
       adminSettings,
       maintenanceSettings,

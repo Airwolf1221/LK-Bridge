@@ -3,6 +3,7 @@
  * owner commands and the `projects` CLI write it.
  */
 import type { Db } from '../db/open.js';
+import { prepared } from '../db/statements.js';
 import { parseProjectSettings } from './settings.js';
 import type { ProjectRecord } from './types.js';
 
@@ -54,7 +55,7 @@ export class ProjectStore {
   }
 
   byId(id: string): ProjectRecord | undefined {
-    const r = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row | undefined;
+    const r = prepared(this.db, 'SELECT * FROM projects WHERE id = ?').get(id) as Row | undefined;
     return r ? toRecord(r) : undefined;
   }
 

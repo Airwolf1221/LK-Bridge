@@ -251,7 +251,11 @@ export interface Packs {
    */
   peek(packId: string): Pack | null;
   /** Reads every governance source's current version (one read each) and records any drift. */
-  governance(packId: string, o?: { signal?: AbortSignal }): Promise<GovernanceStatus>;
+  /**
+   * v3 F6a.1: `signal` aborts it (a background check stopped with the bridge writes nothing); `priority` is the reads'
+   * class (default P1, the owner waiting; a check started in the background after a publication reads at P3).
+   */
+  governance(packId: string, o?: { signal?: AbortSignal; priority?: 'P1' | 'P3' }): Promise<GovernanceStatus>;
   /**
    * v3 F5b (ADR 0068): carries the owner's approval of one governance source over a write the bridge itself made to it
    * (a bridge-managed paragraph of Repository Automation, written as the owner's action). Only the document written is
@@ -543,6 +547,7 @@ export function createPacks(d: PacksDeps): Packs {
   const readSource = async (
     src: GovernanceSource,
     signal?: AbortSignal,
+    priority: 'P1' | 'P3' = 'P1',
   ): Promise<{
     version: string | null;
     digest: string | null;
@@ -586,7 +591,7 @@ export function createPacks(d: PacksDeps): Packs {
         p.id,
         'getDocumentBlocks',
         { path: ids },
-        { priority: 'P1', notFoundIsAnswer: true, ...(signal ? { signal } : {}) },
+        { priority, notFoundIsAnswer: true, ...(signal ? { signal } : {}) },
       )) as { version?: unknown; blocks?: unknown } | null;
       if (!r || typeof r.version !== 'string')
         return { version: null, digest: null, reason: 'the document is gone or has no version', ...none };
@@ -607,14 +612,17 @@ export function createPacks(d: PacksDeps): Packs {
   /** The pinned sections read at the last governance check, by source key (for the owner's approval). */
   const lastSections = new Map<string, { sections: FoundSection[]; headings: string[] }>();
 
-  const governance = async (packId: string, o: { signal?: AbortSignal } = {}): Promise<GovernanceStatus> => {
+  const governance = async (
+    packId: string,
+    o: { signal?: AbortSignal; priority?: 'P1' | 'P3' } = {},
+  ): Promise<GovernanceStatus> => {
     let pack = store.get(packId);
     if (!pack) throw new PackError('PACK_NOT_FOUND', `No pack ${packId}.`);
     const approved = pack.approved;
     const sources: SourceStatus[] = [];
     const blocksBySource = new Map<string, unknown>();
     for (const src of pack.governance) {
-      const read = await readSource(src, o.signal);
+      const read = await readSource(src, o.signal, o.priority ?? 'P1');
       if (read.version !== null) blocksBySource.set(src.key, read.blocks);
       lastSections.set(src.key, { sections: read.sections, headings: read.headings });
       const approvedSource = approved?.sources.find((x) => x.key === src.key);
@@ -674,6 +682,8 @@ export function createPacks(d: PacksDeps): Packs {
           : {}),
       });
     }
+    // v3 F6a.1: a check stopped with the bridge (its reads aborted) writes nothing: no derived version from half a read.
+    o.signal?.throwIfAborted();
     /** The changed pinned sections of a changed source, in words. */
     const sectionWords = (s: SourceStatus): string => {
       const moved = (s.sections ?? []).filter(

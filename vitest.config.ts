@@ -45,6 +45,7 @@ export default defineConfig({
       'test/f7_1/**/*.test.ts', // v3 F7.1: a Compact Reference becomes the Character Core (ADR 0072)
       'test/f9/**/*.test.ts', // v3 F9: the bulk class P4 and its callers (ADR 0074)
       'test/f7c/**/*.test.ts', // v3 F7c: image archives (ADR 0075)
+      'test/f6a1/**/*.test.ts', // v3 F6a.1: the Reference Types hang at Arkona's scale (ADR 0076 amendment 1)
       'test/sandbox-mock/**/*.test.ts', // CR-2026-11-R4 (S): every sandbox check, run against the mock in the ordinary suite
       'test/ui/**/*.test.{ts,tsx}',
     ],
