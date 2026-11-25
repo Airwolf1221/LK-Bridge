@@ -15,6 +15,7 @@ import {
   type ResourcePiece,
   type SidebarPiece,
 } from './canonical.js';
+import { prepared } from '../db/statements.js';
 import type { PieceRow } from './db.js';
 import { decodeCursor, encodeCursor } from './page-index.js';
 import { renderDocument, renderResource, renderSidebar } from './diff.js';
@@ -156,8 +157,9 @@ export function historyOf(
   const w = pieceWhere(f);
   const base = `FROM snapshot_pieces INDEXED BY snapshot_pieces_page WHERE project_id = ? AND page_id = ?${w.sql}`;
   const args = [projectId, pageId, ...w.args];
-  const count = (db.prepare(`SELECT COUNT(DISTINCT snapshot_id) AS n ${base}`).get(...args) as { n: number })
-    .n;
+  const count = (
+    prepared(db, `SELECT COUNT(DISTINCT snapshot_id) AS n ${base}`).get(...args) as { n: number }
+  ).n;
   const c = decodeCursor(cursor);
   const shown = db
     .prepare(
@@ -181,14 +183,13 @@ export function historyOf(
   // Each piece's state just before the oldest snapshot shown, and the page's last deletion before it.
   const oldest = page.at(-1)!;
   const before = (pieceSql: string, pieceArgs: unknown[]): PieceRow | undefined => {
-    const r = db
-      .prepare(
-        `SELECT p.*, s.kind, s.state FROM snapshot_pieces p INDEXED BY snapshot_pieces_page JOIN snapshots s ON s.id = p.snapshot_id
+    const r = prepared(
+      db,
+      `SELECT p.*, s.kind, s.state FROM snapshot_pieces p INDEXED BY snapshot_pieces_page JOIN snapshots s ON s.id = p.snapshot_id
           WHERE p.project_id = ? AND p.page_id = ? AND ${pieceSql}
             AND (p.taken_at < ? OR (p.taken_at = ? AND p.snapshot_id < ?))
           ORDER BY p.taken_at DESC, p.snapshot_id DESC LIMIT 1`,
-      )
-      .get(projectId, pageId, ...pieceArgs, oldest.t, oldest.t, oldest.snapshot_id) as
+    ).get(projectId, pageId, ...pieceArgs, oldest.t, oldest.t, oldest.snapshot_id) as
       Record<string, unknown> | undefined;
     return r ? svc.index.pieceRowOf(r) : undefined;
   };

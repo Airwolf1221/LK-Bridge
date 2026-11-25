@@ -4,6 +4,7 @@
  * the state of runs, owed change snapshots, verify findings, notices and rehearsals.
  */
 import type { Db } from '../db/open.js';
+import { prepared } from '../db/statements.js';
 import {
   manifestPieces,
   missingPiecesOf,
@@ -401,17 +402,15 @@ export class SnapshotDb {
   piecesOf(snapshotId: string, pageId?: string): PieceRow[] {
     const rows = (
       pageId === undefined
-        ? this.db
-            .prepare(
-              `SELECT p.*, s.kind, s.state FROM snapshot_pieces p JOIN snapshots s ON s.id = p.snapshot_id WHERE p.snapshot_id = ?`,
-            )
-            .all(snapshotId)
-        : this.db
-            .prepare(
-              `SELECT p.*, s.kind, s.state FROM snapshot_pieces p JOIN snapshots s ON s.id = p.snapshot_id
+        ? prepared(
+            this.db,
+            `SELECT p.*, s.kind, s.state FROM snapshot_pieces p JOIN snapshots s ON s.id = p.snapshot_id WHERE p.snapshot_id = ?`,
+          ).all(snapshotId)
+        : prepared(
+            this.db,
+            `SELECT p.*, s.kind, s.state FROM snapshot_pieces p JOIN snapshots s ON s.id = p.snapshot_id
                WHERE p.snapshot_id = ? AND p.page_id = ?`,
-            )
-            .all(snapshotId, pageId)
+          ).all(snapshotId, pageId)
     ) as Raw[];
     return rows.map(pieceRow);
   }
