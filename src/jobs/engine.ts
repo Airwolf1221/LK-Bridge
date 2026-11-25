@@ -1487,7 +1487,12 @@ export class JobEngine {
       renewed ??
       (first ? (this.repo.stepResult(first) as { uploadKey?: unknown; withdrawn?: unknown } | null) : null);
     // v3 F7c (ADR 0075): an image withdrawn before it was uploaded: this step is withdrawn too (bindStaged), not bound.
-    if (step.options.bindStaged && (created as { withdrawn?: unknown } | null)?.withdrawn) return false;
+    // v3 F7d (ADR 0077, A4): likewise an art set's image whose upload was withdrawn (`withdrawWith` withdraws this step).
+    if (
+      (step.options.bindStaged || step.options.withdrawWith) &&
+      (created as { withdrawn?: unknown } | null)?.withdrawn
+    )
+      return false;
     if (typeof created?.uploadKey !== 'string' || created.uploadKey.length === 0) {
       throw new JobsError('BRIDGE_ERROR', 'createImageUpload returned no uploadKey', {
         jobId,
@@ -1848,6 +1853,74 @@ export class JobEngine {
         ...(typeof version === 'string' && version !== '' ? { version } : {}),
       },
       startedAt: step.startedAt ?? now,
+      finishedAt: now,
+    });
+    return true;
+  }
+
+  /**
+   * v3 F7d (ADR 0077, A4): the keys withdrawn before `beforeStep` (an art set's images and groups, `withdrawAs`, and an
+   * archive entry's staged id, `bindStaged`), each with the first step that withdrew it and why.
+   */
+  private withdrawnKeys(jobId: string, beforeStep: number): Map<string, { stepNo: number; reason: string }> {
+    const out = new Map<string, { stepNo: number; reason: string }>();
+    for (const s of this.repo.steps(jobId)) {
+      if (s.stepNo >= beforeStep) break;
+      if (s.status !== 'succeeded') continue;
+      const w = (s.resultSummary as { withdrawn?: unknown } | null)?.withdrawn as
+        { keys?: unknown; stagedId?: unknown; reason?: unknown } | undefined;
+      if (!w || typeof w !== 'object') continue;
+      const reason = typeof w.reason === 'string' ? w.reason : 'withdrawn';
+      const keys = [
+        ...(Array.isArray(w.keys) ? w.keys.filter((k): k is string => typeof k === 'string') : []),
+        ...(typeof w.stagedId === 'string' ? [w.stagedId] : []),
+      ];
+      for (const k of keys) if (!out.has(k)) out.set(k, { stepNo: s.stepNo, reason });
+    }
+    return out;
+  }
+
+  /** v3 F7d (A4): `withdrawWith`: a step whose image (or group) was withdrawn earlier is not sent. */
+  private withdrawForEarlier(job: JobView, step: StepView): boolean {
+    const want = step.options.withdrawWith ?? [];
+    if (want.length === 0 || step.status === 'running' || step.maybeSent || step.firstSentAt !== null)
+      return false;
+    const gone = this.withdrawnKeys(job.id, step.stepNo);
+    const hit = want.find((k) => gone.has(k));
+    if (hit === undefined) return false;
+    const why = gone.get(hit)!;
+    const now = this.clock.now();
+    this.repo.updateStep(job.id, step.stepNo, {
+      status: 'succeeded',
+      resultSummary: {
+        skipped: `not placed: withdrawn at step ${why.stepNo} (${why.reason})`,
+        withdrawn: { keys: [...(step.options.withdrawAs ?? [hit])], reason: why.reason, at: why.stepNo },
+      },
+      startedAt: step.startedAt ?? now,
+      finishedAt: now,
+    });
+    return true;
+  }
+
+  /**
+   * v3 F7d (A4): `withdrawAs`: a step that failed for certain (never an uncertain outcome: it may have written) is
+   * withdrawn under its keys, the error kept as the reason, and the job goes on with the rest.
+   */
+  private withdrawOnFailure(job: JobView, step: StepView, error: unknown, uncertain: boolean): boolean {
+    const keys = step.options.withdrawAs ?? [];
+    if (keys.length === 0 || uncertain) return false;
+    const e = (error ?? {}) as { code?: unknown; message?: unknown; lk?: { code?: unknown } };
+    // LegendKeeper's own code when it refused the call (VALIDATION_FAILED, …), else the bridge's.
+    const code = typeof e.lk?.code === 'string' ? e.lk.code : typeof e.code === 'string' ? e.code : 'FAILED';
+    const reason = `${code}: ${typeof e.message === 'string' ? e.message : 'the step failed'}`.slice(0, 1000);
+    const now = this.clock.now();
+    this.repo.updateStep(job.id, step.stepNo, {
+      status: 'succeeded',
+      resultSummary: {
+        skipped: `not placed: ${reason}`,
+        withdrawn: { keys: [...keys], reason, code },
+      },
+      error: null,
       finishedAt: now,
     });
     return true;
@@ -2793,6 +2866,13 @@ export class JobEngine {
         this.emitJob(jobId, 'updated');
         continue;
       }
+      // v3 F7d (ADR 0077, A4): a step of an image (or group) withdrawn earlier in the job is withdrawn too.
+      if (this.withdrawForEarlier(job, step)) {
+        this.emitStep(job, step.stepNo);
+        this.refreshProgress(jobId);
+        this.emitJob(jobId, 'updated');
+        continue;
+      }
       // v3 F2 (ADR 0049): a write an earlier `bridge.lmr` step decided: bound to its decision now, or skipped.
       if (this.bindDecision(job, step)) {
         this.emitStep(job, step.stepNo);
@@ -2887,6 +2967,13 @@ export class JobEngine {
         case 'failed': {
           this.emitStep(job, step.stepNo);
           this.recordStepFailure(job, step.opId, step.stepNo, outcome.error);
+          // v3 F7d (ADR 0077, A4): a failure that wrote nothing withdraws its image (or group) instead of the job.
+          if (this.withdrawOnFailure(job, step, outcome.error, outcome.uncertain)) {
+            this.emitStep(job, step.stepNo);
+            this.refreshProgress(jobId);
+            this.emitJob(jobId, 'updated');
+            continue;
+          }
           this.refreshProgress(jobId);
           // v3 F2: a follow-up (the Last Major Revision write failed after the edit was written): the job goes on, and
           // the edit stays written (nothing is rolled back).
@@ -3091,6 +3178,26 @@ export class JobEngine {
               outcome: r.found === true ? 'found existing folder' : 'created folder',
             };
           }),
+        };
+      // v3 F7d (ADR 0077, A4): an art set's report (what each group placed and what it did not), and every step
+      // withdrawn with why, on the job itself.
+      const all7d = this.repo.steps(jobId);
+      const groupsReport = all7d.find(
+        (s) => (s.resultSummary as { recorded?: unknown } | null)?.recorded === 'art_groups',
+      );
+      if (groupsReport?.status === 'succeeded')
+        result = { ...result, artGroups: (groupsReport.resultSummary as { groups?: unknown }).groups ?? [] };
+      const withdrawnSteps = all7d.filter(
+        (s) => s.status === 'succeeded' && (s.resultSummary as { withdrawn?: unknown } | null)?.withdrawn,
+      );
+      if (withdrawnSteps.length > 0)
+        result = {
+          ...result,
+          withdrawn: withdrawnSteps.map((s) => ({
+            stepNo: s.stepNo,
+            op: s.opId,
+            ...(s.resultSummary as { withdrawn: Record<string, unknown> }).withdrawn,
+          })),
         };
       // v2 C1: what the read after each verified page write found, on the job itself. v2 C2a: and what every generic
       // verify step found (`bridge.verify`), the same way.
@@ -4033,6 +4140,17 @@ function stepOptions(o: StepOptions): StepOptions {
     // v3 F7c (ADR 0075): set by bridge code only.
     ...(o.bindStaged && typeof o.bindStaged.stagedId === 'string'
       ? { bindStaged: { stagedId: o.bindStaged.stagedId } }
+      : {}),
+    // v3 F7d (ADR 0077, A4): set by bridge code only.
+    ...(Array.isArray(o.withdrawWith) &&
+    o.withdrawWith.length > 0 &&
+    o.withdrawWith.every((k) => typeof k === 'string')
+      ? { withdrawWith: [...o.withdrawWith] }
+      : {}),
+    ...(Array.isArray(o.withdrawAs) &&
+    o.withdrawAs.length > 0 &&
+    o.withdrawAs.every((k) => typeof k === 'string')
+      ? { withdrawAs: [...o.withdrawAs] }
       : {}),
     ...(o.fill && typeof o.fill.filler === 'string'
       ? { fill: { filler: o.fill.filler, ...(o.fill.input !== undefined ? { input: o.fill.input } : {}) } }

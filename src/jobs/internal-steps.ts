@@ -514,6 +514,8 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
         .object({ step: z.number().int().min(1) })
         .strict()
         .optional(),
+      // v3 F7d (ADR 0077, A4): not read back when one of these was withdrawn in the job (a move left out with why).
+      withdrawnWith: z.array(z.string().min(1).max(200)).max(20).optional(),
     })
     .strict()
     .refine((t) => (t.assetId === undefined) !== (t.assetFrom === undefined), {
@@ -836,6 +838,8 @@ export type VerifyTarget =
       readonly assetFrom?: { readonly step: number };
       readonly fields: Readonly<Record<string, unknown>>;
       readonly folderFrom?: { readonly step: number };
+      /** v3 F7d (ADR 0077, A4): skipped when one of these keys was withdrawn earlier in the job. */
+      readonly withdrawnWith?: readonly string[];
     }
   | {
       readonly kind: 'block';

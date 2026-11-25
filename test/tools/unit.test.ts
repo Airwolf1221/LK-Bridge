@@ -34,6 +34,9 @@ describe('tools configuration', () => {
       slowRequestRepeatMs: 60_000,
       eventLoopLagWarnMs: 2_000,
       memoryWarnFraction: 0.7,
+      // v3 F7d (ADR 0077, A1): one groups call's limits.
+      artCallMaxImages: 120,
+      artCallMaxGroups: 40,
     });
     expect(loadToolsConfig({ ART_CACHE_DIR: '/srv/art', ART_CACHE_MAX_MB: '20' }).artCache).toEqual({
       dir: '/srv/art',

@@ -456,6 +456,26 @@ const SPECS: readonly Spec[] = [
     unit: UNITS.megabytes,
     applies: 'next_start',
   },
+  {
+    key: 'ART_CALL_MAX_IMAGES',
+    schema: 'tools',
+    group: 'art',
+    label: 'Images per art call',
+    description:
+      'The most images one arkona_add_character_art call with groups may carry, every group together (a character’s whole art set). A larger call is refused before anything is planned.',
+    unit: UNITS.count,
+    applies: 'now',
+  },
+  {
+    key: 'ART_CALL_MAX_GROUPS',
+    schema: 'tools',
+    group: 'art',
+    label: 'Groups per art call',
+    description:
+      'The most groups (the design pieces and each outfit) one arkona_add_character_art call may carry. A larger call is refused before anything is planned.',
+    unit: UNITS.count,
+    applies: 'now',
+  },
 
   // ---------------------------------------------------------------- Jobs and engine
   {

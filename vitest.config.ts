@@ -46,6 +46,7 @@ export default defineConfig({
       'test/f9/**/*.test.ts', // v3 F9: the bulk class P4 and its callers (ADR 0074)
       'test/f7c/**/*.test.ts', // v3 F7c: image archives (ADR 0075)
       'test/f6a1/**/*.test.ts', // v3 F6a.1: the Reference Types hang at Arkona's scale (ADR 0076 amendment 1)
+      'test/f7d/**/*.test.ts', // v3 F7d: a character's whole art set in one call (ADR 0077)
       'test/sandbox-mock/**/*.test.ts', // CR-2026-11-R4 (S): every sandbox check, run against the mock in the ordinary suite
       'test/ui/**/*.test.{ts,tsx}',
     ],

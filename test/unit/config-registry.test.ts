@@ -170,6 +170,9 @@ describe('the registry agrees with the schemas', () => {
       IMAGE_ARCHIVE_MAX_UNCOMPRESSED_BYTES: [2147483648, 1048576, 21474836480],
       IMAGE_STAGED_MAX_BYTES: [5368709120, 1048576, 1099511627776],
       ART_CACHE_MAX_MB: [500, 1, 1000000],
+      // v3 F7d (ADR 0077, A1): one groups call's limits.
+      ART_CALL_MAX_IMAGES: [120, 1, 1000],
+      ART_CALL_MAX_GROUPS: [40, 1, 200],
       WRITERS_MAX: [2, 1, 8],
       RESERVE_FLOOR_INTERACTIVE: [0.1, 0, 1],
       RESERVE_FLOOR_JOB: [0.25, 0, 1],

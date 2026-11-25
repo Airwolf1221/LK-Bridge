@@ -66,8 +66,20 @@ export function itemizePackage(
     } else if (s.op === EXPECT_STEP) {
       if (i === 0) return; // the package's own check (governance, absent): shared
       const checks = Array.isArray(body?.checks) ? (body.checks as Obj[]) : [];
-      const ids = [...new Set(checks.map((c) => str(c.resourceId)).filter((x): x is string => x !== null))];
-      if (ids.length === 0) unplaced = true;
+      // v3 F7d (ADR 0077, A8): the check of the identity page an Art page copies from is the Art page's own (that page
+      // is not changed by the package): with the page's other checks, or alone, the Art page's item.
+      const identity = (c: Obj) => typeof c.label === 'string' && c.label.endsWith(': identity');
+      const ids = [
+        ...new Set(
+          checks
+            .filter((c) => !identity(c))
+            .map((c) => str(c.resourceId))
+            .filter((x): x is string => x !== null),
+        ),
+      ];
+      const art = plan.pages.find((p) => p.role === plan.type.assets.role)?.id;
+      if (ids.length === 0 && checks.some(identity) && art) tags[i] = [itemOf(art)];
+      else if (ids.length === 0) unplaced = true;
       else tags[i] = ids.map(itemOf);
     } else if (s.op === VERIFY_STEP) {
       const targets = Array.isArray(body?.targets) ? (body.targets as Obj[]) : [];

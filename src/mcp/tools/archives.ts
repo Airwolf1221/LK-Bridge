@@ -38,7 +38,7 @@ const TOOL = 'upload_image_archive';
 /** Z8: what every answer says about using the rows. */
 export const ARCHIVE_GUIDANCE = [
   'Look at the images yourself (in ChatGPT, open the zip in your own code tool and write each image’s interpretation).',
-  'Then call arkona_add_character_art with images given as { "archive": { "id": "<archive_id>", "entry": "<entry>" }, "label": …, "interpretation": … }; an entry is converted only when a call uses it.',
+  'Then do the character’s whole art set in ONE arkona_add_character_art call with `groups` (the design pieces, then one group per outfit), images given as { "archive": { "id": "<archive_id>", "entry": "<entry>" }, "label": …, "interpretation": … }: one proposal for the owner. An entry is converted only when a call uses it.',
   'A folder is a suggestion: look at the images; use suggestedOutfit when it fits. For each top-level image, decide yourself whether it is a design piece or a single-piece outfit (no outfit is guessed for it); if you are unsure, ask the owner.',
   'Held entries finish on their own: never upload them again; follow bridge_archive_status.',
 ];
@@ -100,7 +100,7 @@ export function archiveTools(deps: ToolDeps): McpToolProvider[] {
       access: 'write',
       description:
         'Stages art in bulk from ONE zip of images (PNG, JPEG, GIF or WebP; other files, __MACOSX and hidden files are refused or skipped; nested archives and encrypted entries are refused). In ChatGPT: attach the zip and pass it as `file` (ChatGPT fills it in); open the same zip in your own code tool to look at each image and write its interpretation. Elsewhere: prepare_image_upload with the zip (content_type application/zip), run its script, then call this with `upload_id`. ' +
-        'Every entry is listed at once: its `entry` (base name), `path`, `folder` (null at the top level), `suggestedOutfit` (the folder name for display), format, size and SHA-256. Nothing is converted until an art call uses an entry, or `stageAll: true`. Then call arkona_add_character_art with images given as { "archive": { "id": archive_id, "entry": entry } }; one archive can feed several calls, and one call can draw from several archives. ' +
+        'Every entry is listed at once: its `entry` (base name), `path`, `folder` (null at the top level), `suggestedOutfit` (the folder name for display), format, size and SHA-256. Nothing is converted until an art call uses an entry, or `stageAll: true`. The standard path for a whole character: this tool with `character`, look at the images, then ONE arkona_add_character_art call with `groups` naming the entries as { "archive": { "id": archive_id, "entry": entry } }, then one proposal for the owner; one archive can feed several calls, and one call can draw from several archives. ' +
         'A folder is only a suggestion: look at the images; for each top-level image decide yourself whether it is a design piece or a single-piece outfit. With `character`, each folder is checked against that character’s outfits (`outfitMatch`: exact, near with its candidates, or new). ' +
         'The same zip again returns the same archive_id and entries (nothing is staged twice). An entry past the hourly brake or the staging capacity is `held` (with heldBy and expectedAt) and finishes on its own: never upload it again; follow bridge_archive_status. Staging only: nothing is proposed and nothing reaches LegendKeeper. Cost: nothing in LegendKeeper (with `character`, a live read of its asset folders).',
       inputSchema: uploadSchema,

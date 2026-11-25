@@ -20,7 +20,7 @@
  * 8. `bridge.verify`: each page's parent and place, its six gated fields as six checks, its template rows (none added or
  *    dropped), its tags in order, its links, each image's asset; the text writes verify themselves as they go.
  */
-import type { FactsPlan, LinkTarget } from '../../facts/plan.js';
+import { rowStates, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
 import type { SidebarProperty } from '../../facts/sidebar.js';
 import { expandFacts } from '../../facts/expand.js';
 import { LMR_STEP, VERIFY_STEP, type ExpectCheck, type VerifyTarget } from '../../jobs/internal-steps.js';
@@ -61,6 +61,8 @@ export const PACK_CHECKS = {
 export const PACK_FILLER = 'pack.body';
 /** v3 F3b (ADR 0052): appends new image sections to an existing Art page inside the lock. */
 export const PACK_ART_FILLER = 'pack.art_append';
+/** v3 F7d (ADR 0077, A4): a groups call's one write to an existing Art page (every group under its own place). */
+export const PACK_ART_GROUPS_FILLER = 'pack.art_groups';
 /** v3 F7.1 (ADR 0072): the Compact → Core upgrade's text change (wording, images) inside the lock. */
 export const PACK_CORE_FILLER = CORE_TEXT_FILLER;
 export const PACK_RECORD_STORE = 'pack';
@@ -110,7 +112,11 @@ export function shiftStep(s: StepSpec, base: number): StepSpec {
     };
   } else if (body && s.op === 'upload_image.verify' && typeof body.assetStep === 'number') {
     out.params = { ...s.params, body: { ...body, assetStep: body.assetStep + base } };
-  } else if (body && s.op === 'bridge.record' && (body.record as Obj | undefined)?.kind === 'art_outfit') {
+  } else if (
+    body &&
+    s.op === 'bridge.record' &&
+    ['art_outfit', 'art_groups'].includes(String((body.record as Obj | undefined)?.kind))
+  ) {
     out.params = {
       ...s.params,
       body: { ...body, record: mapArtRecordSteps(body.record as Obj, (n) => n + base) },
@@ -226,6 +232,30 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     });
   steps.push({ op: 'bridge.expect', params: { body: { checks } } });
   labels.push('check');
+  // v3 F7d (ADR 0077, A8): a new Art page copies its character's identity values: the identity page's rows must still be
+  // the ones the plan copied (read live inside the job), else nothing is written (plan it again). Its own step, so a
+  // resumed job (whose upgrade may have changed that page) does not check it again.
+  const idCheck = plan.art?.identityCheck;
+  const lateFacts = plan.existing.some((c) => c.kind === 'facts' && c.late === true);
+  if (idCheck && !lateFacts) {
+    steps.push({
+      op: 'bridge.expect',
+      params: {
+        body: {
+          checks: [
+            {
+              label: `${idCheck.page.rawName}: identity`,
+              kind: 'propertyRows',
+              resourceId: idCheck.page.id,
+              propertyId: idCheck.propertyId,
+              rows: rowStates(idCheck.rows),
+            },
+          ],
+        },
+      },
+    });
+    labels.push(`check ${idCheck.page.rawName}'s identity values`);
+  }
 
   // 2. The creates, tags and facts (C2b's job, whose step numbers start at 1: shifted after the check).
   const created = plan.pages;
@@ -311,7 +341,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         ],
         summaryLabel: `${c.from}: upgraded to ${c.to} (id, documents, facts, links and text kept)${c.automatic ? ': the character now has an index and several owners' : ''}`,
       });
-    } else if (c.kind === 'facts') {
+    } else if (c.kind === 'facts' && c.late !== true) {
       const fx = expandFacts(c.plan, { id: c.page.id, name: c.page.rawName }, c.sidebar, {
         facts: c.why,
         links: null,
@@ -414,6 +444,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         input: {
           // The template's sections the plan names but leaves empty keep the template's own content (the collection).
           keepSections: p.kind === 'index' ? [type.index.collection] : [],
+          // v3 F7d (ADR 0077): the headings a groups call made, each gone with the last image it was made for.
+          ...(p.prune?.length ? { prune: p.prune } : {}),
         },
       },
       verifyAfterWrite: true,
@@ -428,10 +460,18 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
   const assetSteps = new Map<string, number>();
   /** v3 F7: each image's destination: the step that makes its folder (0: none), else the folder's id. */
   const folderOf = new Map<string, { step: number; id: string | null; first: number }>();
+  // v3 F7d (ADR 0077, A4): a groups call: each image's steps withdraw it (with why) instead of failing the job, and a
+  // step of an image withdrawn earlier is not sent.
+  const groupOf = plan.art?.groupOf;
+  const soft = (stagedId: string, folder = false): Partial<StepSpec> =>
+    groupOf
+      ? { withdrawWith: [stagedId], withdrawAs: folder ? [stagedId, `folder:${stagedId}`] : [stagedId] }
+      : {};
   for (const im of plan.images) {
     const first = steps.length + 1;
     im.creates.forEach((c, i) => {
       steps.push({
+        ...soft(im.stagedId, true),
         op: 'createAssetFolder',
         params: {
           body: { name: c.name, ...(i === 0 && c.parentFolderId ? { folderId: c.parentFolderId } : {}) },
@@ -455,6 +495,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       op: 'createImageUpload',
       params: { body: { contentType: 'image/webp', contentLength: im.row.webp.bytes, contentHash } },
       ...bindStaged,
+      ...soft(im.stagedId),
     });
     labels.push(`upload ${im.name}`);
     steps.push({
@@ -468,6 +509,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         },
       },
       ...bindStaged,
+      ...soft(im.stagedId),
     });
     labels.push(`send ${im.name} (from the bridge’s server)`);
     const assetStep = steps.length + 1;
@@ -483,12 +525,14 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       ...(lastFolder > 0 ? { bindFrom: { step: lastFolder, to: 'body.folderId' as const } } : {}),
       journalOperation: { ...journal(null, `image “${im.name}”`), stagedId: im.stagedId },
       ...bindStaged,
+      ...soft(im.stagedId),
     });
     labels.push(`image ${im.name} in ${im.path.join(' / ')}`);
     steps.push({
       op: 'upload_image.verify',
       params: { body: { assetStep, contentLength: im.row.webp.bytes, contentHash } },
       ...bindStaged,
+      ...soft(im.stagedId),
     });
     labels.push(`verify the stored file of ${im.name}`);
     assetSteps.set(im.stagedId, assetStep);
@@ -510,19 +554,34 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     });
   }
   // v3 F7 (ADR 0070, G2): the loose pieces moved into the outfit's new folder (made with the first image), then the
-  // outfit record (G3), before the Art page's text.
+  // outfit record (G3), before the Art page's text. v3 F7d (ADR 0077): a groups call does this for each of its outfits,
+  // each from its own group's first image; a move is withdrawn (with why) rather than failing the job.
   const art = plan.art;
-  const firstImage = plan.images[0];
-  const dest = firstImage ? folderOf.get(firstImage.stagedId) : undefined;
-  if (art?.outfit && dest) {
-    for (const m of art.outfit.moves) {
+  const outfitPlans = art?.outfits
+    ? art.outfits
+    : art?.outfit
+      ? [{ ...art.outfit, key: null as string | null }]
+      : [];
+  const moveStepOf = new Map<string, number>();
+  for (const o of outfitPlans) {
+    const firstImage =
+      o.key === null ? plan.images[0] : plan.images.find((im) => groupOf?.[im.stagedId] === o.key);
+    const dest = firstImage ? folderOf.get(firstImage.stagedId) : undefined;
+    if (!art || !firstImage || !dest) continue;
+    const moveSteps: number[] = [];
+    for (const m of o.moves) {
       steps.push({
         op: 'updateAsset',
         params: { path: { assetId: m.assetId }, body: { folderId: dest.step > 0 ? 'pending' : dest.id! } },
         ...(dest.step > 0 ? { bindFrom: { step: dest.step, to: 'body.folderId' as const } } : {}),
-        journalOperation: journal(null, `move “${m.name}” into ${art.outfit.toPath}`),
+        journalOperation: journal(null, `move “${m.name}” into ${o.toPath}`),
+        ...(groupOf
+          ? { withdrawWith: [`folder:${firstImage.stagedId}`], withdrawAs: [`move:${m.assetId}`] }
+          : {}),
       });
-      labels.push(`move ${m.name} into ${art.outfit.toPath}`);
+      moveSteps.push(steps.length);
+      moveStepOf.set(m.assetId, steps.length);
+      labels.push(`move ${m.name} into ${o.toPath}`);
       operations.push({
         kind: 'move_asset',
         tool,
@@ -530,13 +589,16 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         assetId: m.assetId,
         name: m.name,
         from: m.fromPath,
-        to: art.outfit.toPath,
-        summaryLabel: `move “${m.name}” from ${m.fromPath ?? 'Wardrobe'} into ${art.outfit.toPath} (the outfit’s second piece arrives)`,
+        to: o.toPath,
+        summaryLabel: `move “${m.name}” from ${m.fromPath ?? 'Wardrobe'} into ${o.toPath} (the outfit’s second piece arrives)`,
       });
     }
     // The character's folder, when this job makes it: its place in the first image's chain of folders.
-    const subLen = art.outfit.into === 'folder' ? 2 : 1;
-    const charIndex = firstImage!.creates.length - 1 - subLen;
+    const subLen = o.into === 'folder' ? 2 : 1;
+    const charIndex = firstImage.creates.length - 1 - subLen;
+    const mine = plan.images.filter(
+      (im) => assetSteps.has(im.stagedId) && (o.key === null || groupOf?.[im.stagedId] === o.key),
+    );
     const record: Obj = {
       kind: 'art_outfit',
       characterName: art.characterName,
@@ -545,32 +607,32 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         : charIndex >= 0
           ? { characterFolderStep: dest.first + charIndex }
           : {}),
-      outfit: art.outfit.name,
-      ...(art.outfit.into === 'folder'
-        ? dest.step > 0
-          ? { folderStep: dest.step }
-          : { folderId: dest.id }
-        : {}),
-      pieces: plan.images
-        .filter((im) => assetSteps.has(im.stagedId))
-        .map((im) => ({ assetStep: assetSteps.get(im.stagedId)!, name: im.name })),
-      moved: art.outfit.moves.map((m) => ({ assetId: m.assetId, name: m.name })),
+      outfit: o.name,
+      ...(o.into === 'folder' ? (dest.step > 0 ? { folderStep: dest.step } : { folderId: dest.id }) : {}),
+      pieces: mine.map((im) => ({ assetStep: assetSteps.get(im.stagedId)!, name: im.name })),
+      moved: o.moves.map((m, i) => ({
+        assetId: m.assetId,
+        name: m.name,
+        ...(groupOf ? { moveStep: moveSteps[i] } : {}),
+      })),
       // G5: lines naming a moved piece, listed for the owner in the job's result (never edited).
-      ...(art.outfit.linesForOwner?.length ? { linesForOwner: art.outfit.linesForOwner } : {}),
+      ...(o.linesForOwner?.length ? { linesForOwner: o.linesForOwner } : {}),
     };
     steps.push({
       op: 'bridge.record',
       params: { body: { action: 'complete', store: PACK_RECORD_STORE, record } },
     });
-    labels.push(`record outfit ${art.outfit.name}`);
-    for (const m of art.outfit.moves)
+    labels.push(`record outfit ${o.name}`);
+    o.moves.forEach((m) =>
       targets.push({
         kind: 'asset',
         label: `moved “${m.name}”`,
         assetId: m.assetId,
         fields: dest.step > 0 ? { name: m.name } : { name: m.name, folderId: dest.id },
         ...(dest.step > 0 ? { folderFrom: { step: dest.step } } : {}),
-      });
+        ...(groupOf ? { withdrawnWith: [`move:${m.assetId}`, `folder:${firstImage.stagedId}`] } : {}),
+      }),
+    );
   }
   if (imagePage) {
     bodyStep(imagePage, {
@@ -579,7 +641,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         .map((im) => ({
           step: assetSteps.get(im.stagedId)!,
           placeholder: im.placeholder,
-          ...dropOf(im, imagePage.blocks ?? []),
+          ...dropOf(im, imagePage.blocks ?? [], groupOf !== undefined),
         })),
     });
   }
@@ -590,14 +652,17 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     steps.push({
       op: 'replaceDocumentBlocks',
       params: { path: { resourceId: c.page.id, documentId: c.documentId }, body: { blocks: [...c.blocks] } },
-      fill: {
-        filler: PACK_ART_FILLER,
-        input: {
-          section: c.section,
-          boundaries: c.boundaries,
-          ...(c.outfit ? { outfit: c.outfit } : {}),
-        },
-      },
+      fill: c.groups
+        ? // v3 F7d (ADR 0077, A4): one write for every group, each under its own place, in the order given.
+          { filler: PACK_ART_GROUPS_FILLER, input: { boundaries: c.boundaries, groups: c.groups } }
+        : {
+            filler: PACK_ART_FILLER,
+            input: {
+              section: c.section,
+              boundaries: c.boundaries,
+              ...(c.outfit ? { outfit: c.outfit } : {}),
+            },
+          },
       judgedInLock: true,
       verifyAfterWrite: true,
       bindAssetUrls: c.images
@@ -605,7 +670,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         .map((im) => ({
           step: assetSteps.get(im.stagedId)!,
           placeholder: im.placeholder,
-          ...dropOf(im, c.blocks),
+          ...dropOf(im, c.blocks, c.groups !== undefined),
         })),
       journalOperation: journal(
         { id: c.page.id, name: c.page.rawName },
@@ -662,6 +727,69 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
             textChanges: coreTextChanges(c),
           }
         : {}),
+    });
+  }
+
+  // v3 F7d (ADR 0077, A4, A8, A9): the Art page's sidebar, after its images, its text and the outfit records: the
+  // identity copies and the agent's fields, governed as set_facts is (its rows read again inside the lock and compared
+  // with the plan, If-Match chained, journalled, read back), and the identity page's rows checked as planned. It is
+  // withdrawn (with why) rather than failing the job: what is placed stays placed.
+  for (const c of plan.existing) {
+    if (c.kind !== 'facts' || c.late !== true) continue;
+    const fx = expandFacts(c.plan, { id: c.page.id, name: c.page.rawName }, c.sidebar, {
+      facts: c.why,
+      links: null,
+    });
+    const base = steps.length;
+    const sidebarSoft = { withdrawWith: ['sidebar'], withdrawAs: ['sidebar'] };
+    for (const s0 of fx.steps) {
+      let st = shiftStep(s0, base);
+      if (st.op === 'bridge.expect' && c.identityCheck) {
+        const body = (st.params?.body ?? {}) as { checks?: ExpectCheck[] };
+        st = {
+          ...st,
+          params: {
+            ...st.params,
+            body: {
+              ...body,
+              checks: [
+                ...(body.checks ?? []),
+                {
+                  label: `${c.identityCheck.page.rawName}: identity`,
+                  kind: 'propertyRows',
+                  resourceId: c.identityCheck.page.id,
+                  propertyId: c.identityCheck.propertyId,
+                  rows: rowStates(c.identityCheck.rows),
+                },
+              ],
+            },
+          },
+        };
+      }
+      steps.push(
+        st.op === 'bridge.expect' || st.op === VERIFY_STEP
+          ? { ...st, ...sidebarSoft }
+          : {
+              ...st,
+              ...sidebarSoft,
+              journalOperation: { ...(st.journalOperation ?? {}), tool, pack: pack.id },
+            },
+      );
+      const write = (s0.journalOperation as Obj | undefined)?.write;
+      labels.push(
+        st.op === 'bridge.expect'
+          ? 'check'
+          : st.op === VERIFY_STEP
+            ? 'verify'
+            : `${c.page.rawName}: ${typeof write === 'string' ? write : st.op}`,
+      );
+    }
+    operations.push({
+      tool,
+      pack: pack.id,
+      page: { id: c.page.id, name: c.page.rawName },
+      pageParts: ['sidebar', ...c.why],
+      summaryLabel: `${c.page.rawName}: ${c.why.join('; ')}`,
     });
   }
 
@@ -921,6 +1049,37 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
   }
   steps.push({ op: VERIFY_STEP, params: { body: { targets } } });
   labels.push('verify');
+  // v3 F7d (ADR 0077, A4): what each group placed and what it did not (withdrawn, with why; or left out of the approval),
+  // worked out from the job's own steps when it runs (the bridge's record; nothing is sent).
+  if (plan.art?.report) {
+    steps.push({
+      op: 'bridge.record',
+      params: {
+        body: {
+          action: 'complete',
+          store: PACK_RECORD_STORE,
+          record: {
+            kind: 'art_groups',
+            groups: plan.art.report.map((g) => ({
+              key: g.key,
+              label: g.label,
+              images: g.images.map((im) => ({
+                stagedId: im.stagedId,
+                name: im.name,
+                ...(assetSteps.has(im.stagedId) ? { assetStep: assetSteps.get(im.stagedId) } : {}),
+              })),
+              moves: g.moves.map((m) => ({
+                assetId: m.assetId,
+                name: m.name,
+                ...(moveStepOf.has(m.assetId) ? { moveStep: moveStepOf.get(m.assetId) } : {}),
+              })),
+            })),
+          },
+        },
+      },
+    });
+    labels.push('record what each group placed');
+  }
 
   // The proposal's page-level summary: one operation per new page, in creation order.
   for (const p of created) {
@@ -1048,8 +1207,9 @@ export function coreTextStep(
  * v3 F7c (ADR 0075, Z4): the blocks that show a not-yet-staged archive image (its label heading, its image block and its
  * interpretation, as `withImages` lays them out), left out of the page if the image is withdrawn when the job runs.
  */
-function dropOf(im: PlannedImage, blocks: readonly LkBlock[]): { drop?: string[] } {
-  if (!im.pending) return {};
+function dropOf(im: PlannedImage, blocks: readonly LkBlock[], always = false): { drop?: string[] } {
+  // v3 F7d (ADR 0077, A3, A4): in a groups call every image can be left out (withdrawn, or its group not approved).
+  if (!im.pending && !always) return {};
   const all = blocks as readonly { id?: unknown; kind?: unknown; url?: unknown }[];
   const at = all.findIndex((b) => b.kind === 'image' && b.url === im.placeholder);
   if (at < 0) return {};

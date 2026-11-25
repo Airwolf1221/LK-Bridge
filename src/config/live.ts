@@ -160,6 +160,8 @@ export const LIVE_TOOL_SETTINGS: Readonly<Record<string, readonly [Section, stri
   SLOW_REQUEST_REPEAT_MS: [null, 'slowRequestRepeatMs'],
   EVENT_LOOP_LAG_WARN_MS: [null, 'eventLoopLagWarnMs'],
   MEMORY_WARN_FRACTION: [null, 'memoryWarnFraction'],
+  ART_CALL_MAX_IMAGES: [null, 'artCallMaxImages'],
+  ART_CALL_MAX_GROUPS: [null, 'artCallMaxGroups'],
 };
 
 /** The registry's `now` settings that are read through {@link liveToolsSettings} (the rest are the pre-F8 ones). */
