@@ -1193,8 +1193,25 @@ function Runs({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void })
             Full snapshot running: <strong>{fmtInt(r.done)}</strong> of {fmtInt(r.total)} pages
             {r.total > 0 ? ` (${Math.floor((r.done / r.total) * 100)}%)` : ''}, at P4 (bulk): it gives way to
             agents’ work and to routine maintenance.
+            {d.overview.bulkWait ? (
+              <span className="muted" data-testid="bulk-wait">
+                {' '}
+                Now {d.overview.bulkWait}.
+              </span>
+            ) : null}
           </p>
         ))}
+      {d.overview.dayHold && (
+        <p
+          className={d.overview.dayHold.holding ? 'note note-warn' : 'muted small-text'}
+          data-testid="day-hold"
+          role={d.overview.dayHold.holding ? 'status' : undefined}
+        >
+          {d.overview.dayHold.holding
+            ? `The full snapshot is held by the daily tier’s floor (since ${fmtTime(d.overview.dayHold.sinceMs)}): ${d.overview.dayHold.text}. It goes on from the page it reached when the tier frees; the day floors are on the Budgets page.`
+            : `The last full snapshot was held by the daily tier’s floor from ${fmtTime(d.overview.dayHold.sinceMs)}${d.overview.dayHold.endedAtMs !== null ? ` to ${fmtTime(d.overview.dayHold.endedAtMs)}` : ''}.`}
+        </p>
+      )}
       <ul className="plain" aria-label="Snapshot jobs">
         {d.jobs.map((j) => (
           <li key={j.id}>

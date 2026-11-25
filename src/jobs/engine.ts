@@ -3011,7 +3011,21 @@ export class JobEngine {
           this.repo.updateJob(jobId, {
             status: 'waiting_budget',
             resumeAt: outcome.retryAtMs,
-            waitReason: { tier: outcome.error.tier, opId: step.opId, stepNo: step.stepNo },
+            // v3 F9 amendment 1 (ADR 0074): the tier, its row of floors, the floor and when it frees, in words too.
+            waitReason: {
+              tier: outcome.error.tier,
+              opId: step.opId,
+              stepNo: step.stepNo,
+              ...(outcome.error.wait
+                ? {
+                    cause: outcome.error.wait.cause,
+                    row: outcome.error.wait.row,
+                    floor: outcome.error.wait.floor,
+                    freesAt: outcome.error.wait.freesAtMs,
+                    text: outcome.error.wait.text,
+                  }
+                : {}),
+            },
             currentStep: null,
           });
           this.emitJob(jobId, 'updated');

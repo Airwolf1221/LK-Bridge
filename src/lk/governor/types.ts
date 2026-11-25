@@ -1,3 +1,4 @@
+import type { FloorRow } from '../../config/floors.js';
 import type { PriorityClass } from '../../config/lk.js';
 import type { BridgeLkError } from '../errors.js';
 import type { OperationKind, TierId } from '../registry-types.js';
@@ -123,12 +124,41 @@ export interface OperationTierSnapshot {
   readonly inFlight: number;
 }
 
+/**
+ * v3 F9 amendment 1 (ADR 0074): what holds a class's queued work. `tier`: a tier is at the class's floor; `refused`:
+ * LegendKeeper refused the tier (429) until Retry-After; `pacing`: the gap between writes; `agents`: P3 and P4 give way
+ * while agents' work (P1, P2) is queued; `in-flight`: every request slot is taken.
+ */
+export type WaitCause = 'tier' | 'refused' | 'pacing' | 'agents' | 'in-flight';
+
+export interface ClassWait {
+  readonly priority: PriorityClass;
+  /** Requests of the class in the queue. */
+  readonly queued: number;
+  readonly cause: WaitCause;
+  /** The tier that decides the wait (`tier`, `refused`), else null. */
+  readonly tier: BudgetTierId | null;
+  /** The row of floors that tier falls under (`tier`): minute and hour, or day. */
+  readonly row: FloorRow | null;
+  /** The share of the tier the class must leave untouched (its floor on that row), as a fraction (`tier`). */
+  readonly floor: number | null;
+  /** The tier's count and limit now (`tier`, `refused`). */
+  readonly used: number | null;
+  readonly limit: number | null;
+  /** When the class's next request may go; null when it waits on other work (agents, a free slot). */
+  readonly freesAtMs: number | null;
+  /** In words, for the dashboard, `bridge_budget` and a job's status ("bulk waiting: the daily tier is at …"). */
+  readonly text: string;
+}
+
 export interface BudgetSnapshot {
   readonly atMs: number;
   readonly tiers: Readonly<Record<TierId, TierSnapshot>>;
   /** v2 E5.5: learned operation tiers, live ones only (an empty list when LegendKeeper has reported none). */
   readonly operationTiers: readonly OperationTierSnapshot[];
   readonly queues: Readonly<Record<PriorityClass, number>>;
+  /** v3 F9 amendment 1: each class with queued work, and what holds it (highest class first). */
+  readonly waits?: readonly ClassWait[];
   readonly inFlight: number;
   readonly writeSpacingMs: number;
   readonly nextWriteAtMs: number | null;
@@ -166,10 +196,18 @@ export interface BudgetWaitEvent {
   readonly retryAtMs: number;
 }
 
+/** v3 F9 amendment 1: a class's wait changed cause or tier (`wait` null: nothing of the class waits any more). */
+export interface ClassWaitEvent {
+  readonly atMs: number;
+  readonly priority: PriorityClass;
+  readonly wait: ClassWait | null;
+}
+
 export interface GovernorEvents {
   sample: SampleEvent;
   throttled: ThrottledEvent;
   'budget-wait': BudgetWaitEvent;
+  'class-wait': ClassWaitEvent;
 }
 
 export interface EstimateInput {

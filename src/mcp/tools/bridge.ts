@@ -276,14 +276,32 @@ export function budgetBody(s: BudgetSnapshot) {
     tiers: Object.values(s.tiers).map((t) => tierRow(t, s.atMs)),
     ...(learned.length > 0 ? { learnedOperationLimits: learned.map((t) => learnedRow(t, s.atMs)) } : {}),
     queues: s.queues,
+    // v3 F9 amendment 1 (ADR 0074): what holds each class with queued work: the tier, its floor, when it frees.
+    ...((s.waits ?? []).length > 0
+      ? {
+          waiting: (s.waits ?? []).map((w) => ({
+            class: w.priority,
+            queued: w.queued,
+            cause: w.cause,
+            tier: w.tier,
+            row: w.row,
+            floor: w.floor,
+            freesInSeconds:
+              w.freesAtMs === null ? null : Math.max(0, Math.ceil((w.freesAtMs - s.atMs) / 1000)),
+            text: w.text,
+          })),
+        }
+      : {}),
     inFlight: s.inFlight,
     writeSpacingMs: s.writeSpacingMs,
     nextWriteInSeconds:
       s.nextWriteAtMs === null ? 0 : Math.max(0, Math.ceil((s.nextWriteAtMs - s.atMs) / 1000)),
     note:
       'Interactive calls (P1) may use down to the interactive reserve; jobs (P2) leave more headroom; maintenance (P3) ' +
-      'more again, and bulk passes (P4: the nightly full snapshot, full tree and asset walks) the most. P3 and P4 wait ' +
-      'while P1 or P2 work is queued, and P4 also gives way to ready P3 work.',
+      'more again, and bulk passes (P4: the nightly full snapshot, full tree and asset walks) the most. Those floors ' +
+      'apply to the minute and hour tiers; the daily tier has small floors of its own (a reserve of the day for the ' +
+      'owner). P3 and P4 wait while P1 or P2 work is queued, and P4 also gives way to ready P3 work. `waiting` names ' +
+      'the tier and floor holding each class, and when it frees.',
   };
 }
 

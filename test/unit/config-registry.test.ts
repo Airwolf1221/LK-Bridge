@@ -178,6 +178,11 @@ describe('the registry agrees with the schemas', () => {
       RESERVE_FLOOR_JOB: [0.25, 0, 1],
       RESERVE_FLOOR_MAINTENANCE: [0.5, 0, 1],
       RESERVE_FLOOR_BULK: [0.7, 0, 1], // v3 F9 (ADR 0074)
+      // v3 F9 amendment 1 (ADR 0074): the daily tier's floors.
+      RESERVE_DAY_FLOOR_INTERACTIVE: [0.02, 0, 1],
+      RESERVE_DAY_FLOOR_JOB: [0.05, 0, 1],
+      RESERVE_DAY_FLOOR_MAINTENANCE: [0.1, 0, 1],
+      RESERVE_DAY_FLOOR_BULK: [0.15, 0, 1],
       WRITE_SPACING_MS: [500, 0, 60000],
       WRITE_SPACING_STRETCHED_MS: [1200, 0, 60000],
       POLICY_PROPOSAL_EXPIRY_DAYS: [14, 1, 365],

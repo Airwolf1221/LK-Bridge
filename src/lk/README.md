@@ -83,7 +83,13 @@ numbers. `upload` has no published numbers, so it has no counter: it is only eve
 **Admission.** A call is dispatched when, for every tier it draws on, `used + cost <= limit - reserve(class)`, no
 tier is blocked by a 429, the in-flight cap has room, and (for writes) the pacing gap has passed. Units are
 counted at dispatch. Reserve floors: P0 0%, P1 10%, P2 25%, P3 50%, P4 70% (`RESERVE_FLOOR_*`; v3 F9, ADR 0074:
-P4 is bulk, the whole-repository passes, and its floor left unset follows a P3 floor raised above 70%). Classes are
+P4 is bulk, the whole-repository passes, and its floor left unset follows a P3 floor raised above 70%), on the minute
+and hour tiers (write-min, write-hour, key-min, key-hour, project-hour, items-min, items-hour, and a learned tier of up
+to an hour). The daily tier (key-day, and a learned tier with a day's window) has its own row (ADR 0074 amendment 1):
+P0 0%, P1 2%, P2 5%, P3 10%, P4 15% (`RESERVE_DAY_FLOOR_*`, the same order; `floorRowOf`, `floorFor` in
+`src/config/floors.ts`). `waitOf(class)` and the snapshot's `waits` say what holds each waiting class: the tier, its
+row, the class's floor on it and when it frees, in words too (`wait-text.ts`); a `BudgetWaitError` carries the same
+(`wait`), and `class-wait` is emitted whenever a class's cause or tier changes. Classes are
 served in order; P3 and P4 run only while no P1/P2 call is queued, and P4 is scanned after P3, so a ready P3 call
 always goes first and a P4 call goes when no P3 call is ready (queued P3 work that is not ready never holds bulk up).
 Every P4 call is patient, and the full snapshot's reads have first claim within P4 (`firstClaim`: when ready they go

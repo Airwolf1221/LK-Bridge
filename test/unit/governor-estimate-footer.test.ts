@@ -53,7 +53,8 @@ describe('estimate', () => {
     expect(e.pacingMs).toBe(51 * 500 + 749 * 1200);
     expect(e.fitsToday).toBe(true);
     expect(e.dayNeeded).toBe(4300);
-    expect(e.dayRemaining).toBe(45_000);
+    // v3 F9 amendment 1 (ADR 0074): the daily tier at the job's day floor (5%), not its 25%.
+    expect(e.dayRemaining).toBe(57_000);
     expect(e.tiers.find((t) => t.tier === 'key-hour')).toMatchObject({
       demand: 4300,
       available: 4500,
@@ -76,15 +77,20 @@ describe('estimate', () => {
   });
 
   it('accounts for budget already used and for the class floor', () => {
-    const busy = snapshot({ 'key-day': 40_000 });
+    // v3 F9 amendment 1 (ADR 0074): the day is held to the class's DAY floor (a job's 5%: 57,000 of 60,000).
+    const busy = snapshot({ 'key-day': 52_000 });
     expect(estimateFrom(busy, settings, { reads: 6000 })).toMatchObject({
       fitsToday: false,
       dayRemaining: 5000,
     });
     expect(estimateFrom(busy, settings, { reads: 6000, priority: 'P0' })).toMatchObject({
       fitsToday: true,
-      dayRemaining: 20_000,
+      dayRemaining: 8000,
     });
+    // At 18,009 of the day (the owner's 25 November evening), bulk still has 32,991 of its 51,000 (85%).
+    expect(
+      estimateFrom(snapshot({ 'key-day': 18_009 }), settings, { reads: 3400, priority: 'P4' }),
+    ).toMatchObject({ fitsToday: true, dayRemaining: 32_991 });
   });
 
   it('small work that waits on nothing names the tier with least headroom', () => {

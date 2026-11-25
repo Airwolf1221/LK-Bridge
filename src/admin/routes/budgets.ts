@@ -6,7 +6,7 @@ import { ALL_PROJECTS } from '../../projects/index.js';
 import { redactDeep } from '../redact.js';
 import { AdminHttpError } from '../http.js';
 import { budgetPayload } from '../stream.js';
-import { reserveFloorsShape } from '../runtime-settings.js';
+import { dayFloorsShape, reserveFloorsShape } from '../runtime-settings.js';
 import { confirmBody, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 interface Point {
@@ -54,6 +54,13 @@ export const registerBudgets: Register = (api, ctx) => {
     const f = g.settings.reserveFloors;
     return { interactive: f.P1, job: f.P2, maintenance: f.P3, bulk: f.P4 };
   };
+  // v3 F9 amendment 1 (ADR 0074): the daily tier's floors, likewise bridge-wide.
+  const dayFloorsNow = () => {
+    const g = projects.clients()[0]?.client.governor;
+    if (!g) return envConfig.governor.dayReserveFloors;
+    const f = g.settings.dayReserveFloors;
+    return { interactive: f.P1, job: f.P2, maintenance: f.P3, bulk: f.P4 };
+  };
   const budgetQuery = z.object({
     hours: z.coerce.number().min(1).max(48).default(24),
     points: limitSchema(288, 1000),
@@ -81,6 +88,12 @@ export const registerBudgets: Register = (api, ctx) => {
         bulkExplicit:
           actions.storedSettings().reserveFloors?.bulk !== undefined ||
           envConfig.governor.bulkFloorSet !== null,
+      },
+      // v3 F9 amendment 1: the second row, the daily tier's floors (the first applies to the minute and hour tiers).
+      dayReserveFloors: {
+        current: dayFloorsNow(),
+        environment: envConfig.governor.dayReserveFloors,
+        stored: actions.storedSettings().dayReserveFloors,
       },
       // Observed (LegendKeeper's own count) against modelled (ours) for the tier other keys also draw on.
       projectDrift: project.drift,
@@ -122,6 +135,21 @@ export const registerBudgets: Register = (api, ctx) => {
     if ('reset' in body) return { reserveFloors: actions.setReserveFloors(null) };
     const { confirm: _confirm, ...floors } = body;
     return { reserveFloors: actions.setReserveFloors(floors) };
+  });
+
+  /** v3 F9 amendment 1 (ADR 0074): the daily tier's floors, all four together (or back to the environment's). */
+  api.put('/budgets/reserve-day-floors', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
+    const body = parseInput(
+      z.union([
+        z.object({ reset: z.literal(true), confirm: z.literal(true) }),
+        dayFloorsShape.and(confirmBody),
+      ]),
+      req.body,
+    );
+    if ('reset' in body) return { dayReserveFloors: actions.setDayReserveFloors(null) };
+    const { confirm: _confirm, ...floors } = body;
+    return { dayReserveFloors: actions.setDayReserveFloors(floors) };
   });
 
   // ---------------------------------------------------------------------------------------------- writers

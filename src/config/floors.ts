@@ -24,3 +24,64 @@ export function bulkOrderMessage(maintenance: number, bulk: number): string {
     'much of each tier untouched as maintenance (interactive <= job <= maintenance <= bulk).'
   );
 }
+
+/**
+ * v3 F9 amendment 1 (ADR 0074, 25 November 2026): the floors of the DAILY tier (key-day, and any learned tier with a
+ * day's window). The four floors above keep applying to the minute and hour tiers; on the day they would bar bulk for
+ * the rest of a busy day while the hourly tiers sat almost empty (30% of 60,000 is 18,000 requests). The day floors'
+ * only purpose is to keep a reserve of the day for the owner's interactive work, so they are small. The same order.
+ */
+export const DEFAULT_DAY_FLOORS = {
+  interactive: 0.02,
+  job: 0.05,
+  maintenance: 0.1,
+  bulk: 0.15,
+} as const;
+
+export interface DayFloors {
+  readonly interactive: number;
+  readonly job: number;
+  readonly maintenance: number;
+  readonly bulk: number;
+}
+
+/** The refusal of day floors out of order, naming the first pair that breaks it (as percentages); null when in order. */
+export function dayOrderMessage(f: DayFloors): string | null {
+  const pct = (x: number) => `${Math.round(x * 1000) / 10}%`;
+  const pairs: [keyof DayFloors, keyof DayFloors][] = [
+    ['interactive', 'job'],
+    ['job', 'maintenance'],
+    ['maintenance', 'bulk'],
+  ];
+  for (const [lo, hi] of pairs) {
+    if (f[lo] > f[hi]) {
+      return (
+        `The day floor for ${hi} (${pct(f[hi])}) is below the day floor for ${lo} (${pct(f[lo])}): the day floors ` +
+        'must rise as the floors do (interactive <= job <= maintenance <= bulk).'
+      );
+    }
+  }
+  return null;
+}
+
+/**
+ * v3 F9 amendment 1 (ADR 0074): which row of floors a tier falls under, by its window: a window longer than an hour
+ * (key-day; a learned tier with a day's window) is the daily row, every other counted tier (write-min, write-hour,
+ * key-min, key-hour, project-hour, items-min, items-hour, a learned tier of up to an hour) the minute-and-hour row.
+ */
+export type FloorRow = 'minute-hour' | 'day';
+export function floorRowOf(windowMs: number): FloorRow {
+  return windowMs > 3_600_000 ? 'day' : 'minute-hour';
+}
+
+/** The floor a class must leave of a tier with this window (P0 to P4, as the governor's settings keep them). */
+export function floorFor<C extends string>(
+  settings: {
+    readonly reserveFloors: Readonly<Record<C, number>>;
+    readonly dayReserveFloors: Readonly<Record<C, number>>;
+  },
+  cls: C,
+  windowMs: number,
+): number {
+  return floorRowOf(windowMs) === 'day' ? settings.dayReserveFloors[cls] : settings.reserveFloors[cls];
+}

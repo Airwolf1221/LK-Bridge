@@ -30,9 +30,11 @@ import { AdminHttpError } from './http.js';
 import type { RestartControl, RestartStatus } from './restart.js';
 import {
   LIMITED_TIERS,
+  dayFloorsSchema,
   readStoredSettings,
   reserveFloorsSchema,
   tierLimitsSchema,
+  type DayReserveFloors,
   type ReserveFloors,
 } from './runtime-settings.js';
 import type { AdminRuntime } from './types.js';
@@ -151,6 +153,25 @@ export function createConfigSettings(d: {
     // v3 F9 (ADR 0074): stored only when the owner sets it; otherwise the environment's, or the default raised to P3.
     RESERVE_FLOOR_BULK: 'bulk',
   };
+  // v3 F9 amendment 1 (ADR 0074): the daily tier's floors, stored together under their own key.
+  const runningDayFloors = (): DayReserveFloors => {
+    const g = runtime.projects.clients()[0]?.client.governor.settings.dayReserveFloors;
+    return g
+      ? { interactive: g.P1, job: g.P2, maintenance: g.P3, bulk: g.P4 }
+      : { ...config.governor.dayReserveFloors };
+  };
+  const DAY_PARTS: Record<keyof DayReserveFloors, true> = {
+    interactive: true,
+    job: true,
+    maintenance: true,
+    bulk: true,
+  };
+  const DAY_FLOOR_PART: Record<string, keyof DayReserveFloors> = {
+    RESERVE_DAY_FLOOR_INTERACTIVE: 'interactive',
+    RESERVE_DAY_FLOOR_JOB: 'job',
+    RESERVE_DAY_FLOOR_MAINTENANCE: 'maintenance',
+    RESERVE_DAY_FLOOR_BULK: 'bulk',
+  };
   const JOURNAL_PART: Record<string, 'retentionDays' | 'maxBytes'> = {
     JOURNAL_RETENTION_DAYS: 'retentionDays',
     JOURNAL_MAX_BYTES: 'maxBytes',
@@ -185,6 +206,15 @@ export function createConfigSettings(d: {
           environment: envConfig.governor.reserveFloors[part],
           dashboard: stored.reserveFloors?.[part] ?? null,
           running: runningFloors()[part],
+          pending: false,
+        };
+      }
+      case 'dayReserveFloors': {
+        const part = DAY_FLOOR_PART[e.key]!;
+        return {
+          environment: envConfig.governor.dayReserveFloors[part],
+          dashboard: stored.dayReserveFloors?.[part] ?? null,
+          running: runningDayFloors()[part],
           pending: false,
         };
       }
@@ -434,6 +464,19 @@ export function createConfigSettings(d: {
           next.bulk === undefined &&
           same([next.interactive, next.job, next.maintenance], [env.interactive, env.job, env.maintenance]);
         actions.setReserveFloors(asEnv ? null : next);
+        return;
+      }
+      case 'dayReserveFloors': {
+        // v3 F9 amendment 1: the four day floors are saved together; the others as they run.
+        const part = DAY_FLOOR_PART[e.key]!;
+        const from = stored.dayReserveFloors ?? runningDayFloors();
+        const env = envConfig.governor.dayReserveFloors;
+        const next = { ...from, [part]: v === null ? env[part] : number(e, v) };
+        const ok = dayFloorsSchema.safeParse(next);
+        if (!ok.success)
+          throw new AdminHttpError(400, 'INVALID_INPUT', ok.error.issues.map((i) => i.message).join('; '));
+        const asEnv = (Object.keys(DAY_PARTS) as (keyof DayReserveFloors)[]).every((k) => next[k] === env[k]);
+        actions.setDayReserveFloors(asEnv ? null : next);
         return;
       }
       case 'exposePerOpTools':

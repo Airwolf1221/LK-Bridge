@@ -7,10 +7,20 @@
  * module and the two form an import cycle.
  */
 import type { TierId } from '../lk/registry-types.js';
-import { effectiveBulkFloor } from './floors.js';
+import { DEFAULT_DAY_FLOORS, effectiveBulkFloor } from './floors.js';
 import { DEFAULT_TIER_LIMITS, TIER_WINDOW_SECONDS, type Config } from './index.js';
 
-export { bulkOrderMessage, DEFAULT_BULK_FLOOR, effectiveBulkFloor } from './floors.js';
+export {
+  bulkOrderMessage,
+  DEFAULT_BULK_FLOOR,
+  DEFAULT_DAY_FLOORS,
+  dayOrderMessage,
+  effectiveBulkFloor,
+  floorFor,
+  floorRowOf,
+  type DayFloors,
+  type FloorRow,
+} from './floors.js';
 
 /**
  * The governor's request classes (PLAN §5.2). P4 (bulk, v3 F9, ADR 0074) is the whole-repository and whole-library
@@ -45,8 +55,14 @@ export interface GovernorSettings {
   readonly tierLimits: Readonly<Record<TierId, number | null>>;
   /** Window length per tier in ms; `null` for the reactive-only upload tier. */
   readonly tierWindowsMs: Readonly<Record<TierId, number | null>>;
-  /** Fraction of each tier a class must leave untouched. P0 always 0. */
+  /**
+   * Fraction of each tier a class must leave untouched. P0 always 0. v3 F9 amendment 1 (ADR 0074): the minute and hour
+   * tiers only (write-min, write-hour, key-min, key-hour, project-hour, items-min, items-hour, and any learned tier of
+   * up to an hour); the daily tier has its own, `dayReserveFloors` (`floorRowOf`).
+   */
   readonly reserveFloors: Readonly<Record<PriorityClass, number>>;
+  /** v3 F9 amendment 1: the floors of the daily tier (key-day, and any learned tier with a longer window). P0 always 0. */
+  readonly dayReserveFloors: Readonly<Record<PriorityClass, number>>;
   /** Minimum gap between write dispatches. */
   readonly writeSpacingMs: number;
   /** Gap used once the projected hourly write count would cross `stretchHourlyWrites`. */
@@ -71,8 +87,9 @@ export interface LkSettings {
 
 /** Defaults straight from PLAN §1.2, §5.2 and §5.3. */
 export function defaultGovernorSettings(
-  overrides: Partial<Omit<GovernorSettings, 'reserveFloors'>> & {
+  overrides: Partial<Omit<GovernorSettings, 'reserveFloors' | 'dayReserveFloors'>> & {
     readonly reserveFloors?: ReserveFloorsInput;
+    readonly dayReserveFloors?: Partial<Omit<Record<PriorityClass, number>, 'P0'>>;
   } = {},
 ): GovernorSettings {
   const tierLimits = { ...DEFAULT_TIER_LIMITS, ...overrides.tierLimits };
@@ -83,6 +100,14 @@ export function defaultGovernorSettings(
     tierLimits,
     tierWindowsMs: { ...tierWindowsMs, ...overrides.tierWindowsMs },
     reserveFloors: floorsWithBulk({ P0: 0, P1: 0.1, P2: 0.25, P3: 0.5, ...overrides.reserveFloors }),
+    dayReserveFloors: {
+      P1: DEFAULT_DAY_FLOORS.interactive,
+      P2: DEFAULT_DAY_FLOORS.job,
+      P3: DEFAULT_DAY_FLOORS.maintenance,
+      P4: DEFAULT_DAY_FLOORS.bulk,
+      ...overrides.dayReserveFloors,
+      P0: 0,
+    },
     writeSpacingMs: overrides.writeSpacingMs ?? 500,
     writeSpacingStretchedMs: overrides.writeSpacingStretchedMs ?? 1200,
     stretchHourlyWrites: overrides.stretchHourlyWrites ?? tierLimits['write-hour'] ?? 3000,
@@ -111,9 +136,16 @@ function floorsWithBulk(f: ReserveFloorsInput): Readonly<Record<PriorityClass, n
 /** The governor settings every project's governor is built with (each project has its own governor, v2 A1). */
 export function governorSettingsFrom(config: Config): GovernorSettings {
   const floors = config.governor.reserveFloors;
+  const day = config.governor.dayReserveFloors;
   return defaultGovernorSettings({
     tierLimits: config.lk.tierLimits,
     reserveFloors: { P0: 0, P1: floors.interactive, P2: floors.job, P3: floors.maintenance, P4: floors.bulk },
+    dayReserveFloors: {
+      P1: day.interactive,
+      P2: day.job,
+      P3: day.maintenance,
+      P4: day.bulk,
+    },
     writeSpacingMs: config.governor.writeSpacingMs,
     writeSpacingStretchedMs: config.governor.writeSpacingStretchedMs,
   });

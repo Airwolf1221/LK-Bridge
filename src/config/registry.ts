@@ -74,6 +74,7 @@ export type LegacyId =
   | 'readOnly'
   | 'writersMax'
   | 'reserveFloors'
+  | 'dayReserveFloors'
   | 'exposePerOpTools'
   | 'allowMemberAdmin'
   | 'journal'
@@ -126,6 +127,7 @@ const LEGACY_STORED: Record<LegacyId, string> = {
   readOnly: 'jobs.read_only_override',
   writersMax: 'jobs.writers_max',
   reserveFloors: 'dash.reserve_floors',
+  dayReserveFloors: 'dash.reserve_day_floors',
   exposePerOpTools: 'dash.expose_per_op_tools',
   allowMemberAdmin: 'dash.allow_member_admin',
   journal: 'dash.journal_retention',
@@ -537,7 +539,7 @@ const SPECS: readonly Spec[] = [
     group: 'governor',
     label: 'Reserve floor: agents',
     description:
-      'The share of each tier an agent’s direct call must leave untouched. The floors must rise: agents ≤ jobs ≤ maintenance ≤ bulk. Also on the Budgets page.',
+      'The share of each minute and hour tier an agent’s direct call must leave untouched (the daily tier has its own floors, below). The floors must rise: agents ≤ jobs ≤ maintenance ≤ bulk. Also on the Budgets page.',
     unit: UNITS.percent,
     applies: 'now',
     legacy: 'reserveFloors',
@@ -548,7 +550,7 @@ const SPECS: readonly Spec[] = [
     group: 'governor',
     label: 'Reserve floor: jobs',
     description:
-      'The share of each tier a job step must leave untouched, so agents stay responsive while a big job runs.',
+      'The share of each minute and hour tier a job step must leave untouched, so agents stay responsive while a big job runs.',
     unit: UNITS.percent,
     applies: 'now',
     legacy: 'reserveFloors',
@@ -559,7 +561,7 @@ const SPECS: readonly Spec[] = [
     group: 'governor',
     label: 'Reserve floor: maintenance',
     description:
-      'The share of each tier routine maintenance (P3) must leave untouched: change snapshots, refreshes after a bridge write, automation, block-id upkeep. The whole-repository passes have their own floor (bulk), so this one no longer needs raising to keep the night’s full snapshot in check.',
+      'The share of each minute and hour tier routine maintenance (P3) must leave untouched: change snapshots, refreshes after a bridge write, automation, block-id upkeep. The whole-repository passes have their own floor (bulk), so this one no longer needs raising to keep the night’s full snapshot in check.',
     unit: UNITS.percent,
     applies: 'now',
     legacy: 'reserveFloors',
@@ -570,10 +572,55 @@ const SPECS: readonly Spec[] = [
     group: 'governor',
     label: 'Reserve floor: bulk passes',
     description:
-      'The share of each tier the whole-repository passes (P4) must leave untouched: the nightly full snapshot, the full repository tree and asset tree checks, the link sweep. At 70% they use at most 30% of each tier, give way to routine maintenance and to agents, and still finish. Must be at least the maintenance floor. Left unset, it is 70%, or the maintenance floor if that is higher. Also on the Budgets page.',
+      'The share of each minute and hour tier the whole-repository passes (P4) must leave untouched: the nightly full snapshot, the full repository tree and asset tree checks, the link sweep. At 70% they use at most 30% of each minute and hour, give way to routine maintenance and to agents, and still finish. Must be at least the maintenance floor. Left unset, it is 70%, or the maintenance floor if that is higher. The daily tier has its own floor (Day floor: bulk passes). Also on the Budgets page.',
     unit: UNITS.percent,
     applies: 'now',
     legacy: 'reserveFloors',
+  },
+  // v3 F9 amendment 1 (ADR 0074): the daily tier's own floors. The four above apply to the minute and hour tiers.
+  {
+    key: 'RESERVE_DAY_FLOOR_INTERACTIVE',
+    schema: 'main',
+    group: 'governor',
+    label: 'Day floor: agents',
+    description:
+      'The share of the day’s 60,000 requests an agent’s direct call must leave untouched. The day floors only keep a reserve of the day for your own work on the dashboard, so they are small; the minute and hour floors above do the pacing. They must rise as the other floors do: agents ≤ jobs ≤ maintenance ≤ bulk. Also on the Budgets page.',
+    unit: UNITS.percent,
+    applies: 'now',
+    legacy: 'dayReserveFloors',
+  },
+  {
+    key: 'RESERVE_DAY_FLOOR_JOB',
+    schema: 'main',
+    group: 'governor',
+    label: 'Day floor: jobs',
+    description:
+      'The share of the day’s requests a job step must leave untouched. At 5% a job may run until 95% of the day is spent.',
+    unit: UNITS.percent,
+    applies: 'now',
+    legacy: 'dayReserveFloors',
+  },
+  {
+    key: 'RESERVE_DAY_FLOOR_MAINTENANCE',
+    schema: 'main',
+    group: 'governor',
+    label: 'Day floor: maintenance',
+    description:
+      'The share of the day’s requests routine maintenance (P3) must leave untouched. At 10% it keeps running until 90% of the day is spent, so a busy day does not stop change snapshots, refreshes or the chronology check.',
+    unit: UNITS.percent,
+    applies: 'now',
+    legacy: 'dayReserveFloors',
+  },
+  {
+    key: 'RESERVE_DAY_FLOOR_BULK',
+    schema: 'main',
+    group: 'governor',
+    label: 'Day floor: bulk passes',
+    description:
+      'The share of the day’s requests the whole-repository passes (P4: the nightly full snapshot, the tree and asset checks, the link sweep) must leave untouched. At 15% they may use the day until 85% of it is spent, leaving 9,000 requests for you and your agents, so a busy day no longer stops the night’s snapshot. Must be at least the maintenance day floor.',
+    unit: UNITS.percent,
+    applies: 'now',
+    legacy: 'dayReserveFloors',
   },
   {
     key: 'WRITE_SPACING_MS',

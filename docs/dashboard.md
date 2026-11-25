@@ -408,7 +408,7 @@ every route that changes a setting, a scope or a key, and of approving a proposa
 | Overview †  | `GET /overview` (every project's status, health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice; where it stopped and Resume; v3 F3e: `split`, the split whose phase 1 it is), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume` (`resume` ‡), `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`; ‡ with `force: true`)                                                                                                                                                                                                                                                                                                                                                                             |
 | Errors †    | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Budgets †   | `GET /budgets` (one project's snapshot with its learned operation limits, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Budgets †   | `GET /budgets` (one project's snapshot with its learned operation limits, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`, `PUT /budgets/reserve-day-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk` (`action`: `approve`, `reject`, or `approve-as-canon` with `{ confirm: true }`; at most 1,000 ids since v3 F5a; a proposal whose job is running is passed over, `PROPOSAL_RUNNING`), v3 F5a: the list's `tool` and `olderThanHours` filters and `total`, `POST /proposals/bulk-matching` (`{ action: approve or reject, filter, expect, confirm: true }`: every proposal the filter matches, refused with `PROPOSALS_CHANGED` when the count changed) |
@@ -1242,19 +1242,20 @@ with its old and new value and source (`settings.config`, `settings.config_reset
 keep their own audit lines).
 
 The settings that existed before F8 keep their stored keys (`dash.expose_per_op_tools`, `dash.allow_member_admin`,
-`dash.journal_retention`, `dash.tier_limits`, `dash.contact_email`, `dash.reserve_floors`, and the engine's
+`dash.journal_retention`, `dash.tier_limits`, `dash.contact_email`, `dash.reserve_floors`, `dash.reserve_day_floors`, and the engine's
 `jobs.read_only_override` and `jobs.writers_max`), their routes and their behaviour; the read-only card (switching it on
 is one click) and the tier limit table stay as they were. Every other value is stored as `dash.cfg.<KEY>`. A stored
 value that no longer loads with the environment is left out at start and named at the top of the page.
 
-| Setting                                                                                     | Applies                                                            |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Read-only mode (follow environment, on, off)                                                | At once (the engine's own override)                                |
-| `WRITERS_MAX`, pause, drain                                                                 | At once                                                            |
-| Reserve floors                                                                              | At once (`governor.setReserveFloors`); also applied at every start |
-| The registry's `now` settings (above)                                                       | At once (read on each use)                                         |
-| Per-operation tool exposure, member administration, journal retention, tier limit overrides | **At the next start.**                                             |
-| Every other editable setting                                                                | **At the next start.**                                             |
+| Setting                                                                                     | Applies                                                               |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Read-only mode (follow environment, on, off)                                                | At once (the engine's own override)                                   |
+| `WRITERS_MAX`, pause, drain                                                                 | At once                                                               |
+| Reserve floors                                                                              | At once (`governor.setReserveFloors`); also applied at every start    |
+| Day floors (v3 F9 amendment 1)                                                              | At once (`governor.setDayReserveFloors`); also applied at every start |
+| The registry's `now` settings (above)                                                       | At once (read on each use)                                            |
+| Per-operation tool exposure, member administration, journal retention, tier limit overrides | **At the next start.**                                                |
+| Every other editable setting                                                                | **At the next start.**                                                |
 
 ### Restart the bridge
 
@@ -1276,6 +1277,22 @@ floors** card has a fourth field, **Bulk (P4)** (`RESERVE_FLOOR_BULK`, default 7
 maintenance floor; left unset it follows the default, or the maintenance floor when that is higher, and the card sends
 it only when it is changed. The Overview's budget line adds "bulk n"; the Snapshots page's **Runs and schedules** card
 shows a running full snapshot's pages done of the total.
+
+## Request Budgets: the day floors and why a class waits (v3 F9 amendment 1)
+
+The floors on the **Reserve floors: minute and hour** card apply to the minute and hour tiers only. The daily tier has
+a second row, the **Reserve floors: day** card (`RESERVE_DAY_FLOOR_INTERACTIVE`, `_JOB`, `_MAINTENANCE`, `_BULK`:
+2%, 5%, 10% and 15% kept free by default, the same order), saved together by `PUT /budgets/reserve-day-floors` (or
+reset) and also on the Settings page, applying at once. Its only purpose is a reserve of the day for the owner's own
+work: with bulk at 15%, the night's passes may use the day until 85% of it is spent, leaving 9,000 requests
+([ADR 0074 amendment 1](adr/0074-v3-f9-the-bulk-class-p4.md#amendment-1-25-november-2026-the-daily-tier-has-floors-of-its-own)).
+
+Wherever a class waits for budget, the bridge says why: the **Waiting for budget** card and the Overview's budget line
+list a sentence per waiting class ("bulk waiting: the daily tier is at 30.0% and bulk may use it up to 30% (frees in
+19 min)"), from the governor's `waits`; `bridge_budget` returns the same as `waiting`; a job parked for budget has it in
+its `waitReason` (`row`, `floor`, `freesAt`, `text`), shown by `bridge_job_status`; an agent's refused call has it as
+`waiting`. The Snapshots page's **Runs and schedules** card adds what holds a running full snapshot now, and, when the
+daily tier's floor holds it, since when (one warning is logged a run).
 
 ## Request Budgets: learned operation limits (v2 E5.5)
 

@@ -73,4 +73,48 @@ describe('loadConfig', () => {
       expect(governorSettingsFrom(c).reserveFloors).toEqual({ P0: 0, P1: 0.1, P2: 0.25, P3: 0.75, P4: 0.75 });
     });
   });
+
+  // v3 F9 amendment 1 (ADR 0074): the daily tier's own floors at load.
+  describe('the day floors (RESERVE_DAY_FLOOR_*)', () => {
+    it('default to 2%, 5%, 10% and 15%, and reach the governor as its second row', async () => {
+      const { governorSettingsFrom } = await import('../../src/config/lk.js');
+      const c = loadConfig(base);
+      expect(c.governor.dayReserveFloors).toEqual({
+        interactive: 0.02,
+        job: 0.05,
+        maintenance: 0.1,
+        bulk: 0.15,
+      });
+      const g = governorSettingsFrom(c);
+      expect(g.dayReserveFloors).toEqual({ P0: 0, P1: 0.02, P2: 0.05, P3: 0.1, P4: 0.15 });
+      // The minute and hour floors are unchanged by them.
+      expect(g.reserveFloors).toEqual({ P0: 0, P1: 0.1, P2: 0.25, P3: 0.5, P4: 0.7 });
+    });
+
+    it('are used as set, independently of the minute and hour floors', () => {
+      const c = loadConfig({
+        ...base,
+        RESERVE_FLOOR_MAINTENANCE: '0.6',
+        RESERVE_DAY_FLOOR_MAINTENANCE: '0.12',
+        RESERVE_DAY_FLOOR_BULK: '0.2',
+      });
+      expect(c.governor.dayReserveFloors).toEqual({
+        interactive: 0.02,
+        job: 0.05,
+        maintenance: 0.12,
+        bulk: 0.2,
+      });
+      expect(c.governor.reserveFloors).toMatchObject({ maintenance: 0.6, bulk: 0.7 });
+    });
+
+    it('must keep the order interactive <= job <= maintenance <= bulk (the message names the pair)', () => {
+      expect(() => loadConfig({ ...base, RESERVE_DAY_FLOOR_BULK: '0.05' })).toThrow(
+        /RESERVE_DAY_FLOOR_\*: The day floor for bulk \(5%\) is below the day floor for maintenance \(10%\)/,
+      );
+      expect(() => loadConfig({ ...base, RESERVE_DAY_FLOOR_INTERACTIVE: '0.06' })).toThrow(
+        /day floor for job \(5%\) is below the day floor for interactive \(6%\)/,
+      );
+      expect(() => loadConfig({ ...base, RESERVE_DAY_FLOOR_JOB: '2' })).toThrow(/RESERVE_DAY_FLOOR_JOB/);
+    });
+  });
 });

@@ -427,9 +427,73 @@ describe('Request Budgets', () => {
     expect(queues).toHaveTextContent('P4 · bulk passes');
     expect(within(queues).getByText('3')).toBeInTheDocument();
     expect(screen.getByLabelText('Bulk (P4)')).toHaveValue('70');
-    expect(screen.getByRole('region', { name: 'Reserve floors' })).toHaveTextContent(
+    expect(screen.getByRole('region', { name: 'Reserve floors: minute and hour' })).toHaveTextContent(
       'The bulk floor follows its default (70%, or the maintenance floor if that is higher).',
     );
+  });
+
+  it('v3 F9 amendment 1: the day floors as a second row, saved together; why each class waits, in words', async () => {
+    const b = {
+      ...budgets(),
+      dayReserveFloors: {
+        current: { interactive: 0.02, job: 0.05, maintenance: 0.1, bulk: 0.15 },
+        environment: { interactive: 0.02, job: 0.05, maintenance: 0.1, bulk: 0.15 },
+        stored: null,
+      },
+    };
+    b.snapshot = {
+      ...b.snapshot,
+      waits: [
+        {
+          priority: 'P4',
+          queued: 2,
+          cause: 'tier',
+          tier: 'key-day',
+          row: 'day',
+          floor: 0.7,
+          used: 18_009,
+          limit: 60_000,
+          freesAtMs: Date.now() + 1_195_000,
+          text: 'bulk waiting: the daily tier is at 30.0% and bulk may use it up to 30% (frees in 20 min)',
+        },
+      ],
+    } as typeof b.snapshot;
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /budgets': b,
+      'PUT /budgets/reserve-day-floors': { dayReserveFloors: {} },
+    });
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    renderApp('/ui/budgets');
+    const queues = await screen.findByRole('region', { name: 'Waiting for budget' });
+    expect(within(queues).getByRole('list', { name: 'Why requests wait' })).toHaveTextContent(
+      'bulk waiting: the daily tier is at 30.0% and bulk may use it up to 30% (frees in 20 min) · 2 queued',
+    );
+    const day = screen.getByRole('region', { name: 'Reserve floors: day' });
+    expect(day).toHaveTextContent('the bulk passes may use the day until 85% of it is spent');
+    expect(screen.getByLabelText('Bulk (P4), day')).toHaveValue('15');
+    // The minute and hour row keeps its own fields.
+    expect(screen.getByLabelText('Bulk (P4)')).toHaveValue('70');
+    const maint = screen.getByLabelText('Maintenance (P3), day');
+    await user.clear(maint);
+    await user.type(maint, '20'); // above bulk's 15: invalid
+    expect(within(day).getByRole('alert')).toHaveTextContent(/maintenance ≤ bulk/);
+    expect(within(day).getByRole('button', { name: 'Save day floors' })).toBeDisabled();
+    await user.clear(maint);
+    await user.type(maint, '12');
+    await user.click(within(day).getByRole('button', { name: 'Save day floors' }));
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save day floors' }),
+    );
+    await waitFor(() => expect(api.find('PUT', '/budgets/reserve-day-floors')).toHaveLength(1));
+    expect(api.find('PUT', '/budgets/reserve-day-floors')[0]!.body).toEqual({
+      interactive: 0.02,
+      job: 0.05,
+      maintenance: 0.12,
+      bulk: 0.15,
+      confirm: true,
+    });
   });
 
   it('v3 F9: sends the bulk floor only when it is changed, and refuses one below maintenance', async () => {

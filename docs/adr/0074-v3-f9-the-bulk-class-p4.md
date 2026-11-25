@@ -168,3 +168,141 @@ registry (`test/unit/config-registry.test.ts`), the callers (`test/f9/snapshot-c
 (`test/sandbox-mock/bulk-f9`).
 
 The sandbox step (opt-in, the owner's): `deploy/sandbox-test.sh --project test -- bulk-f9` (test/sandbox/README.md).
+
+## Amendment 1 (25 November 2026): the daily tier has floors of its own
+
+- Status: **Proposed** (25 November 2026). Built and tested against the mock LegendKeeper and the governor's fake clock
+  only; nothing touched a live system. Where the brief was silent the choice is marked **chosen**.
+- Amends: decision 2 (one fraction for every tier), decision 5 (what the bridge shows), PLAN §5.2 (amendment 20),
+  `src/lk/README.md` (admission), the Budgets, Overview and Snapshots pages, `bridge_budget`, a job's status.
+
+### The evidence (live, 25 November 2026, 23:15)
+
+The full snapshot stopped at 66%. The dashboard read "Waiting for budget: interactive 0 · jobs 0 · maintenance 0 · bulk
+2 · dashboard 0", the bridge otherwise idle. `bridge_budget` for Arkona: key-min 2 / 300, key-hour 22 / 6,000, key-day
+18,009 / 60,000 (resets in 1,195 s), project-hour 22 / 12,000; queues P0 to P3 empty, P4 2.
+
+### The cause
+
+Decision 2 gave `RESERVE_FLOOR_BULK` (0.7) to **every** tier, the daily one included. 30% of 60,000 is 18,000: a busy
+day of the owner's own and agents' work reached 18,009, so P4 was barred for the rest of the day while the hourly tiers
+were almost empty. The chronology check (P3) was waiting, correctly, for the snapshot (F9's chain), not for budget. The
+same trap waited for P3 at `RESERVE_FLOOR_MAINTENANCE` (0.5 of the day, 30,000). A design error in F9's handoff, not an
+implementation error: it gave one fraction for all tiers, and the night simulation started from an empty day.
+
+### Decision A1: two rows of floors
+
+- The four floors (`RESERVE_FLOOR_INTERACTIVE`, `_JOB`, `_MAINTENANCE`, `_BULK`) keep applying to the **minute and
+  hour** tiers, as before, with every rule of decision 2 (the bulk floor's derivation from a raised P3 floor included).
+- The **daily** tier has its own: `RESERVE_DAY_FLOOR_INTERACTIVE`, `_JOB`, `_MAINTENANCE`, `_BULK`, fractions, defaults
+  **0.02, 0.05, 0.10, 0.15**. Their only purpose is to keep a reserve of the day for the owner's interactive work, so
+  they are small: bulk may use the day until 85% of it is spent, leaving 9,000 requests; maintenance until 90%; a job
+  until 95%; an agent's call until 98%. P0 (the dashboard) is 0 on both rows.
+- The defaults are the brief's (**kept**): the code suggests nothing better. The minute and hour floors already pace
+  bulk at 30% of each hour (1,800 an hour, about 14,400 over a night's eight hours), so the day's floor is a stop, not a
+  pace; 15% keeps the 9,000 the owner asked for. A 5% gap between bulk (15%) and maintenance (10%) is 3,000 requests:
+  enough for a night's routine work (about 1,300 requests in simulation C below) after bulk has stopped.
+- The same order, interactive ≤ job ≤ maintenance ≤ bulk, checked on its own row at load (`loadConfig`: a
+  `ConfigError` naming the pair, "RESERVE_DAY_FLOOR_\*: The day floor for bulk (5%) is below the day floor for
+  maintenance (10%) …"), in `Governor.setDayReserveFloors`, in the Budgets page's day action
+  (`PUT /budgets/reserve-day-floors`, `actions.setDayReserveFloors`) and in its F8 Settings entries. No rule ties the two
+  rows together (**chosen**: a day floor above an hourly one is odd but harmless).
+- Stored by the dashboard as all four together under `dash.reserve_day_floors` (a new legacy id, `dayReserveFloors`,
+  **chosen** as the minute-and-hour floors are stored under `dash.reserve_floors`), applied at once to every project's
+  governor and at every start (`applyStoredSettings`). Registered in F8's registry, group "Governor and budgets",
+  `applies: now`, with descriptions written for the owner; in `.env.example` and `deploy/env.template`, commented out.
+- `GovernorSettings.dayReserveFloors` beside `reserveFloors`; `floorFor(settings, class, windowMs)` is the one place
+  that picks the row, used by admission (`readyAt`), the "can never fit" check (`validate`), learned tiers and
+  `estimate` (whose `fitsToday` and `dayRemaining` now use the day floor).
+
+### Decision A2: which row each tier falls under
+
+By the tier's window (`floorRowOf`: longer than an hour is the day row).
+
+| Tier                                                   | Window               | Row                                                                       |
+| ------------------------------------------------------ | -------------------- | ------------------------------------------------------------------------- |
+| `write-min`, `key-min`, `items-min` (createMany items) | 1 minute             | minute and hour                                                           |
+| `write-hour`, `key-hour`, `project-hour`, `items-hour` | 1 hour               | minute and hour                                                           |
+| `key-day`                                              | 1 day                | day                                                                       |
+| A learned operation tier (ADR 0047)                    | as inferred          | by its window: a minute or an hour on the first row, a day on the day row |
+| `upload`                                               | none (reactive only) | neither: it has no counter, only a 429's block                            |
+
+### Decision A3: the bridge says which tier is blocking
+
+- The governor says what holds each class with queued work (`waitOf`, `waits()`, and `BudgetSnapshot.waits`): the cause
+  (`tier`, `refused` by a 429, `pacing`, `agents` queued ahead of P3 and P4, `in-flight`), the tier, its row, the class's
+  floor on it, the tier's count and limit, when it frees, and a sentence: "bulk waiting: the daily tier is at 30.0% and
+  bulk may use it up to 30% (frees in 20 min)" (`src/lk/governor/wait-text.ts`). The head that may go soonest decides.
+- A `BudgetWaitError` carries the same (`wait`); a job parked `waiting_budget` keeps it in its `waitReason` (`cause`,
+  `row`, `floor`, `freesAt`, `text`), so `bridge_job_status` shows it; an agent's refused call (`BUDGET_EXHAUSTED`)
+  carries `waiting`.
+- Shown: the Budgets page's **Waiting for budget** card and the Overview's budget line (a sentence per waiting class,
+  live from the stream), `bridge_budget` (`waiting`, with `freesInSeconds`), the Snapshots page's **Runs and schedules**
+  card (what holds bulk now, for a running full snapshot).
+- The governor emits `class-wait` whenever a class's cause or tier changes (only while someone listens). A full
+  snapshot listens while it runs: when the daily tier's floor holds it, the service **logs one warning a run** ("the
+  full snapshot is held by the daily tier's floor: …", with the run, tier, floor and when it frees) and the card says
+  "The full snapshot is held by the daily tier's floor (since 23:15): …", or afterwards "The last full snapshot was held
+  … from … to …" (in memory, **chosen**: a restart forgets it, as the run itself resumes). Once a run: at its floor the
+  hold comes and goes request by request as the rolling day frees a unit at a time.
+
+### Decision A4: a held bulk pass loses nothing
+
+- **Confirmed** (as F9 expected): every P4 call is patient, so a full snapshot held by a floor is not parked or
+  restarted: its next read waits in the governor's queue and is sent the moment the tier frees; the run goes on from the
+  page it reached, each page read once. Tested on the fake clock (a pass at the day floor, rolling and fixed) and on
+  the mock (a run held mid-way, then freed: the same requests as a run never held). A run stopped by a restart was
+  already resumed from its pending pages (ADR 0042); unchanged.
+- **The day's window.** LegendKeeper publishes "1 day" and nothing more. The governor models every tier as a sliding
+  window (a unit counts for 24 hours after it was spent), which is safe whichever LegendKeeper uses, and snaps its count
+  to LegendKeeper's headers, back-dating the units to LegendKeeper's reset. So:
+  - if LegendKeeper's day resets on a **fixed boundary**, a pass held shortly before the reset frees at the reset and
+    loses nothing (the snapped units all leave at the reset; tested);
+  - if the window is **rolling**, a pass held at its floor frees only as the units spent 24 hours earlier leave: at the
+    pace the day was spent, so after a day of steady work about as fast as that work came. Held at 85% after a very
+    heavy day (simulation C), the night's passes wait for the morning's units to leave and finish by late morning.
+  - The live reading ("resets in 1,195 s" at 23:15) does not tell the two apart: the bridge shows the next unit's expiry
+    when LegendKeeper's last header was another tier's. The headers will tell once LegendKeeper reports key-day as the
+    tightest tier; nothing in the bridge depends on which it is.
+
+### Measurements (fake clock, published limits, the night of decision 3's measurements)
+
+`test/f9/night-heavy-day.test.ts`: F9's night (`test/f9/night-p4.test.ts`: the snapshot at 00:30 with first claim, the
+link sweep 01:15, the tree check 02:30, the asset check 02:50, routine P3 work every 5 minutes, light agent traffic)
+after a day of P1 work spread evenly from 08:00 to 23:00, the day a rolling window.
+
+- **A: the day at 18,500 by 23:00, the new defaults.** Never held by the day (at most 29,152 of 60,000 at any bulk
+  dispatch). The full snapshot finished at **03:48** (198 minutes), the asset check 04:40, the link sweep 05:42, the
+  tree check 05:47: exactly the quiet night's figures, as the day's 18,500 is far below 85%. Routine P3: 624 requests,
+  **0 budget waits**, 0 ms dispatch delay.
+- **B: the same day under the floors before this amendment** (70% of every tier for bulk, the day included). Held at
+  once ("bulk waiting: the daily tier is at 30.8% and bulk may use it up to 30% (frees in 7 h 55 min)"); by noon the
+  next day the full snapshot had read **0 of 3,400**: the night's agents keep the rolling day above 18,000 as the
+  morning's units leave. This is the live case.
+- **C: a very heavy day, 45,000 by 23:00, the new defaults.** Bulk is held at 85% ("bulk waiting: the daily tier is at
+  85.0% and bulk may use it up to 85% …") and **never takes the day past it** (at most 51,000 at any bulk dispatch). The
+  snapshot finished at 09:37, the asset check 10:32, the link sweep 11:36, the tree check 11:44, once the day's first
+  units had left the window. Routine P3 waited 7 times (at most 13 minutes), each on its own day floor (the day at
+  54,000 or more), which the night's agents reached after bulk had stopped: bulk never took P3's room. (To keep P3 free
+  of waits even on such a day, lower `RESERVE_DAY_FLOOR_MAINTENANCE`, to 0.05 say.)
+
+### Consequences
+
+- A busy day no longer stops the night's passes: they stop at 85% of the day, not at 30%. The 05:30 block-id sweep and
+  06:30 automation run (decision 6) find the snapshot finished on an ordinary heavy day, as on a quiet one.
+- Every "waiting for budget" now says which tier and floor, and when it frees; the owner need not read the tiers.
+- The owner can leave `RESERVE_FLOOR_BULK` at 0.7: it now paces each minute and hour only.
+
+### Tests (amendment 1)
+
+`test/f9/day-floors.test.ts` (the tier-to-row mapping and defaults; the day floors on the day only and the minute and
+hour floors on theirs only; the order in `setDayReserveFloors`; the live case at 18,009 before and after; P4 stops at
+85%, P3 and agents still go; the P3 equivalent at 30,001 and at 90%; the waiting reason for an hourly wait, for agents'
+work, for the write gap and for a 429; `class-wait` on each change; a held pass goes on from where it was, rolling and
+fixed), `test/f9/day-floors-surfaces.test.ts` (a parked job's status; `bridge_budget`; `GET /budgets` and `/overview`;
+the day row on `/budgets` and `PUT /budgets/reserve-day-floors`: saved, refused out of order, reset, applied at a start;
+the four Settings entries, set and refused at save), `test/f9/snapshot-day-hold.test.ts` (a full snapshot held mid-run
+and freed, on the mock: the card, one warning, complete, no read twice; once a run however often the hold comes and
+goes), `test/f9/night-heavy-day.test.ts` (the measurements), `test/unit/config.test.ts` (the day floors at load),
+`test/unit/config-registry.test.ts` (the registry's frozen defaults and ranges), and
+`test/unit/governor-estimate-footer.test.ts` (estimates at the day floor).

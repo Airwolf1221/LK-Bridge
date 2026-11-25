@@ -30,7 +30,7 @@ import {
   type WriteStepInfo,
   type WriteStepResult,
 } from '../jobs/index.js';
-import type { PriorityClass } from '../lk/governor/index.js';
+import type { ClassWait, PriorityClass } from '../lk/governor/index.js';
 
 /** v3 F9 (ADR 0074): the class of a full snapshot's reads (and its image downloads): bulk. */
 export const FULL_SNAPSHOT_PRIORITY = 'P4' satisfies PriorityClass;
@@ -89,6 +89,21 @@ export class SnapshotError extends Error {
   ) {
     super(message);
   }
+}
+
+/** v3 F9 amendment 1 (ADR 0074): a full run held by the daily tier's floor (in memory: a restart forgets it). */
+export interface DayHold {
+  readonly runId: string;
+  /** First seen held by the daily tier, and last seen. */
+  readonly sinceMs: number;
+  readonly lastSeenMs: number;
+  /** Still held (false once another wait, or none, followed, or the run ended). */
+  readonly holding: boolean;
+  readonly endedAtMs: number | null;
+  /** The governor's account at the latest sighting ("bulk waiting: the daily tier is at …"). */
+  readonly text: string;
+  readonly freesAtMs: number | null;
+  warned: boolean;
 }
 
 /** What the tree gives the snapshots (src/tree): its status, root, subtree and nodes. */
@@ -254,6 +269,8 @@ export class SnapshotService {
   private seq = 0;
   private changes: Promise<void> = Promise.resolve();
   private readonly running = new Set<string>();
+  /** v3 F9 amendment 1 (ADR 0074): per project, the latest full run's hold by the daily tier (in memory). */
+  private readonly dayHolds = new Map<string, DayHold>();
   /** v3 F9: projects whose full snapshot has finished and whose after-snapshot hooks are running now. */
   private readonly afterFullRunning = new Set<string>();
   private detach: (() => void)[] = [];
@@ -765,6 +782,9 @@ export class SnapshotService {
       firstClaim: true,
     });
     const deps = this.captureDeps(projectId, FULL_SNAPSHOT_PRIORITY);
+    // v3 F9 amendment 1 (ADR 0074): while the run reads, the governor says what holds bulk; a hold by the daily tier is
+    // logged once a run and shown on the Snapshots card.
+    const offWait = this.watchBulkWaits(projectId, run.id);
     const abandoned = (): RunOutcome | null =>
       this.index.run(run.id)?.state === 'running'
         ? null
@@ -861,7 +881,86 @@ export class SnapshotService {
       }
       this.index.noteRunError(run.id, e instanceof Error ? e.message : String(e));
       throw e;
+    } finally {
+      offWait();
+      const hold = this.dayHolds.get(projectId);
+      if (hold?.runId === run.id)
+        this.dayHolds.set(projectId, { ...hold, holding: false, endedAtMs: this.o.now() });
     }
+  }
+
+  /** v3 F9 amendment 1: follows the project's governor's bulk (P4) waits for one run. Returns the unsubscribe. */
+  private watchBulkWaits(projectId: string, runId: string): () => void {
+    const g = this.o.projects.client(projectId)?.governor as
+      | {
+          on?: (
+            e: 'class-wait',
+            cb: (x: { priority: PriorityClass; wait: ClassWait | null }) => void,
+          ) => () => void;
+        }
+      | undefined;
+    if (typeof g?.on !== 'function') return () => {};
+    return g.on('class-wait', (x) => {
+      if (x.priority === FULL_SNAPSHOT_PRIORITY) this.noteBulkWait(projectId, runId, x.wait);
+    });
+  }
+
+  /**
+   * v3 F9 amendment 1 (ADR 0074): a bulk wait seen while a full run reads. A hold by the daily tier (its floor reached)
+   * is kept for the Snapshots card, and logged ONCE a run (as LegendKeeper's day is a rolling window, the hold can come
+   * and go request by request at its floor); any other wait ends the hold. Public for the tests.
+   */
+  noteBulkWait(projectId: string, runId: string, wait: ClassWait | null): void {
+    const now = this.o.now();
+    const prev = this.dayHolds.get(projectId);
+    const mine = prev?.runId === runId ? prev : undefined;
+    if (wait && wait.cause === 'tier' && wait.row === 'day') {
+      const hold: DayHold = {
+        runId,
+        sinceMs: mine?.sinceMs ?? now,
+        lastSeenMs: now,
+        holding: true,
+        endedAtMs: null,
+        text: wait.text,
+        freesAtMs: wait.freesAtMs,
+        warned: mine?.warned ?? false,
+      };
+      if (!hold.warned) {
+        hold.warned = true;
+        this.o.log?.warn(
+          {
+            project: this.o.projects.nameOf(projectId) ?? projectId,
+            runId,
+            tier: wait.tier,
+            floor: wait.floor,
+            freesAt: wait.freesAtMs === null ? null : new Date(wait.freesAtMs).toISOString(),
+          },
+          `the full snapshot is held by the daily tier's floor: ${wait.text}`,
+        );
+      }
+      this.dayHolds.set(projectId, hold);
+    } else if (mine?.holding) {
+      this.dayHolds.set(projectId, { ...mine, holding: false, endedAtMs: now });
+    }
+  }
+
+  /** v3 F9 amendment 1: the governor's account of what holds bulk (P4) now, or null when nothing of it waits. */
+  private bulkWaitText(projectId: string): string | null {
+    try {
+      const g = this.o.projects.client(projectId)?.governor as
+        { waitOf?: (c: PriorityClass) => ClassWait | null } | undefined;
+      return typeof g?.waitOf === 'function' ? (g.waitOf(FULL_SNAPSHOT_PRIORITY)?.text ?? null) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** v3 F9 amendment 1: the latest full run's hold by the daily tier, for the Snapshots card (null: none). */
+  dayHold(projectId: string): Omit<DayHold, 'warned'> | null {
+    const h = this.dayHolds.get(projectId);
+    if (!h) return null;
+    const { warned: _w, ...rest } = h;
+    return rest;
   }
 
   /**
@@ -1629,6 +1728,10 @@ export class SnapshotService {
             nextFullEstimate: estimate,
             runs: this.index.runs(projectId, 20),
             owed: this.index.owedCount(projectId),
+            // v3 F9 amendment 1 (ADR 0074): what holds bulk now (the tier, its floor, when it frees), and the latest
+            // full run's hold by the daily tier, for the "Runs and schedules" card.
+            bulkWait: this.bulkWaitText(projectId),
+            dayHold: this.dayHold(projectId),
           }
         : {}),
       findings: this.index.openFindings(100),

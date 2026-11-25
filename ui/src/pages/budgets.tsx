@@ -21,6 +21,7 @@ import type {
   BudgetSamples,
   BudgetsAllResponse,
   BudgetsResponse,
+  ClassWait,
   OperationTierSnapshot,
   PriorityClass,
   TierId,
@@ -172,6 +173,7 @@ function ProjectBudgets({ toggle }: { toggle: ReactNode }) {
             </div>
           ))}
         </div>
+        <WaitReasons waits={snap.waits} />
         <p className="muted small-text">
           {snap.inFlight} request{snap.inFlight === 1 ? '' : 's'} in flight · writes are spaced at least{' '}
           {snap.writeSpacingMs} ms apart.
@@ -179,6 +181,7 @@ function ProjectBudgets({ toggle }: { toggle: ReactNode }) {
       </section>
 
       <FloorsCard data={b.data} onSaved={b.reload} />
+      {b.data.dayReserveFloors && <DayFloorsCard data={b.data} onSaved={b.reload} />}
     </>
   );
 }
@@ -336,6 +339,24 @@ function AllBudgets({ toggle }: { toggle: ReactNode }) {
   );
 }
 
+/**
+ * v3 F9 amendment 1 (ADR 0074): what holds each waiting class, in the governor's words: the tier, the class's floor on
+ * that tier's row, and when it frees ("bulk waiting: the daily tier is at 30.0% and bulk may use it up to 30% …").
+ */
+export function WaitReasons({ waits }: { waits: ClassWait[] | undefined }) {
+  if (!waits || waits.length === 0) return null;
+  return (
+    <ul className="plain small-text" aria-label="Why requests wait" data-testid="wait-reasons">
+      {waits.map((w) => (
+        <li key={w.priority} data-class={w.priority} data-row={w.row ?? ''}>
+          {w.text}
+          {w.queued > 1 ? <span className="muted"> · {fmtInt(w.queued)} queued</span> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function FloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => void }) {
   const cur = data.reserveFloors.current;
   const toPct = (f: number) => String(Math.round(f * 1000) / 10);
@@ -388,12 +409,12 @@ function FloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => v
   );
   return (
     <section className="card" aria-labelledby="floors-h">
-      <h2 id="floors-h">Reserve floors</h2>
+      <h2 id="floors-h">Reserve floors: minute and hour</h2>
       <p className="muted small-text">
-        The share of each tier a class must leave untouched, so agents stay responsive while a big job runs.
-        Changes apply to the next request. Dashboard actions (P0) always have the whole budget. Bulk passes
-        (the nightly full snapshot, the tree and asset checks, the link sweep) also give way to routine
-        maintenance.
+        The share of each minute and hour tier a class must leave untouched (the daily tier has its own
+        floors, below), so agents stay responsive while a big job runs. Changes apply to the next request.
+        Dashboard actions (P0) always have the whole budget. Bulk passes (the nightly full snapshot, the tree
+        and asset checks, the link sweep) also give way to routine maintenance.
         {data.reserveFloors.stored ? ' Saved in the dashboard.' : ' Using the environment’s values.'}
         {data.reserveFloors.bulkExplicit
           ? ''
@@ -457,6 +478,136 @@ function FloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => v
                   void run(
                     () => api.put('/budgets/reserve-floors', { reset: true, confirm: true }),
                     'Reserve floors reset.',
+                  ).then(onSaved);
+              });
+            }}
+          >
+            Reset to the environment’s values
+          </Button>
+        )}
+        {changed && valid && <Badge tone="warn">unsaved</Badge>}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * v3 F9 amendment 1 (ADR 0074): the second row of floors, the daily tier's. They only keep a reserve of the day for the
+ * owner's own work, so they are small: with bulk at 15%, the night's passes may use the day until 85% of it is spent.
+ */
+function DayFloorsCard({ data, onSaved }: { data: BudgetsResponse; onSaved: () => void }) {
+  const day = data.dayReserveFloors!;
+  const cur = day.current;
+  const toPct = (f: number) => String(Math.round(f * 1000) / 10);
+  const fromCur = () => ({
+    interactive: toPct(cur.interactive),
+    job: toPct(cur.job),
+    maintenance: toPct(cur.maintenance),
+    bulk: toPct(cur.bulk),
+  });
+  const [vals, setVals] = useState(fromCur);
+  useEffect(() => setVals(fromCur()), [cur.interactive, cur.job, cur.maintenance, cur.bulk]);
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const n = {
+    interactive: Number(vals.interactive) / 100,
+    job: Number(vals.job) / 100,
+    maintenance: Number(vals.maintenance) / 100,
+    bulk: Number(vals.bulk) / 100,
+  };
+  const valid =
+    Object.values(n).every((v) => Number.isFinite(v) && v >= 0 && v <= 1) &&
+    n.interactive <= n.job &&
+    n.job <= n.maintenance &&
+    n.maintenance <= n.bulk;
+  const changed =
+    n.interactive !== cur.interactive ||
+    n.job !== cur.job ||
+    n.maintenance !== cur.maintenance ||
+    n.bulk !== cur.bulk;
+  const dayLimit = data.snapshot.tiers['key-day']?.limit ?? null;
+  const field = (key: keyof typeof vals, label: string) => (
+    <div>
+      <label htmlFor={`dayfloor-${key}`}>{label}</label>
+      <input
+        id={`dayfloor-${key}`}
+        inputMode="decimal"
+        size={5}
+        value={vals[key]}
+        onChange={(e) => setVals({ ...vals, [key]: e.target.value })}
+        aria-describedby={`dayfloor-${key}-hint`}
+      />
+      <span id={`dayfloor-${key}-hint`} className="muted small-text">
+        {' '}
+        % kept free
+      </span>
+    </div>
+  );
+  return (
+    <section className="card" aria-labelledby="dayfloors-h" data-testid="day-floors">
+      <h2 id="dayfloors-h">Reserve floors: day</h2>
+      <p className="muted small-text">
+        The share of the daily tier a class must leave untouched. These only keep a reserve of the day for
+        your own work; the minute and hour floors above do the pacing. At {toPct(cur.bulk)}% the bulk passes
+        may use the day until {toPct(1 - cur.bulk)}% of it is spent
+        {dayLimit !== null ? `, leaving ${fmtInt(Math.ceil(dayLimit * cur.bulk))} requests` : ''}.
+        {day.stored ? ' Saved in the dashboard.' : ' Using the environment’s values.'}
+      </p>
+      <div className="field-row">
+        {field('interactive', 'Interactive (P1), day')}
+        {field('job', 'Jobs (P2), day')}
+        {field('maintenance', 'Maintenance (P3), day')}
+        {field('bulk', 'Bulk (P4), day')}
+      </div>
+      {!valid && (
+        <p className="note note-bad" role="alert">
+          Each value must be between 0 and 100, and interactive ≤ jobs ≤ maintenance ≤ bulk.
+        </p>
+      )}
+      <div className="row mt">
+        <Button
+          variant="primary"
+          busy={busy}
+          disabled={!valid || !changed}
+          onClick={() => {
+            void confirm({
+              title: 'Change the day floors?',
+              message: (
+                <p>
+                  Interactive {vals.interactive}%, jobs {vals.job}%, maintenance {vals.maintenance}%, bulk{' '}
+                  {vals.bulk}% of the daily tier kept free.
+                </p>
+              ),
+              confirmLabel: 'Save day floors',
+            }).then((ok) => {
+              if (ok)
+                void run(
+                  () => api.put('/budgets/reserve-day-floors', { ...n, confirm: true }),
+                  'Day floors saved.',
+                ).then(onSaved);
+            });
+          }}
+        >
+          Save day floors
+        </Button>
+        {day.stored && (
+          <Button
+            busy={busy}
+            onClick={() => {
+              void confirm({
+                title: 'Go back to the environment’s day floors?',
+                message: (
+                  <p>
+                    Interactive {toPct(day.environment.interactive)}%, jobs {toPct(day.environment.job)}%,
+                    maintenance {toPct(day.environment.maintenance)}%, bulk {toPct(day.environment.bulk)}%.
+                  </p>
+                ),
+                confirmLabel: 'Reset',
+              }).then((ok) => {
+                if (ok)
+                  void run(
+                    () => api.put('/budgets/reserve-day-floors', { reset: true, confirm: true }),
+                    'Day floors reset.',
                   ).then(onSaved);
               });
             }}

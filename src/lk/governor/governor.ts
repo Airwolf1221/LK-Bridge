@@ -7,7 +7,13 @@
  * tiers exhausted on 429. Failures go through the retry matrix (`retry.ts`).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { bulkOrderMessage, effectiveBulkFloor } from '../../config/floors.js';
+import {
+  bulkOrderMessage,
+  dayOrderMessage,
+  effectiveBulkFloor,
+  floorFor,
+  floorRowOf,
+} from '../../config/floors.js';
 import type { GovernorSettings, PriorityClass } from '../../config/lk.js';
 import {
   BridgeLkError,
@@ -45,6 +51,7 @@ import {
   PRIORITY_CLASSES,
   TIER_ORDER,
   type BudgetSnapshot,
+  type ClassWait,
   type CostSpec,
   type Estimate,
   type EstimateInput,
@@ -55,6 +62,7 @@ import {
   type TierSnapshot,
   type VerifyResult,
 } from './types.js';
+import { waitText } from './wait-text.js';
 import { SlidingWindow, type WindowEvent } from './window.js';
 import {
   COUNTERS_FORMAT,
@@ -345,6 +353,24 @@ export class Governor {
     this.pump(); // queued calls are re-evaluated against the new floors
   }
 
+  /**
+   * v3 F9 amendment 1 (ADR 0074): changes the daily tier's floors live (key-day, and any learned tier with a day's
+   * window); `setReserveFloors` keeps the minute and hour tiers'. The same rules: fractions 0-1, P1 <= P2 <= P3 <= P4;
+   * P0 is always 0. Throws `RangeError` otherwise.
+   */
+  setDayReserveFloors(floors: Readonly<Record<'P1' | 'P2' | 'P3' | 'P4', number>>): void {
+    const { P1, P2, P3, P4 } = floors;
+    for (const v of [P1, P2, P3, P4]) {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
+        throw new RangeError('Day floors must be fractions between 0 and 1');
+      }
+    }
+    const order = dayOrderMessage({ interactive: P1, job: P2, maintenance: P3, bulk: P4 });
+    if (order !== null) throw new RangeError(order);
+    this.current = { ...this.current, dayReserveFloors: { P0: 0, P1, P2, P3, P4 } };
+    this.pump();
+  }
+
   // ---------------------------------------------------------------------------------------------- public API
 
   /**
@@ -558,6 +584,7 @@ export class Governor {
       tiers,
       operationTiers: this.operationTierSnapshots(now),
       queues,
+      waits: this.waits(now),
       inFlight: this.inFlight,
       writeSpacingMs: spacing,
       nextWriteAtMs: this.lastWriteAt === null ? null : Math.max(now, this.lastWriteAt + spacing),
@@ -675,10 +702,11 @@ export class Governor {
     if (drawsItems && (!Number.isInteger(req.costs.items) || (req.costs.items ?? 0) < 1)) {
       throw invalid('costs.items must be a positive integer when items tiers are drawn');
     }
-    const floor = this.settings.reserveFloors[req.priority];
     for (const id of req.costs.tiers) {
       const limit = this.limitOf(this.tiers[id]);
-      if (limit === null || this.tiers[id].window === null) continue;
+      const windowMs = this.tiers[id].windowMs;
+      if (limit === null || this.tiers[id].window === null || windowMs === null) continue;
+      const floor = floorFor(this.settings, req.priority, windowMs);
       if (weightFor(id, req.costs) > limit - reserveUnits(limit, floor)) {
         throw invalid(`Cost on ${id} exceeds what class ${req.priority} may ever use in one window`);
       }
@@ -759,7 +787,6 @@ export class Governor {
   ): { at: number; tier: BudgetTierId | 'pacing' | null } {
     let at = now;
     let tier: BudgetTierId | 'pacing' | null = null;
-    const floor = this.settings.reserveFloors[req.priority];
     for (const id of TIER_ORDER) {
       if (!draws(req.costs, id)) continue;
       const t = this.tiers[id];
@@ -768,8 +795,9 @@ export class Governor {
         tier = id;
       }
       const limit = this.limitOf(t);
-      if (!t.window || limit === null) continue;
-      const cap = limit - reserveUnits(limit, floor);
+      if (!t.window || limit === null || t.windowMs === null) continue;
+      // v3 F9 amendment 1 (ADR 0074): the daily tier is held to the class's day floor, the others to its floor.
+      const cap = limit - reserveUnits(limit, floorFor(this.settings, req.priority, t.windowMs));
       const r = t.window.readyAt(now, weightFor(id, req.costs), cap);
       if (r > at) {
         at = r;
@@ -782,7 +810,11 @@ export class Governor {
         at = g.blockedUntil;
         tier = g.id;
       }
-      const r = g.window.readyAt(now, 1, learnedCap(g.limit, floor));
+      const r = g.window.readyAt(
+        now,
+        1,
+        learnedCap(g.limit, floorFor(this.settings, req.priority, g.windowMs)),
+      );
       if (r > at) {
         at = r;
         tier = g.id;
@@ -864,6 +896,88 @@ export class Governor {
       if (!progressed) break;
     }
     this.armWake(earliest, now);
+    this.noteWaits(now);
+  }
+
+  // ---------------------------------------------------------------------------------------------- what waits
+
+  /**
+   * v3 F9 amendment 1 (ADR 0074): what holds a class's queued work now, or null when nothing of it is queued. The head
+   * that may go soonest decides; P3 and P4 name agents' work while it is queued (they give way to it).
+   */
+  waitOf(cls: PriorityClass, now = this.clock.now()): ClassWait | null {
+    const queued = this.queueDepth(cls);
+    if (queued === 0) return null;
+    if ((cls === 'P3' || cls === 'P4') && this.queueDepth('P1') + this.queueDepth('P2') > 0) {
+      return this.describeWait(cls, queued, 'agents', null, now);
+    }
+    let best: { at: number; tier: BudgetTierId | 'pacing' | null } | null = null;
+    for (const lane of this.lanes[cls].values()) {
+      const head = lane[0];
+      if (!head) continue;
+      const r = this.readyAt(head.req, now);
+      if (!best || r.at < best.at) best = r;
+    }
+    if (!best || best.at <= now || best.tier === null)
+      return this.describeWait(cls, queued, 'in-flight', null, now);
+    return this.describeWait(cls, queued, best.tier, best.at, now);
+  }
+
+  /** Every class with queued work, highest first. */
+  waits(now = this.clock.now()): ClassWait[] {
+    const out: ClassWait[] = [];
+    for (const cls of PRIORITY_CLASSES) {
+      const w = this.waitOf(cls, now);
+      if (w) out.push(w);
+    }
+    return out;
+  }
+
+  /** The figures and the sentence of one wait. */
+  private describeWait(
+    cls: PriorityClass,
+    queued: number,
+    on: BudgetTierId | 'pacing' | 'agents' | 'in-flight',
+    at: number | null,
+    now: number,
+    o: { readonly refused?: boolean } = {},
+  ): ClassWait {
+    const base = { priority: cls, queued, row: null, floor: null, used: null, limit: null } as const;
+    const finish = (w: Omit<ClassWait, 'text'>, windowMs: number | null = null): ClassWait => ({
+      ...w,
+      text: waitText({ ...w, windowMs, maxInFlight: this.settings.maxInFlight }, now),
+    });
+    const freesAtMs = at !== null && Number.isFinite(at) ? at : null;
+    if (on === 'agents' || on === 'in-flight')
+      return finish({ ...base, cause: on, tier: null, freesAtMs: null });
+    if (on === 'pacing') return finish({ ...base, cause: 'pacing', tier: null, freesAtMs });
+    const doc = (TIER_IDS as readonly string[]).includes(on) ? this.tiers[on as TierId] : undefined;
+    const learned = doc ? undefined : [...this.opTiers.values()].find((g) => g.id === on);
+    const windowMs = doc ? doc.windowMs : (learned?.windowMs ?? null);
+    const limit = doc ? this.limitOf(doc) : (learned?.limit ?? null);
+    const used = doc ? (doc.window?.used(now) ?? null) : (learned?.window.used(now) ?? null);
+    const blockedUntil = doc ? doc.blockedUntil : (learned?.blockedUntil ?? 0);
+    if (o.refused === true || (at !== null && blockedUntil >= at && blockedUntil > now)) {
+      return finish({ ...base, cause: 'refused', tier: on, used, limit, freesAtMs }, windowMs);
+    }
+    const row = windowMs === null ? null : floorRowOf(windowMs);
+    const floor = windowMs === null ? null : floorFor(this.settings, cls, windowMs);
+    return finish({ ...base, cause: 'tier', tier: on, row, floor, used, limit, freesAtMs }, windowMs);
+  }
+
+  /** The last wait announced per class (`class-wait`), by cause and tier. */
+  private readonly waitKeys: Partial<Record<PriorityClass, string>> = {};
+
+  /** Announces each class whose wait changed cause or tier since the last pump (only while someone listens). */
+  private noteWaits(now: number): void {
+    if (!this.listeners.get('class-wait')?.size) return;
+    for (const cls of PRIORITY_CLASSES) {
+      const w = this.waitOf(cls, now);
+      const key = w === null ? '' : `${w.cause}:${w.tier ?? ''}`;
+      if ((this.waitKeys[cls] ?? '') === key) continue;
+      this.waitKeys[cls] = key;
+      this.emit('class-wait', { atMs: now, priority: cls, wait: w });
+    }
   }
 
   /**
@@ -1283,7 +1397,17 @@ export class Governor {
     retryAtMs: number,
     cause?: BridgeLkError,
   ) {
-    const err = new BudgetWaitError({ tier, retryAtMs, opId: req.opId, ...(cause ? { cause } : {}) });
+    const wait = this.describeWait(
+      req.priority,
+      this.queueDepth(req.priority),
+      tier,
+      retryAtMs,
+      this.clock.now(),
+      {
+        refused: cause !== undefined,
+      },
+    );
+    const err = new BudgetWaitError({ tier, retryAtMs, opId: req.opId, wait, ...(cause ? { cause } : {}) });
     this.emit('budget-wait', {
       atMs: this.clock.now(),
       opId: req.opId,

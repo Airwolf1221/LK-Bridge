@@ -13,6 +13,7 @@
  * least the project's measured per-write duration (the median wall time of its recent write steps), floored at the
  * configured spacing; `perWrite` says which figure was used.
  */
+import { floorFor } from '../../config/floors.js';
 import type { GovernorSettings } from '../../config/lk.js';
 import type { TierId } from '../registry-types.js';
 import { drawsLearnedTier, type BudgetTierId } from './groups.js';
@@ -65,7 +66,9 @@ export function estimateFrom(
   const items = count(input.createManyItems, 'createManyItems');
   const createManyCalls = Math.ceil(items / CREATE_MANY_MAX_ITEMS);
   const writeCalls = writes + createManyCalls;
-  const floor = settings.reserveFloors[input.priority ?? 'P2'];
+  const cls = input.priority ?? 'P2';
+  // v3 F9 amendment 1 (ADR 0074): each tier at the class's floor on its row (the daily tier at the day floor).
+  const floorOf = (windowMs: number) => floorFor(settings, cls, windowMs);
   const now = snapshot.atMs;
 
   const demandFor = (tier: TierId): number => {
@@ -80,7 +83,7 @@ export function estimateFrom(
     const t = snapshot.tiers[tier];
     const demand = demandFor(tier);
     if (t.limit === null || t.windowMs === null || demand === 0) continue;
-    const cap = Math.max(0, t.limit - reserveUnits(t.limit, floor));
+    const cap = Math.max(0, t.limit - reserveUnits(t.limit, floorOf(t.windowMs)));
     const available = Math.max(0, cap - t.used);
     const blockedMs = t.blockedUntilMs !== null ? Math.max(0, t.blockedUntilMs - now) : 0;
     let timeMs: number;
@@ -105,7 +108,7 @@ export function estimateFrom(
     let demand = 0;
     for (const [op, n] of ops) if (drawsLearnedTier(op, g.group, g.ops)) demand += n;
     if (demand === 0) continue;
-    const cap = Math.max(1, g.limit - reserveUnits(g.limit, floor));
+    const cap = Math.max(1, g.limit - reserveUnits(g.limit, floorOf(g.windowMs)));
     const available = Math.max(0, cap - g.used);
     const blockedMs = g.blockedUntilMs !== null ? Math.max(0, g.blockedUntilMs - now) : 0;
     const timeMs =
@@ -153,7 +156,10 @@ export function estimateFrom(
   }
 
   const day = snapshot.tiers['key-day'];
-  const dayCap = day.limit === null ? Number.POSITIVE_INFINITY : day.limit - reserveUnits(day.limit, floor);
+  const dayCap =
+    day.limit === null
+      ? Number.POSITIVE_INFINITY
+      : day.limit - reserveUnits(day.limit, floorOf(day.windowMs ?? 86_400_000));
   const dayRemaining = Math.max(0, dayCap - day.used);
   const dayNeeded = reads + writeCalls;
 

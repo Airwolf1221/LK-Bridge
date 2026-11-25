@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased: v3 F9 amendment 1, the daily tier's own floors
+
+[ADR 0074 amendment 1](adr/0074-v3-f9-the-bulk-class-p4.md#amendment-1-25-november-2026-the-daily-tier-has-floors-of-its-own).
+No migration. Four new settings, `RESERVE_DAY_FLOOR_INTERACTIVE` (2%), `_JOB` (5%), `_MAINTENANCE` (10%) and `_BULK`
+(15%). Built and tested against the mock and the governor's fake clock; nothing live was touched.
+
+- **The fix for 25 November's stalled snapshot** (66%, key-day at 18,009 of 60,000, the hourly tiers almost empty):
+  `RESERVE_FLOOR_BULK`'s 70% applied to the day too, barring bulk once the day passed 18,000. The four reserve floors
+  now apply to the minute and hour tiers only; the daily tier has its own, small floors (a reserve of the day for the
+  owner): bulk may use the day until 85% of it is spent, maintenance until 90%. The same order, checked at load, set and
+  save; a second row on the Budgets page's Reserve floors and four entries on the Settings page.
+- **Why a class waits, in words**, wherever the bridge shows one waiting for budget: the Budgets and Overview pages,
+  `bridge_budget` (`waiting`), a parked job's `waitReason` (`bridge_job_status`), an agent's refused call (`waiting`),
+  and the Snapshots card ("bulk waiting: the daily tier is at 30.0% and bulk may use it up to 30% (frees in 19 min)").
+  A full snapshot held by the day's floor says since when on the card and logs one warning a run.
+- **Measured** on F9's night after a day of 18,500 requests: the snapshot at 03:48, the last pass at 05:47 (as on a
+  quiet night); routine P3 never waited. Under the old floors the same night had read nothing by noon.
+
 ## Unreleased: v3 F6b, navigation and subject indexes
 
 [ADR 0079](adr/0079-v3-f6b-navigation-and-subject-indexes.md). Migrations `4700` and `4710`. Pack seed
