@@ -417,6 +417,9 @@ export class Audits {
       );
       const drafts: FindingDraft[] = [];
       for (const c of CHECKS) {
+        // v3 F6a.1 (ADR 0076 amendment 1): each check is a synchronous pass over every page; the run yields to the event
+        // loop between them, so a whole-repository audit cannot hold every request and the scheduler for its length.
+        await new Promise<void>((resolve) => setImmediate(resolve));
         try {
           drafts.push(...c.run(ctx));
         } catch (e) {

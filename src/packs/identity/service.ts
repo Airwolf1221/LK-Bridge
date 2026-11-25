@@ -4,6 +4,7 @@
  * partly done, skipped, failed, not run, excluded), runs the consistency check for each character it touched (free:
  * the snapshots) and keeps its new or still-open findings as the item's follow-ups.
  */
+import type { BackgroundRunner } from '../../background.js';
 import type { Db } from '../../db/open.js';
 import { EXPECT_STEP, VERIFY_STEP } from '../../jobs/internal-steps.js';
 import { TERMINAL_JOB_STATUSES, type JobView, type SkippedItem } from '../../jobs/types.js';
@@ -33,6 +34,8 @@ export interface IdentityStepRecord {
 }
 
 export interface IdentityDeps {
+  /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
+  readonly background?: Pick<BackgroundRunner, 'track'>;
   readonly db: Db;
   readonly engine: {
     readonly events: { on(e: 'job', f: (e: { type: string; job: JobView }) => void): () => void };
@@ -287,9 +290,13 @@ export class IdentityService {
       this.d.engine.events.on('job', (e) => {
         if (!TERMINAL_JOB_STATUSES.has(e.job.status)) return;
         if (!this.records.byJob(e.job.projectId, e.job.id)) return;
-        void this.conclude(e.job.projectId, e.job.id).catch((err: unknown) =>
+        // v3 F6a.1: tracked by the runtime's background work (a stop waits for it before the database closes).
+        const followUp = this.conclude(e.job.projectId, e.job.id).catch((err: unknown) =>
           this.d.log?.warn({ err, jobId: e.job.id }, 'an identity reconcile could not record its outcome'),
         );
+        void (this.d.background
+          ? this.d.background.track('an identity reconcile recording its outcome', followUp)
+          : followUp);
       }),
     );
     return () => this.stop();

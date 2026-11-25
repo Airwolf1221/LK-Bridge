@@ -169,3 +169,35 @@ the dashboard), `SPLIT_NOT_WRITABLE`, `STEP_TOO_LARGE`, `REPROPOSE_REFUSED`,
 `REPROPOSE_RUNNING`, `REVERT_STOPPED`, `PROPOSAL_NOT_APPROVED`, `FROM_NOT_A_FORMER_NAME`, `RETAG_STALE` and
 `BRIDGE_RESTARTING` (503 while the bridge restarts); from part B, `CANCELLED_BY_OWNER` and `REST_PROPOSED` (Resume), a
 proposal from Resume (`proposal_captured`), and the deletes rail's `text removal` reason.
+
+## Amendment 1 (v3 F6a.1, 25 November 2026): a hang names itself
+
+- Status: **Proposed** (v3 F6a.1). Builds on R3-65 (every task logs its start and finish with the memory) and fix A
+  (the clean shutdown). The hang it answers: [ADR 0076 amendment 1](0076-v3-f6a-reference-type-vocabulary.md#amendment-1-v3-f6a1-25-november-2026-the-live-hang-of-24-november-a-decision-is-cheap-the-report-is-cached).
+- Why: on 24 November 2026 a dashboard request held the event loop for 20 minutes and the journal said nothing. Requests
+  are logged when they complete, and a blocked loop logs nothing at all, so the culprit was not named.
+- New settings, each in `src/config/registry.ts` (group General, `applies: now`): `SLOW_REQUEST_WARN_MS` (30 s),
+  `SLOW_REQUEST_REPEAT_MS` (60 s), `EVENT_LOOP_LAG_WARN_MS` (2 s), `MEMORY_WARN_FRACTION` (0.7).
+
+1. **What is running** (`src/observability/watchdog.ts`, `Activities`): the HTTP server registers each request while it
+   runs (method and path; never a query string, header or body), the MCP layer each tool call (its name, never its
+   arguments; `/mcp` requests are registered per tool call instead), `loggedTask` each background task.
+2. **Start lines** at debug: `request started` for a dashboard action (POST, PUT or DELETE under `/api/admin`), `tool
+call started` for an MCP tool call.
+3. **Slow requests**: a request or tool call still running after `SLOW_REQUEST_WARN_MS` is a warning, `request still
+running`, again every `SLOW_REQUEST_REPEAT_MS` while it runs (`repeat: true`).
+4. **Event-loop lag**: `perf_hooks.monitorEventLoopDelay`, sampled every second; above `EVENT_LOOP_LAG_WARN_MS`, the
+   warning `event loop blocked` with the lag, what is running, what finished since the last sample (a block that has just
+   ended was most likely one of these), heap and RSS. A blocked loop cannot log until it is free, so in production a
+   **watchdog thread** (a worker) takes the main thread's heartbeat and, when it stops for longer than the threshold,
+   writes the warning itself straight to standard output with `writeSync` (`source: "watchdog-thread"`, what is running,
+   RSS, MemoryHigh), while the block lasts, again every `SLOW_REQUEST_REPEAT_MS`. Tests start many runtimes in one
+   process, so the thread runs only where the bridge's own start asks for it (`createBridge({ watchdogThread: true })`).
+5. **Memory pressure**: RSS above `MEMORY_WARN_FRACTION` of MemoryHigh is a warning naming the running tasks, again every
+   five minutes while it stays above (`memory pressure eased` at info when it drops). MemoryHigh is the bridge's own
+   cgroup's `memory.high` (from `/proc/self/cgroup`), else `/sys/fs/cgroup/memory.high`; `max` or none: no guard. A
+   report only: nothing is stopped or killed.
+6. **Shutdown**: the runtime's background work (ADR 0076 amendment 1, decision E) is aborted and awaited first, the audit
+   a full snapshot started is awaited (bounded), and the watchdog stops in the wind-down.
+
+The lines the owner will see are in docs/runbook-deploy.md ("When the bridge hangs").

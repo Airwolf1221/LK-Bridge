@@ -4,6 +4,7 @@
  * (`snapshot_restores`), so the dashboard can list them and so an undelete's second proposal (the page's content back to
  * the snapshot, planned against the page as it came back) follows once the undelete has run.
  */
+import type { BackgroundRunner } from '../background.js';
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { JobEngine, JobOrigin, Principal } from '../jobs/index.js';
@@ -98,6 +99,8 @@ export class Restores {
       /** v2 E5.5: the project's governor estimate (undefined when it has no governor now). */
       readonly estimate?: (projectId: string, input: PlanEstimateInput) => EstimateLike | undefined;
       readonly now: () => number;
+      /** v3 F6a.1: the runtime's background work: the second proposal is tracked there (awaited on stop). */
+      readonly background?: Pick<BackgroundRunner, 'track'>;
       readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
     },
   ) {}
@@ -302,10 +305,12 @@ export class Restores {
         this.setState(rec.id, 'executed');
         this.noteDropped(rec, e.jobId);
         if (rec.scope === 'image') this.noteImage(rec, e.jobId);
-        if (rec.followUp === 'content')
-          void this.followUp(rec).catch((err: unknown) =>
+        if (rec.followUp === 'content') {
+          const p = this.followUp(rec).catch((err: unknown) =>
             this.o.log?.warn({ err, restore: rec.id }, 'the restore’s second proposal failed'),
           );
+          void (this.o.background ? this.o.background.track('the restore’s second proposal', p) : p);
+        }
       } else if (['failed', 'conflicted', 'rejected', 'expired'].includes(e.state)) {
         this.setState(rec.id, e.state === 'failed' ? 'failed' : 'closed');
       }

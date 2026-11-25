@@ -72,6 +72,8 @@ import { ROUTE_BACK_REBASER, routeBackRebaser } from './jobs/route-back.js';
 import { SplitService } from './packs/split/service.js';
 import { RetagService } from './packs/retag/service.js';
 import { ReferenceTypeService } from './packs/reftypes/service.js';
+import { Watchdog } from './observability/watchdog.js';
+import { BackgroundRunner } from './background.js';
 import { OutcomeReconciler } from './jobs/reconcile.js';
 import { registerRetagChecks, RETAG_CHECKS } from './packs/retag/checks.js';
 import { bridgeArchiver } from './packs/split/archive.js';
@@ -94,7 +96,11 @@ import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
 import { snapshotMapCheckers } from './snapshots/restore.js';
 import { Rehearsals } from './snapshots/rehearsal.js';
-import { DEFAULT_ART_CACHE_SETTINGS, DEFAULT_SNAPSHOT_SETTINGS } from './config/tools.js';
+import {
+  DEFAULT_ART_CACHE_SETTINGS,
+  DEFAULT_SNAPSHOT_SETTINGS,
+  DEFAULT_WATCHDOG_SETTINGS,
+} from './config/tools.js';
 import { createTree, type TreeService } from './tree/index.js';
 import { SecretStore } from './secrets/store.js';
 import { createRegistry, type Registry } from './registry/index.js';
@@ -216,6 +222,8 @@ export interface Runtime {
   readonly retag: RetagService;
   /** v3 F6a (ADR 0076): the Reference Type report, the owner's decisions and the vocabulary's publication. */
   readonly referenceTypes: ReferenceTypeService;
+  /** v3 F6a.1: background work actions start (governance re-checks, "Run audit now"), awaited on stop. */
+  readonly background: BackgroundRunner;
   /** v3 F5a (ADR 0067, H10): the reconciliation of writes whose outcome is unknown. */
   readonly outcomes: OutcomeReconciler;
   /** v3 F5b (ADR 0068, H5): automatic actions for audits, one finding code at a time (the owner's settings). */
@@ -315,6 +323,12 @@ export interface RuntimeOptions {
   /** The runtime's log level and destination (default: LOG_LEVEL, to stdout). `createBridge` passes the server's. */
   readonly logLevel?: string;
   readonly logStream?: Writable;
+  /**
+   * v3 F6a.1 (ADR 0061 amendment 1): the watchdog (slow requests, event-loop lag, memory pressure). On by default; its
+   * thread, which still speaks while the event loop is blocked, only where asked (the bridge's own start: tests start
+   * many runtimes in one process). `false`: none (a test that installs its own).
+   */
+  readonly watchdog?: false | { readonly thread?: boolean };
   /** v2 E1b test seam: Google's OAuth and Drive endpoints and the fetch that reaches them (default: Google's). */
   readonly googleOAuth?: GoogleOAuthOptions;
 }
@@ -913,7 +927,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const consistencyRef: { current: Consistency | null } = { current: null };
   // v3 F6a (ADR 0076): the Reference Type vocabulary: the report, the owner's decisions, the publication, and the two
   // checks' input (from the approved pack and the decisions).
+  // v3 F6a.1 (ADR 0076 amendment 1): background work an action starts, owned here: debounced where it is a re-check,
+  // one run at a time per key, and aborted and awaited before the engine and the database stop.
+  const background = new BackgroundRunner({
+    log: { warn: (obj, msg) => log.warn(obj, msg), debug: (obj, msg) => log.debug(obj, msg) },
+    debounceMs: 2_000,
+  });
   const referenceTypes = new ReferenceTypeService({
+    background,
     db: o.db,
     packs,
     tree,
@@ -923,6 +944,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
+    // v3 F6a.1 (ADR 0076 amendment 1): the bulk accept's bound, read on each use.
+    bulkMax: () => toolsSettings.reftypeBulkMax,
   });
   const detachReferenceTypes = referenceTypes.start();
   const audits: Audits = new Audits({
@@ -1075,10 +1098,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine.registerChecker(BLOCKWISE_CHECK, blockwiseChecker),
   ];
   // v2 E4: a block-by-block write that stops part-way is undone when the page is exactly as it left it.
-  const blockwiseUndo = new BlockwiseUndo({ engine, log: { warn: (obj, msg) => log.warn(obj, msg) } });
+  const blockwiseUndo = new BlockwiseUndo({
+    engine,
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+    background,
+  });
   const detachBlockwiseUndo = blockwiseUndo.start();
   // v2 E1a: restores are always proposals; the plan reads the page live at P1 and the tree for names and places.
   const restores = new Restores({
+    background,
     db: o.db,
     svc: snapshots,
     engine,
@@ -1188,6 +1216,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v3 F3e: the split service is made after the reverts (it hooks the proposals); Revert reaches it through this.
   const splitsRef: { current: SplitService | null } = { current: null };
   const reverts = new RevertService({
+    background,
     db: o.db,
     engine,
     review,
@@ -1296,6 +1325,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
   );
   const renames = new RenameService({
+    background,
     db: o.db,
     engine,
     packs,
@@ -1337,6 +1367,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine.markRelockCheck(c),
   );
   const splits = new SplitService({
+    background,
     db: o.db,
     engine,
     proposals: {
@@ -1354,6 +1385,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v3 F3f (ADR 0060): the retag audit and its separately approved apply: the job's checks (the policy, a fresh read per
   // page, the in-lock tags rebaser, the read-back), each batch's dispositions, the owner's classifications.
   const retag = new RetagService({
+    background,
     db: o.db,
     packs,
     appraisal,
@@ -1383,6 +1415,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     policy: (packId, projectId) => retag.currentPolicy(packId, projectId),
   });
   const identity = new IdentityService({
+    background,
     db: o.db,
     engine,
     proposals: policy.proposals,
@@ -1407,6 +1440,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v3 F5b (ADR 0068, H5): automatic actions for audits, switched on one finding code at a time by the owner; each
   // switch recorded in Repository Automation's "Approved Narrow Automations".
   const automation = new AutomationService({
+    background,
     db: o.db,
     engine,
     packs,
@@ -1483,6 +1517,25 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   logMemory();
   const memoryTimer = setInterval(logMemory, MEMORY_LOG_MS);
   memoryTimer.unref();
+  // v3 F6a.1 (ADR 0061 amendment 1): the next hang names itself (src/observability/watchdog.ts); its thresholds are
+  // registry settings read on each check.
+  const watchdog =
+    o.watchdog === false
+      ? null
+      : new Watchdog({
+          log: { warn: (obj, msg) => log.warn(obj, msg), info: (obj, msg) => log.info(obj, msg) },
+          settings: () => ({
+            slowRequestWarnMs: toolsSettings.slowRequestWarnMs ?? DEFAULT_WATCHDOG_SETTINGS.slowRequestWarnMs,
+            slowRequestRepeatMs:
+              toolsSettings.slowRequestRepeatMs ?? DEFAULT_WATCHDOG_SETTINGS.slowRequestRepeatMs,
+            eventLoopLagWarnMs:
+              toolsSettings.eventLoopLagWarnMs ?? DEFAULT_WATCHDOG_SETTINGS.eventLoopLagWarnMs,
+            memoryWarnFraction:
+              toolsSettings.memoryWarnFraction ?? DEFAULT_WATCHDOG_SETTINGS.memoryWarnFraction,
+          }),
+          thread: o.watchdog?.thread === true,
+        });
+  watchdog?.start();
   const mappings = createMappings({
     db: o.db,
     engine,
@@ -1692,6 +1745,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits,
     retag,
     referenceTypes,
+    background,
     outcomes,
     automation,
     workstreamReports,
@@ -1719,8 +1773,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       projects.stopWaits();
       // 2. Background work stops alongside: a build resumes at the next start; a sweep or check in flight ends as
       //    interrupted. The trees keep following writes while jobs reach their boundary.
-      const background = (async () => {
+      const stopping = (async () => {
+        // v3 F6a.1: the actions' background work first (a governance re-check, an audit run): aborted and awaited.
+        await background.stop(o.backgroundMs ?? 10_000);
         await Promise.allSettled([tree.stopPasses(), assets.stopPasses()]);
+        // The audit a full snapshot started (it reads the snapshot store and writes findings): waited for, bounded.
+        await within(audits.settled(), o.backgroundMs ?? 10_000);
         lifecycle.stop();
         chronology.stop();
         snapshots.stop();
@@ -1733,7 +1791,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       const { parked, stillRunning } = await parking;
       await bounded(
         'background work',
-        background,
+        stopping,
         Math.max(0, (o.backgroundMs ?? 10_000) - (Date.now() - started)),
       );
       // 3. The rest of the shutdown, each part bounded.
@@ -1746,6 +1804,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       };
     },
     async shutdown(drainTimeoutMs = 20_000) {
+      // v3 F6a.1: the actions' background work (a governance re-check after a publication, an audit run): aborted and
+      // awaited before anything it uses stops.
+      await background.stop(10_000);
+      await within(audits.settled(), 10_000);
       // A build resumes at the next start; a sweep or check in flight ends as interrupted. Writes are still followed
       // while the engine drains, so their re-reads are made (or owed) before the tree stops.
       await tree.stopPasses();
@@ -1776,6 +1838,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   }): Promise<void> {
     const run = (label: string, p: Promise<unknown>, ms: number | undefined) =>
       ms === undefined || !w.bounded ? p : w.bounded(label, p, ms);
+    // v3 F6a.1: idempotent (both stops call it first); here for a caller that winds down without either.
+    await run('background work', background.stop(2_000), 2_500);
     detachPolicy();
     await run(
       'the engine',
@@ -1792,6 +1856,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     for (const off of detachAuditCheckers) off();
     detachBlockIds();
     clearInterval(memoryTimer);
+    await watchdog?.stop();
     detachBlockwiseUndo();
     detachReverts();
     detachResume();

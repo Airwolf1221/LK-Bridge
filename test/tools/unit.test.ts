@@ -28,6 +28,12 @@ describe('tools configuration', () => {
       snapshots: DEFAULT_SNAPSHOT_SETTINGS,
       // v3 F7b (ADR 0071, D6): the art cache, beside the database, 500 MB.
       artCache: { dir: null, maxBytes: 500 * 1024 * 1024 },
+      // v3 F6a.1 (ADR 0076 amendment 1, ADR 0061 amendment 1): the bulk accept's bound and the hang warnings.
+      reftypeBulkMax: 500,
+      slowRequestWarnMs: 30_000,
+      slowRequestRepeatMs: 60_000,
+      eventLoopLagWarnMs: 2_000,
+      memoryWarnFraction: 0.7,
       // v3 F7d (ADR 0077, A1): one groups call's limits.
       artCallMaxImages: 120,
       artCallMaxGroups: 40,

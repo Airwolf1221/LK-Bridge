@@ -11,7 +11,11 @@
  * A task that runs more often than once a minute (the budget sampler every 10 seconds, the instance heartbeat, a
  * dashboard stream's timers) is `quiet`: it logs its finish, with its start's figures, only when memory moved by 1 MB or
  * more during it, or when it failed; two lines every few seconds would bury everything else.
+ *
+ * v3 F6a.1 (ADR 0061 amendment 1): every task also registers with the process's activities for as long as it runs, so the
+ * watchdog's slow-request, event-loop and memory warnings can name it (src/observability/watchdog.ts).
  */
+import { processActivities } from '../observability/watchdog.js';
 
 export interface TaskLogger {
   info(obj: Record<string, unknown>, msg: string): void;
@@ -36,7 +40,31 @@ export async function loggedTask<T>(
   fn: () => Promise<T> | T,
   o: TaskLogOptions = {},
 ): Promise<T> {
-  if (!log) return fn();
+  const done = processActivities.begin('task', task, taskFields(fields));
+  try {
+    if (!log) return await fn();
+    return await logged(log, task, fields, fn, o);
+  } finally {
+    done();
+  }
+}
+
+/** The fields an activity keeps: short plain values only (a project id, a trigger), never a payload. */
+function taskFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields))
+    if ((typeof v === 'string' && v.length <= 100) || typeof v === 'number' || typeof v === 'boolean')
+      out[k] = v;
+  return out;
+}
+
+async function logged<T>(
+  log: TaskLogger,
+  task: string,
+  fields: Record<string, unknown>,
+  fn: () => Promise<T> | T,
+  o: TaskLogOptions,
+): Promise<T> {
   const t0 = Date.now();
   const before = memoryNow();
   if (o.quiet !== true) log.info({ task, ...fields, memory: before }, 'task started');

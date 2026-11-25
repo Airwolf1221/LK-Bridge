@@ -68,7 +68,7 @@ export function referenceTypesTool(deps: ToolDeps): McpToolProvider {
     annotations: READ_ANNOTATIONS,
     listed,
     handler: (args, mctx) =>
-      withProject(deps, args.project, 'read', (pd) => {
+      withProject(deps, args.project, 'read', async (pd) => {
         const svc = pd.services?.referenceTypes;
         if (!svc)
           return errorResult(
@@ -84,6 +84,8 @@ export function referenceTypesTool(deps: ToolDeps): McpToolProvider {
           underId = r.node.id;
         }
         try {
+          // v3 F6a.1: the report's cached base, brought up to date in chunks that yield (a reload rebuilds nothing).
+          await svc.prepare(pd.project.id);
           const offset = args.offset ?? 0;
           const limit = args.limit ?? DEFAULT_ROWS;
           const report = svc.report(

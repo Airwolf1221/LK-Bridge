@@ -14,6 +14,7 @@
  *   follow-up rename of exactly those (`arkona_rename` with `from`). Historical pages (D2) and the old name kept as an
  *   alias are not leftovers.
  */
+import type { BackgroundRunner } from '../../background.js';
 import type { Db } from '../../db/open.js';
 import type { Appraisal } from '../../appraisal/service.js';
 import type { JobEngine } from '../../jobs/engine.js';
@@ -146,6 +147,8 @@ const toRecord = (r: Row): RenameRecord => ({
 });
 
 export interface RenameServiceDeps {
+  /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
+  readonly background?: Pick<BackgroundRunner, 'track'>;
   readonly db: Db;
   readonly engine: Pick<JobEngine, 'events' | 'setWaitForCheck' | 'poke'> &
     Partial<Pick<JobEngine, 'skippedItems'>>;
@@ -404,9 +407,11 @@ export class RenameService {
     }
     this.update(rec.id, { state: job.status === 'succeeded' ? 'done' : 'stopped' });
     // What is left, once the job's change snapshot is in the index (taken as the job ended).
-    void this.leftovers(rec.projectId, rec.id, { refresh: true }).catch((err: unknown) =>
+    // v3 F6a.1: tracked by the runtime's background work (a stop waits for it before the database closes).
+    const followUp = this.leftovers(rec.projectId, rec.id, { refresh: true }).catch((err: unknown) =>
       this.d.log?.warn({ err, rename: rec.id }, 'what a rename left could not be listed'),
     );
+    void (this.d.background ? this.d.background.track('listing what a rename left', followUp) : followUp);
   }
 
   /**

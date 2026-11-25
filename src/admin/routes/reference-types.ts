@@ -7,10 +7,15 @@
  *   published section, the decisions not published yet, the latest publications;
  * - `POST /reference-types/decide` (the step-up; audited `reftypes.decide`): accept, edit (another canonical value, or a
  *   new one with its role word), reject, keep as specialist (the pages listed, or any page in the category);
- * - `POST /reference-types/bulk-accept` (the step-up): every confident suggestion of the open rows a filter matches;
+ * - `POST /reference-types/bulk-accept` (the step-up): v3 F6a.1 (ADR 0076 amendment 1): the rows named by `ids` (the
+ *   page sends the confident rows it offers), or every confident suggestion of the open rows a filter matches; ONE
+ *   transaction, at most REFTYPE_BULK_MAX rows, idempotent; it returns the rows it changed, not a report;
  * - `POST /reference-types/undo` (the step-up; audited `reftypes.undo`): a decision not applied and not published;
  * - `POST /reference-types/publish`: `dryRun` (one read, no step-up) returns the section's exact text and the
  *   confirmation; otherwise the step-up, ONE job of the bridge's, audited `reftypes.publish`.
+ *
+ * v3 F6a.1: every route awaits the service's `prepare` first, which brings the report's cached base up to date in chunks
+ * that yield to the event loop; a reload while nothing changed rebuilds nothing, and a decision never rebuilds the report.
  */
 import * as z from 'zod';
 import { ReferenceTypeError, STATUSES, type ReferenceTypeService } from '../../packs/reftypes/service.js';
@@ -38,6 +43,7 @@ const STATUS: Readonly<Record<string, number>> = {
   SOURCE_UNREADABLE: 502,
   SECTION_AMBIGUOUS: 409,
   SECTION_PARENT_MISSING: 409,
+  BULK_TOO_LARGE: 413,
 };
 
 const filterShape = {
@@ -45,6 +51,8 @@ const filterShape = {
   status: z.union([z.enum(STATUSES), z.array(z.enum(STATUSES)).max(5)]).optional(),
   minCount: z.coerce.number().int().min(1).max(100_000).optional(),
   under: z.string().min(1).max(500).optional(),
+  /** v3 F6a.1: the page's "Value contains" (server side, so paging holds). */
+  value: z.string().min(1).max(200).optional(),
 };
 
 export const registerReferenceTypes: Register = (api, ctx) => {
@@ -77,6 +85,7 @@ export const registerReferenceTypes: Register = (api, ctx) => {
       status?: string | string[] | undefined;
       minCount?: number | undefined;
       under?: string | undefined;
+      value?: string | undefined;
     },
   ) => {
     const u = underId(projectId, f.under);
@@ -86,6 +95,7 @@ export const registerReferenceTypes: Register = (api, ctx) => {
         ? { status: (Array.isArray(f.status) ? f.status : [f.status]) as (typeof STATUSES)[number][] }
         : {}),
       ...(f.minCount !== undefined ? { minCount: f.minCount } : {}),
+      ...(f.value !== undefined ? { valueContains: f.value } : {}),
       ...(u ? { underId: u } : {}),
     };
   };
@@ -101,9 +111,12 @@ export const registerReferenceTypes: Register = (api, ctx) => {
       req.query,
     );
     const p = ctx.project(q.project);
-    return wrap(() => {
+    return wrap(async () => {
       const s = svc();
-      const report = s.report(p.id, filterOf(p.id, q), { offset: q.offset, limit: q.limit });
+      await s.prepare(p.id);
+      const filter = filterOf(p.id, q);
+      const report = s.report(p.id, filter, { offset: q.offset, limit: q.limit });
+      const confident = s.confident(p.id, filter);
       const eff = s.effective(p.id);
       const decisions = s.store.decisions(p.id);
       return {
@@ -122,6 +135,9 @@ export const registerReferenceTypes: Register = (api, ctx) => {
           .map((d) => ({ decision: d, reason: eff.conflicts.get(d.id)! })),
         decisions,
         publications: s.store.publications(p.id, 10),
+        // v3 F6a.1: what "Accept all confident suggestions" offers in this filter (every page of it), and its bound.
+        confident,
+        bulkMax: s.bulkMax(),
         now: ctx.now(),
       };
     });
@@ -146,8 +162,10 @@ export const registerReferenceTypes: Register = (api, ctx) => {
       req.body,
     );
     const p = projectFor(ctx, req, b.project);
-    return wrap(() => ({
-      decision: svc().decide('owner', p.id, {
+    return wrap(async () => {
+      const s = svc();
+      await s.prepare(p.id);
+      const decision = s.decide('owner', p.id, {
         value: b.value,
         category: b.category,
         action: b.action,
@@ -155,20 +173,43 @@ export const registerReferenceTypes: Register = (api, ctx) => {
         ...(b.role !== undefined ? { role: b.role } : {}),
         ...(b.scope !== undefined ? { scope: b.scope } : {}),
         ...(b.reason !== undefined ? { reason: b.reason } : {}),
-      }),
-    }));
+      });
+      // The row as it now stands (from the cached base), not a report.
+      return { decision, row: s.rowAfter(p.id, decision) };
+    });
   });
 
   api.post('/reference-types/bulk-accept', async (req) => {
     requireReauth(ctx.deps.services, req);
     const b = parseInput(
-      z.object({ project: projectParam, ...filterShape, confirm: z.literal(true) }).strict(),
+      z
+        .object({
+          project: projectParam,
+          ...filterShape,
+          // The service bounds them by REFTYPE_BULK_MAX (BULK_TOO_LARGE); this is only the request's own limit.
+          ids: z
+            .array(z.string().regex(/^rtr_[0-9a-f]{16}$/))
+            .max(5000)
+            .optional(),
+          confirm: z.literal(true),
+        })
+        .strict(),
       req.body,
     );
     const p = projectFor(ctx, req, b.project);
-    return wrap(() => {
-      const r = svc().bulkAccept('owner', p.id, filterOf(p.id, b));
-      return { accepted: r.accepted.length, skipped: r.skipped, decisions: r.accepted };
+    return wrap(async () => {
+      const s = svc();
+      await s.prepare(p.id);
+      const r = s.bulkAccept('owner', p.id, { ...filterOf(p.id, b), ...(b.ids ? { ids: b.ids } : {}) });
+      return {
+        accepted: r.accepted.length,
+        skipped: r.skipped.length,
+        remaining: r.remaining,
+        max: r.max,
+        decisions: r.accepted,
+        rows: r.rows,
+        skippedRows: r.skipped,
+      };
     });
   });
 

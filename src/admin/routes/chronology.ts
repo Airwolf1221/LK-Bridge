@@ -155,7 +155,11 @@ export const registerChronology: Register = (api, ctx) => {
       throw new AdminHttpError(409, 'CHECK_RUNNING', 'A chronology check is already running.');
     const ready = c.readiness(p.id);
     if (!ready.ok) throw new AdminHttpError(409, ready.code, ready.message);
-    void c.check(p.id, 'manual', 'P2').catch(() => undefined);
+    // v3 F6a.1: owned by the runtime (a stop waits for it before the database closes).
+    const run = c.check(p.id, 'manual', 'P2');
+    if (ctx.deps.runtime.background)
+      void ctx.deps.runtime.background.track('the chronology check (Check now)', run);
+    else void run.catch(() => undefined);
     return { started: true };
   });
 

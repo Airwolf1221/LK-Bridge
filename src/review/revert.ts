@@ -17,6 +17,7 @@
  * - **Audited** (`job.revert`: the job, the targets and the outcome; once when submitted or refused, once when it ends)
  *   and needs the owner's re-authentication (the admin route). Its result points to the journal and the snapshots.
  */
+import type { BackgroundRunner } from '../background.js';
 import type { Db } from '../db/open.js';
 import type { JobEngine } from '../jobs/engine.js';
 import { JobsError } from '../jobs/errors.js';
@@ -124,6 +125,8 @@ export type RevertResult =
     };
 
 export interface RevertDeps {
+  /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
+  readonly background?: Pick<BackgroundRunner, 'track'>;
   readonly db: Db;
   readonly engine: Pick<
     JobEngine,
@@ -778,21 +781,33 @@ export class RevertService {
     const notes = note.images ?? [];
     if (state !== 'succeeded') {
       // The revert did not go ahead: the copies of the images' files are not wanted.
-      void this.dropCopies(notes);
+      this.follow('dropping the copies of a revert’s images', this.dropCopies(notes));
       return;
     }
     this.d.review.markReverted(row.project_id, row.job_id);
-    if (notes.length > 0) void this.afterImages(row.id, row.project_id, row.job_id, note, notes);
+    if (notes.length > 0)
+      this.follow(
+        'putting a revert’s images back on the Staging page',
+        this.afterImages(row.id, row.project_id, row.job_id, note, notes),
+      );
     // v3 F3e (ADR 0059): a split's phase 1 reverted: the pages it made go to ONE deletion proposal.
     if (this.d.splits?.isPhase1(row.project_id, row.job_id))
-      void this.d.splits
-        .afterRevert(row.project_id, row.job_id, job.id)
-        .catch((err: unknown) =>
-          this.d.log?.warn(
-            { err, jobId: row.job_id },
-            'the pages a reverted split made could not be proposed for deletion',
+      this.follow(
+        'proposing the deletion of a reverted split’s pages',
+        this.d.splits
+          .afterRevert(row.project_id, row.job_id, job.id)
+          .catch((err: unknown) =>
+            this.d.log?.warn(
+              { err, jobId: row.job_id },
+              'the pages a reverted split made could not be proposed for deletion',
+            ),
           ),
-        );
+      );
+  }
+
+  /** v3 F6a.1: a follow-up, tracked by the runtime's background work (a stop waits for it before the database closes). */
+  private follow(label: string, p: Promise<unknown>): void {
+    void (this.d.background ? this.d.background.track(label, p) : p);
   }
 
   /**

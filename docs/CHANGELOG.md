@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased: v3 F6a.1, the Reference Types hang (25 November 2026)
+
+[ADR 0076 amendment 1](adr/0076-v3-f6a-reference-type-vocabulary.md#amendment-1-v3-f6a1-25-november-2026-the-live-hang-of-24-november-a-decision-is-cheap-the-report-is-cached),
+[ADR 0061 amendment 1](adr/0061-cr-2026-11-r3-decisions.md#amendment-1-v3-f6a1-25-november-2026-a-hang-names-itself).
+Migration `4510_tree_versions.sql`. Reproduced and fixed against the mock at Arkona's scale; nothing live was touched.
+
+- **The cause**: "Accept all confident suggestions" called `decide` per row in one synchronous loop, and `decide`
+  rebuilt the whole report first; each build asked the tree for every id on every page's path (1,703 status reads, each
+  with freshly prepared SQLite statements), whose native memory is freed only once the event loop turns. About 116 MB
+  per build, never freed, the loop never free: the 24 November hang (heap flat, RSS past MemoryHigh, swap, silence).
+- **The report** is built from one light tree scan and one kinds query (68 ms at 1,500 pages, was 500 ms), cached on the
+  tree's version and the decisions' version, built in chunks that yield, and paged (100 rows a page; "Value contains" on
+  the server). A reload: 19 ms (was 514 ms).
+- **A decision** reads the cached base and returns its row; it never rebuilds the report.
+- **Accept all**: one request by ids (the page sends the whole filter's confident rows), one transaction (decisions and
+  audit rows together), at most `REFTYPE_BULK_MAX` (new setting, 500), idempotent (rows already decided are skipped
+  with their reason), returning the rows it changed. 131 rows: 124 ms, the loop held 118 ms, RSS unchanged (was: the
+  process killed at 13 GB).
+- **Background work an action starts is the runtime's** (`src/background.ts`): the governance check after "Publish
+  vocabulary" (the sandbox's race, `The database connection is not open`) and after "Allow this tag everywhere" is
+  debounced, one at a time, at P3, aborted and awaited on stop; "Run audit now", the chronology's "Check now" and the job
+  follow-ups of Revert, splits, renames, identity reconciles, block-by-block undo and restores are tracked and awaited.
+  The audit yields between its checks.
+- **A hang names itself**: `request still running` (30 s, again every 60 s), `event loop blocked` (over 2 s, with what
+  ran, heap and RSS), a watchdog thread that writes `event loop blocked: the main thread has not answered` while the
+  loop is still held, and `memory pressure: RSS above 70% of MemoryHigh` naming the running tasks; `request started` and
+  `tool call started` at debug. New settings `SLOW_REQUEST_WARN_MS`, `SLOW_REQUEST_REPEAT_MS`, `EVENT_LOOP_LAG_WARN_MS`,
+  `MEMORY_WARN_FRACTION`. The lines are in docs/runbook-deploy.md ("When the bridge hangs").
+- Hot SQL (the tree's status, a node, a project) is prepared once per connection (`src/db/statements.ts`).
+
 ## Unreleased: v3 F7d, a character's whole art set in one call (24 November 2026)
 
 [ADR 0077](adr/0077-v3-f7d-one-call-art.md). No migration. Nothing was run against a live system: the mock only (the

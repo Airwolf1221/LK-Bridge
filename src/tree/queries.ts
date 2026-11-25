@@ -9,6 +9,7 @@
  * Name lookups are EXACT (no fuzzy matching, PLAN-v2 4.4) and return EVERY match. By default they ignore case
  * (Unicode NFC, lower case); `caseSensitive: true` compares the stored text as it is.
  */
+import { prepared } from '../db/statements.js';
 import { nameKey } from './classify.js';
 import { TreeStore, type NodeRow } from './store.js';
 import type {
@@ -36,6 +37,22 @@ export interface TreeCounts {
   readonly stale: number;
   /** Nodes whose properties have not been read yet. */
   readonly propertiesPending: number;
+}
+
+/** v3 F6a.1: a page as `pageScan` returns it (no sidebar, no documents). */
+export interface PageScanRow {
+  readonly id: string;
+  readonly rawName: string;
+  readonly kind: NodeKind;
+  /** From the root to this node, both included. */
+  readonly pathIds: readonly string[];
+  readonly pathNames: readonly string[];
+  readonly tags: readonly string[];
+  readonly referenceType: string | null;
+  readonly propertiesFound: boolean | null;
+  readonly propertiesPending: boolean;
+  readonly lastReadAt: number;
+  readonly stale: boolean;
 }
 
 const ORDER = 'ORDER BY rank IS NULL, rank COLLATE BINARY, id';
@@ -201,6 +218,73 @@ export class TreeQueries {
   /** Nodes under the root whose name has neither prefix (reported, PLAN-v2 section 1). */
   unclassified(projectId: string, o: { limit?: number; offset?: number } = {}): TreeAnswer<TreeNode[]> {
     return this.byKind(projectId, 'unclassified', o);
+  }
+
+  /**
+   * v3 F6a.1 (ADR 0076 amendment 1): the tree's version, bumped by every change to any of its nodes (migration 4510's
+   * triggers). 0 before the first node. Cheap (one row): callers cache what they derive from the tree on it.
+   */
+  version(projectId: string): number {
+    const r = prepared(this.db, 'SELECT version FROM tree_versions WHERE project_id = ?').get(projectId) as
+      { version: number } | undefined;
+    return r?.version ?? 0;
+  }
+
+  /**
+   * v3 F6a.1: every node's kind, in ONE query (a report that labels each page by the kinds on its path asked node() per
+   * id before: 1,700 status reads per build at Arkona's scale).
+   */
+  kinds(projectId: string): Map<string, NodeKind> {
+    const rows = prepared(this.db, 'SELECT id, kind FROM tree_nodes WHERE project_id = ?').all(projectId) as {
+      id: string;
+      kind: NodeKind;
+    }[];
+    return new Map(rows.map((r) => [r.id, r.kind]));
+  }
+
+  /**
+   * v3 F6a.1: the pages (`bsrc`, `bwrk`, `barc`), light: the fields a whole-repository report needs, without the
+   * stored sidebars and documents (`SELECT *` carried every sidebar's JSON for each page). Unordered.
+   */
+  pageScan(projectId: string): PageScanRow[] {
+    const rows = prepared(
+      this.db,
+      `SELECT id, raw_name, kind, path_ids, path_names, tags, reference_type, properties_found, props_observed_at,
+              last_read_at, stale
+         FROM tree_nodes WHERE project_id = ? AND kind IN ('bsrc', 'bwrk', 'barc')`,
+    ).all(projectId) as {
+      id: string;
+      raw_name: string;
+      kind: NodeKind;
+      path_ids: string;
+      path_names: string;
+      tags: string;
+      reference_type: string | null;
+      properties_found: number | null;
+      props_observed_at: number | null;
+      last_read_at: number;
+      stale: number;
+    }[];
+    const parse = <T>(s: string, fallback: T): T => {
+      try {
+        return JSON.parse(s) as T;
+      } catch {
+        return fallback;
+      }
+    };
+    return rows.map((r) => ({
+      id: r.id,
+      rawName: r.raw_name,
+      kind: r.kind,
+      pathIds: parse<string[]>(r.path_ids, []),
+      pathNames: parse<string[]>(r.path_names, []),
+      tags: parse<string[]>(r.tags, []),
+      referenceType: r.reference_type,
+      propertiesFound: r.properties_found === null ? null : r.properties_found === 1,
+      propertiesPending: r.props_observed_at === null,
+      lastReadAt: r.last_read_at,
+      stale: r.stale === 1,
+    }));
   }
 
   /** Stale nodes (a re-read failed, or their place is unknown). */

@@ -13,7 +13,10 @@ import { Link } from '../router';
  * Per row the owner can **Accept** the suggestion, **Edit** (pick another canonical value of the category, or type a new
  * one with its role word, added to the vocabulary), **Reject** (leave it as it is; never suggested again) or **Keep as
  * specialist** (an approved additional type for exactly the pages listed, or any page in the category). **Accept all
- * confident suggestions** takes every open row the filter shows that has one. A decision not yet applied (no fix written
+ * confident suggestions** takes every open row of the filter that has one (every page of it, not only the one shown):
+ * v3 F6a.1 (ADR 0076 amendment 1) sends their ids in ONE request, at most REFTYPE_BULK_MAX at a time, and the server
+ * decides them in one transaction (running it again touches only the rows still open). The table is paged (100 rows a
+ * page); every filter, "Value contains" included, is applied by the server. A decision not yet applied (no fix written
  * with it) nor published can be undone. Every decision asks for the step-up and is recorded in the audit log.
  *
  * **Publish vocabulary** previews the exact section text, then writes "Reference Type Vocabulary" under "Sidebar
@@ -53,6 +56,7 @@ interface Candidate {
   role: string;
 }
 interface Row {
+  id: string;
   value: string;
   category: string;
   count: number;
@@ -106,7 +110,17 @@ interface Response {
   };
   conflicts: { decision: Decision; reason: string }[];
   publications: { id: string; jobId: string | null; state: string; at: number; replaced: boolean }[];
+  /** v3 F6a.1: the confident open rows of the whole filter, and how many one "Accept all" decides. */
+  confident?: {
+    count: number;
+    ids: string[];
+    sample: { value: string; suggestion: string; count: number }[];
+  };
+  bulkMax?: number;
 }
+
+/** Rows a page of the table shows (v3 F6a.1: fetched a page at a time). */
+export const PAGE_ROWS = 100;
 interface PublishPreview {
   lines: string[];
   replaced: boolean;
@@ -128,18 +142,26 @@ export function ReferenceTypesPage() {
   const [status, setStatus] = useState<Status | ''>(initialParam('value') ? '' : 'open');
   const [minCount, setMinCount] = useState('');
   const [valueText, setValueText] = useState(initialParam('value'));
+  const [offset, setOffset] = useState(0);
+  const filterKey = `${category}\u0000${status}\u0000${minCount}\u0000${valueText}`;
+  const [seenFilter, setSeenFilter] = useState(filterKey);
+  if (seenFilter !== filterKey) {
+    // A new filter starts at its first page.
+    setSeenFilter(filterKey);
+    setOffset(0);
+  }
   const path = `/reference-types${qs({
     category: category || undefined,
     status: status || undefined,
     minCount: minCount || undefined,
-    limit: 500,
+    value: valueText.trim() || undefined,
+    offset: offset || undefined,
+    limit: PAGE_ROWS,
   })}`;
   const r = useScopedApi<Response>(path);
   if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
   const d = r.data;
-  const rows = valueText
-    ? d.report.rows.filter((x) => x.value.toLowerCase().includes(valueText.toLowerCase()))
-    : d.report.rows;
+  const rows = d.report.rows;
   const categories = d.vocabulary.categories.map((c) => c.category);
   return (
     <>
@@ -217,7 +239,7 @@ export function ReferenceTypesPage() {
             />
           </label>
         </div>
-        <BulkAccept rows={rows} filter={{ category, status, minCount }} onChanged={r.reload} />
+        <BulkAccept rows={rows} confident={d.confident} bulkMax={d.bulkMax} onChanged={r.reload} />
         {rows.length === 0 ? (
           <Empty>No value matches.</Empty>
         ) : (
@@ -236,7 +258,7 @@ export function ReferenceTypesPage() {
               <tbody>
                 {rows.map((row) => (
                   <ValueRow
-                    key={`${row.value}\u0000${row.category}`}
+                    key={row.id ?? `${row.value}\u0000${row.category}`}
                     row={row}
                     vocabulary={d.vocabulary.categories}
                     onChanged={r.reload}
@@ -245,6 +267,22 @@ export function ReferenceTypesPage() {
               </tbody>
             </table>
           </div>
+        )}
+        {d.report.totalRows > PAGE_ROWS && (
+          <p className="pager" role="group" aria-label="Pages">
+            <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_ROWS))}>
+              Previous
+            </Button>{' '}
+            <span className="small-text">
+              Rows {offset + 1} to {Math.min(offset + PAGE_ROWS, d.report.totalRows)} of {d.report.totalRows}
+            </span>{' '}
+            <Button
+              disabled={offset + PAGE_ROWS >= d.report.totalRows}
+              onClick={() => setOffset(offset + PAGE_ROWS)}
+            >
+              Next
+            </Button>
+          </p>
         )}
         <p className="small-text">
           {d.report.totalRows} value(s) match. The audits’ findings link here: see{' '}
@@ -362,31 +400,56 @@ function Coverage({ data }: { data: Response }) {
 
 function BulkAccept({
   rows,
-  filter,
+  confident: server,
+  bulkMax,
   onChanged,
 }: {
   rows: Row[];
-  filter: { category: string; status: string; minCount: string };
+  confident: Response['confident'];
+  bulkMax: number | undefined;
   onChanged: () => void;
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
   const withReauth = useReauth();
   const { run, busy } = useAction();
-  const confident = rows.filter((r) => r.status === 'open' && r.suggestion.kind === 'suggested');
-  if (confident.length === 0) return null;
+  // The server's list covers the whole filter (every page of it); an older server sends none: the rows shown.
+  const shown = rows.filter((r) => r.status === 'open' && r.suggestion.kind === 'suggested');
+  const all = server
+    ? server
+    : {
+        count: shown.length,
+        ids: shown.map((r) => r.id),
+        sample: shown
+          .slice(0, 30)
+          .map((r) => ({ value: r.value, suggestion: r.suggestion.value!, count: r.count })),
+      };
+  if (all.count === 0) return null;
+  const max = bulkMax ?? 500;
+  const ids = all.ids.slice(0, max);
+  const partial = all.count > ids.length;
   const go = () =>
     void confirm({
-      title: `Accept ${confident.length} confident suggestion(s)?`,
+      title: partial
+        ? `Accept the first ${ids.length} of ${all.count} confident suggestions?`
+        : `Accept ${all.count} confident suggestion(s)?`,
       message: (
-        <ul className="small-text">
-          {confident.slice(0, 30).map((r) => (
-            <li key={`${r.value}:${r.category}`}>
-              {r.value} → {r.suggestion.value} ({r.count} page(s))
-            </li>
-          ))}
-          {confident.length > 30 && <li>… and {confident.length - 30} more</li>}
-        </ul>
+        <>
+          <ul className="small-text">
+            {all.sample.map((r) => (
+              <li key={`${r.value}:${r.suggestion}`}>
+                {r.value} → {r.suggestion} ({r.count} page(s))
+              </li>
+            ))}
+            {all.count > all.sample.length && <li>… and {all.count - all.sample.length} more</li>}
+          </ul>
+          {partial && (
+            <p className="small-text">
+              At most {max} are accepted at once; accept again for the rest. Rows already decided are left as
+              they are.
+            </p>
+          )}
+        </>
       ),
       confirmLabel: 'Accept all',
     }).then((ok) => {
@@ -395,8 +458,7 @@ function BulkAccept({
         () =>
           withReauth(() =>
             api.post('/reference-types/bulk-accept', {
-              ...(filter.category ? { category: filter.category } : {}),
-              ...(filter.minCount ? { minCount: Number(filter.minCount) } : {}),
+              ids,
               confirm: true,
             }),
           ),
@@ -408,7 +470,9 @@ function BulkAccept({
   return (
     <p>
       <Button busy={busy} onClick={go}>
-        Accept all {confident.length} confident suggestion(s) in this filter
+        {partial
+          ? `Accept the first ${ids.length} of ${all.count} confident suggestions in this filter`
+          : `Accept all ${all.count} confident suggestion(s) in this filter`}
       </Button>
     </p>
   );

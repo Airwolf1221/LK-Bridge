@@ -19,7 +19,7 @@ export {
   type TreeServiceOptions,
   type PassOutcome,
 } from './service.js';
-export { TreeQueries, type SubtreeEntry, type TreeCounts } from './queries.js';
+export { TreeQueries, type PageScanRow, type SubtreeEntry, type TreeCounts } from './queries.js';
 export { TreeStore } from './store.js';
 export {
   BARC_PREFIX,
