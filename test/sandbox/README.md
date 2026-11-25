@@ -537,17 +537,30 @@ mock: `test/sandbox-mock/f7-1-core.test.ts`, and `test/sandbox-mock/pack-governa
 ## A whole art set in one call (v3 F7d)
 
 `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7d-art-set` (`f7d-art-set.ts`; ADR
-0077). WRITES, then cleans up (about 45 writes and 70 reads). D0 the Arkona pack attached, the asset tree built, the
-pack's governance current in the temporary database (the throwaway governance page, as f7-1-core's C0); D1 a throwaway
-Working compact character `Probe <Letters>`; D2 a zip of 4 tiny images taken in as an archive (`portrait.png` at the top,
-`Probe Gala/front.png` and `Probe Gala/back.png`, `Probe Hunt/front.png`); D3 ONE `arkona_add_character_art` call with
-`groups` naming the entries, ONE proposal of four items, printed as `F7D PLAN items=Art page | Design pieces |
-Outfits(Probe Gala) | Outfits(Probe Hunt)`, approved whole, its job succeeded and verified (`placed Design pieces 1, Outfit
-Probe Gala 2, Outfit Probe Hunt 1`); D4 read back LIVE and printed as `F7D SET …`: `core=[BWRK] Probe <Letters> -
-Character Core referenceType=Character Core`, `folders=Wardrobe, Wardrobe / Probe Gala (2) looseInWardrobe=1
-designPieces=1`, the Art page's `headings=` holding Reference Images, Probe Gala and Probe Hunt, `images=4`, `copies=`
-with the Core's values, `dependsOnCore=true`. Clean-up: the throwaway index, the character's asset folder, the archive
-and the governance page. On the mock: `test/sandbox-mock/f7d-art-set.test.ts`.
+0077). WRITES, then cleans up (about 50 writes and 80 reads). It calls the tools as two temporary principals, one at
+scope `propose` and one at scope `write`, because the pack's switch for `arkona_add_character_art` is "follow the
+scope": at `propose` a call is one proposal; at `write` it runs as a job, unless it makes an Authoritative Art page or
+upgrades an Authoritative Core. D0 the Arkona pack attached, the asset tree built, the pack's governance current in the
+temporary database (the throwaway governance page, as f7-1-core's C0); D1 a throwaway Working compact character
+`Probe <Letters>`; D2 a zip of 5 tiny images taken in as an archive (`portrait.png` at the top, `Probe Gala/front.png`
+and `Probe Gala/back.png`, `Probe Hunt/front.png`, `Probe Ride/front.png`); D3 **at scope `propose`**, ONE
+`arkona_add_character_art` call with `groups` naming four entries, ONE proposal of four items, printed as
+`F7D PLAN items=Art page | Design pieces | Outfits(Probe Gala) | Outfits(Probe Hunt)`, approved whole, its job
+succeeded and verified (`placed Design pieces 1, Outfit Probe Gala 2, Outfit Probe Hunt 1`); D3b **at scope `write`**,
+a second, smaller groups call on the same Working character now that its Art page exists (the new outfit Probe Ride, one
+piece): it runs **directly as a job, with no proposal**, printed as `F7D DIRECT job … succeeded and verified; placed
+Outfit Probe Ride 1`; D4 read back LIVE and printed as `F7D SET …`: `core=[BWRK] Probe <Letters> - Character Core
+referenceType=Character Core`, `folders=Wardrobe, Wardrobe / Probe Gala (2) looseInWardrobe=2 designPieces=1`, the Art
+page's `headings=` holding Reference Images, Probe Gala, Probe Hunt and Probe Ride, `images=5`, `copies=` with the
+Core's values, `dependsOnCore=true`. Clean-up: the throwaway index, the character's asset folder, the archive and the
+governance page. On the mock: `test/sandbox-mock/f7d-art-set.test.ts`, on a world with the pack's seed switches (the
+tool at "follow the scope", as live; the run asserts it).
+
+**The 25 November 2026 run failed D3 with "not one proposal".** The check, not the product, was wrong: it made its
+call at scope `write` on a Working character, which runs directly as a job (the tool's description since F7d), and it
+expected the old "always a proposal" claim. The run on the mock passed only because the mock's pack had the tool at
+"always propose". Fixed in F10's Step 0 as above; rerun it after deploying:
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7d-art-set`.
 
 **Any check that runs a pack's tag-computing tools** (`arkona_create_*`, `arkona_identity_reconcile`, `arkona_rename`,
 `arkona_split_owner`, `arkona_retag_apply`) on a copy of the bridge's state must opt in the same way, or point the
