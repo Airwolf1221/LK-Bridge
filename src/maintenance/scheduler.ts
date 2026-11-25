@@ -118,7 +118,12 @@ export class MaintenanceScheduler {
       }
       // v3 F10 (ADR 0078): a job on its default schedule whose default now comes round sooner (the chronology check,
       // weekly until F10, nightly since) takes the new one at once, not after its old next run.
-      if (state.enabled && state.schedule === null && state.nextRunAt !== null && state.runningSince === null) {
+      if (
+        state.enabled &&
+        state.schedule === null &&
+        state.nextRunAt !== null &&
+        state.runningSince === null
+      ) {
         const sooner = nextRun(def.defaultSchedule, now);
         if (sooner < state.nextRunAt) {
           this.store.update(def.id, { nextRunAt: sooner }, now);
