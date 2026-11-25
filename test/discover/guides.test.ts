@@ -61,7 +61,9 @@ describe('docs/bridge-guide.md', () => {
     // v3 F7b (ADR 0071, D7): one table row more, `arkona_get_art` (166 characters: 9,282 before it), and nothing else.
     // v3 F6a (ADR 0076): one row more, `arkona_reference_types`, paid for by trimming rule 1 and 4, the split line and
     // the scope paragraph (rule 2's last sentence kept, at the owner's review): 9,446, the cap unchanged. R5 trims it.
-    expect(decide.markdown.length).toBeLessThan(9450);
+    // v3 F10 (ADR 0078): one row more ("Edit many chronology rows, or restructure a table", 166 characters): 9,612, the
+    // cap raised by exactly what it needs (9,450 → 9,613). The five rules are unchanged.
+    expect(decide.markdown.length).toBeLessThan(9613);
   });
   it('names only tools that exist', () => {
     const names = new Set(tools.map((t) => t.name));

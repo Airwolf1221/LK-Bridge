@@ -1480,6 +1480,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     automation,
     background,
     delayMs: () => toolsSettings.chronologyCheckDelayMs ?? DEFAULT_CHRONOLOGY_CHECK_DELAY_MS,
+    workstreamOfJob: (projectId, jobId) => engine.queries.getJob(projectId, jobId)?.origin.workstream ?? null,
     log: { info: (obj, msg) => log.info(obj, msg) },
   });
 

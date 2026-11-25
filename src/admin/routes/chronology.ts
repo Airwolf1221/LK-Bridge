@@ -139,6 +139,18 @@ export const registerChronology: Register = (api, ctx) => {
   });
 
   /** The chronology check's last run (findings only). */
+  /**
+   * v3 F10 (ADR 0078, C5): what the automation's chronology codes did (the rows and events it synced or proposed), and
+   * when the automation last ran.
+   */
+  api.get('/chronology/automation', (req) => {
+    const q = parseInput(z.object({ project: projectParam }), req.query);
+    const p = ctx.project(q.project);
+    const a = ctx.deps.runtime.automation;
+    if (!a) return { project: p, available: false };
+    return { project: p, available: true, ...a.chronologyView(p.id) };
+  });
+
   api.get('/chronology/check', (req) => {
     const q = parseInput(z.object({ project: projectParam }), req.query);
     const p = ctx.project(q.project);

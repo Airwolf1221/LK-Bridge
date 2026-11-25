@@ -337,6 +337,26 @@ export class AutomationService {
     });
   }
 
+  /**
+   * v3 F10 (ADR 0078, C5): the Chronology page's view of the automation: when it last ran, each chronology code's mode,
+   * and what its chronology codes did (newest first): the rows and events synced, proposed or left for the owner.
+   */
+  chronologyView(projectId: string, limit = 50) {
+    const codes = PROPOSE_ONLY.filter((e) => e.source === 'chronology');
+    return {
+      lastRun: this.store.runs(projectId, { limit: 1 })[0] ?? null,
+      lastChronologyRun:
+        this.store.runs(projectId, { limit: 50 }).find((r) => r.trigger === 'chronology') ?? null,
+      paused: this.store.global().paused,
+      codes: codes.map((e) => ({ code: e.code, name: e.name, mode: this.modeOf(projectId, e) })),
+      items: this.store.itemsOfCodes(
+        projectId,
+        codes.map((e) => e.code),
+        limit,
+      ),
+    };
+  }
+
   /** The codes that run now in a project (bridge_info tells agents, so they do not duplicate the work). */
   automated(
     projectId: string,
@@ -1031,11 +1051,24 @@ export class AutomationService {
    * v3 F10 (ADR 0078, C3): the chronology's codes (C1 and C2) on the findings of the check that just finished, at once,
    * within the caps, as the nightly run does (every stop condition, the governance state and the pauses alike).
    */
-  runChronology(projectId: string): Promise<RunRow> {
+  runChronology(
+    projectId: string,
+    o: {
+      /** C5: the workstream of the table edit that caused the check, per age (its repairs are attributed to it). */
+      readonly workstreamOf?: (age: string) => string | null;
+    } = {},
+  ): Promise<RunRow> {
+    if (o.workstreamOf) this.chronologyWorkstreams.set(projectId, o.workstreamOf);
     return this.run(projectId, 'chronology', {
       codes: new Set(PROPOSE_ONLY.filter((e) => e.source === 'chronology').map((e) => e.code)),
+    }).finally(() => {
+      if (this.chronologyWorkstreams.get(projectId) === o.workstreamOf)
+        this.chronologyWorkstreams.delete(projectId);
     });
   }
+
+  /** v3 F10 (C5): per project, the workstream of the edit behind a run of the chronology codes (set by that run). */
+  private readonly chronologyWorkstreams = new Map<string, (age: string) => string | null>();
 
   private async runOnce(
     projectId: string,
@@ -1399,7 +1432,10 @@ export class AutomationService {
         plan: () => Promise.resolve({ ok: false, code: 'CHRONOLOGY', reason: 'planned by the chronology' }),
       };
       try {
-        const r = await chron.repair('automation', projectId, t.fix, { mode, origin: this.origin(e) });
+        // C5: a repair caused by a table edit with a workstream is in that workstream (bridge_workstream_report).
+        const ws = this.chronologyWorkstreams.get(projectId)?.(t.fix.age) ?? null;
+        const origin = ws ? { ...this.origin(e), workstream: ws } : this.origin(e);
+        const r = await chron.repair('automation', projectId, t.fix, { mode, origin });
         if (r.status === 'proposal_captured')
           this.item(projectId, runId, e.code, c, 'proposed', {
             proposalId: r.proposalId,

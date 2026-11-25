@@ -39,6 +39,7 @@ import type { McpToolProvider, McpToolResult } from '../server.js';
 import { planBlockwise, type BlockOp } from '../../pages/blockwise.js';
 import { blockwiseJob, validateBlockOp } from '../../pages/blockwise-job.js';
 import { defineTool } from './define.js';
+import { chronologyTableNote } from './chronology-note.js';
 import { runWriteJob } from './write-job.js';
 import { lastMajorRevisionArg } from './schemas.js';
 import type { LmrMode } from '../../jobs/lmr-hook.js';
@@ -378,6 +379,8 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           ...(plan.section ? { section: plan.section.path } : args.section ? { section: args.section } : {}),
           ...(choices.length > 0 ? { mentions: mentionChoices(choices) } : {}),
         };
+        // v3 F10 (ADR 0078, C4): an age table's edit says how its rows reach the timeline. Nothing is refused.
+        const tableNote = chronologyTableNote(pd.services?.chronology, ctx.projectId, node.id, doc.id);
         const warnings =
           plan.warnings.length > 0
             ? {
@@ -445,6 +448,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
             'write_page',
             {
               ...head,
+              ...tableNote,
               status: 'dry_run',
               plannedOn: plan.version,
               counts,
@@ -508,7 +512,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
             plan,
             ops: blockwise.ops,
             title,
-            head: { ...head, ...warnings },
+            head: { ...head, ...tableNote, ...warnings },
             operation: { ...operation, blockwise: blockwiseSummary(blockwise.ops) },
             journalOperation,
             prefetched: [{ op: 'getDocumentBlocks', path, body: read.value }],
@@ -575,6 +579,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
               'write_page',
               {
                 ...head,
+                ...tableNote,
                 status: 'written',
                 version: newVersion,
                 previousVersion: plan.version,
@@ -617,6 +622,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
               'write_page',
               {
                 ...head,
+                ...tableNote,
                 status: run.status,
                 jobId: run.jobId,
                 ...(run.status === 'queued' ? { reason: run.reason } : {}),
@@ -639,6 +645,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
               'write_page',
               {
                 ...head,
+                ...tableNote,
                 status: 'proposal_captured',
                 proposalId: run.proposalId,
                 ...(run.summary !== undefined ? { summary: run.summary } : {}),
@@ -660,6 +667,8 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
 }
 
 const full0 = (detail: string | undefined): boolean => detail === 'full';
+
+export { CHRONOLOGY_TABLE_NOTE, chronologyTableNote } from './chronology-note.js';
 
 /** What a block-by-block write will send (v2 E4). */
 function blockwiseSummary(ops: readonly BlockOp[]): Record<string, unknown> {

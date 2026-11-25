@@ -63,8 +63,18 @@ export interface AfterEditDeps {
       priority?: 'P3',
     ): Promise<{ summary: string; skipped?: boolean }>;
   };
-  /** The automation's chronology codes (absent: the check alone). */
-  readonly automation?: { runChronology(projectId: string): Promise<unknown> };
+  /**
+   * The automation's chronology codes (absent: the check alone). `workstreamOf` names, for an age, the workstream of
+   * the table edit that caused the check (C5: its repairs are attributed to it), where one is recorded.
+   */
+  readonly automation?: {
+    runChronology(
+      projectId: string,
+      o?: { readonly workstreamOf?: (age: string) => string | null },
+    ): Promise<unknown>;
+  };
+  /** The workstream a job was labelled with (F5c), or null. */
+  readonly workstreamOfJob?: (projectId: string, jobId: string) => string | null;
   readonly background: Pick<BackgroundRunner, 'trigger'>;
   /** CHRONOLOGY_CHECK_DELAY_MS, read on each use. */
   readonly delayMs: () => number;
@@ -76,12 +86,26 @@ export const afterEditKey = (projectId: string) => `chronology-check:${projectId
 
 /** The change-snapshot hook: schedules the delayed check when a chronology document changed. True when it did. */
 export function createAfterEdit(d: AfterEditDeps): (projectId: string, change: ChangeTaken) => boolean {
+  /** Per project, the workstream of the newest edit of each chronology document since its check last started. */
+  const causes = new Map<string, Map<string, string>>();
   return (projectId, change) => {
     if (isChronologyJobTool(change.tool)) return false;
     const ready = d.chronology.readiness(projectId);
     if (!ready.ok) return false;
     const touched = chronologyDocumentsTouched(ready.config, change);
     if (touched.length === 0) return false;
+    const ws = d.workstreamOfJob?.(projectId, change.jobId) ?? null;
+    if (ws !== null) {
+      const page = change.pages.find((p) => p.pageId === ready.config.resourceId);
+      const c = ready.config;
+      const docs =
+        page?.documents === 'all'
+          ? [c.mainDocumentId, ...c.ages.flatMap((a) => [a.tableDocumentId, a.timelineDocumentId])]
+          : (page?.documents ?? []);
+      const m = causes.get(projectId) ?? new Map<string, string>();
+      for (const doc of docs) if (doc) m.set(doc, ws);
+      causes.set(projectId, m);
+    }
     const delay = d.delayMs();
     d.log?.info?.(
       { project: projectId, job: change.jobId, documents: touched, delayMs: delay },
@@ -91,9 +115,22 @@ export function createAfterEdit(d: AfterEditDeps): (projectId: string, change: C
       afterEditKey(projectId),
       'chronology check after an edit',
       async () => {
+        // The edits this run answers: those up to its start (a later edit schedules the next run).
+        const mine = causes.get(projectId) ?? new Map<string, string>();
+        causes.delete(projectId);
         const r = await d.chronology.check(projectId, 'after-edit', 'P3');
         if (r.skipped === true) return;
-        await d.automation?.runChronology(projectId);
+        const now = d.chronology.readiness(projectId);
+        const workstreamOf = (ageName: string): string | null => {
+          if (!now.ok) return null;
+          const a = now.config.ages.find((x) => x.name === ageName);
+          return (
+            (a ? (mine.get(a.tableDocumentId) ?? mine.get(a.timelineDocumentId)) : undefined) ??
+            (now.config.mainDocumentId ? mine.get(now.config.mainDocumentId) : undefined) ??
+            null
+          );
+        };
+        await d.automation?.runChronology(projectId, mine.size > 0 ? { workstreamOf } : {});
       },
       { debounceMs: delay },
     );

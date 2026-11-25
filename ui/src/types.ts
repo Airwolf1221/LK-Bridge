@@ -1523,6 +1523,36 @@ export interface ChronologyCheckResponse {
   running: boolean;
 }
 
+/** v3 F10 (ADR 0078, C5): GET /chronology/automation. */
+export interface ChronologyAutomationResponse {
+  project: ProjectRef;
+  available: boolean;
+  lastRun?: {
+    id: string;
+    trigger: string;
+    startedAt: number;
+    finishedAt: number | null;
+    state: string;
+    summary: string | null;
+  } | null;
+  lastChronologyRun?: ChronologyAutomationResponse['lastRun'];
+  paused?: boolean;
+  codes?: { code: string; name: string; mode: 'off' | 'propose' | 'apply' }[];
+  items?: {
+    id: number;
+    runId: string;
+    code: string;
+    pageId: string | null;
+    pageName: string | null;
+    outcome: 'applied' | 'proposed' | 'skipped' | 'guarded' | 'failed' | 'stopped';
+    reasonCode: string | null;
+    reason: string | null;
+    jobId: string | null;
+    proposalId: string | null;
+    at: number;
+  }[];
+}
+
 export interface ChronologyRecordView {
   id: number;
   tool:

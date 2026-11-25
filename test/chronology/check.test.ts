@@ -116,14 +116,15 @@ describe('the chronology check', () => {
     expect(JSON.stringify(w.repo.blocks.get(w.ages[FOURTH]!.table))).toBe(before);
   });
 
-  it('is a weekly maintenance job at the lowest priority', () => {
+  // v3 F10 (ADR 0078, C3): nightly since F10 (it was weekly), chained after the night's full snapshot.
+  it('is a nightly maintenance job at P3', () => {
     const job = w.stack.runtime.maintenance.scheduler.list().find((j) => j.id === 'chronology-check');
     expect(job).toMatchObject({
       implemented: true,
       writes: false,
       scope: 'project',
       priority: 'P3',
-      schedule: { kind: 'interval', everySeconds: 7 * 86_400 },
+      schedule: { kind: 'daily', time: '05:00' },
     });
   });
 });
