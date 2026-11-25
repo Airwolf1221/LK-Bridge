@@ -7,7 +7,7 @@ import type { Chronology } from '../../chronology/index.js';
 
 /** v3 F10 (ADR 0078, C4): the note a write to an age table carries (the owner's words). */
 export const CHRONOLOGY_TABLE_NOTE =
-  'This is a chronology table. New or changed rows are synced to the timeline by the bridge within minutes; to add one row with its event in one step, use sync_timeline_event.';
+  'This is a chronology table. New or changed rows are synced to the timeline by the bridge within minutes. To add one row with its event in one step, use create_timeline_event; sync_timeline_event gives an event to a row already in the table.';
 
 /** The note, when the document is an age table of the project's confirmed chronology (else nothing). */
 export function chronologyTableNote(

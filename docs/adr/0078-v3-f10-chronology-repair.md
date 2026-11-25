@@ -83,8 +83,8 @@ is later than its new default's next run takes the new one at start (so the week
 ## Decision 4 (C4): steering agents
 
 A `write_page` that changes an age table, and an `lk_api_write` that names an age table's document, carry
-`chronologyNote`: "This is a chronology table. New or changed rows are synced to the timeline by the bridge within
-minutes; to add one row with its event in one step, use sync_timeline_event." (the owner's words). Nothing is refused.
+`chronologyNote`: "This is a chronology table. New or changed rows are synced to the timeline by the bridge within minutes. To add one row with its event in one step, use create_timeline_event; sync_timeline_event gives an event to a row already in the table." (the owner's words, corrected at review: `create_timeline_event` adds a row with its event;
+`sync_timeline_event` gives an event to a row already in the table). Nothing is refused.
 The guide's "Dates and the chronology" says the same, plus when a direct table edit is right (several rows, or
 restructuring), and that each repair is a proposal unless the owner set its code to Apply; "How to decide" gains one
 row (its cap raised by exactly the row, 9,450 to 9,613).

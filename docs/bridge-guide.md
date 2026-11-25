@@ -1327,15 +1327,13 @@ timeline is a view of it. For one event, use the timeline tools, which keep all 
 
 **Editing a table directly.** A direct table edit with `write_page` is right for **several rows at once, or to
 restructure a table** (rows re-dated or reordered, wording corrected across an age). It is never refused, and its result
-carries one note: "This is a chronology table. New or changed rows are synced to the timeline by the bridge within
-minutes; to add one row with its event in one step, use sync_timeline_event." A few minutes after the edit
+carries one note: "This is a chronology table. New or changed rows are synced to the timeline by the bridge within minutes. To add one row with its event in one step, use create_timeline_event; sync_timeline_event gives an event to a row already in the table." A few minutes after the edit
 (`CHRONOLOGY_CHECK_DELAY_MS`, 10 by default) the bridge checks the chronology and the owner's automation repairs what
 it finds, the table being the authority: each new or changed row's event made or corrected, the Main count, a wrong
 KCY, an event's link, the rows' calendar order (only when it is strict) and the dates' written style. By default each
 repair is a proposal for the owner; it is direct only where the owner switched it to Apply. So after a table edit, do
-not also make or fix its events by hand: tell the person the bridge syncs them (or proposes it). For ONE new event,
-`create_timeline_event` adds its row and its event together; for one row already in the table, `sync_timeline_event`
-gives it its event at once. Never edit an age's timeline by hand.
+not also make or fix its events by hand: tell the person the bridge syncs them (or proposes it). Never edit an age's
+timeline by hand.
 
 **Dates.** Write them in the chronology's forms: `Kumikas 1st, 1A 159` (a day), `4A 881` (a year), `Unknown, 4A 101`
 (a year whose day is unknown), `Zahras 4A 367` (a month), `Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102` (a range),
