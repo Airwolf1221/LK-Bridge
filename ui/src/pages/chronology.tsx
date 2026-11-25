@@ -873,8 +873,11 @@ function CheckCard({
                     (f.kind === 'count_mismatch' && typeof f.detail?.main === 'string') ||
                     // v2 E6: an event without a row is deleted (only the event).
                     (f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string') ||
-                    // v3 F10 (ADR 0078): the four repairs.
-                    REPAIR_KIND[f.kind] !== undefined;
+                    // v3 F10 (ADR 0078): the four repairs (each needs its row, its event, or only its age).
+                    REPAIR_KIND[f.kind] === 'order' ||
+                    (REPAIR_KIND[f.kind] === 'uri' && typeof f.detail?.eventId === 'string') ||
+                    ((REPAIR_KIND[f.kind] === 'kcy' || REPAIR_KIND[f.kind] === 'style') &&
+                      typeof f.detail?.rowId === 'string');
                   const tableOnly =
                     (f.kind === 'row_without_event' || f.kind === 'unreadable_date') &&
                     typeof f.detail?.rowId === 'string';

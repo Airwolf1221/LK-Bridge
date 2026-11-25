@@ -166,8 +166,8 @@ describe('all 24 sandbox checks run through the harness', () => {
   const dir = join(import.meta.dirname, '..', 'sandbox');
   const files = readdirSync(dir).filter((f) => f.endsWith('.test.ts'));
 
-  it('there are 27 (v3 F7c: f7c-archive; v3 F6a: f6a-reftypes; v3 F7d: f7d-art-set), and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
-    expect(files).toHaveLength(27);
+  it('there are 28 (v3 F7c: f7c-archive; v3 F6a: f6a-reftypes; v3 F7d: f7d-art-set; v3 F10: f10-chronology), and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
+    expect(files).toHaveLength(28);
     for (const f of files) {
       const s = readFileSync(join(dir, f), 'utf8');
       expect(s, f).toMatch(/sandboxRun\(\{ name: '[a-z0-9-]+'/);
