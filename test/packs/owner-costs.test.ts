@@ -118,9 +118,11 @@ it('reads and writes per typical package', async () => {
     'relationship of two canon characters: plan': [14, 0],
     'relationship of two canon characters: job': [40, 15],
     // v3 F7 (ADR 0070, G9): one more read to plan each: the character's folder listed live before placing anything.
-    'art: a new Art page with 1 image: plan': [8, 0],
-    'art: a new Art page with 1 image: job': [27, 16],
-    'art: 1 image on an existing Art page: plan': [5, 0],
+    // v3 F7d (ADR 0077 amendment 1): the identity page read when planned (and, on an existing page, its sidebar); a new
+    // page's job checks the identity page and writes its Dependencies (the identity page).
+    'art: a new Art page with 1 image: plan': [9, 0],
+    'art: a new Art page with 1 image: job': [29, 17],
+    'art: 1 image on an existing Art page: plan': [7, 0],
     'art: 1 image on an existing Art page: job': [11, 3],
     'brief: plan': [0, 0],
     'brief, live: plan': [1, 0],

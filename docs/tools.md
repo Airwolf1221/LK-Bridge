@@ -1376,7 +1376,9 @@ Measured against the mock LegendKeeper (test/packs/costs.test.ts), every request
 | Developed, Working: Core, Biography and a Relationship | 8          | 57        | 46         |
 | An Art page with one image for an existing character   | 7          | 28        | 16         |
 
-Three of the planning reads are the pack's governance pages (read again in the job's first check). LegendKeeper changes
+Three of the planning reads are the pack's governance pages (read again in the job's first check). Since v3 F7d an art
+call also reads the identity page (and an existing Art page's sidebar) to plan; a new Art page's job checks the identity
+page and writes its Dependencies. LegendKeeper changes
 one sidebar row per request, so a page's rows are most of its writes (a Compact Reference has 17). Capturing the
 proposal writes nothing; the job runs when the owner approves.
 
@@ -1606,8 +1608,8 @@ Measured against the mock LegendKeeper (test/packs/owner-costs.test.ts), every r
 | Compact owner, Authoritative                 | 4          | 18        | 13         |
 | promoteNation: index, Reference moved, owner | 7          | 31        | 16         |
 | Relationship of two canon characters         | 14         | 40        | 15         |
-| Art: a new Art page with one image           | 7          | 27        | 16         |
-| Art: one image on an existing Art page       | 4          | 11        | 3          |
+| Art: a new Art page with one image           | 9          | 29        | 17         |
+| Art: one image on an existing Art page       | 7          | 11        | 3          |
 | Brief                                        | 0          | -         | -          |
 | Brief, `live: true`                          | 1          | -         | -          |
 
