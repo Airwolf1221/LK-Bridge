@@ -84,7 +84,12 @@ export type ChronologyTool =
   /** v3 F3.4 (ADR 0055): the owner's revert of a direct chronology change (src/review/revert-chronology.ts). */
   | 'job_revert'
   /** v3 F3d (renames), ADR 0058: the chronology rows (and their events) of an approved rename (src/packs/rename). */
-  | 'arkona_rename';
+  | 'arkona_rename'
+  /** v3 F10 (ADR 0078, C2): the four deterministic repairs (src/chronology/repairs.ts); no MCP tool. */
+  | 'chronology_kcy_fix'
+  | 'chronology_uri_fix'
+  | 'chronology_order_fix'
+  | 'chronology_style_fix';
 
 /** One write a change makes, as the record keeps it (what resuming checks against the documents as they are). */
 export type TargetWrite =
@@ -136,6 +141,30 @@ export type TargetWrite =
        * table-only); any other such row inside the lock stops the delete. Absent on proposals made before it.
        */
       readonly unreadableKnown?: readonly string[];
+    }
+  | {
+      /**
+       * v3 F10 (ADR 0078). Not a write: the age table must still hold exactly these rows, in this order, each with these
+       * texts, inside the lock (the compare-and-swap of putting rows into calendar order).
+       */
+      readonly kind: 'row.order';
+      readonly age: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly rows: readonly {
+        readonly rowId: string;
+        readonly texts: { readonly description: string; readonly date: string; readonly kcy: string };
+      }[];
+    }
+  | {
+      /** v3 F10 (ADR 0078): a row moved, unchanged, to just after `after` (a row id, or the header row's). */
+      readonly kind: 'row.move';
+      readonly age: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly rowId: string;
+      readonly after: string;
+      readonly texts: { readonly description: string; readonly date: string; readonly kcy: string };
     }
   | {
       readonly kind: 'row.insert';

@@ -7,6 +7,7 @@ import { useProject, useScopedApi } from '../project';
 import { Link } from '../router';
 import { rowCandidates, tieFromError, TieChoices, type TieCandidate } from './chronology-ties';
 import type {
+  ChronologyAutomationResponse,
   ChronologyAgeSummary,
   ChronologyCheckResponse,
   ChronologyEvidence,
@@ -45,11 +46,14 @@ export function ChronologyPage() {
   const check = useScopedApi<ChronologyCheckResponse>('/chronology/check');
   const records = useScopedApi<ChronologyRecordsResponse>('/chronology/records?limit=200');
   const tableOnly = useScopedApi<ChronologyTableOnlyResponse>('/chronology/table-only');
+  // v3 F10 (ADR 0078, C5): what the automation synced, and when it last ran.
+  const automation = useScopedApi<ChronologyAutomationResponse>('/chronology/automation');
   const reloadAll = () => {
     settings.reload();
     check.reload();
     records.reload();
     tableOnly.reload();
+    automation.reload();
   };
   return (
     <>
@@ -65,6 +69,7 @@ export function ChronologyPage() {
       {selected ? <SettingsCard project={selected} v={settings} /> : <Empty>No project is selected.</Empty>}
       <CheckCard project={selected} r={check} onMarked={tableOnly.reload} />
       <TableOnlyCard project={selected} r={tableOnly} check={check.data?.last ?? null} />
+      <AutomationCard r={automation} />
       <RecordsCard project={selected} r={records} />
     </>
   );
@@ -611,6 +616,26 @@ function CheckCard({
     // v2 E6 (ADR 0048): an event without a row: the proposal deletes only the event.
     const eventId =
       f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string' ? f.detail.eventId : null;
+    // v3 F10 (ADR 0078): the four repairs (a KCY from the calendar, a date in the confirmed style, an event's link,
+    // the rows in calendar order).
+    const repair = REPAIR_KIND[f.kind];
+    if (repair) {
+      const id = repair === 'uri' ? (typeof f.detail?.eventId === 'string' ? f.detail.eventId : null) : rowId;
+      if (repair !== 'order' && !id) return;
+      setProposing(key);
+      void run(() =>
+        api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
+          confirm: true,
+          project,
+          age: f.age,
+          kind: repair,
+          ...(repair === 'uri' ? { eventId: id } : repair === 'order' ? {} : { rowId: id }),
+        }),
+      )
+        .then((res) => done(key, res))
+        .finally(() => setProposing(null));
+      return;
+    }
     if (!rowId && !count && !eventId) return;
     // A fix that turns a range into a single date (or the reverse) is never one click.
     const shape = typeof f.detail?.shapeChange === 'string' ? f.detail.shapeChange : null;
@@ -847,7 +872,12 @@ function CheckCard({
                     // A count mismatch has a fix when the Main table has a row (a count) for the age.
                     (f.kind === 'count_mismatch' && typeof f.detail?.main === 'string') ||
                     // v2 E6: an event without a row is deleted (only the event).
-                    (f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string');
+                    (f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string') ||
+                    // v3 F10 (ADR 0078): the four repairs (each needs its row, its event, or only its age).
+                    REPAIR_KIND[f.kind] === 'order' ||
+                    (REPAIR_KIND[f.kind] === 'uri' && typeof f.detail?.eventId === 'string') ||
+                    ((REPAIR_KIND[f.kind] === 'kcy' || REPAIR_KIND[f.kind] === 'style') &&
+                      typeof f.detail?.rowId === 'string');
                   const tableOnly =
                     (f.kind === 'row_without_event' || f.kind === 'unreadable_date') &&
                     typeof f.detail?.rowId === 'string';
@@ -1106,6 +1136,14 @@ function TableOnlyCard({
   );
 }
 
+/** v3 F10 (ADR 0078): the findings the four deterministic repairs fix, and the kind each proposes. */
+const REPAIR_KIND: Readonly<Record<string, 'kcy' | 'style' | 'uri' | 'order'>> = {
+  wrong_kcy: 'kcy',
+  date_text_differs: 'style',
+  wrong_uri: 'uri',
+  row_out_of_order: 'order',
+};
+
 // ================================================================================================ changes
 
 const TOOL: Record<ChronologyRecordView['tool'], string> = {
@@ -1114,7 +1152,104 @@ const TOOL: Record<ChronologyRecordView['tool'], string> = {
   delete_timeline_event: 'Deleted',
   sync_timeline_event: 'Repaired the timeline',
   chronology_count_fix: 'Set the Main count',
+  chronology_kcy_fix: 'Set a KCY from the calendar',
+  chronology_uri_fix: 'Set an event’s link',
+  chronology_order_fix: 'Put rows in calendar order',
+  chronology_style_fix: 'Wrote a date in the confirmed style',
 };
+
+const OUTCOME: Record<string, { label: string; tone: 'ok' | 'warn' | 'bad' | 'info' | 'neutral' }> = {
+  applied: { label: 'Synced', tone: 'ok' },
+  proposed: { label: 'Proposed', tone: 'info' },
+  guarded: { label: 'Left for you', tone: 'warn' },
+  skipped: { label: 'Skipped', tone: 'neutral' },
+  failed: { label: 'Failed', tone: 'bad' },
+  stopped: { label: 'Stopped', tone: 'warn' },
+};
+
+/** v3 F10 (ADR 0078, C5): the rows the automation synced (or proposed), and when it last ran. */
+function AutomationCard({ r }: { r: Resource<ChronologyAutomationResponse> }) {
+  if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
+  const d = r.data;
+  if (!d.available) return null;
+  const items = d.items ?? [];
+  const name = new Map((d.codes ?? []).map((c) => [c.code, c.name]));
+  const run = d.lastRun ?? null;
+  const after = d.lastChronologyRun ?? null;
+  return (
+    <section className="card table-wrap" aria-labelledby="chronology-automation-h">
+      <h2 id="chronology-automation-h">
+        Repairs by the automation {d.paused && <Badge tone="warn">all automation paused</Badge>}
+      </h2>
+      <p className="muted small-text">
+        A few minutes after an edit of a chronology document, and every night, the chronology is checked and
+        the automation&rsquo;s chronology codes act on what it finds (the table is the authority). Each
+        code&rsquo;s mode (Off, Propose, Apply) is on the <Link to="/automation">Automation</Link> page.{' '}
+        {(d.codes ?? []).filter((c) => c.mode === 'apply').length > 0
+          ? `Applied directly: ${(d.codes ?? [])
+              .filter((c) => c.mode === 'apply')
+              .map((c) => c.name)
+              .join(', ')}.`
+          : 'None is set to Apply: every repair is a proposal for you.'}
+      </p>
+      <p data-automation-last-run>
+        {run ? (
+          <>
+            The automation last ran {fmtTime(run.startedAt)} ({run.trigger}, {run.state})
+            {run.summary ? `: ${run.summary}` : ''}
+          </>
+        ) : (
+          'The automation has not run yet.'
+        )}
+        {after && after.id !== run?.id && (
+          <span className="muted small-text">
+            {' '}
+            · last after a chronology check {fmtTime(after.startedAt)} ({after.state})
+          </span>
+        )}
+      </p>
+      {items.length === 0 ? (
+        <Empty>The automation has not repaired anything in the chronology yet.</Empty>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>What</th>
+              <th>Finding</th>
+              <th>Outcome</th>
+              <th>Job or proposal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((i) => (
+              <tr key={i.id} data-automation-item={i.outcome}>
+                <td>{fmtTime(i.at)}</td>
+                <td>{name.get(i.code) ?? i.code}</td>
+                <td className="small-text">{i.pageName ?? '—'}</td>
+                <td>
+                  <Badge tone={OUTCOME[i.outcome]?.tone ?? 'neutral'}>
+                    {OUTCOME[i.outcome]?.label ?? i.outcome}
+                  </Badge>
+                  {i.reason && <div className="muted small-text">{i.reason}</div>}
+                </td>
+                <td>
+                  {i.jobId ? (
+                    <Link to={`/jobs/${encodeURIComponent(i.jobId)}`}>{i.jobId}</Link>
+                  ) : i.proposalId ? (
+                    <Link to="/proposals">{i.proposalId}</Link>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
 
 function RecordsCard({ project, r }: { project: string | null; r: Resource<ChronologyRecordsResponse> }) {
   const { run, busy } = useAction();

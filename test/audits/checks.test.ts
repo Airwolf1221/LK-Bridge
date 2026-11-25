@@ -809,7 +809,11 @@ describe('the chronology fold-in', () => {
       kind: 'chronology_sync',
       args: { rowId: 'row7' },
     });
-    expect(find(out, 'chronology_wrong_kcy').fix).toBeUndefined();
+    // v3 F10 (ADR 0078, C2): a wrong KCY now has its fix (the plan re-reads and refuses a date it cannot decide).
+    expect(find(out, 'chronology_wrong_kcy').fix).toMatchObject({
+      kind: 'chronology_kcy',
+      args: { age: 'Third Age', rowId: 'row2' },
+    });
     expect(find(out, 'chronology_wrong_kcy').source).toMatchObject({ kind: 'chronology-check', checkId: 9 });
   });
 

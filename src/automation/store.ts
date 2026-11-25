@@ -307,6 +307,18 @@ export class AutomationStore {
     ).map(toItem);
   }
 
+  /** v3 F10 (ADR 0078, C5): the newest items of several codes (the Chronology page's repairs). */
+  itemsOfCodes(projectId: string, codes: readonly string[], limit = 50): ItemRow[] {
+    if (codes.length === 0) return [];
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM automation_run_items WHERE project_id = ? AND code IN (${codes.map(() => '?').join(', ')}) ORDER BY id DESC LIMIT ?`,
+        )
+        .all(projectId, ...codes, limit) as R[]
+    ).map(toItem);
+  }
+
   /** The newest items of a code (the Automation page's "what was done or skipped"). */
   codeItems(projectId: string, code: string, limit = 20): ItemRow[] {
     return (

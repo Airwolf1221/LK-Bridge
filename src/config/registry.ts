@@ -756,6 +756,16 @@ const SPECS: readonly Spec[] = [
     applies: 'now',
   },
   {
+    key: 'CHRONOLOGY_CHECK_DELAY_MS',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Chronology check after an edit',
+    description:
+      'How long after the last change to a chronology document (the Main table, an age table or an age timeline) the project’s chronology check runs. A burst of edits gives one check; the automation’s chronology codes then act on its findings.',
+    unit: UNITS.msAsMinutes,
+    applies: 'now',
+  },
+  {
     key: 'SLOW_REQUEST_WARN_MS',
     schema: 'tools',
     group: 'general',

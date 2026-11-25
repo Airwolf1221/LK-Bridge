@@ -17,7 +17,7 @@
  *   brakes are the design's; see ADR 0068.
  */
 import type { BackgroundRunner } from '../background.js';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { Appraisal } from '../appraisal/service.js';
 import type { AppraisalFinding } from '../appraisal/types.js';
@@ -54,6 +54,7 @@ import {
   type ParagraphProblem,
 } from './governance.js';
 import { ELIGIBLE, entryOf, PROPOSE_ONLY, SWITCHABLE, type CodeEntry } from './registry.js';
+import type { Chronology, ChronologyFix } from '../chronology/index.js';
 import { AutomationStore, type ItemOutcome, type ItemRow, type Mode, type RunRow } from './store.js';
 
 type Obj = Record<string, unknown>;
@@ -91,6 +92,11 @@ export interface AutomationDeps {
     'audit' | 'correctionBatches' | 'planApply' | 'submitApply' | 'store' | 'onJob'
   >;
   readonly review: Pick<ReviewService, 'store'>;
+  /**
+   * v3 F10 (ADR 0078): the chronology (its newest check's findings and its repairs). Without it the chronology codes
+   * do nothing, saying why.
+   */
+  readonly chronology?: Pick<Chronology, 'store' | 'readiness' | 'repair'>;
   readonly projects: {
     anyClient(id: string):
       | {
@@ -192,6 +198,25 @@ const CAPTURED = 'automation:captured';
 /** CR-2026-11-R3 (R3-64): a turn of the event loop. */
 const yieldToLoop = (): Promise<void> => new Promise((r) => setImmediate(r));
 /** The refusals of the guards and the gate (never bypassed: the code pauses). */
+/**
+ * v3 F10 (ADR 0078): the chronology's refusals that leave a finding to the owner's judgement (recorded as `guarded`,
+ * never a skip that pauses the code): an ambiguous pairing (the Chronology page offers the choices), a date the engine
+ * cannot read, a KCY or style a partial or qualified date does not decide, an order that is not strict.
+ */
+const CHRONOLOGY_JUDGEMENTS = new Set([
+  'PAIRING_AMBIGUOUS',
+  'EVENT_AMBIGUOUS',
+  'ROW_AMBIGUOUS',
+  'EVENT_TAKEN',
+  'ROW_HAS_EVENT',
+  'ROW_DATE_UNREADABLE',
+  'KCY_NOT_DETERMINED',
+  'STYLE_NOT_DETERMINED',
+  'KCY_WRONG',
+  'ORDER_NOT_STRICT',
+  'SHAPE_CHANGE_UNCONFIRMED',
+]);
+
 const GUARD_CODES = new Set([
   'POLICY_DENIED',
   'CANONICAL_APPROVAL_REQUIRED',
@@ -310,6 +335,26 @@ export class AutomationService {
         })),
       };
     });
+  }
+
+  /**
+   * v3 F10 (ADR 0078, C5): the Chronology page's view of the automation: when it last ran, each chronology code's mode,
+   * and what its chronology codes did (newest first): the rows and events synced, proposed or left for the owner.
+   */
+  chronologyView(projectId: string, limit = 50) {
+    const codes = PROPOSE_ONLY.filter((e) => e.source === 'chronology');
+    return {
+      lastRun: this.store.runs(projectId, { limit: 1 })[0] ?? null,
+      lastChronologyRun:
+        this.store.runs(projectId, { limit: 50 }).find((r) => r.trigger === 'chronology') ?? null,
+      paused: this.store.global().paused,
+      codes: codes.map((e) => ({ code: e.code, name: e.name, mode: this.modeOf(projectId, e) })),
+      items: this.store.itemsOfCodes(
+        projectId,
+        codes.map((e) => e.code),
+        limit,
+      ),
+    };
   }
 
   /** The codes that run now in a project (bridge_info tells agents, so they do not duplicate the work). */
@@ -982,28 +1027,54 @@ export class AutomationService {
   /** One run in a project (the nightly job, or "Run automation now"). A run already in progress is joined. */
   run(
     projectId: string,
-    trigger: 'nightly' | 'manual',
+    trigger: 'nightly' | 'manual' | 'chronology',
     o: {
       /**
        * The sandbox check's seam (bridge code and tests only, never a route): only these pages (or assets) are acted
        * on, whatever else the findings name.
        */
       readonly onlyPages?: ReadonlySet<string>;
+      /** v3 F10 (ADR 0078, C3): only these codes run (the chronology's, straight after its check). */
+      readonly codes?: ReadonlySet<string>;
     } = {},
   ): Promise<RunRow> {
     const busy = this.running.get(projectId);
     if (busy) return busy;
     const p = loggedTask(this.d.log, 'automation:run', { project: projectId, trigger }, () =>
-      this.runOnce(projectId, trigger, o.onlyPages ?? null),
+      this.runOnce(projectId, trigger, o.onlyPages ?? null, o.codes ?? null),
     ).finally(() => this.running.delete(projectId));
     this.running.set(projectId, p);
     return p;
   }
 
+  /**
+   * v3 F10 (ADR 0078, C3): the chronology's codes (C1 and C2) on the findings of the check that just finished, at once,
+   * within the caps, as the nightly run does (every stop condition, the governance state and the pauses alike).
+   */
+  runChronology(
+    projectId: string,
+    o: {
+      /** C5: the workstream of the table edit that caused the check, per age (its repairs are attributed to it). */
+      readonly workstreamOf?: (age: string) => string | null;
+    } = {},
+  ): Promise<RunRow> {
+    if (o.workstreamOf) this.chronologyWorkstreams.set(projectId, o.workstreamOf);
+    return this.run(projectId, 'chronology', {
+      codes: new Set(PROPOSE_ONLY.filter((e) => e.source === 'chronology').map((e) => e.code)),
+    }).finally(() => {
+      if (this.chronologyWorkstreams.get(projectId) === o.workstreamOf)
+        this.chronologyWorkstreams.delete(projectId);
+    });
+  }
+
+  /** v3 F10 (C5): per project, the workstream of the edit behind a run of the chronology codes (set by that run). */
+  private readonly chronologyWorkstreams = new Map<string, (age: string) => string | null>();
+
   private async runOnce(
     projectId: string,
     trigger: string,
     only: ReadonlySet<string> | null,
+    codes: ReadonlySet<string> | null = null,
   ): Promise<RunRow> {
     const runId = `aut_${randomBytes(8).toString('hex')}`;
     this.store.startRun(runId, projectId, trigger);
@@ -1015,6 +1086,7 @@ export class AutomationService {
       const why = this.blocked(projectId);
       if (why) return finish('skipped', `Skipped: ${why}.`, why);
       const enabled = [...ELIGIBLE, ...PROPOSE_ONLY].filter((e) => {
+        if (codes && !codes.has(e.code)) return false;
         const s = this.store.setting(projectId, e.code);
         return this.modeOf(projectId, e) !== 'off' && (s?.pausedAt ?? null) === null;
       });
@@ -1131,6 +1203,7 @@ export class AutomationService {
     ctx: RunContext,
   ): Promise<CodeOutcome> {
     if (e.source === 'retag') return this.runRetag(projectId, runId, e, mode, cap, ctx);
+    if (e.source === 'chronology') return this.runChronologyCode(projectId, runId, e, cap, mode);
     if (e.automatable === 'propose') return this.runProposals(projectId, runId, e, cap, mode);
     let candidates: Candidate[];
     try {
@@ -1262,6 +1335,147 @@ export class AutomationService {
           });
       } catch (err) {
         if (this.skipped(projectId, runId, e, c, errCode(err), errMessage(err)))
+          return { kind: 'done', attempted };
+      }
+    }
+    return { kind: 'done', attempted, capped };
+  }
+
+  /**
+   * v3 F10 (ADR 0078, C1 and C2): a chronology code. Its findings are the chronology check's own, from its newest
+   * successful run (the table is the authority: never repaired from its timeline). Each finding's fix is planned live
+   * by the chronology module and becomes ONE proposal (Propose), or a job (Apply) unless the plan names a guard (then
+   * a proposal with the reason). A finding a run already proposed or applied is not acted on again. Refusals that leave
+   * the finding to the owner (an ambiguous pairing, a date the engine cannot read, an order that is not strict, a
+   * partial date's KCY) are recorded as `guarded` and never pause the code; a row the owner marked table-only is
+   * skipped.
+   */
+  private async runChronologyCode(
+    projectId: string,
+    runId: string,
+    e: CodeEntry,
+    cap: number,
+    mode: Exclude<Mode, 'off'>,
+  ): Promise<CodeOutcome> {
+    const chron = this.d.chronology;
+    const spec = e.chronology!;
+    const none = (reason: string): CodeOutcome => {
+      this.item(projectId, runId, e.code, { pageId: null, pageName: null }, 'skipped', {
+        reasonCode: 'NO_CHRONOLOGY',
+        reason,
+      });
+      return { kind: 'done', attempted: 0 };
+    };
+    if (!chron) return none('the chronology is not running on this bridge');
+    const ready = chron.readiness(projectId);
+    if (!ready.ok) return { kind: 'done', attempted: 0 }; // no confirmed chronology: nothing to do, nothing to say
+    const last = chron.store.lastCheck(projectId);
+    if (!last || last.state !== 'succeeded') return { kind: 'done', attempted: 0 };
+    // One fix per target: a row, an event, or (a count, an order) the age.
+    const seen = new Set<string>();
+    const todo: { key: string; name: string; fix: ChronologyFix }[] = [];
+    for (const f of last.findings) {
+      if (f.kind !== spec.kind) continue;
+      const d = f.detail ?? {};
+      const rowId = typeof d.rowId === 'string' ? d.rowId : null;
+      const eventId = typeof d.eventId === 'string' ? d.eventId : null;
+      let fix: ChronologyFix | null = null;
+      let target: string | null = null;
+      if (spec.fix === 'sync' && rowId) {
+        fix = { age: f.age, rowId };
+        target = `row:${rowId}`;
+      } else if ((spec.fix === 'kcy' || spec.fix === 'style') && rowId) {
+        fix = { kind: spec.fix, age: f.age, rowId };
+        target = `row:${rowId}`;
+      } else if (spec.fix === 'uri' && eventId) {
+        fix = { kind: 'uri', age: f.age, eventId };
+        target = `event:${eventId}`;
+      } else if (spec.fix === 'count' && typeof d.main === 'string') {
+        fix = { kind: 'count', age: f.age };
+        target = 'age';
+      } else if (spec.fix === 'order') {
+        fix = { kind: 'order', age: f.age };
+        target = 'age';
+      }
+      if (!fix || !target) continue;
+      // The finding's own words for what it is (its dates, cells and counts): a changed row or event is a new finding.
+      const key = `chronology:${f.age}:${spec.kind}:${target}:${createHash('sha256').update(f.message).digest('hex').slice(0, 16)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      todo.push({ key, name: `${f.age}: ${f.message}`.slice(0, 200), fix });
+    }
+    const done = new Set(
+      this.store
+        .codeItems(projectId, e.code, 5000)
+        .filter(
+          (i) =>
+            (i.proposalId !== null || (i.outcome === 'applied' && i.jobId !== null)) && i.pageId !== null,
+        )
+        .map((i) => i.pageId!),
+    );
+    let attempted = 0;
+    let capped = false;
+    for (const t of todo) {
+      if (done.has(t.key)) continue;
+      if (attempted >= cap) {
+        capped = true;
+        break;
+      }
+      const why = this.blocked(projectId);
+      if (why) return { kind: 'stopRun', why, attempted };
+      if (this.budgetWaits(projectId)) return { kind: 'stopRun', why: 'the P3 budget says wait', attempted };
+      attempted++;
+      await yieldToLoop();
+      const c: Candidate = {
+        pageId: t.key,
+        pageName: t.name,
+        plan: () => Promise.resolve({ ok: false, code: 'CHRONOLOGY', reason: 'planned by the chronology' }),
+      };
+      try {
+        // C5: a repair caused by a table edit with a workstream is in that workstream (bridge_workstream_report).
+        const ws = this.chronologyWorkstreams.get(projectId)?.(t.fix.age) ?? null;
+        const origin = ws ? { ...this.origin(e), workstream: ws } : this.origin(e);
+        const r = await chron.repair('automation', projectId, t.fix, { mode, origin });
+        if (r.status === 'proposal_captured')
+          this.item(projectId, runId, e.code, c, 'proposed', {
+            proposalId: r.proposalId,
+            ...(r.guard
+              ? { reasonCode: r.guard.code, reason: `proposed, not applied: ${r.guard.reason}` }
+              : {}),
+          });
+        else if (r.status === 'job_submitted') {
+          const job = await this.settle(projectId, r.jobId, this.d.settleMs ?? 600_000);
+          if (job.status === 'succeeded')
+            this.item(projectId, runId, e.code, c, 'applied', { jobId: r.jobId });
+          else {
+            await this.fail(
+              projectId,
+              runId,
+              e,
+              c,
+              'JOB_FAILED',
+              `the job ${r.jobId} ended ${job.status}`,
+              r.jobId,
+            );
+            return { kind: 'done', attempted };
+          }
+        } else if (this.skipped(projectId, runId, e, c, 'NOTHING_TO_DO', r.message))
+          return { kind: 'done', attempted };
+      } catch (err) {
+        const code = errCode(err);
+        if (code === 'BUDGET_EXHAUSTED')
+          return { kind: 'stopRun', why: 'the P3 budget says wait', attempted };
+        if (code === 'ROW_TABLE_ONLY')
+          this.item(projectId, runId, e.code, c, 'skipped', {
+            reasonCode: 'TABLE_ONLY',
+            reason: errMessage(err),
+          });
+        else if (CHRONOLOGY_JUDGEMENTS.has(code))
+          this.item(projectId, runId, e.code, c, 'guarded', {
+            reasonCode: code,
+            reason: `left for the owner: ${errMessage(err)}`,
+          });
+        else if (this.skipped(projectId, runId, e, c, code, errMessage(err)))
           return { kind: 'done', attempted };
       }
     }

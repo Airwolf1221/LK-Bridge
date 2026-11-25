@@ -139,6 +139,18 @@ export const registerChronology: Register = (api, ctx) => {
   });
 
   /** The chronology check's last run (findings only). */
+  /**
+   * v3 F10 (ADR 0078, C5): what the automation's chronology codes did (the rows and events it synced or proposed), and
+   * when the automation last ran.
+   */
+  api.get('/chronology/automation', (req) => {
+    const q = parseInput(z.object({ project: projectParam }), req.query);
+    const p = ctx.project(q.project);
+    const a = ctx.deps.runtime.automation;
+    if (!a) return { project: p, available: false };
+    return { project: p, available: true, ...a.chronologyView(p.id) };
+  });
+
   api.get('/chronology/check', (req) => {
     const q = parseInput(z.object({ project: projectParam }), req.query);
     const p = ctx.project(q.project);
@@ -178,7 +190,8 @@ export const registerChronology: Register = (api, ctx) => {
           age: z.string().min(1).max(200),
           // v2 E5 hotfix: `count` proposes the Main count of the age set to its table's row count (no row).
           // v2 E6 (ADR 0048): `orphan` proposes deleting an event without a row (only the event).
-          kind: z.enum(['sync', 'count', 'orphan']).optional(),
+          // v3 F10 (ADR 0078): `kcy`, `style` (a row), `uri` (an event) and `order` (an age), the four repairs.
+          kind: z.enum(['sync', 'count', 'orphan', 'kcy', 'style', 'uri', 'order']).optional(),
           rowId: z.string().min(1).max(64).optional(),
           eventId: z.string().min(1).max(64).optional(),
           // v2 E6: a repair that turns a range into a single date (or the reverse) is confirmed by the owner.
@@ -192,12 +205,20 @@ export const registerChronology: Register = (api, ctx) => {
           message: 'createNew and eventId cannot be given together',
           path: ['createNew'],
         })
-        .refine((x) => x.kind === 'count' || x.kind === 'orphan' || x.rowId !== undefined, {
-          message: 'rowId is required unless kind is count or orphan',
-          path: ['rowId'],
-        })
-        .refine((x) => x.kind !== 'orphan' || x.eventId !== undefined, {
-          message: 'eventId is required when kind is orphan',
+        .refine(
+          (x) =>
+            x.kind === 'count' ||
+            x.kind === 'orphan' ||
+            x.kind === 'uri' ||
+            x.kind === 'order' ||
+            x.rowId !== undefined,
+          {
+            message: 'rowId is required unless kind is count, orphan, uri or order',
+            path: ['rowId'],
+          },
+        )
+        .refine((x) => (x.kind !== 'orphan' && x.kind !== 'uri') || x.eventId !== undefined, {
+          message: 'eventId is required when kind is orphan or uri',
           path: ['eventId'],
         }),
       req.body,
@@ -211,13 +232,19 @@ export const registerChronology: Register = (api, ctx) => {
           ? { kind: 'count', age: b.age }
           : b.kind === 'orphan'
             ? { kind: 'orphan', age: b.age, eventId: b.eventId! }
-            : {
-                age: b.age,
-                rowId: b.rowId!,
-                ...(b.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
-                ...(b.eventId !== undefined ? { eventId: b.eventId } : {}),
-                ...(b.createNew === true ? { createNew: true } : {}),
-              },
+            : b.kind === 'uri'
+              ? { kind: 'uri', age: b.age, eventId: b.eventId! }
+              : b.kind === 'order'
+                ? { kind: 'order', age: b.age }
+                : b.kind === 'kcy' || b.kind === 'style'
+                  ? { kind: b.kind, age: b.age, rowId: b.rowId! }
+                  : {
+                      age: b.age,
+                      rowId: b.rowId!,
+                      ...(b.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+                      ...(b.eventId !== undefined ? { eventId: b.eventId } : {}),
+                      ...(b.createNew === true ? { createNew: true } : {}),
+                    },
       );
     } catch (e) {
       if (e instanceof ChronologyError) throw chronologyHttpError(e);

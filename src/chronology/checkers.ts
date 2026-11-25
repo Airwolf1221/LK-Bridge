@@ -70,6 +70,11 @@ export type TableOp =
   /** v2 E5 hotfix: the table must still have exactly this many rows (the count fix's compare-and-swap). */
   | { readonly op: 'rows'; readonly count: number }
   /**
+   * v3 F10 (ADR 0078): the table must still hold exactly these rows, in this order, with these texts (the
+   * compare-and-swap of putting rows into calendar order).
+   */
+  | { readonly op: 'order'; readonly rows: readonly { readonly rowId: string; readonly texts: RowTexts }[] }
+  /**
    * v2 E6 (ADR 0048): no row of the table could be this event's own, but the rows in `ignore` as they were (deleting
    * an event without a row).
    */
@@ -187,6 +192,25 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
     for (const op of input.ops) {
       if (op.op === 'rows') {
         if (t.rows.length !== op.count) differences.push(diff(`${ctx.label} rows`, op.count, t.rows.length));
+        continue;
+      }
+      if (op.op === 'order') {
+        const now = t.rows.map((r) => r.id ?? '');
+        const want = op.rows.map((r) => r.rowId);
+        if (now.length !== want.length || now.some((id, i) => id !== want[i]))
+          differences.push(diff(`${ctx.label} row order`, want, now));
+        else
+          for (const w of op.rows) {
+            const r = byId.get(w.rowId);
+            if (r && !same(r, w.texts))
+              differences.push(
+                diff(`${ctx.label} row ${w.rowId}`, w.texts, {
+                  description: r.description,
+                  date: r.dateText,
+                  kcy: r.kcyText,
+                }),
+              );
+          }
         continue;
       }
       if (op.op === 'orphan') {

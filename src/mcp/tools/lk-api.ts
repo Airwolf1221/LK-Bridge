@@ -41,6 +41,7 @@ import {
   type ProjectDeps,
   type ToolDeps,
 } from './shape.js';
+import { chronologyTableNote } from './chronology-note.js';
 
 const TAGS = [...new Set(operations.map((o) => o.tag))];
 
@@ -205,6 +206,12 @@ export async function executeOne(
     if (v.refusal) return errorResult(v.refusal as { code: string; message: string }, deps);
     steeringRead = v.read;
   }
+  // v3 F10 (ADR 0078, C4): a write the bridge can attribute to an age table's document carries the chronology note.
+  const path = input.params.path as Record<string, unknown> | undefined;
+  const tableNote =
+    op.kind !== 'read' && typeof path?.resourceId === 'string' && typeof path.documentId === 'string'
+      ? chronologyTableNote(deps.services?.chronology, deps.project.id, path.resourceId, path.documentId)
+      : {};
   try {
     const origin = mcpOrigin(ctx, tool);
     const r = await deps.engine.run(op.operationId, input.params, {
@@ -230,9 +237,12 @@ export async function executeOne(
     if (r.status !== 'succeeded') {
       const body = runResultBody(op.operationId, r, input.detail);
       return render(
-        r.status !== 'proposal_captured' && r.lastMajorRevision
-          ? { ...body, lastMajorRevision: r.lastMajorRevision }
-          : body,
+        {
+          ...(r.status !== 'proposal_captured' && r.lastMajorRevision
+            ? { ...body, lastMajorRevision: r.lastMajorRevision }
+            : body),
+          ...tableNote,
+        },
         deps,
       );
     }
@@ -252,6 +262,7 @@ export async function executeOne(
           result: shaped.inline,
           requestIds: r.requestIds,
           ...(r.lastMajorRevision ? { lastMajorRevision: r.lastMajorRevision } : {}),
+          ...tableNote,
         },
         deps,
       );
@@ -262,6 +273,7 @@ export async function executeOne(
         ...(r.jobId ? { jobId: r.jobId } : {}),
         ...shaped,
         ...(r.lastMajorRevision ? { lastMajorRevision: r.lastMajorRevision } : {}),
+        ...tableNote,
       },
       deps,
     );

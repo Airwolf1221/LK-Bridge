@@ -202,6 +202,31 @@ export function buildJob(o: {
         pushTableOp(w.documentId, { op: 'rows', count: w.rows });
         break;
       }
+      case 'row.order': {
+        // v3 F10 (ADR 0078): not a write: the table's rows, in order and as read, compared inside the lock.
+        pushTableOp(w.documentId, { op: 'order', rows: w.rows });
+        break;
+      }
+      case 'row.move': {
+        // v3 F10 (ADR 0078): a row moved unchanged; the order op above asserted the table it was planned on. Verified
+        // in its place among its readable neighbours.
+        pushVerify(w.documentId, { rowId: w.rowId, present: true, texts: w.texts });
+        addWrite(
+          w.documentId,
+          {
+            op: 'moveBlock',
+            judgedInLock: true,
+            params: {
+              path: { resourceId, documentId: w.documentId, blockId: w.rowId },
+              body: { after: w.after },
+            },
+            ifMatchFrom: chain(w.documentId, `table:${w.documentId}`),
+            journalOperation: journal(w),
+          },
+          `move the row “${w.texts.date}” into calendar order in the ${w.age} table`,
+        );
+        break;
+      }
       case 'row.orphan': {
         // v2 E6 (ADR 0048): not a write: the table is locked and must still have no row for the event to delete.
         pushTableOp(w.documentId, {

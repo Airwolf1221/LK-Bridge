@@ -537,22 +537,53 @@ mock: `test/sandbox-mock/f7-1-core.test.ts`, and `test/sandbox-mock/pack-governa
 ## A whole art set in one call (v3 F7d)
 
 `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7d-art-set` (`f7d-art-set.ts`; ADR
-0077). WRITES, then cleans up (about 45 writes and 70 reads). D0 the Arkona pack attached, the asset tree built, the
-pack's governance current in the temporary database (the throwaway governance page, as f7-1-core's C0); D1 a throwaway
-Working compact character `Probe <Letters>`; D2 a zip of 4 tiny images taken in as an archive (`portrait.png` at the top,
-`Probe Gala/front.png` and `Probe Gala/back.png`, `Probe Hunt/front.png`); D3 ONE `arkona_add_character_art` call with
-`groups` naming the entries, ONE proposal of four items, printed as `F7D PLAN items=Art page | Design pieces |
-Outfits(Probe Gala) | Outfits(Probe Hunt)`, approved whole, its job succeeded and verified (`placed Design pieces 1, Outfit
-Probe Gala 2, Outfit Probe Hunt 1`); D4 read back LIVE and printed as `F7D SET …`: `core=[BWRK] Probe <Letters> -
-Character Core referenceType=Character Core`, `folders=Wardrobe, Wardrobe / Probe Gala (2) looseInWardrobe=1
-designPieces=1`, the Art page's `headings=` holding Reference Images, Probe Gala and Probe Hunt, `images=4`, `copies=`
-with the Core's values, `dependsOnCore=true`. Clean-up: the throwaway index, the character's asset folder, the archive
-and the governance page. On the mock: `test/sandbox-mock/f7d-art-set.test.ts`.
+0077). WRITES, then cleans up (about 50 writes and 80 reads). It calls the tools as two temporary principals, one at
+scope `propose` and one at scope `write`, because the pack's switch for `arkona_add_character_art` is "follow the
+scope": at `propose` a call is one proposal; at `write` it runs as a job, unless it makes an Authoritative Art page or
+upgrades an Authoritative Core. D0 the Arkona pack attached, the asset tree built, the pack's governance current in the
+temporary database (the throwaway governance page, as f7-1-core's C0); D1 a throwaway Working compact character
+`Probe <Letters>`; D2 a zip of 5 tiny images taken in as an archive (`portrait.png` at the top, `Probe Gala/front.png`
+and `Probe Gala/back.png`, `Probe Hunt/front.png`, `Probe Ride/front.png`); D3 **at scope `propose`**, ONE
+`arkona_add_character_art` call with `groups` naming four entries, ONE proposal of four items, printed as
+`F7D PLAN items=Art page | Design pieces | Outfits(Probe Gala) | Outfits(Probe Hunt)`, approved whole, its job
+succeeded and verified (`placed Design pieces 1, Outfit Probe Gala 2, Outfit Probe Hunt 1`); D3b **at scope `write`**,
+a second, smaller groups call on the same Working character now that its Art page exists (the new outfit Probe Ride, one
+piece): it runs **directly as a job, with no proposal**, printed as `F7D DIRECT job … succeeded and verified; placed
+Outfit Probe Ride 1`; D4 read back LIVE and printed as `F7D SET …`: `core=[BWRK] Probe <Letters> - Character Core
+referenceType=Character Core`, `folders=Wardrobe, Wardrobe / Probe Gala (2) looseInWardrobe=2 designPieces=1`, the Art
+page's `headings=` holding Reference Images, Probe Gala, Probe Hunt and Probe Ride, `images=5`, `copies=` with the
+Core's values, `dependsOnCore=true`. Clean-up: the throwaway index, the character's asset folder, the archive and the
+governance page. On the mock: `test/sandbox-mock/f7d-art-set.test.ts`, on a world with the pack's seed switches (the
+tool at "follow the scope", as live; the run asserts it).
+
+**The 25 November 2026 run failed D3 with "not one proposal".** The check, not the product, was wrong: it made its
+call at scope `write` on a Working character, which runs directly as a job (the tool's description since F7d), and it
+expected the old "always a proposal" claim. The run on the mock passed only because the mock's pack had the tool at
+"always propose". Fixed in F10's Step 0 as above; rerun it after deploying:
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7d-art-set`.
 
 **Any check that runs a pack's tag-computing tools** (`arkona_create_*`, `arkona_identity_reconcile`, `arkona_rename`,
 `arkona_split_owner`, `arkona_retag_apply`) on a copy of the bridge's state must opt in the same way, or point the
 governance itself; `copyBridgeState`'s report lists, in `governanceMissing`, each pack whose sources are in a project
 this runtime does not register, and `pack-governance.test.ts` fails a check that opts in to neither.
+
+## A direct table edit synced by the bridge (v3 F10)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f10-chronology` (`f10-chronology.ts`; ADR
+0078). WRITES, then cleans up (about 15 writes and 40 reads). It never touches test's own chronology: it builds a
+THROWAWAY one through the bridge's engine (so the tree follows it) and confirms it in the TEMPORARY database only, and
+the runtime's `CHRONOLOGY_CHECK_DELAY_MS` is shortened to 3 seconds. K0 the pack's governance current in the temporary
+database (a throwaway governance page with Repository Automation's sections), every automation code Off there except
+`chronology_row_without_event`, at Apply; K1 the throwaway chronology `lk-bridge f10 chronology <time>`: a Main document
+with its index table and one age (the calendar's last era) with its table (one row) and its timeline (one lane, the
+row's event), printed as `F10 CHRONOLOGY …`; K2 a second row added DIRECTLY to the age table with `write_page` (read
+first, its version passed back, labelled with a workstream): the result carries the chronology note; K3 the delayed
+check runs by itself, finds the row without its event, and the automation applies the sync at once, printed as
+`F10 SYNC check=… job=… succeeded verified=true workstream=f10-sandbox-…`; K4 read back LIVE: two events, the new one at
+the new row's date, linked to the table, printed as `F10 EVENTS 2: …`. What to look for: every line PASS, K3's
+`verified=true` and the workstream, and K4's two events. A K3 failure that says "no check after the edit" means the
+change snapshot did not schedule it (the report gives the last check). Clean-up: the throwaway chronology and the
+governance page. On the mock: `test/sandbox-mock/f10-chronology.test.ts`.
 
 ## The bulk class P4 (v3 F9)
 
@@ -601,6 +632,7 @@ always skips it and the run asserts its reason (the smoke's (c)).
 | f7c-archive                    | `test/sandbox-mock/f7c-archive.test.ts`                     |
 | f7-1-core                      | `test/sandbox-mock/f7-1-core.test.ts`, `…/pack-governance…` |
 | f7d-art-set                    | `test/sandbox-mock/f7d-art-set.test.ts`                     |
+| f10-chronology                 | `test/sandbox-mock/f10-chronology.test.ts`                  |
 
 The mock answers as LegendKeeper does only with its **faithful** setting on (`test/sandbox-mock/faithful.ts`, which
 these runs turn on and nothing else does): each behaviour there names the owner's run or the part of the spec it comes

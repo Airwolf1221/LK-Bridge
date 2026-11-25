@@ -411,16 +411,20 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
           : { skipped: true, summary: 'Skipped: the link index is not running.' },
     },
     // v2 D1 (ADR 0038): the chronology check. The table is the authority; the check reports, it never repairs.
+    // v3 F10 (ADR 0078, C3): nightly (it is light, at P3), chained after the night's full snapshot and its audit; and
+    // also CHRONOLOGY_CHECK_DELAY_MS after an edit of a chronology document (src/chronology/after-edit.ts).
     {
       id: 'chronology-check',
       name: 'Chronology check',
       description:
         'Reads each project’s confirmed chronology (the Main table, every age table and every age timeline: about 15 ' +
-        'requests plus one per 100 events) at the lowest priority, and reports table rows without a timeline event, events ' +
+        'requests plus one per 100 events) at P3, and reports table rows without a timeline event, events ' +
         'without a row, rows out of calendar order, wrong KCY values, Main counts that differ from the tables, and event ' +
-        'links that do not point at their age’s table. Findings only: it never repairs anything. The findings are on the ' +
-        'Chronology page. Skips projects whose chronology is not confirmed.',
-      defaultSchedule: { kind: 'interval', everySeconds: 7 * 86_400 },
+        'links that do not point at their age’s table. The check itself repairs nothing: the findings are on the ' +
+        'Chronology page, and the Automation page’s chronology codes act on them (Propose by default). Nightly, after the ' +
+        'night’s full snapshot and its audit (a scheduled run waits for them); it also runs by itself a few minutes ' +
+        '(CHRONOLOGY_CHECK_DELAY_MS) after an edit of a chronology document. Skips projects whose chronology is not confirmed.',
+      defaultSchedule: { kind: 'daily', time: '05:00' },
       defaultEnabled: true,
       implemented: true,
       writes: false,
@@ -428,9 +432,10 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       record: 'always',
       scope: 'project',
       background: true,
+      // v3 F10 (C3): a scheduled run waits for the night's chain (the full snapshot, then its audit), as F9's do.
       run: (ctx) =>
         d.chronology && ctx.project
-          ? d.chronology.check(ctx.project.id, ctx.trigger)
+          ? afterChain(d.chain, ctx, () => d.chronology!.check(ctx.project!.id, ctx.trigger))
           : { skipped: true, summary: 'Skipped: chronology sync is not running.' },
     },
     // v2 E2 (ADR 0044): the audits. They read the snapshots only, so a run costs no request to LegendKeeper.

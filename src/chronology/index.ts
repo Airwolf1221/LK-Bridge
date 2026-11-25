@@ -11,6 +11,7 @@ import {
   BudgetExhaustedError,
   LkOperationError,
   type JobEngine,
+  type JobOrigin,
   type JobView,
   type OpParams,
   type PriorityClass,
@@ -25,6 +26,8 @@ import { buildJob, type WriteContext } from './plan.js';
 import { planSync, SYNC_TOOL } from './sync.js';
 import { COUNT_FIX_TOOL, planCountFix } from './count.js';
 import { ORPHAN_TOOL, planOrphanDelete } from './orphan.js';
+import { planKcyFix, planOrderFix, planStyleFix, planUriFix } from './repairs.js';
+import type { TextChange } from '../jobs/text-change.js';
 import {
   chronologyConfigFrom,
   chronologySchema,
@@ -50,6 +53,7 @@ export * from './checkers.js';
 export { runCheck, type CheckReader, type CheckReport } from './check.js';
 export * from './sync.js';
 export { COUNT_FIX_TOOL, planCountFix, type CountFixPlan, type CountFixResult } from './count.js';
+export * from './repairs.js';
 export * from './orphan.js';
 export {
   matchRowsAndEvents,
@@ -222,6 +226,34 @@ export interface Chronology {
     | { readonly status: 'nothing_to_do'; readonly message: string }
   >;
   /**
+   * v3 F10 (ADR 0078, C1 and C2): the automation's repair of one finding, planned exactly as `proposeFix` plans it (its
+   * reads at P3, as the Automation principal's `origin`). `mode: 'propose'` captures ONE proposal; `mode: 'apply'`
+   * submits the job (every guard still judging it), EXCEPT when the plan names a `guard` (a sync changing the event's
+   * shape, a qualified date, a lapsed table-only mark): then it is proposed, with the reason in its summary. Refusals
+   * throw `ChronologyError` as `proposeFix`'s do (an ambiguous pairing, a current table-only mark, a date that cannot be
+   * read, an order that is not strict).
+   */
+  repair(
+    actor: string,
+    projectId: string,
+    fix: ChronologyFix,
+    o: { readonly mode: 'propose' | 'apply'; readonly origin: JobOrigin },
+  ): Promise<
+    | {
+        readonly status: 'proposal_captured';
+        readonly proposalId: string;
+        readonly summary: string | null;
+        readonly guard: { readonly code: string; readonly reason: string } | null;
+      }
+    | {
+        readonly status: 'job_submitted';
+        readonly jobId: string;
+        readonly summary: string | null;
+        readonly guard: null | { readonly code: string; readonly reason: string };
+      }
+    | { readonly status: 'nothing_to_do'; readonly message: string }
+  >;
+  /**
    * v2 E6 (ADR 0048): marks a row of an age table table-only (the owner never wants it on the timeline). The table is
    * read once (the row's cells as they are now are kept with the mark); the mark hides the row from the check while
    * they are unchanged. Audited `chronology.table_only`.
@@ -261,7 +293,27 @@ export type ChronologyFix =
       readonly createNew?: boolean;
     }
   | { readonly kind: 'count'; readonly age: string }
-  | { readonly kind: 'orphan'; readonly age: string; readonly eventId: string };
+  | { readonly kind: 'orphan'; readonly age: string; readonly eventId: string }
+  /** v3 F10 (ADR 0078, C2): a row's KCY cell from the calendar engine (`wrong_kcy`). */
+  | { readonly kind: 'kcy'; readonly age: string; readonly rowId: string }
+  /** v3 F10: a row's Date and KCY cells in the confirmed style (`date_text_differs`). */
+  | { readonly kind: 'style'; readonly age: string; readonly rowId: string }
+  /** v3 F10: an event's link set to its age's table (`wrong_uri`). */
+  | { readonly kind: 'uri'; readonly age: string; readonly eventId: string }
+  /** v3 F10: the age's rows moved into calendar order, when the order is strict (`row_out_of_order`). */
+  | { readonly kind: 'order'; readonly age: string };
+
+/** What `capture` submits: a plan of any of the chronology's fixes. */
+interface CapturePlan {
+  readonly target: ChronologyTarget;
+  readonly writes: readonly TargetWrite[];
+  readonly ctx: WriteContext;
+  readonly requestKey: string;
+  readonly summary: string;
+  readonly head: Obj;
+  readonly markdown: { readonly before: string; readonly after: string };
+  readonly textChanges?: readonly TextChange[];
+}
 
 const nodeView = (n: TreeNode) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') });
 
@@ -832,7 +884,31 @@ export function createChronology(d: ChronologyDeps): Chronology {
 
   // ------------------------------------------------------------------------------------------ propose a fix
 
-  const proposeFix: Chronology['proposeFix'] = async (actor, projectId, fix) => {
+  /**
+   * v3 F10 (ADR 0078): one fix planned from a live read, as "Propose a fix" and the automation both use it. The guard
+   * names why a repair is never applied directly (only ever proposed): a sync that changes the event's shape (the
+   * owner's approval is the confirmation), a row whose date is qualified (read by its anchor), a row whose table-only
+   * mark has lapsed (its cells changed since the owner marked it).
+   */
+  type Planned =
+    | { readonly nothing: string }
+    | {
+        readonly nothing?: undefined;
+        readonly tool: ChronologyTool;
+        readonly config: ChronologyConfig;
+        readonly age: AgeConfig;
+        readonly page: { readonly id: string; readonly name: string };
+        readonly plan: CapturePlan;
+        readonly audit: Obj;
+        readonly shapeChange: string | null;
+        readonly guard: { readonly code: string; readonly reason: string } | null;
+      };
+
+  const planFix = async (
+    projectId: string,
+    fix: ChronologyFix,
+    priority: PriorityClass,
+  ): Promise<Planned> => {
     const ready = readiness(projectId);
     if (!ready.ok) throw new ChronologyError(ready.code, ready.message);
     const c = ready.config;
@@ -847,29 +923,27 @@ export function createChronology(d: ChronologyDeps): Chronology {
         `A chronology change of ${stopped.ages.join(' and ')} stopped part-way (change ${stopped.id}: ${stopped.summary}). Finish it (repeat the same request) or mark it resolved first. Nothing was proposed.`,
         { recordId: stopped.id },
       );
-    const read = reader(projectId, 'P1', { n: 0 });
+    const read = reader(projectId, priority, { n: 0 });
     const list = (await read('listCalendars', {})) as { data?: Obj[] } | undefined;
     const def = (list?.data ?? []).find((x) => x.id === c.calendarId);
     if (!def)
       throw new ChronologyError('CALENDAR_NOT_FOUND', `The calendar ${String(c.calendarId)} was not found.`);
     const cal = remember(projectId, def);
     const page = { id: c.resourceId!, name: ready.resource.rawName };
+    const common = { config: c, age, page, shapeChange: null, guard: null };
     if (fix.kind === 'count') {
       const plan = await planCountFix({ config: c, calendar: cal, read, age });
       if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
       if (plan.action === 'nothing')
         return {
-          status: 'nothing_to_do',
-          message: `The ${age.name} count on the Main table already matches its table (${plan.main.text.trim()}; table rows ${plan.rows}): nothing to fix, and nothing was proposed.`,
+          nothing: `The ${age.name} count on the Main table already matches its table (${plan.main.text.trim()}; table rows ${plan.rows}): nothing to fix, and nothing was proposed.`,
         };
-      return capture(actor, projectId, {
+      return {
+        ...common,
         tool: COUNT_FIX_TOOL,
-        config: c,
-        age,
-        page,
         plan,
         audit: { kind: 'count', from: plan.main.value, to: plan.rows, events: plan.events },
-      });
+      };
     }
     if (fix.kind === 'orphan') {
       // v2 E6 (ADR 0048): an event without a row, deleted (only the event; no row, no count change).
@@ -882,21 +956,47 @@ export function createChronology(d: ChronologyDeps): Chronology {
         ref: { eventId: fix.eventId, age: age.name },
       });
       if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
-      return capture(actor, projectId, {
+      return {
+        ...common,
         tool: ORPHAN_TOOL,
-        config: c,
-        age,
-        page,
         plan,
         audit: { kind: 'orphan', eventId: fix.eventId, nearest: plan.nearest.map((n) => n.rowId) },
-      });
+      };
     }
+    if (fix.kind === 'kcy' || fix.kind === 'style' || fix.kind === 'uri' || fix.kind === 'order') {
+      // v3 F10 (ADR 0078, C2): the four deterministic repairs.
+      const plan =
+        fix.kind === 'kcy'
+          ? await planKcyFix({ config: c, calendar: cal, read, age, rowId: fix.rowId, pageName: page.name })
+          : fix.kind === 'style'
+            ? await planStyleFix({
+                config: c,
+                calendar: cal,
+                read,
+                age,
+                rowId: fix.rowId,
+                pageName: page.name,
+              })
+            : fix.kind === 'uri'
+              ? await planUriFix({ config: c, read, age, eventId: fix.eventId, pageName: page.name })
+              : await planOrderFix({ config: c, calendar: cal, read, age, pageName: page.name });
+      if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
+      if (plan.action === 'nothing')
+        return { nothing: `${plan.summary}: nothing to fix, and nothing was proposed.` };
+      return {
+        ...common,
+        tool: plan.tool,
+        plan,
+        audit: { kind: fix.kind, ...plan.head },
+      };
+    }
+    const tableOnly = store.tableOnly(projectId);
     const plan = await planSync({
       config: c,
       calendar: cal,
       read,
       links: store.links(projectId),
-      tableOnly: store.tableOnly(projectId),
+      tableOnly,
       ref: {
         rowId: fix.rowId,
         age: age.name,
@@ -906,23 +1006,30 @@ export function createChronology(d: ChronologyDeps): Chronology {
     });
     if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
     if (plan.action === 'nothing')
-      return {
-        status: 'nothing_to_do',
-        message: 'The row and its timeline event already agree; nothing was proposed.',
-      };
-    // v2 E6 (ADR 0048): a repair that turns a range into a single date (or the reverse) is never one click.
-    if (plan.shapeChange && fix.confirmShapeChange !== true)
-      throw new ChronologyError(
-        'SHAPE_CHANGE_UNCONFIRMED',
-        `This fix would change the ${age.name} event “${plan.event?.name.slice(0, 80) ?? ''}”: ${plan.shapeChange} (the row says “${plan.row.dateText}”). Check that the row and the event are the same chronology event, then confirm the change. Nothing was proposed.`,
-        { shapeChange: plan.shapeChange, rowId: fix.rowId, eventId: plan.event?.id ?? null },
-      );
-    return capture(actor, projectId, {
+      return { nothing: 'The row and its timeline event already agree; nothing was proposed.' };
+    const lapsed = tableOnly.find((m) => m.tableDocumentId === age.tableDocumentId && m.rowId === fix.rowId);
+    const guard = plan.shapeChange
+      ? {
+          code: 'SHAPE_CHANGE',
+          reason: `the fix changes the event's shape (${plan.shapeChange}): your approval confirms it`,
+        }
+      : plan.row.reading
+        ? {
+            code: 'QUALIFIED_DATE',
+            reason: `the row's date “${plan.row.dateText}” is qualified (its event takes the date's anchor)`,
+          }
+        : lapsed
+          ? {
+              code: 'TABLE_ONLY_LAPSED',
+              reason: `you marked this row table-only, and its cells have changed since (it was “${lapsed.texts.date}”)`,
+            }
+          : null;
+    return {
+      ...common,
       tool: SYNC_TOOL,
-      config: c,
-      age,
-      page,
       plan,
+      shapeChange: plan.shapeChange,
+      guard,
       audit: {
         rowId: fix.rowId,
         action: plan.action,
@@ -932,7 +1039,43 @@ export function createChronology(d: ChronologyDeps): Chronology {
           : {}),
         ...(plan.shapeChange ? { shapeChange: plan.shapeChange, confirmed: true } : {}),
       },
+    };
+  };
+
+  const proposeFix: Chronology['proposeFix'] = async (actor, projectId, fix) => {
+    const p = await planFix(projectId, fix, 'P1');
+    if (p.nothing !== undefined) return { status: 'nothing_to_do', message: p.nothing };
+    // v2 E6 (ADR 0048): a repair that turns a range into a single date (or the reverse) is never one click.
+    if (
+      p.shapeChange &&
+      (fix.kind ?? 'sync') === 'sync' &&
+      (fix as { confirmShapeChange?: boolean }).confirmShapeChange !== true
+    ) {
+      const plan = p.plan as Extract<Awaited<ReturnType<typeof planSync>>, { ok: true }>;
+      throw new ChronologyError(
+        'SHAPE_CHANGE_UNCONFIRMED',
+        `This fix would change the ${p.age.name} event “${plan.event?.name.slice(0, 80) ?? ''}”: ${plan.shapeChange} (the row says “${plan.row.dateText}”). Check that the row and the event are the same chronology event, then confirm the change. Nothing was proposed.`,
+        { shapeChange: plan.shapeChange, rowId: plan.row.id, eventId: plan.event?.id ?? null },
+      );
+    }
+    const r = await capture(actor, projectId, { ...p, proposed: true });
+    if (r.status !== 'proposal_captured')
+      throw new ChronologyError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
+    return r;
+  };
+
+  const repair: Chronology['repair'] = async (actor, projectId, fix, o) => {
+    const p = await planFix(projectId, fix, 'P3');
+    if (p.nothing !== undefined) return { status: 'nothing_to_do', message: p.nothing };
+    const proposed = o.mode === 'propose' || p.guard !== null;
+    const r = await capture(actor, projectId, {
+      ...p,
+      proposed,
+      origin: o.origin,
+      priority: 'P3',
+      ...(p.guard ? { note: `Proposed, not applied: ${p.guard.reason}.` } : {}),
     });
+    return { ...r, guard: p.guard };
   };
 
   // ------------------------------------------------------------------------------------------ table-only marks
@@ -1007,18 +1150,20 @@ export function createChronology(d: ChronologyDeps): Chronology {
       readonly config: ChronologyConfig;
       readonly age: AgeConfig;
       readonly page: { readonly id: string; readonly name: string };
-      readonly plan: {
-        readonly target: ChronologyTarget;
-        readonly writes: readonly TargetWrite[];
-        readonly ctx: WriteContext;
-        readonly requestKey: string;
-        readonly summary: string;
-        readonly head: Obj;
-        readonly markdown: { readonly before: string; readonly after: string };
-      };
+      readonly plan: CapturePlan;
       readonly audit: Obj;
+      /** True: ONE proposal whatever the caller (`forceProposal`). False (v3 F10, the automation's Apply): a job. */
+      readonly proposed: boolean;
+      /** v3 F10: the automation's origin (default: the owner's dashboard). */
+      readonly origin?: JobOrigin;
+      readonly priority?: PriorityClass;
+      /** v3 F10: why a repair the owner set to Apply was proposed (shown in the proposal's summary). */
+      readonly note?: string;
     },
-  ): Promise<{ status: 'proposal_captured'; proposalId: string; summary: string | null }> => {
+  ): Promise<
+    | { status: 'proposal_captured'; proposalId: string; summary: string | null }
+    | { status: 'job_submitted'; jobId: string; summary: string | null }
+  > => {
     const { plan, page, tool } = o;
     const built = buildJob({
       tool,
@@ -1031,17 +1176,20 @@ export function createChronology(d: ChronologyDeps): Chronology {
       ...(tool === COUNT_FIX_TOOL ? { captureMainVersion: true } : {}),
     });
     const parts = built.labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l));
+    // v3 F10 (ADR 0078): the before and after text per cell or row (F7.1a's display), where the plan gives them.
+    const textChanges = 'textChanges' in plan && Array.isArray(plan.textChanges) ? plan.textChanges : [];
+    const summary = o.note ? `${plan.summary}. ${o.note}` : plan.summary;
     const r = await d.engine.submit({
       kind: 'batch_ops',
       project: projectId,
       steps: built.steps,
       onError: 'stop',
-      priority: 'P1',
-      origin: { kind: 'ui', client: 'owner', tool: 'chronology_propose_fix' },
-      title: plan.summary.slice(0, 300),
+      priority: o.priority ?? 'P1',
+      origin: o.origin ?? { kind: 'ui', client: 'owner', tool: 'chronology_propose_fix' },
+      title: summary.slice(0, 300),
       holdDocuments: built.holdDocuments,
       internal: true,
-      forceProposal: true,
+      ...(o.proposed ? { forceProposal: true } : {}),
       proposal: {
         operation: {
           tool,
@@ -1049,19 +1197,34 @@ export function createChronology(d: ChronologyDeps): Chronology {
           before: plan.markdown.before,
           after: plan.markdown.after,
           chronology: plan.head,
+          ...(textChanges.length > 0 ? { textChanges } : {}),
         },
-        operations: [{ tool, page, pageParts: parts, summaryLabel: plan.summary, chronology: plan.head }],
-        summary: plan.summary,
+        operations: [
+          {
+            tool,
+            page,
+            pageParts: parts,
+            summaryLabel: summary,
+            chronology: plan.head,
+            ...(textChanges.length > 0 ? { textChanges } : {}),
+          },
+        ],
+        summary,
       },
     });
-    if (!('proposalId' in r))
-      throw new ChronologyError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
-    d.audit(actor, 'chronology.propose_fix', projectId, null, {
-      age: o.age.name,
-      ...o.audit,
-      proposalId: r.proposalId,
-    });
-    return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary ?? null };
+    if ('proposalId' in r && typeof r.proposalId === 'string') {
+      d.audit(actor, 'chronology.propose_fix', projectId, null, {
+        age: o.age.name,
+        ...o.audit,
+        proposalId: r.proposalId,
+      });
+      return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary ?? null };
+    }
+    if (!o.proposed && 'jobId' in r && typeof r.jobId === 'string') {
+      d.audit(actor, 'chronology.repair', projectId, null, { age: o.age.name, ...o.audit, jobId: r.jobId });
+      return { status: 'job_submitted', jobId: r.jobId, summary };
+    }
+    throw new ChronologyError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
   };
 
   return {
@@ -1078,6 +1241,7 @@ export function createChronology(d: ChronologyDeps): Chronology {
     resolve,
     check,
     proposeFix,
+    repair,
     markTableOnly,
     unmarkTableOnly,
     attach() {

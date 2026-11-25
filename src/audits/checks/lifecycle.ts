@@ -395,6 +395,30 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
       typeof d.eventId === 'string' &&
       candidates.some((c) => typeof c.rowId === 'string');
     const shape = typeof d.shapeChange === 'string' ? d.shapeChange : null;
+    // v3 F10 (ADR 0078, C2): the four deterministic repairs (each plan re-reads live and refuses what it cannot decide).
+    const repair =
+      (f.kind === 'wrong_kcy' || f.kind === 'date_text_differs') && typeof d.rowId === 'string'
+        ? {
+            kind: f.kind === 'wrong_kcy' ? ('chronology_kcy' as const) : ('chronology_style' as const),
+            args: { age: f.age, rowId: d.rowId },
+            summary:
+              f.kind === 'wrong_kcy'
+                ? `Propose setting the ${f.age} row's KCY to the calendar engine's value.`
+                : `Propose writing the ${f.age} row's date and KCY in the confirmed style.`,
+          }
+        : f.kind === 'wrong_uri' && typeof d.eventId === 'string'
+          ? {
+              kind: 'chronology_uri' as const,
+              args: { age: f.age, eventId: d.eventId },
+              summary: `Propose setting the ${f.age} event's link to its age's table.`,
+            }
+          : f.kind === 'row_out_of_order'
+            ? {
+                kind: 'chronology_order' as const,
+                args: { age: f.age },
+                summary: `Propose putting the ${f.age} rows in calendar order (only when the order is strict).`,
+              }
+            : null;
     out.push({
       code,
       key: `${f.age}:${f.kind}:${id}:${f.kind === 'count_mismatch' ? '' : str(d.cell) || str(d.date)}`,
@@ -403,48 +427,50 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
       evidence: { age: f.age, ...d },
       sourceKind: 'chronology-check',
       source: { kind: 'chronology-check', checkId: run.id, takenAt: run.finishedAt ?? run.startedAt },
-      ...(fixable
-        ? {
-            fix: {
-              kind: 'chronology_sync' as const,
-              args: { age: f.age, rowId: d.rowId },
-              summary: shape
-                ? `Propose sync_timeline_event for the ${f.age} row (${shape}: needs your confirmation).`
-                : `Propose sync_timeline_event for the ${f.age} row.`,
-              ...(shape ? { confirm: { shapeChange: shape } } : {}),
-            },
-          }
-        : countFixable
+      ...(repair
+        ? { fix: repair }
+        : fixable
           ? {
               fix: {
-                kind: 'chronology_count' as const,
-                args: { age: f.age },
-                summary: `Propose setting the ${f.age} count on the Main table to its table's row count.`,
+                kind: 'chronology_sync' as const,
+                args: { age: f.age, rowId: d.rowId },
+                summary: shape
+                  ? `Propose sync_timeline_event for the ${f.age} row (${shape}: needs your confirmation).`
+                  : `Propose sync_timeline_event for the ${f.age} row.`,
+                ...(shape ? { confirm: { shapeChange: shape } } : {}),
               },
             }
-          : orphanFixable
+          : countFixable
             ? {
                 fix: {
-                  kind: 'chronology_orphan' as const,
-                  args: { age: f.age, eventId: d.eventId },
-                  summary: `Propose deleting the ${f.age} timeline event, which has no table row (only the event).`,
+                  kind: 'chronology_count' as const,
+                  args: { age: f.age },
+                  summary: `Propose setting the ${f.age} count on the Main table to its table's row count.`,
                 },
               }
-            : pairFixable
+            : orphanFixable
               ? {
                   fix: {
-                    kind: 'chronology_pair' as const,
-                    args: {
-                      age: f.age,
-                      eventId: d.eventId,
-                      candidates: candidates
-                        .filter((c) => typeof c.rowId === 'string')
-                        .map((c) => ({ rowId: c.rowId, date: c.date, words: c.words })),
-                    },
-                    summary: `Propose pairing the ${f.age} timeline event with the row you pick (sync_timeline_event with event_id); it is never deleted.`,
+                    kind: 'chronology_orphan' as const,
+                    args: { age: f.age, eventId: d.eventId },
+                    summary: `Propose deleting the ${f.age} timeline event, which has no table row (only the event).`,
                   },
                 }
-              : {}),
+              : pairFixable
+                ? {
+                    fix: {
+                      kind: 'chronology_pair' as const,
+                      args: {
+                        age: f.age,
+                        eventId: d.eventId,
+                        candidates: candidates
+                          .filter((c) => typeof c.rowId === 'string')
+                          .map((c) => ({ rowId: c.rowId, date: c.date, words: c.words })),
+                      },
+                      summary: `Propose pairing the ${f.age} timeline event with the row you pick (sync_timeline_event with event_id); it is never deleted.`,
+                    },
+                  }
+                : {}),
     });
   }
   return out;

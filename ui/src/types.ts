@@ -1523,6 +1523,36 @@ export interface ChronologyCheckResponse {
   running: boolean;
 }
 
+/** v3 F10 (ADR 0078, C5): GET /chronology/automation. */
+export interface ChronologyAutomationResponse {
+  project: ProjectRef;
+  available: boolean;
+  lastRun?: {
+    id: string;
+    trigger: string;
+    startedAt: number;
+    finishedAt: number | null;
+    state: string;
+    summary: string | null;
+  } | null;
+  lastChronologyRun?: ChronologyAutomationResponse['lastRun'];
+  paused?: boolean;
+  codes?: { code: string; name: string; mode: 'off' | 'propose' | 'apply' }[];
+  items?: {
+    id: number;
+    runId: string;
+    code: string;
+    pageId: string | null;
+    pageName: string | null;
+    outcome: 'applied' | 'proposed' | 'skipped' | 'guarded' | 'failed' | 'stopped';
+    reasonCode: string | null;
+    reason: string | null;
+    jobId: string | null;
+    proposalId: string | null;
+    at: number;
+  }[];
+}
+
 export interface ChronologyRecordView {
   id: number;
   tool:
@@ -1530,7 +1560,11 @@ export interface ChronologyRecordView {
     | 'update_timeline_event'
     | 'delete_timeline_event'
     | 'sync_timeline_event'
-    | 'chronology_count_fix';
+    | 'chronology_count_fix'
+    | 'chronology_kcy_fix'
+    | 'chronology_uri_fix'
+    | 'chronology_order_fix'
+    | 'chronology_style_fix';
   summary: string;
   ages: string[];
   state: 'incomplete' | 'complete' | 'resolved';
@@ -2762,7 +2796,7 @@ export interface AutomationCode {
   name: string;
   example: string;
   transformation: string;
-  source: 'audit' | 'appraisal' | 'retag';
+  source: 'audit' | 'appraisal' | 'retag' | 'chronology';
   mode: AutomationMode;
   /** v3 F7: the modes the owner can choose (a proposal-only code: Off or Propose). */
   modes?: AutomationMode[];

@@ -36,6 +36,8 @@ describe('tools configuration', () => {
       memoryWarnFraction: 0.7,
       // v3 F7d (ADR 0077, A1): one groups call's limits.
       artCallMaxImages: 120,
+      // v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS.
+      chronologyCheckDelayMs: 600000,
       artCallMaxGroups: 40,
     });
     expect(loadToolsConfig({ ART_CACHE_DIR: '/srv/art', ART_CACHE_MAX_MB: '20' }).artCache).toEqual({

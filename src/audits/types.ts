@@ -71,6 +71,11 @@ export type FixKind =
    * `sync_timeline_event` with that row and the event, through the chronology module likewise. Never a delete.
    */
   | 'chronology_pair'
+  /** v3 F10 (ADR 0078, C2): the four deterministic repairs, through the chronology module likewise. */
+  | 'chronology_kcy'
+  | 'chronology_style'
+  | 'chronology_uri'
+  | 'chronology_order'
   /** v3 F2 (ADR 0049 decision 9): duplicate asset folders merged into the earliest, the emptied ones deleted. */
   | 'merge_asset_folders'
   /**
@@ -526,8 +531,14 @@ export const CODES = {
     category: 'chronology',
     severity: 'warning',
     title: 'A table row is out of calendar order',
+    fix: 'chronology_order',
   },
-  chronology_wrong_kcy: { category: 'chronology', severity: 'warning', title: 'A KCY value is wrong' },
+  chronology_wrong_kcy: {
+    category: 'chronology',
+    severity: 'warning',
+    title: 'A KCY value is wrong',
+    fix: 'chronology_kcy',
+  },
   chronology_count_mismatch: {
     category: 'chronology',
     severity: 'warning',
@@ -538,6 +549,7 @@ export const CODES = {
     category: 'chronology',
     severity: 'warning',
     title: 'An event does not link to its age’s table',
+    fix: 'chronology_uri',
   },
   chronology_unreadable_date: {
     category: 'chronology',
@@ -548,6 +560,7 @@ export const CODES = {
     category: 'chronology',
     severity: 'info',
     title: 'A date or KCY is written differently from the confirmed style',
+    fix: 'chronology_style',
   },
   chronology_not_found: {
     category: 'chronology',

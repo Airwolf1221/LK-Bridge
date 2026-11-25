@@ -64,7 +64,8 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 | Make Working work canon                             | `promote_page` (`subtree: true` for a set)                  | `set_facts` Status                            |
 | Delete (and undo)                                   | `delete_resource`, `restore_resource`                       | `lk_api_write`                                |
 | Check or convert a date                             | `calendar_date`                                             | working it out yourself                       |
-| Add, change, remove a chronology event              | `create_`, `update_`, `delete_timeline_event`               | `write_page` on a table; `lk_api_*`           |
+| Add, change, remove a chronology event              | `create_`, `update_`, `delete_timeline_event`               | `lk_api_*` on a table or timeline             |
+| Edit many chronology rows, or restructure a table   | `write_page` on the table (the bridge syncs the timeline)   | editing the timeline by hand                  |
 | Add or move a map pin, region, path                 | `create_map_feature`, `update_map_feature`                  | `lk_api_write` `createFeature`                |
 | Put an image in the library                         | `upload_image` (staged first at `propose`)                  | `lk_upload_image` (older; usually not shown)  |
 | See older states of a page and bring one back       | `list_snapshots`, `snapshot_diff`, `restore_snapshot`       | rewriting the text with `write_page`          |
@@ -1322,8 +1323,17 @@ confirmed the project's two indexes, the tools and Working creates are refused (
 
 The Universal Chronology has, for each age, a **table** (`Historical Event | Date | KCY`, in calendar order), a
 **timeline** (one lane, "Historical Events") and a **count** on its Main table. **The table is the authority**; the
-timeline is a view of it. Never edit them separately (with `write_page` or `lk_api_*`): use the timeline tools, which
-keep all three in step in one job.
+timeline is a view of it. For one event, use the timeline tools, which keep all three in step in one job.
+
+**Editing a table directly.** A direct table edit with `write_page` is right for **several rows at once, or to
+restructure a table** (rows re-dated or reordered, wording corrected across an age). It is never refused, and its result
+carries one note: "This is a chronology table. New or changed rows are synced to the timeline by the bridge within minutes. To add one row with its event in one step, use create_timeline_event; sync_timeline_event gives an event to a row already in the table." A few minutes after the edit
+(`CHRONOLOGY_CHECK_DELAY_MS`, 10 by default) the bridge checks the chronology and the owner's automation repairs what
+it finds, the table being the authority: each new or changed row's event made or corrected, the Main count, a wrong
+KCY, an event's link, the rows' calendar order (only when it is strict) and the dates' written style. By default each
+repair is a proposal for the owner; it is direct only where the owner switched it to Apply. So after a table edit, do
+not also make or fix its events by hand: tell the person the bridge syncs them (or proposes it). Never edit an age's
+timeline by hand.
 
 **Dates.** Write them in the chronology's forms: `Kumikas 1st, 1A 159` (a day), `4A 881` (a year), `Unknown, 4A 101`
 (a year whose day is unknown), `Zahras 4A 367` (a month), `Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102` (a range),
@@ -1380,7 +1390,8 @@ The full list of forms is in docs/chronology.md.
   refuse more.
 
 If a table row and its event no longer agree, the other tools refuse (`CHRONOLOGY_DRIFT`): repair it with
-`sync_timeline_event` (the weekly chronology check reports it, and the owner's dashboard offers "Propose a fix"). If a
+`sync_timeline_event` (the nightly chronology check, and the check a few minutes after a table edit, report it; the
+owner's automation proposes or makes the repair, and the dashboard offers "Propose a fix"). If a
 change stops part-way, send **the same request again**: it does only what is left; other changes of that age wait for it
 (`CHRONOLOGY_INCOMPLETE`). Before the owner has confirmed the chronology, the tools refuse
 (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on an Authoritative page.

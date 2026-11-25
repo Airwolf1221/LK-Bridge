@@ -98,6 +98,7 @@ import { snapshotMapCheckers } from './snapshots/restore.js';
 import { Rehearsals } from './snapshots/rehearsal.js';
 import {
   DEFAULT_ART_CACHE_SETTINGS,
+  DEFAULT_CHRONOLOGY_CHECK_DELAY_MS,
   DEFAULT_SNAPSHOT_SETTINGS,
   DEFAULT_WATCHDOG_SETTINGS,
 } from './config/tools.js';
@@ -121,6 +122,8 @@ import { assetLibraryOf } from './assets/library.js';
 import { snapshotPageState } from './snapshots/restore.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
+import { createAfterEdit } from './chronology/after-edit.js';
+import type { ChangeTaken } from './snapshots/service.js';
 import { mapCheckers } from './maps/index.js';
 import { OffsiteService } from './offsite/service.js';
 import type { GoogleOAuthOptions } from './offsite/google.js';
@@ -886,6 +889,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     artCacheSettings.maxBytes,
     () => (o.clock ?? systemClock).now(),
   );
+  // v3 F10 (ADR 0078, C3): the chronology's check after an edit (made below, once the automation exists).
+  const afterEditRef: { current: ((projectId: string, change: ChangeTaken) => boolean) | null } = {
+    current: null,
+  };
   const snapshots = new SnapshotService({
     db: o.db,
     engine,
@@ -911,6 +918,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       audits?.afterFullSnapshot(projectId);
       // v3 F3c (ADR 0054): the appraisal's overlay and full-text index rebuilt from it (likewise).
       appraisal?.afterFullSnapshot(projectId);
+    },
+    afterChange: (projectId, change) => {
+      afterEditRef.current?.(projectId, change);
     },
   });
   void snapshots.start();
@@ -1448,6 +1458,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     appraisal,
     retag,
     review,
+    chronology,
     projects: {
       anyClient: (id) => projects.anyClient(id),
     },
@@ -1461,6 +1472,17 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   const detachAutomation = automation.start();
   automationRef.current = automation;
+  // v3 F10 (ADR 0078, C3): a change snapshot that touched a chronology document schedules the project's check
+  // CHRONOLOGY_CHECK_DELAY_MS after the last such change (debounced, one at a time, awaited on stop), and the
+  // automation's chronology codes then act on its findings.
+  afterEditRef.current = createAfterEdit({
+    chronology,
+    automation,
+    background,
+    delayMs: () => toolsSettings.chronologyCheckDelayMs ?? DEFAULT_CHRONOLOGY_CHECK_DELAY_MS,
+    workstreamOfJob: (projectId, jobId) => engine.queries.getJob(projectId, jobId)?.origin.workstream ?? null,
+    log: { info: (obj, msg) => log.info(obj, msg) },
+  });
 
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.

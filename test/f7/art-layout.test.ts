@@ -146,12 +146,30 @@ describe('G7: the findings', () => {
       'owner_identity_copy_drift',
       // v3 F6a (ADR 0076): Apply allowed, but default Off (no defaultMode).
       'reference_type_noncanonical',
+      // v3 F10 (ADR 0078): the chronology's codes, Propose by default, Apply the owner's switch.
+      'chronology_row_without_event',
+      'chronology_date_mismatch',
+      'chronology_name_drift',
+      'chronology_count_mismatch',
+      'chronology_wrong_kcy',
+      'chronology_wrong_uri',
+      'chronology_row_out_of_order',
+      'chronology_date_text_differs',
     ]);
     expect(PROPOSE_ONLY.filter((e) => e.applyDirect === true).map((e) => e.code)).toEqual([
       'character_core_missing',
       'core_compact_wording',
       'owner_identity_copy_drift',
       'reference_type_noncanonical',
+      // v3 F10 (ADR 0078): the chronology's codes, Propose by default, Apply the owner's switch.
+      'chronology_row_without_event',
+      'chronology_date_mismatch',
+      'chronology_name_drift',
+      'chronology_count_mismatch',
+      'chronology_wrong_kcy',
+      'chronology_wrong_uri',
+      'chronology_row_out_of_order',
+      'chronology_date_text_differs',
     ]);
     for (const e of PROPOSE_ONLY.filter((x) => x.code !== 'reference_type_noncanonical'))
       expect(e).toMatchObject({ automatable: 'propose', defaultMode: 'propose' });
