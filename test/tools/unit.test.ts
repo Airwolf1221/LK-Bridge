@@ -28,6 +28,9 @@ describe('tools configuration', () => {
       snapshots: DEFAULT_SNAPSHOT_SETTINGS,
       // v3 F7b (ADR 0071, D6): the art cache, beside the database, 500 MB.
       artCache: { dir: null, maxBytes: 500 * 1024 * 1024 },
+      // v3 F7d (ADR 0077, A1): one groups call's limits.
+      artCallMaxImages: 120,
+      artCallMaxGroups: 40,
     });
     expect(loadToolsConfig({ ART_CACHE_DIR: '/srv/art', ART_CACHE_MAX_MB: '20' }).artCache).toEqual({
       dir: '/srv/art',
