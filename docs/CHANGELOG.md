@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased: v3 F10, the chronology repaired soon after an edit (25 November 2026)
+
+[ADR 0078](adr/0078-v3-f10-chronology-repair.md). No migration. Built and tested against the mock; nothing live was
+touched.
+
+- **Step 0**: the `f7d-art-set` sandbox check tested the old "always a proposal" claim (the live run of 25 November
+  failed D3 with "not one proposal"). D3 now runs at scope `propose`; a new D3b, a smaller groups call at scope `write`
+  on the same character, asserts the direct job, its placement and verification; the mock run keeps the pack's seed
+  switches (the art tool at "follow the scope", as live) and asserts it. Rerun after deploy:
+  `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f7d-art-set`.
+- **C1**: `chronology_row_without_event`, `chronology_date_mismatch`, `chronology_name_drift` and
+  `chronology_count_mismatch` are automation codes (Propose by default, Apply allowed), each running "Propose a fix"'s
+  plan; a shape change, a qualified date or a lapsed table-only mark is always proposed with the reason; an ambiguous
+  pairing or an unreadable date is left for the owner; table-only rows are skipped; caps 25 a code, 100 a run.
+- **C2**: four new repairs, on the Chronology and Audits pages and as codes: `chronology_wrong_kcy` (the KCY from the
+  calendar engine, a complete date only), `chronology_wrong_uri` (the event's link), `chronology_row_out_of_order` (the
+  fewest rows moved, only when the order is strict) and `chronology_date_text_differs` (the confirmed style); every
+  proposal shows the text before and after.
+- **C3**: a change snapshot touching the Main table, an age table or an age timeline schedules the chronology check
+  `CHRONOLOGY_CHECK_DELAY_MS` later (new setting, 10 minutes; debounced; one at a time; awaited on stop), then the
+  chronology codes run on its findings. The scheduled check is nightly at 05:00 (was weekly), chained after the full
+  snapshot; a stored next run from the old default is brought forward at start.
+- **C4**: a `write_page` or `lk_api_write` that changes an age table carries `chronologyNote`; the guide's "Dates and the
+  chronology" says when a direct table edit is right; "How to decide" has one row more (its cap 9,450 → 9,613).
+- **C5**: the Chronology page's "Repairs by the automation" (when it last ran, what it synced or proposed);
+  `bridge_workstream_report` attributes each repair to the table edit's workstream.
+- **Sandbox**: `f10-chronology` (opt-in, on a throwaway chronology in the temporary database).
+
 ## Unreleased: v3 F6a.1, the Reference Types hang (25 November 2026)
 
 [ADR 0076 amendment 1](adr/0076-v3-f6a-reference-type-vocabulary.md#amendment-1-v3-f6a1-25-november-2026-the-live-hang-of-24-november-a-decision-is-cheap-the-report-is-cached),

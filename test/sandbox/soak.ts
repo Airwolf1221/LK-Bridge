@@ -120,6 +120,8 @@ export async function createSoakRuntime(o: {
    */
   readonly uploadGuard?: GuardOptions;
   /** v3 F3.4: image settings over the defaults (that dry run: the mock's asset host). Unset everywhere else. */
+  /** v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS for this runtime (f10-chronology shortens it to seconds). */
+  readonly chronologyCheckDelayMs?: number;
   readonly images?: Partial<typeof DEFAULT_TOOLS_SETTINGS.images>;
 }): Promise<SoakRuntime> {
   const dir = mkdtempSync(join(tmpdir(), 'lkb-soak-'));
@@ -154,6 +156,7 @@ export async function createSoakRuntime(o: {
       images: { ...DEFAULT_TOOLS_SETTINGS.images, ...o.images, dataDir: join(dir, 'images') },
       // v2 E1a: the snapshot store too (snapshots of the sandbox's own writes, the snapshot sandbox test's store).
       snapshots: { ...DEFAULT_SNAPSHOT_SETTINGS, dataDir: join(dir, 'snapshots') },
+      ...(o.chronologyCheckDelayMs !== undefined ? { chronologyCheckDelayMs: o.chronologyCheckDelayMs } : {}),
     },
     db,
     version: 'soak',

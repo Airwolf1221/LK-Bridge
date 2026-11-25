@@ -737,7 +737,14 @@ project.
   without an event, events without a row, a row and its event that disagree about the date or shape (**Row and event
   disagree about the date**), rows out of order, wrong KCY values, cells written differently from the confirmed style,
   count mismatches, event links not to their age's table, dates the engine cannot read. **Run the check now** runs it
-  (P2; reads only; the check itself never repairs); it also runs weekly (Maintenance page). Differences of wording only
+  (P2; reads only; the check itself never repairs); it also runs nightly (Maintenance page) and a few minutes after an
+  edit of a chronology document (v3 F10). **Propose a fix** also covers a wrong KCY, a date written in another style, an
+  event's link and rows out of calendar order (only when the order is strict), each proposal showing the text before and
+  after.
+- **Repairs by the automation** (v3 F10, ADR 0078). When the automation last ran (and last after a chronology check),
+  which chronology codes are set to Apply, and what they did, newest first: rows synced (with the job), proposed (with
+  the proposal) or left for you (an ambiguous pairing, a date the engine cannot read, an order that is not strict), with
+  the reason. Differences of wording only
   between a row's description and its event's short name, and the thousands separator in a year (LegendKeeper writes
   `AA 1988119`, the tables `AA 1,988,119`), are not findings.
 - **Propose a fix** (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)). A **Row without an

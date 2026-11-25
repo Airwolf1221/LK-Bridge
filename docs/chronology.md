@@ -248,3 +248,33 @@ own (the same date, the same start, or its name) is reported as **Event in a tie
 which is `sync_timeline_event` with that row and the event's id. It is never offered for deletion. A delete reached
 anyway is refused: "This event is not an orphan: N rows of the table could be its own (…). Pair it with one instead of
 deleting it."
+
+## Repaired soon after an edit (v3 F10)
+
+[ADR 0078](adr/0078-v3-f10-chronology-repair.md). The table is the authority; every repair below sets the timeline from
+its table, a table cell from the calendar engine, or the rows' order from their own dates. Nothing reads the timeline to
+change a table.
+
+- **When.** The chronology check runs nightly at 05:00 (after the night's full snapshot and its audit), and also
+  `CHRONOLOGY_CHECK_DELAY_MS` (10 minutes by default) after the last change snapshot that touched a chronology document
+  (the Main table, an age table or an age timeline): a burst of edits is one check. The chronology's own changes (the
+  timeline tools, the fixes) schedule nothing: they keep the table and the timeline in step themselves.
+- **What then.** The automation's chronology codes act on the check's findings at once (Automation page; Propose by
+  default, Apply when the owner switches a code): `chronology_row_without_event`, `chronology_date_mismatch`,
+  `chronology_name_drift` (the sync), `chronology_count_mismatch` (the count), and four deterministic repairs:
+
+  | Code                           | Repair                                                          | Only when                                                  |
+  | ------------------------------ | --------------------------------------------------------------- | ---------------------------------------------------------- |
+  | `chronology_wrong_kcy`         | the KCY cell set to the engine's value, in the confirmed style  | the date is complete (a day) and readable                  |
+  | `chronology_wrong_uri`         | the event's link set to its age's table                         | always (the age is the finding's)                          |
+  | `chronology_row_out_of_order`  | the fewest rows moved into calendar order                       | strict: plain dates, no ties, no partial date either side  |
+  | `chronology_date_text_differs` | the Date cell as the engine writes it; a right KCY in the style | a plain readable date (a qualified one is never rewritten) |
+
+- **Always a proposal, even at Apply**, with the reason: a sync that changes the event's shape, a row whose date is
+  qualified, a row whose table-only mark has lapsed. **Left for the owner**: an ambiguous pairing, a date the engine
+  cannot read, an order that is not strict, a partial date's KCY. A row marked table-only gets nothing. Events without a
+  row, events in a tie, unreadable dates and documents not found stay judgements, as before.
+- **Seen.** The Chronology page's "Repairs by the automation"; each proposal shows the text before and after;
+  `bridge_workstream_report` puts each repair in the workstream of the table edit that caused it.
+- **Agents.** A `write_page` (or a low-level write) that changes an age table carries `chronologyNote`; the guide's
+  "Dates and the chronology" says when a direct table edit is right (several rows, or restructuring).

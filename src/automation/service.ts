@@ -17,7 +17,7 @@
  *   brakes are the design's; see ADR 0068.
  */
 import type { BackgroundRunner } from '../background.js';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { Appraisal } from '../appraisal/service.js';
 import type { AppraisalFinding } from '../appraisal/types.js';
@@ -1398,8 +1398,8 @@ export class AutomationService {
         target = 'age';
       }
       if (!fix || !target) continue;
-      // The finding's own words for what it is: a change of the row or event (its cell, its date) is a new finding.
-      const key = `chronology:${f.age}:${spec.kind}:${target}:${typeof d.cell === 'string' ? d.cell : typeof d.date === 'string' ? d.date : typeof d.rows === 'number' ? d.rows : ''}`;
+      // The finding's own words for what it is (its dates, cells and counts): a changed row or event is a new finding.
+      const key = `chronology:${f.age}:${spec.kind}:${target}:${createHash('sha256').update(f.message).digest('hex').slice(0, 16)}`;
       if (seen.has(key)) continue;
       seen.add(key);
       todo.push({ key, name: `${f.age}: ${f.message}`.slice(0, 200), fix });

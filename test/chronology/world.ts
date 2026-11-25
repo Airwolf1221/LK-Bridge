@@ -384,8 +384,10 @@ export async function chronologyWorld(
     const m = /\/resources\/([^/]+)\/docs\/([^/]+)(?:\/(.*))?$/.exec(req.path.replace(/\/$/, ''));
     if (!m) return undefined;
     const [, , did, rest] = m;
-    if (!docIds().has(did!)) return undefined;
     const parts = (rest ?? '').split('/').filter(Boolean);
+    // v3 F10: the lanes and events of ANY timeline document (a sandbox check's throwaway chronology, made at run time),
+    // as LegendKeeper serves them; everything else only for this world's own chronology documents.
+    if (!docIds().has(did!) && parts[0] !== 'lanes' && parts[0] !== 'events') return undefined;
     const M = req.method;
     const body = (req.body ?? {}) as Obj;
     // The document: its calendar for a timeline.

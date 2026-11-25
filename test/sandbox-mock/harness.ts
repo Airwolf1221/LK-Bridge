@@ -31,7 +31,10 @@ export interface OnMock {
 }
 
 /** The sandbox runtime and raw client of the real run, pointed at the mock world's LegendKeeper. */
-export async function sandboxOnMock(stack: Stack): Promise<OnMock> {
+export async function sandboxOnMock(
+  stack: Stack,
+  o: { readonly chronologyCheckDelayMs?: number } = {},
+): Promise<OnMock> {
   if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/.test(stack.mock.url))
     throw new Error(`the mock LegendKeeper must be on loopback, not ${stack.mock.url}`);
   new ProjectStore(stack.db).setSandbox(PROJECT, true);
@@ -45,6 +48,7 @@ export async function sandboxOnMock(stack: Stack): Promise<OnMock> {
       WRITE_SPACING_STRETCHED_MS: '0',
       LK_TIER_LIMITS: JSON.stringify(MOCK_LIMITS),
     },
+    ...(o.chronologyCheckDelayMs !== undefined ? { chronologyCheckDelayMs: o.chronologyCheckDelayMs } : {}),
   });
   const raw = rawLk({ lk: sb.lk, projectId: sb.projectId, apiKey: API_KEY, baseUrl: stack.mock.url });
   return { sb, raw, bridgeDbPath: stack.dbPath, close: () => sb.close() };

@@ -567,6 +567,24 @@ expected the old "always a proposal" claim. The run on the mock passed only beca
 governance itself; `copyBridgeState`'s report lists, in `governanceMissing`, each pack whose sources are in a project
 this runtime does not register, and `pack-governance.test.ts` fails a check that opts in to neither.
 
+## A direct table edit synced by the bridge (v3 F10)
+
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f10-chronology` (`f10-chronology.ts`; ADR
+0078). WRITES, then cleans up (about 15 writes and 40 reads). It never touches test's own chronology: it builds a
+THROWAWAY one through the bridge's engine (so the tree follows it) and confirms it in the TEMPORARY database only, and
+the runtime's `CHRONOLOGY_CHECK_DELAY_MS` is shortened to 3 seconds. K0 the pack's governance current in the temporary
+database (a throwaway governance page with Repository Automation's sections), every automation code Off there except
+`chronology_row_without_event`, at Apply; K1 the throwaway chronology `lk-bridge f10 chronology <time>`: a Main document
+with its index table and one age (the calendar's last era) with its table (one row) and its timeline (one lane, the
+row's event), printed as `F10 CHRONOLOGY …`; K2 a second row added DIRECTLY to the age table with `write_page` (read
+first, its version passed back, labelled with a workstream): the result carries the chronology note; K3 the delayed
+check runs by itself, finds the row without its event, and the automation applies the sync at once, printed as
+`F10 SYNC check=… job=… succeeded verified=true workstream=f10-sandbox-…`; K4 read back LIVE: two events, the new one at
+the new row's date, linked to the table, printed as `F10 EVENTS 2: …`. What to look for: every line PASS, K3's
+`verified=true` and the workstream, and K4's two events. A K3 failure that says "no check after the edit" means the
+change snapshot did not schedule it (the report gives the last check). Clean-up: the throwaway chronology and the
+governance page. On the mock: `test/sandbox-mock/f10-chronology.test.ts`.
+
 ## The bulk class P4 (v3 F9)
 
 `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- bulk-f9` (`bulk-f9.ts`; ADR 0074).
@@ -614,6 +632,7 @@ always skips it and the run asserts its reason (the smoke's (c)).
 | f7c-archive                    | `test/sandbox-mock/f7c-archive.test.ts`                     |
 | f7-1-core                      | `test/sandbox-mock/f7-1-core.test.ts`, `…/pack-governance…` |
 | f7d-art-set                    | `test/sandbox-mock/f7d-art-set.test.ts`                     |
+| f10-chronology                 | `test/sandbox-mock/f10-chronology.test.ts`                  |
 
 The mock answers as LegendKeeper does only with its **faithful** setting on (`test/sandbox-mock/faithful.ts`, which
 these runs turn on and nothing else does): each behaviour there names the owner's run or the part of the spec it comes
