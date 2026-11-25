@@ -91,8 +91,10 @@ describe('pinned sections', () => {
       ...PINNED.formatting,
       'Reference Type Vocabulary',
     ]);
+    // v3 F6b (ADR 0079): and the Navigation and Subject Index Tags (unpublished while the index tag rule is a draft).
     expect(ARKONA_PACK.governance.find((g) => g.key === 'tagging-standard')!.sections).toEqual([
       ...PINNED.tagging,
+      'Navigation and Subject Index Tags',
     ]);
   });
 

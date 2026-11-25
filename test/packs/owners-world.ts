@@ -24,7 +24,7 @@
  *   pack attached with all ten template roles and approved.
  */
 import { ROOT } from '../discover/world.js';
-import { LIFECYCLE, SidebarModel, T } from '../resources/world.js';
+import { INDEX_KEYS, LIFECYCLE, SidebarModel, T } from '../resources/world.js';
 import { PROJECT } from '../tools/helpers.js';
 import { GENERAL_KEYS, IDENTITY_KEYS, TPL, packWorld, type PackWorld } from './world.js';
 
@@ -49,6 +49,8 @@ export const OTPL = {
   place: 'tplplac1',
   magictech: 'tplmagi1',
   creature: 'tplcrea1',
+  /** v3 F6b (ADR 0079): "[NAV] AI Navigation", the owner's copy of "[INDEX] AI Index" (by name, never by id). */
+  nav: 'tplnav01',
 } as const;
 
 /** The fixture pages' ids. */
@@ -258,6 +260,7 @@ export async function ownersWorld(o: Parameters<typeof packWorld>[0] = {}): Prom
       r.seed({ id: OTPL.place, name: '[BSRC] AI Place and Divine Realm', parentId: null, props: false });
       r.seed({ id: OTPL.magictech, name: '[BSRC] AI Magic and Technology', parentId: null, props: false });
       r.seed({ id: OTPL.creature, name: '[BSRC] AI Creature and Species', parentId: null, props: false });
+      r.seed({ id: OTPL.nav, name: '[NAV] AI Navigation', parentId: null, props: false });
       o.seed?.(world);
     },
   });
@@ -275,6 +278,8 @@ export async function ownersWorld(o: Parameters<typeof packWorld>[0] = {}): Prom
   sb.page(OTPL.place, ownerSidebar('tplac'));
   sb.page(OTPL.magictech, ownerSidebar('tmagi'));
   sb.page(OTPL.creature, ownerSidebar('tcrea'));
+  // v3 F6b: the [NAV] template carries the Index template's rows.
+  sb.page(OTPL.nav, [SidebarModel.kv('kvtplnav', 'PROPERTIES', blank(INDEX_KEYS))]);
   // AI General Source carries the same ten rows (design section 1).
   sb.page(TPL.general, ownerSidebar('tgen1'));
   const mainOf = (id: string) => w.repo.liveDocs(w.repo.live(id)!).find((d) => d.name === 'Main')!;
@@ -339,6 +344,7 @@ export async function ownersWorld(o: Parameters<typeof packWorld>[0] = {}): Prom
     { id: OTPL.place, name: '[BSRC] AI Place and Divine Realm Template' },
     { id: OTPL.magictech, name: '[BSRC] AI Magic and Technology Template' },
     { id: OTPL.creature, name: '[BSRC] AI Creature and Species Template' },
+    { id: OTPL.nav, name: '[NAV] AI Navigation Template' },
   ];
   for (const re of [...w.overrides.keys()]) if (re.source === '\\/templates$') w.overrides.delete(re);
   w.overrides.set(/\/templates$/, (req) =>

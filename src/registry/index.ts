@@ -12,6 +12,7 @@
  * r.planCharacterPlacement({ characterName: 'Mehrana', race: 'Qishen', kind: 'core' });
  * ```
  */
+import type { IndexRole } from '../tree/classify.js';
 import type { Db } from '../db/open.js';
 import type { JobEngine } from '../jobs/index.js';
 import type { ResolveMention } from '../markdown/index.js';
@@ -60,7 +61,13 @@ export interface ProjectTypes {
   /** v2 E3b: the character a page (its Core or Reference, its index, or a specialist page) belongs to, from the tree. */
   characterOfPage(id: string): CharacterOfPageResult;
   /** The ordering slot for a new or moved page (PLAN-v2 4.5). */
-  placementFor(parentId: string, newDisplayName: string, kind: ResolveKind, o?: { excludeId?: string }): Slot;
+  placementFor(
+    parentId: string,
+    newDisplayName: string,
+    kind: ResolveKind,
+    /** v3 F6b: `role`, a new index's role (`[NAV]` sorts first where T11's order is in force). */
+    o?: { excludeId?: string; role?: IndexRole | null },
+  ): Slot;
   /** Siblings out of order (reports only). */
   outOfOrder(parentId?: string): OutOfOrderParent[];
   /**
@@ -165,7 +172,12 @@ export function createRegistry(o: RegistryOptions): Registry {
       ) => resolver().mentionResolver(ro),
       characterRole: (id: string) => resolver().characterRole(id),
       characterOfPage: (id: string) => resolver().characterOfPage(id),
-      placementFor: (parentId: string, name: string, kind: ResolveKind, po?: { excludeId?: string }) =>
+      placementFor: (
+        parentId: string,
+        name: string,
+        kind: ResolveKind,
+        po?: { excludeId?: string; role?: IndexRole | null },
+      ) =>
         placementFor(tree(), parentId, name, kind, {
           ...po,
           compare: siblingOrder?.(projectId, parentId) ?? null,

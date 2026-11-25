@@ -347,6 +347,7 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'Setting packs (Arkona)': 'package',
   'Arkona characters': 'package gate identity',
   'Arkona owners': 'home nation polity institution place species race',
+  'Navigation and subject indexes': 'nav index prefix classify classification role routing',
   // Not "finding": it stands for "audit" (a synonym group), which must keep leading to "Audit findings".
   'Arkona appraisal': 'appraise appraisal impact digest hygiene',
   'Arkona splits': 'split monolith trigger fragmentation destination',

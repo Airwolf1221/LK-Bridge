@@ -39,9 +39,12 @@ import {
   BWRK_PREFIX,
   INDEX_PREFIX,
   KIND_PREFIX,
+  ROLE_PREFIX,
   classifyName,
   isPageKind,
+  type IndexRole,
 } from '../../tree/classify.js';
+import { templateNameOf } from '../../packs/indextax/rules.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import {
@@ -357,9 +360,19 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
     title: 'Create an index',
     access: 'write',
     description:
-      'Creates an [INDEX] page (a category such as a race) from its type’s Index template, in its alphabetical place. Give `parent`, or `type` and `category` (the category’s index is then the parent). Content pages are create_resource; a character’s own index is made by create_character. An index has no status and is never made under [INDEX] Working or [INDEX] Archived. An unknown type or category is refused with the known ones. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 5 reads and 1 write.',
+      'Creates an index in its place among its siblings. `role` "nav" makes a [NAV] page, an index that only groups or routes (a race or racial group, a category index, a nation subindex, an act), from the “[NAV] AI Navigation” template (resolved by name; missing: refused with TEMPLATE_MISSING); `role` "subject" makes an [INDEX] page, an index about one subject (a character, a nation, a continent, a culture family, a story), from its type’s Index template. On a project with the Arkona pack `role` is required; elsewhere it defaults to subject. Give `parent`, or `type` and `category` (the category’s index is then the parent). Content pages are create_resource; a character’s own index is made by create_character. An index has no status and is never made under Working or Archived. An unknown type or category is refused with the known ones. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 5 reads and 1 write.',
     inputSchema: z.object({
-      name: z.string().min(1).max(500).describe('The index’s name, without [INDEX] (added).'),
+      name: z
+        .string()
+        .min(1)
+        .max(500)
+        .describe('The index’s name, without its prefix ([NAV] or [INDEX], added).'),
+      role: z
+        .enum(['nav', 'subject'])
+        .optional()
+        .describe(
+          'nav: a [NAV] index that only groups or routes; subject: an [INDEX] about one subject. Required with the Arkona pack.',
+        ),
       parent: pageRef.optional().describe('The parent index (name or id).'),
       type: z.string().min(1).max(100).optional().describe('The type (singular or plural), e.g. Character.'),
       category: z
@@ -381,6 +394,29 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
         return withRequest(pd, mctx, 'create_index', args, null, async () => {
           const name = cleanName(args.name);
           if (!name) return refusal(pd, 'INVALID_PARAMS', 'An index name (1 to 200 characters) is required.');
+          // v3 F6b (ADR 0079, T11): the index's role. Required where a pack carries the index rules; subject elsewhere.
+          const taxonomy = pd.services?.indexClassify?.packFor(pd.project.id) ?? null;
+          const role: IndexRole | undefined = args.role ?? (taxonomy ? undefined : 'subject');
+          if (!role)
+            return refusal(
+              pd,
+              'ROLE_REQUIRED',
+              'Say which kind of index: role "nav" ([NAV], an index that only groups or routes: a race or racial group, a category index, a nation subindex, an act) or "subject" ([INDEX], an index about one subject: a character, a nation, a continent, a culture family, a story). Never guess it from the name: ask the person when unsure.',
+            );
+          const taxRules = taxonomy?.approved?.indexTaxonomy ?? taxonomy?.current.indexTaxonomy ?? null;
+          let navTemplate: { id: string; name: string } | null = null;
+          if (role === 'nav') {
+            const want = templateNameOf(taxRules, 'nav');
+            const t = await resolveTemplate(pd, mctx, ctx, 'create_index', want);
+            if (!t.ok)
+              return refusal(
+                pd,
+                'TEMPLATE_MISSING',
+                `The template “${want}” is missing, so no [NAV] index can be made. The owner makes it as a copy of “${templateNameOf(taxRules, 'subject')}”; until then nothing is created.`,
+                { template: want },
+              );
+            navTemplate = { id: t.value.id, name: t.value.name ?? want };
+          }
           const store = ctx.types.store;
           const types = store.listTypes();
           const known = types.map((t) => t.singular);
@@ -442,7 +478,7 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
               );
             }
           } else if (categoryNode) parent = categoryNode;
-          else if (type?.rootIndexId) {
+          else if (role === 'subject' && type?.rootIndexId) {
             const root = ctx.tree.node(ctx.projectId, type.rootIndexId).data;
             if (!root)
               return refusal(
@@ -458,8 +494,9 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
               'Give parent, or type and category (or type alone for its root index).',
             );
           }
-          // The type: given, or the one whose root index holds the parent (the nearest).
-          if (!type) {
+          // The type: given, or the one whose root index holds the parent (the nearest). v3 F6b: a [NAV] needs none (its
+          // template is "[NAV] AI Navigation", by name).
+          if (!type && role === 'subject') {
             const owners = types
               .filter(
                 (t) =>
@@ -478,7 +515,7 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
               );
             }
           } else if (
-            type.rootIndexId &&
+            type?.rootIndexId &&
             parent.id !== type.rootIndexId &&
             !parent.path.ids.includes(type.rootIndexId)
           ) {
@@ -488,11 +525,12 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
               `“${parent.displayName}” is not under the ${type.plural} index.`,
             );
           }
-          if (!type.indexTemplateId) {
+          const templateId = navTemplate?.id ?? type?.indexTemplateId ?? null;
+          if (!templateId) {
             return refusal(
               pd,
               'TEMPLATE_NOT_CONFIGURED',
-              `The type ${type.singular} has no Index template; the owner sets it on the Repository Mappings page.`,
+              `The type ${type?.singular ?? '(none)'} has no Index template; the owner sets it on the Repository Mappings page.`,
             );
           }
           const twin = sibling(ctx, parent.id, 'index', name);
@@ -519,17 +557,19 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
           }
           const id = newPage({
             key: 'index',
-            rawName: `${INDEX_PREFIX}${name}`,
+            rawName: `${ROLE_PREFIX[role]}${name}`,
             parent: { existing: parent.id },
-            templateId: type.indexTemplateId,
+            templateId,
             facts: null,
             parentName: parent.rawName,
-            templateName: `the ${type.singular} Index template`,
+            templateName: navTemplate
+              ? `“${navTemplate.name}”`
+              : `the ${type?.singular ?? ''} Index template`,
           });
           const facts = await planNewPageFacts(cc, {
             pageId: id.id,
             pageName: id.rawName,
-            templateId: type.indexTemplateId,
+            templateId,
             status: null,
             what: id.rawName,
           });
@@ -538,7 +578,8 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
             batch: false,
             dryRun: args.dryRun === true,
             extraHead: {
-              type: type.singular,
+              role,
+              ...(type ? { type: type.singular } : {}),
               ...(categoryNode ? { category: categoryNode.displayName } : {}),
             },
             summary: `create_index: ${id.rawName} under ${parent.rawName}`,

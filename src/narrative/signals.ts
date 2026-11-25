@@ -24,8 +24,9 @@ export interface LifecycleWords {
 
 /** A name's lifecycle prefix, read loosely (as the lifecycle guard reads it), or null. */
 export function lifecyclePrefix(name: string): 'bsrc' | 'bwrk' | 'barc' | null {
-  const m = /^\[\s*(bsrc|bwrk|barc|index)\s*\]/.exec(factKey(name));
-  const kind = m ? m[1]! : classifyName(name).kind;
+  const m = /^\[\s*(bsrc|bwrk|barc|index|nav)\s*\]/.exec(factKey(name));
+  // v3 F6b: `[NAV]` is an index.
+  const kind = m ? (m[1] === 'nav' ? 'index' : m[1]!) : classifyName(name).kind;
   return kind === 'bsrc' || kind === 'bwrk' || kind === 'barc' ? kind : null;
 }
 

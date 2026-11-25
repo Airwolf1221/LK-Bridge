@@ -756,6 +756,16 @@ const SPECS: readonly Spec[] = [
     applies: 'now',
   },
   {
+    key: 'INDEX_CLASSIFY_BULK_MAX',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Index Classification: most rows one “Approve all” decides',
+    description:
+      'The Index Classification page’s “Approve all as proposed” decides at most this many rows in one request and one transaction; the page asks again for the rest.',
+    unit: UNITS.count,
+    applies: 'now',
+  },
+  {
     key: 'CHRONOLOGY_CHECK_DELAY_MS',
     schema: 'tools',
     group: 'automation',

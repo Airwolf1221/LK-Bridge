@@ -63,7 +63,9 @@ describe('docs/bridge-guide.md', () => {
     // the scope paragraph (rule 2's last sentence kept, at the owner's review): 9,446, the cap unchanged. R5 trims it.
     // v3 F10 (ADR 0078): one row more ("Edit many chronology rows, or restructure a table", 166 characters): 9,612, the
     // cap raised by exactly what it needs (9,450 → 9,613). The five rules are unchanged.
-    expect(decide.markdown.length).toBeLessThan(9613);
+    // v3 F6b (ADR 0079): one row more ("Make an index, or tell [NAV] from [INDEX]", 166 characters): 9,778, the cap
+    // raised by exactly what it needs (9,613 → 9,779). The five rules are unchanged.
+    expect(decide.markdown.length).toBeLessThan(9779);
   });
   it('names only tools that exist', () => {
     const names = new Set(tools.map((t) => t.name));

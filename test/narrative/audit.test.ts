@@ -103,7 +103,7 @@ describe('the narrative audit on a tree the tools made (E4, E8)', () => {
 describe('exemptions and authority (E2)', () => {
   it('the lifecycle tools refuse a narrative page with NARRATIVE_NO_LIFECYCLE', async () => {
     const ch = named(
-      named(named(N.main, '[INDEX] Tide Tables').id, '[INDEX] Act 1 - Ebb').id,
+      named(named(N.main, '[INDEX] Tide Tables').id, '[NAV] Act 1 - Ebb').id, // v3 F6b: an act is [NAV]
       'Chapter 1 - Tide 1',
     );
     for (const tool of ['promote_page', 'archive_page', 'move_to_working'])
@@ -112,7 +112,7 @@ describe('exemptions and authority (E2)', () => {
 
   it('the appraisal (owner body rules, completion gate, split triggers) refuses a chapter and skips Narratives', async () => {
     const ch = named(
-      named(named(N.main, '[INDEX] Tide Tables').id, '[INDEX] Act 1 - Ebb').id,
+      named(named(N.main, '[INDEX] Tide Tables').id, '[NAV] Act 1 - Ebb').id, // v3 F6b: an act is [NAV]
       'Chapter 1 - Tide 1',
     );
     expect((await w.tool('arkona_appraise_owner', { page: ch.id })).error?.code).toBe('NARRATIVE_EXEMPT');
@@ -140,7 +140,7 @@ describe('exemptions and authority (E2)', () => {
     const run = await w.tool('arkona_consistency', { subject: 'Leila Darvish', detail: 'full' });
     expect(JSON.stringify(run)).not.toMatch(/Tide \d|Narratives/);
     const ch = named(
-      named(named(N.main, '[INDEX] Tide Tables').id, '[INDEX] Act 1 - Ebb').id,
+      named(named(N.main, '[INDEX] Tide Tables').id, '[NAV] Act 1 - Ebb').id, // v3 F6b: an act is [NAV]
       'Chapter 1 - Tide 1',
     );
     expect((await w.tool('arkona_brief', { subject: ch.id })).error?.code).toBe('NARRATIVE_NOT_AUTHORITY');

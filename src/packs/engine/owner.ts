@@ -24,7 +24,8 @@ import { mintClientId } from '../../jobs/ids.js';
 import { readSidebar, statusValue } from '../../mcp/tools/create-support.js';
 import { fromMarkdown, MarkdownError, type FromMarkdownContext, type LkBlock } from '../../markdown/index.js';
 import { pageConverterContext, withImageCheck } from '../../pages/index.js';
-import { cleanPrefixes, key as nameKey, singularFor } from '../../registry/names.js';
+import { cleanPrefixes, key as nameKey, singularFor, templateBaseKey } from '../../registry/names.js';
+import { templateIdByName, templateMissingMessage } from '../indextax/rules.js';
 import type { TreeNode } from '../../tree/index.js';
 import type {
   HomeRule,
@@ -671,13 +672,24 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   const tid = templateId(otype.template);
   const needsIndex = promote !== null || subName !== null || navPlan !== null;
   const indexTid = needsIndex ? templateId(owners.index.template) : null;
+  // v3 F6b (ADR 0079, T11): where the pack carries the index rules, a nation subindex and a race's or racial group's
+  // navigation are [NAV] (from "[NAV] AI Navigation", by name); a nation's own index stays [INDEX].
+  const tax = rules.indexTaxonomy ?? null;
+  const navPrefix = tax ? '[NAV] ' : '[INDEX] ';
+  let navTid: string | null = null;
+  if (tax && (subName !== null || navPlan !== null)) {
+    navTid = templateIdByName(ctx.types.store.templates().templates, tax.templates.nav, (x) =>
+      templateBaseKey(cleanPrefixes(x).name),
+    );
+    if (!navTid) refuse('TEMPLATE_MISSING', templateMissingMessage(tax), { template: tax.templates.nav });
+  }
 
   // ---------------------------------------------------------------------------------- the pages, their places
   const prefix = working ? '[BWRK] ' : '[BSRC] ';
   const rawPage = `${prefix}${display}`;
   const ownerId = mintClientId();
   const nationRaw = promote ? `[INDEX] ${nationName}` : null;
-  const subRaw = subName ? `[INDEX] ${subName}` : null;
+  const subRaw = subName ? `${navPrefix}${subName}` : null;
   const ids = { nation: mintClientId(), subindex: mintClientId(), navigation: mintClientId() };
   const destinationName =
     home?.kind === 'planned' ? (home.key === 'nation' ? nationRaw : subRaw) : (home?.node.rawName ?? '?');
@@ -909,22 +921,23 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
     parent: { existing: string } | { item: string },
     parentName: string,
     note: string,
+    tid: string | null = indexTid,
   ): PlannedPage => ({
     key,
     id: ids[key],
     rawName: raw,
-    displayName: raw.replace(/^\[INDEX\]\s*/, ''),
+    displayName: raw.replace(/^\[(?:INDEX|NAV)\]\s*/, ''),
     kind: 'index',
     parent,
-    templateId: indexTid ?? 'missing',
+    templateId: tid ?? 'missing',
     facts: null,
     parentName,
-    templateName: indexTid ? templateName(indexTid) : '?',
+    templateName: tid ? templateName(tid) : '?',
     status: null,
     role: 'index',
     rule: indexRule,
     templateRole: indexRule.template,
-    subject: raw.replace(/^\[INDEX\]\s*/, ''),
+    subject: raw.replace(/^\[(?:INDEX|NAV)\]\s*/, ''),
     referenceType: null,
     scope: null,
     factValues: [],
@@ -956,15 +969,17 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
           'planned' in subParent ? { item: 'nation' } : { existing: subParent.existing.id },
           'planned' in subParent ? (nationRaw ?? '?') : subParent.existing.rawName,
           'national subindex (createSubindex): its own, named step',
+          tax ? navTid : indexTid,
         )
       : null;
   const navPage = navPlan
     ? indexPage(
         'navigation',
-        `[INDEX] ${navPlan.name}`,
+        `${navPrefix}${navPlan.name}`,
         { existing: navPlan.parent.id },
         navPlan.parent.rawName,
         `character navigation (createCharacterNavigation): ${navPlan.path}, added to the Character taxonomy`,
+        tax ? navTid : indexTid,
       )
     : null;
   const ownerPage: PlannedPage = {

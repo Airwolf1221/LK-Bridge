@@ -889,6 +889,77 @@ export const referenceTypesRulesSchema = z
   });
 export type ReferenceTypeRules = z.infer<typeof referenceTypesRulesSchema>;
 
+/**
+ * v3 F6b (ADR 0079; design T11, T12, the owner's amendments): navigation and subject indexes. `[NAV] <name>` is an index
+ * that only groups or routes; `[INDEX] <name>` is an index about one subject (a character, a nation or polity, a
+ * continent, a Realmship or a named Divine Realm, a culture or religion family, a story). In every parent: `[NAV]` first,
+ * then `[INDEX]`, then sources, each group alphabetical (the narrative number order still applies inside a story). A
+ * `[NAV]` carries exactly the navigation tag; an `[INDEX]` its subject's primary category; neither carries CANON.
+ *
+ * `status: 'draft'`: the seed's own rule, offered while the Controlled Native Tagging Standard has no "Navigation and
+ * Subject Index Tags" section (the old rules stay in force for tags; the section's pin reads `unpublished`, never
+ * refusing the approval). `published`: the tag rule as the section states it, read at each governance check exactly as
+ * F5a reads the Approved Supplementary Tags. The ordering rule applies once a version holding this section is APPROVED.
+ *
+ * The exact-name lists are the classification report's structural rules (T12 step 1), edited on the dashboard (Index
+ * Classification › Structural names) as a new pack version the owner approves.
+ */
+const indexName = text(200);
+export const indexTaxonomyRulesSchema = z
+  .object({
+    /** The governance source holding the tag section (its key). */
+    source: z.string().regex(/^[a-z][a-z0-9-]{0,59}$/),
+    /** The section's heading, as pinned. */
+    section: text(200),
+    status: z.enum(['draft', 'published']),
+    /** T11's sibling order: `[NAV]`, then `[INDEX]`, then sources, each alphabetical. */
+    ordering: z.literal('nav-index-sources'),
+    /** The one tag a `[NAV]` carries. */
+    navTag: text(100),
+    /** The primary category tag of each kind of subject an `[INDEX]` is about. */
+    subjectTags: z
+      .object({
+        character: text(100),
+        polity: text(100),
+        culture: text(100),
+        religion: text(100),
+        place: text(100),
+        story: text(100),
+      })
+      .strict(),
+    /** The templates, by name (resolved in each project by name, never by id). */
+    templates: z.object({ nav: text(200), subject: text(200) }).strict(),
+    /** The structural indexes, by exact display name (case and spacing aside), and the category words. */
+    structural: z
+      .object({
+        /** The top-level branches (directly under the AI REPOSITORY root). */
+        topLevel: z.array(indexName).max(40),
+        /** Other routing indexes by exact name, wherever they are (Arkona's Continents, Lost Realmships…). */
+        named: z.array(indexName).max(200),
+        /** `<Continent> <word>` (and `<Realmship> <word>`): the category indexes of continents and Realmships. */
+        continentCategories: z.array(text(100)).max(40),
+        /** The parents whose direct `[INDEX]` children are continents, and those whose are Realmships. */
+        continentParents: z.array(indexName).max(10),
+        realmshipParents: z.array(indexName).max(10),
+        /** Setting Framework: the branch's name and its category indexes (exact names). */
+        settingFramework: indexName,
+        settingFrameworkCategories: z.array(indexName).max(60),
+        /** Divine Realms: the branch's name and its category indexes (exact names); a category's index children are realms. */
+        divineRealms: indexName,
+        divineRealmCategories: z.array(indexName).max(30),
+        /** A nation subindex: a child of a nation `[INDEX]` named `<word>` or `<Nation> <word>`. */
+        nationSubindexes: z.array(text(100)).max(60),
+        /** Category words whose index children are culture families, and religion families. */
+        cultureCategories: z.array(text(100)).max(10),
+        religionCategories: z.array(text(100)).max(10),
+      })
+      .strict(),
+    /** Areas reported but never proposed (by index name, prefix aside): Working, Archive, Legacy, Design References. */
+    outOfScope: z.array(indexName).max(20),
+  })
+  .strict();
+export type IndexTaxonomyRules = z.infer<typeof indexTaxonomyRulesSchema>;
+
 export const packRulesSchema = z
   .object({
     schema: z.literal(1),
@@ -1010,6 +1081,11 @@ export const packRulesSchema = z
      * creation tools' guard do nothing).
      */
     referenceTypes: referenceTypesRulesSchema.optional(),
+    /**
+     * v3 F6b (ADR 0079): navigation and subject indexes (absent: no `[NAV]` rule; ordering, tags and the classification
+     * report as before).
+     */
+    indexTaxonomy: indexTaxonomyRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {

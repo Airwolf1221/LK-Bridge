@@ -150,7 +150,7 @@ function storyCreateTool(deps: ToolDeps, listed: () => boolean): McpToolProvider
     title: 'Create a story under Narratives (Arkona pack)',
     access: 'write',
     description:
-      'The Arkona pack (design F4c, E5): makes a STORY under Narratives, in Main CANON or an AU’s continuity index: the story index, its Story Map as its first child, and (with acts) one act index “Act <n> - <Title>” and one “Act <n> Map” under the Story Map per act, from the narrative templates, tagged Narrative + kind (+ AU), with no [BSRC] or [BWRK] prefix (narrative pages have no lifecycle). Without acts, chapters and plans later go straight under the story and its Story Map. ' +
+      'The Arkona pack (design F4c, E5): makes a STORY under Narratives, in Main CANON or an AU’s continuity index: the story index ([INDEX] <title>: a story is a subject), its Story Map as its first child, and (with acts) one act index “Act <n> - <Title>” ([NAV]: an act only routes, once the approved pack carries the navigation and subject index rules; [INDEX] before) and one “Act <n> Map” under the Story Map per act, from the narrative templates, tagged Narrative + kind (+ AU), with no [BSRC] or [BWRK] prefix (narrative pages have no lifecycle). Without acts, chapters and plans later go straight under the story and its Story Map. ' +
       'A continuity index that does not exist yet is refused (the narrative audit proposes it); a story of that name in that continuity is refused. span: the Story Span (a date or range the calendar reads); principalCharacters: pages for the Principal Characters collection (a field the template lacks is refused as a template mismatch). ' +
       'At scope write it is written directly (Review page, Revertible); at scope propose, a proposal. dryRun shows the plan. Next: arkona_chapter_plan for each chapter. Cost: 1 to 2 template reads, then about 3 writes per page.',
     inputSchema: z.object({
@@ -274,6 +274,9 @@ async function storyCreate(
     },
     { key: f.continuity, runs: text(cont.name), needed: false },
   ];
+  // v3 F6b (ADR 0079, T11): a story is an [INDEX] (a subject); its acts only route, so they are [NAV] once the APPROVED
+  // pack carries the index rules (before that, [INDEX] as before). Neither uses a template (unchanged).
+  const navActs = env.pd.services?.packs?.approvedRules(env.packId)?.indexTaxonomy !== undefined;
   const story = newPage({
     key: 'story',
     rawName: `[INDEX] ${title}`,
@@ -318,7 +321,7 @@ async function storyCreate(
     const n = i + 1;
     const act = newPage({
       key: `act${n}`,
-      rawName: `[INDEX] ${formatName(rules.names.act, n, t)}`,
+      rawName: `${navActs ? '[NAV] ' : '[INDEX] '}${formatName(rules.names.act, n, t)}`,
       parent: { item: 'story' },
       templateId: null,
       facts: null,

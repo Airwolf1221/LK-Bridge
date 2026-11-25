@@ -133,6 +133,7 @@ describe('a compact polity and promoteNation', () => {
 
 describe('national subindexes: only when named', () => {
   it('createSubindex makes the named subindex as its own step, with the owner in it', async () => {
+    // v3 F6b (ADR 0079): a national subindex only routes, so it is [NAV] (the nation's own index stays [INDEX]).
     const pkg = {
       type: 'Military',
       name: 'Glass Guard',
@@ -149,18 +150,18 @@ describe('national subindexes: only when named', () => {
     const r = await call({ ...pkg, dryRun: true });
     expect(r.isError, r.text).toBe(false);
     expect(r.body.tree.map((t: { page: string; parent: string }) => [t.page, t.parent])).toEqual([
-      ['[INDEX] Al-Tibr Institutions', '[INDEX] Al-Tibr'],
-      ['[BSRC] Glass Guard - Military Reference', '[INDEX] Al-Tibr Institutions'],
+      ['[NAV] Al-Tibr Institutions', '[INDEX] Al-Tibr'],
+      ['[BSRC] Glass Guard - Military Reference', '[NAV] Al-Tibr Institutions'],
     ]);
-    const sub = r.body.pages.find((p: { name: string }) => p.name === '[INDEX] Al-Tibr Institutions');
+    const sub = r.body.pages.find((p: { name: string }) => p.name === '[NAV] Al-Tibr Institutions');
     expect(sub.notes.join(' ')).toMatch(/national subindex \(createSubindex\)/);
     const p = await call(pkg);
     const prop = w.stack.runtime.policy.proposals.get(String(p.body.proposalId))!;
-    expect(prop.pages.join('\n')).toMatch(/\[INDEX\] Al-Tibr Institutions.*national subindex/);
+    expect(prop.pages.join('\n')).toMatch(/\[NAV\] Al-Tibr Institutions.*national subindex/);
     const done = await approve(w, prop.id);
     expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
     expect(childNames(O.alTibr)).toEqual([
-      '[INDEX] Al-Tibr Institutions',
+      '[NAV] Al-Tibr Institutions',
       '[BSRC] Al-Tibr - Polity Reference',
       '[BSRC] Living Mercury-Glass - Al-Tibr Defensive Material',
     ]);
@@ -213,8 +214,8 @@ describe('national subindexes: only when named', () => {
     expect(r.isError, r.text).toBe(false);
     expect(r.body.tree.map((t: { page: string; parent: string }) => [t.page, t.parent])).toEqual([
       ['[INDEX] Emirate of Qasr', '[INDEX] Salahad Polities'],
-      ['[INDEX] Emirate of Qasr Cultures', '[INDEX] Emirate of Qasr'],
-      ['[BSRC] Qasr Pearl-Song - Cultural Reference', '[INDEX] Emirate of Qasr Cultures'],
+      ['[NAV] Emirate of Qasr Cultures', '[INDEX] Emirate of Qasr'],
+      ['[BSRC] Qasr Pearl-Song - Cultural Reference', '[NAV] Emirate of Qasr Cultures'],
     ]);
   });
 });

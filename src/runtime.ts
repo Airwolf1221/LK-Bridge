@@ -1,3 +1,6 @@
+import { IndexClassifyService } from './packs/indextax/service.js';
+import { approvedIndexTaxonomy, navOrderingInForce } from './packs/indextax/rules.js';
+import { compareSiblings, compareSiblingsNav } from './registry/ordering.js';
 import { loggedTask, type TaskLogger } from './maintenance/task-log.js';
 import { AutomationService } from './automation/service.js';
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
@@ -225,6 +228,8 @@ export interface Runtime {
   readonly retag: RetagService;
   /** v3 F6a (ADR 0076): the Reference Type report, the owner's decisions and the vocabulary's publication. */
   readonly referenceTypes: ReferenceTypeService;
+  /** v3 F6b (ADR 0079): the index classification report and decisions. */
+  readonly indexClassify: IndexClassifyService;
   /** v3 F6a.1: background work actions start (governance re-checks, "Run audit now"), awaited on stop. */
   readonly background: BackgroundRunner;
   /** v3 F5a (ADR 0067, H10): the reconciliation of writes whose outcome is unknown. */
@@ -529,19 +534,30 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // The 25 November 2026 freeze, step 5 (ADR 0061 amendment 2): the project's narrative scope is worked out once per
   // synchronous pass (a whole-tree out-of-order report asks for every parent: about 240 ms at Arkona's scale when each
   // asked afresh), and forgotten at the next turn of the event loop, so a change is seen by the next request.
-  let scopeMemo: { projectId: string; scope: ReturnType<typeof narrativeScope> } | null = null;
+  // v3 F6b (ADR 0079, T11): once the APPROVED pack carries the index taxonomy, every parent orders `[NAV]` first, then
+  // `[INDEX]`, then sources (inside Narratives, what the narrative order does not place follows it too).
+  let scopeMemo: {
+    projectId: string;
+    scope: ReturnType<typeof narrativeScope>;
+    nav: boolean;
+  } | null = null;
   registry.setSiblingOrder((projectId, parentId) => {
     if (scopeMemo?.projectId !== projectId) {
-      scopeMemo = { projectId, scope: narrativeScope(packs, tree.queries, projectId) };
+      scopeMemo = {
+        projectId,
+        scope: narrativeScope(packs, tree.queries, projectId),
+        nav: navOrderingInForce(approvedIndexTaxonomy(packs, projectId)?.rules),
+      };
       setImmediate(() => {
         scopeMemo = null;
       });
     }
     const scope = scopeMemo.scope;
-    if (!scope) return null;
+    const base = scopeMemo.nav ? compareSiblingsNav : null;
+    if (!scope) return base;
     return inNarratives(scope, tree.queries.node(projectId, parentId).data)
-      ? narrativeCompare(scope.rules)
-      : null;
+      ? narrativeCompare(scope.rules, base ?? compareSiblings)
+      : base;
   });
   // v3 F7 (ADR 0070, G3): each character's outfits (the art jobs' record, the owner's seeding and aliases).
   const outfits = new OutfitStore(o.db, () => (o.clock ?? systemClock).now());
@@ -970,6 +986,17 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     bulkMax: () => toolsSettings.reftypeBulkMax,
   });
   const detachReferenceTypes = referenceTypes.start();
+  // v3 F6b (ADR 0079): navigation and subject indexes: the classification report, the owner's decisions, and the
+  // index codes' and T11's ordering input (from the approved pack and the approved rows).
+  const indexClassify = new IndexClassifyService({
+    db: o.db,
+    packs,
+    tree,
+    registry,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    bulkMax: () => toolsSettings.indexClassifyBulkMax,
+  });
   const audits: Audits = new Audits({
     db: o.db,
     snapshots,
@@ -1001,6 +1028,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     unknownWrites: (projectId) => outcomes.unresolved(projectId),
     // v3 F6a (ADR 0076): the Reference Type vocabulary in force and the owner's decisions.
     referenceTypes: (projectId) => referenceTypes.auditInput(projectId),
+    // v3 F6b (ADR 0079): the approved index taxonomy and rows (index_prefix, index_tags, T11's ordering).
+    indexTaxonomy: (projectId) => indexClassify.auditInput(projectId),
     referenceTypeDecision: (projectId, id) => referenceTypes.decisionNow(projectId, id),
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
     consistency: async (projectId) =>
@@ -1642,6 +1671,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       retag,
       // v3 F6a (ADR 0076): the Reference Type report and the creation tools' vocabulary check.
       referenceTypes,
+      // v3 F6b (ADR 0079): arkona_index_classify, and the creation tools' index rule.
+      indexClassify,
       // v3 F5b (ADR 0068): which codes the automation runs (bridge_info tells agents; they cannot change it).
       automation,
       // v3 F5c (ADR 0069, H8): workstream labels and their report.
@@ -1779,6 +1810,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     splits,
     retag,
     referenceTypes,
+    indexClassify,
     background,
     outcomes,
     automation,

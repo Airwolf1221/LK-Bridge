@@ -26,9 +26,9 @@ describe('docs/tools.md', () => {
     // arkona_consistency_suggest, and v3 F4c's arkona_story_create, arkona_chapter_plan, arkona_chapter_save,
     // arkona_chapter_insert, arkona_chapter_move, arkona_chapter_context, arkona_chapter_check and
     // arkona_promote_from_chapter, and v3 F5c's arkona_identity_reconcile, query_facts, bridge_workstream and
-    // bridge_workstream_report, and v3 F7b's arkona_get_art, and v3 F7c's upload_image_archive and bridge_archive_status, and v3 F6a's arkona_reference_types.
-    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(100);
-    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(100 + 89);
-    expect(docs).toContain('189 tools');
+    // bridge_workstream_report, and v3 F7b's arkona_get_art, and v3 F7c's upload_image_archive and bridge_archive_status, and v3 F6a's arkona_reference_types, and v3 F6b's arkona_index_classify.
+    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(101);
+    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(101 + 89);
+    expect(docs).toContain('190 tools');
   });
 });

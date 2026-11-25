@@ -1,4 +1,5 @@
 /** Shared types of the repository tree (v2 A2, docs/tree.md, ADR 0025). */
+import type { IndexRole } from './classify.js';
 
 /**
  * `root` is the AI REPOSITORY page itself; every other node is classified by its name's prefix. v2 C2c (ADR 0035): the
@@ -64,6 +65,11 @@ export interface TreeNode {
   readonly rawName: string;
   readonly displayName: string;
   readonly kind: NodeKind;
+  /**
+   * v3 F6b (ADR 0079): an index's role, from its prefix: `nav` ([NAV]) or `subject` ([INDEX]); null for any other kind.
+   * Optional so a node built by hand (tests) reads as before; `indexRoleOf` derives it from the raw name when absent.
+   */
+  readonly indexRole?: IndexRole | null;
   /** Null only for the root. */
   readonly parentId: string | null;
   readonly rank: string | null;

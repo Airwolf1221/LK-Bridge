@@ -3,6 +3,7 @@
  * lifecycle records and the chronology check's last run. Built once per run by the audit service; checks are pure
  * functions of it, so each is tested with a hand-made context.
  */
+import type { IndexTaxonomyAuditInput } from '../packs/indextax/service.js';
 import type { OutfitRecord } from '../art/store.js';
 import type { ArtPageText } from './checks/art-layout.js';
 import type { LifecycleConfig } from '../lifecycle/index.js';
@@ -119,6 +120,11 @@ export interface AuditContext {
    * vocabulary, so the `reference_type_*` checks report nothing).
    */
   readonly referenceTypes?: ReferenceTypeAuditInput | null;
+  /**
+   * v3 F6b (ADR 0079): the approved index taxonomy and the owner's approved rows (null or absent: no approved version
+   * carries it, so `index_prefix` and `index_tags` report nothing and the ordering is the old rule).
+   */
+  readonly indexTaxonomy?: IndexTaxonomyAuditInput | null;
   /** v3 F4c: every page under Narratives (narrative pages: E2's exemptions), worked out by `makeContext`. */
   readonly narrativeIds?: ReadonlySet<string>;
 }

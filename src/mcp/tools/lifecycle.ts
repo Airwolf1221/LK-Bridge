@@ -303,7 +303,9 @@ async function build(
   const currentParent = mover ? (movingNode?.parentId ?? null) : page.parentId;
   let placement: { parentId: string; after: string | null; before: string | null } | null = null;
   if (currentParent !== target.parentId) {
-    const display = mover ? mover.name.replace(/^\[INDEX\]\s*/, '') : classifyName(target.name).displayName;
+    const display = mover
+      ? mover.name.replace(/^\[(?:INDEX|NAV)\]\s*/, '')
+      : classifyName(target.name).displayName;
     const kind = mover ? 'index' : classifyName(target.name).kind;
     if (currentParent) sim.remove(currentParent, movingId);
     const slot = sim.slot(target.parentId, { displayName: display, kind }, () => true, movingId);
@@ -1833,7 +1835,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
                   (x) =>
                     x.id !== mover.id &&
                     x.kind === 'index' &&
-                    key(x.displayName) === key(mover.name.replace(/^\[INDEX\]\s*/, '')),
+                    key(x.displayName) === key(mover.name.replace(/^\[(?:INDEX|NAV)\]\s*/, '')),
                 );
               if (twinIdx)
                 return refuse(pd, 'NAME_TAKEN', `“${dest.displayName}” already holds “${twinIdx.rawName}”.`);

@@ -176,7 +176,7 @@ export function findStory(
   const q = ref.trim().replace(/^lk:\/\/resources\//, '');
   const stories = conts.flatMap((c) => storiesIn(env.view, c.node));
   const hits = stories.filter(
-    (s) => s.id === q || nkey(s.displayName) === nkey(q.replace(/^\[INDEX\]\s*/i, '')),
+    (s) => s.id === q || nkey(s.displayName) === nkey(q.replace(/^\[(?:INDEX|NAV)\]\s*/i, '')),
   );
   if (hits.length === 0) {
     // Any page of the story (its Story Map, a chapter): the story it belongs to.

@@ -1,3 +1,4 @@
+import type { IndexClassifyService } from '../packs/indextax/service.js';
 import type { BackgroundRunner } from '../background.js';
 import type { Packs } from '../packs/service.js';
 import type { Appraisal } from '../appraisal/index.js';
@@ -99,6 +100,8 @@ export interface AdminRuntime {
   readonly retag?: RetagService;
   /** v3 F6a (ADR 0076): the Reference Types page (the report, decisions, publish); optional for tests. */
   readonly referenceTypes?: ReferenceTypeService;
+  /** v3 F6b (ADR 0079): the Index Classification page. */
+  readonly indexClassify?: IndexClassifyService;
   /** v3 F5b (ADR 0068): automatic actions for audits (the Automation page, the Overview's tile); optional for tests. */
   readonly automation?: AutomationService;
   /** v3 F5c (ADR 0069, H8): the workstreams and their reports (the Workstreams page); optional for tests. */

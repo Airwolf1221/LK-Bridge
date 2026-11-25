@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased: v3 F6b, navigation and subject indexes
+
+[ADR 0079](adr/0079-v3-f6b-navigation-and-subject-indexes.md). Migrations `4700` and `4710`. Pack seed
+`arkona-2026-11-25-f6b`. One new setting, `INDEX_CLASSIFY_BULK_MAX` (500). Built and tested against the mock; nothing
+live was touched.
+
+- **The tree knows `[NAV]`**: an index that only groups or routes. It keeps kind `index` with a stored index role (`nav`
+  or `subject`, from the prefix; `kinds-3` re-classifies an older tree once, with no reads), so every site that means
+  "an index, not a source" is unchanged; the sites that must tell them apart are listed in the ADR.
+- **T11's order**: in every parent `[NAV]`, then `[INDEX]`, then sources, each alphabetical, once the APPROVED pack
+  carries the rule: the registry's placement of new and moved pages, `out_of_order` and its fix (the narrative number
+  order still applies inside a story). `out_of_order` is at Apply on live Arkona: renamed `[NAV]` pages are re-placed
+  automatically, within the caps.
+- **The classification report** (`arkona_index_classify`, read-only and free; the dashboard's **Index Classification**
+  page): every index's proposed role and the rule that decided it, from the registry, the narrative layout, the pack's
+  exact-name lists and position only; undecided where no rule settles it or two disagree; Working, Archive, Legacy and
+  Design References reported, never proposed. Cached and paged; the owner approves, changes or leaves each row (step-up,
+  audited); "Approve all as proposed" is one bounded, idempotent transaction. The structural lists are edited on the
+  page (a new pack version).
+- **Two audit codes** (taxonomy): `index_prefix` (the prefix renamed only: display name, id and links kept) and
+  `index_tags` (exactly Navigation, or the subject's category, never CANON; through the retag engine's write path; once
+  the Tagging Standard's section is published; CANON off an index is always a canonical proposal). Automation:
+  proposal-first, Apply allowed, default Propose. Each proposal one item, before and after shown.
+- **Creation**: `create_index` takes `role` (required with the pack; `[NAV]` from "[NAV] AI Navigation" by name,
+  `TEMPLATE_MISSING` while it does not exist); `arkona_create_owner`'s national subindexes and race navigation are
+  `[NAV]`, a nation's index `[INDEX]`; `arkona_story_create`'s acts are `[NAV]`, the story `[INDEX]`.
+- **Governance**: the Tagging Standard's "Navigation and Subject Index Tags" pinned, unpublished until the owner's
+  reviewer writes it (never blocking approval), then read at each governance check. The guide gains one row and a
+  section, "Navigation and subject indexes".
+- Sandbox check `f6b-nav` (opt-in), and its mock run in the ordinary suite.
+
 ## Unreleased: the Snapshots freeze of 25 November 2026
 
 [ADR 0042 amendment 2](adr/0042-snapshots-restore-rehearsal.md#amendment-2-25-november-2026-browsing-from-an-index-the-list-never-waits),

@@ -221,7 +221,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (189 tools in all with the Arkona pack's thirty-two tools, v3 F6a's `arkona_reference_types`, v3 F7c's `upload_image_archive` and `bridge_archive_status`, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, v3 F4b's `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency_suggest`, v3 F4c's `arkona_story_create`, `arkona_chapter_plan`, `arkona_chapter_save`, `arkona_chapter_insert`, `arkona_chapter_move`, `arkona_chapter_context`, `arkona_chapter_check` and `arkona_promote_from_chapter`, v3 F5c's `arkona_identity_reconcile`, v3 F7b's `arkona_get_art`, and v3 F3d's `bridge_job_resume` and v3 F5c's `bridge_workstream`, `bridge_workstream_report` and `query_facts`; 191 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (190 tools in all with the Arkona pack's thirty-two tools, v3 F6a's `arkona_reference_types`, v3 F6b's `arkona_index_classify`, v3 F7c's `upload_image_archive` and `bridge_archive_status`, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five, v3 F3d's `arkona_rename`, v3 F3e's `arkona_split_appraisal` and `arkona_split_owner`, v3 F3f's `arkona_retag_audit` and `arkona_retag_apply` and v3 F4a's `arkona_name_check` and `arkona_brief`, v3 F4b's `arkona_consistency`, `arkona_as_of`, `arkona_as_of_coverage` and `arkona_consistency_suggest`, v3 F4c's `arkona_story_create`, `arkona_chapter_plan`, `arkona_chapter_save`, `arkona_chapter_insert`, `arkona_chapter_move`, `arkona_chapter_context`, `arkona_chapter_check` and `arkona_promote_from_chapter`, v3 F5c's `arkona_identity_reconcile`, v3 F7b's `arkona_get_art`, and v3 F3d's `bridge_job_resume` and v3 F5c's `bridge_workstream`, `bridge_workstream_report` and `query_facts`; 192 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -773,8 +773,12 @@ normalised request (spacing and key order do not count; `project`, `dryRun` and 
 
 ### Creating pages
 
-**`create_index`** `{ name, parent?, type?, category?, dryRun?, operation_id?, project }`: `[INDEX] {name}` from the
-type's Index template. Give `parent`, or `type` and `category` (the category's index is then the parent; for example
+**`create_index`** `{ name, role?, parent?, type?, category?, dryRun?, operation_id?, project }`: v3 F6b
+([ADR 0079](adr/0079-v3-f6b-navigation-and-subject-indexes.md)): `role` `"nav"` makes `[NAV] {name}` (an index that only
+groups or routes) from the "[NAV] AI Navigation" template, resolved by name (missing: `TEMPLATE_MISSING`, naming it; no
+type needed); `role` `"subject"` makes `[INDEX] {name}` (an index about one subject) from the type's Index template.
+`role` is required on a project whose pack carries the navigation and subject index rules (`ROLE_REQUIRED`), `subject`
+by default elsewhere. Placed by T11's order where it is in force ([NAV] first). Give `parent`, or `type` and `category` (the category's index is then the parent; for example
 `{ "type": "Character", "category": "Foxians" }`), or both (the parent must then be the category's index or under it).
 Without `type`, the type is the one whose root index holds the parent. Refusals: `UNKNOWN_TYPE` (with `types`),
 `UNKNOWN_CATEGORY` (with `categories`), `CATEGORY_AMBIGUOUS`, `CATEGORY_MISMATCH`, `TYPE_MISMATCH`,
@@ -1546,6 +1550,16 @@ to placement or Scope), or no confident suggestion with `candidates`; the owner'
 published section. `coverage` as `query_facts`: pages read recently, stale and never read (listed in `unread`), the
 oldest read, the tree's confirmation. Paged (limit up to 200). Listed while the approved pack version has a vocabulary.
 The owner decides each value on the dashboard's Reference Types page; agents only report.
+
+**`arkona_index_classify`** `{ status?, proposed?, rule?, under?, name?, limit?, offset?, project }` (read; v3 F6b,
+[ADR 0079](adr/0079-v3-f6b-navigation-and-subject-indexes.md)): every current index with the role the rules propose
+(`nav` for `[NAV]`, an index that only groups or routes; `subject` for `[INDEX]`, an index about one subject; or
+`undecided`), the `rule` that decided it and `why`, its `current` role and `tags`, its `status` (`proposed`, `undecided`,
+`approved`, `changed`, `left_undecided`, `out_of_scope`) and the owner's `decision`; `counts` by status; the rules in
+force (approved, the tag section's state, whether T11's order is in force). Rules use only the bridge's data (the
+registry, the narrative layout, the pack's exact-name lists, position), never a guess from a name. Working, Archive,
+Legacy and Design References pages are reported, never proposed. Free; paged (limit up to 200). Listed while the
+approved pack version carries the rules. The owner decides on the dashboard's Index Classification page.
 
 **`arkona_get_art`** `{ asset? | character? (outfit? | design?) | page? (document?), delivery?, limit?, cursor?, project }`
 (read; v3 F7b, [ADR 0071](adr/0071-v3-f7b-seeing-character-art.md)): lets an agent SEE a character's art. Exactly one

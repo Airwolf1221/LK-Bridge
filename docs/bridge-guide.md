@@ -55,6 +55,7 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 | Brief on any Arkona subject (or a character)        | `arkona_brief` (free; a character: delegated)               | many `get_resource` and `read_document` calls |
 | Check a character's name before an intake or rename | `arkona_name_check` (free; never infers)                    | guessing a culture from the name              |
 | Choose or check a Reference Type                    | `arkona_reference_types` (the vocabulary; free)             | inventing a type                              |
+| Make an index, or tell [NAV] from [INDEX]           | `create_index` `role`; `arkona_index_classify` (free)       | guessing a role from the name                 |
 | Rename an Arkona character or owner everywhere      | `arkona_rename` (one proposal, item by item)                | `update_resource`, `write_page` page by page  |
 | Split an Arkona owner into several owners           | `arkona_split_appraisal`, `arkona_split_owner`              | `write_page` and the create tools by hand     |
 | Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact`             | reading every page yourself                   |
@@ -1202,6 +1203,22 @@ Polity Reference with its time and region elsewhere).
 - **The owner decides**: mapping a value, rejecting it or keeping it as a specialist type is the owner's, on the
   dashboard's Reference Types page. You report what you see; you never retype pages yourself (`set_facts` on Reference
   Type to "tidy" it is not yours to do). The audits' `reference_type_noncanonical` fix applies only the owner's mapping.
+
+### Navigation and subject indexes
+
+An index is one of two kinds. **`[NAV] <name>`** only groups or routes: a top-level branch, a race or racial group, a
+continent's or Realmship's category index, a nation subindex, a continuity or act index. **`[INDEX] <name>`** is about
+one subject: a character, a nation or polity, a continent, a Realmship, a named Divine Realm, a culture or religion family,
+a story. In every parent `[NAV]` comes first, then `[INDEX]`, then sources, each alphabetical (inside a story the
+narrative number order still applies). A `[NAV]` carries exactly `Navigation`; an `[INDEX]` its subject's primary
+category; neither carries CANON.
+
+- **Never guess an index's kind from its name or body.** `arkona_index_classify` (read-only, free) lists every index
+  with the role a rule proposes (and which rule), or `undecided`; the owner decides each on the dashboard.
+- **Making one:** `create_index` with `role` (`nav` from "[NAV] AI Navigation", `subject` from the type's Index
+  template; required with the Arkona pack: ask the person when unsure). The pack tools choose the prefix themselves.
+- **Never rename a prefix or retag an index yourself**: the owner's approved rows become proposals (`index_prefix`,
+  `index_tags` in the audits).
 
 ## Many pages at once: query_facts and workstreams
 

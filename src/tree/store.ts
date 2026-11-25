@@ -9,7 +9,15 @@
  */
 import type { Db } from '../db/open.js';
 import { prepared } from '../db/statements.js';
-import { catalogueFrom, classifyName, nameKey, type TreeSettings } from './classify.js';
+import {
+  catalogueFrom,
+  classifyName,
+  indexRoleOfName,
+  roleOfClassified,
+  nameKey,
+  type IndexRole,
+  type TreeSettings,
+} from './classify.js';
 import type {
   BuildEstimate,
   CorrectionEntry,
@@ -32,6 +40,8 @@ export interface NodeRow {
   raw_name: string;
   display_name: string;
   kind: NodeKind;
+  /** v3 F6b (migration 4700): `nav` or `subject` for an index, from its prefix; null otherwise. */
+  index_role: IndexRole | null;
   parent_id: string | null;
   rank: string | null;
   depth: number;
@@ -339,6 +349,7 @@ export class TreeStore {
       rawName: r.raw_name,
       displayName: r.display_name,
       kind: r.kind,
+      indexRole: r.kind === 'index' ? (r.index_role ?? indexRoleOfName(r.raw_name) ?? 'subject') : null,
       parentId: r.parent_id,
       rank: r.rank,
       depth: r.depth,
@@ -420,11 +431,11 @@ export class TreeStore {
     const cat = obs.props ? catalogueFrom(obs.props.sidebar, ctx.settings) : null;
     this.db
       .prepare(
-        `INSERT INTO tree_nodes (project_id, id, raw_name, display_name, kind, parent_id, rank, depth, path_ids,
-           path_names, tags, aliases, documents, is_hidden, is_locked, reference_type, scope, index_scope,
+        `INSERT INTO tree_nodes (project_id, id, raw_name, display_name, kind, index_role, parent_id, rank, depth,
+           path_ids, path_names, tags, aliases, documents, is_hidden, is_locked, reference_type, scope, index_scope,
            canonical_name, properties_found, sidebar, struct_observed_at, props_observed_at, props_pass, last_read_at,
            last_read_by, stale, stale_reason, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, '[]', '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '[]', '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
       )
       .run(
         ctx.projectId,
@@ -432,6 +443,7 @@ export class TreeStore {
         obs.name,
         c.displayName,
         c.kind,
+        roleOfClassified(c),
         isRoot ? null : obs.parentId,
         obs.rank,
         j(obs.tags),
@@ -478,6 +490,7 @@ export class TreeStore {
       set('raw_name', obs.name);
       set('display_name', c.displayName);
       set('kind', c.kind);
+      set('index_role', roleOfClassified(c));
       set('parent_id', isRoot ? null : obs.parentId);
       set('rank', obs.rank);
       set('tags', j(obs.tags));
@@ -645,18 +658,25 @@ export class TreeStore {
   reclassify(projectId: string): number {
     const rows = this.db
       .prepare(
-        "SELECT id, raw_name, display_name, kind FROM tree_nodes WHERE project_id = ? AND kind <> 'root'",
+        "SELECT id, raw_name, display_name, kind, index_role FROM tree_nodes WHERE project_id = ? AND kind <> 'root'",
       )
-      .all(projectId) as { id: string; raw_name: string; display_name: string; kind: NodeKind }[];
+      .all(projectId) as {
+      id: string;
+      raw_name: string;
+      display_name: string;
+      kind: NodeKind;
+      index_role: IndexRole | null;
+    }[];
     const up = this.db.prepare(
-      'UPDATE tree_nodes SET kind = ?, display_name = ? WHERE project_id = ? AND id = ?',
+      'UPDATE tree_nodes SET kind = ?, display_name = ?, index_role = ? WHERE project_id = ? AND id = ?',
     );
     let n = 0;
     this.db.transaction(() => {
       for (const r of rows) {
         const c = classifyName(r.raw_name);
-        if (c.kind === r.kind && c.displayName === r.display_name) continue;
-        up.run(c.kind, c.displayName, projectId, r.id);
+        const role = roleOfClassified(c);
+        if (c.kind === r.kind && c.displayName === r.display_name && role === r.index_role) continue;
+        up.run(c.kind, c.displayName, role, projectId, r.id);
         this.writeNames(projectId, r.id);
         n++;
       }

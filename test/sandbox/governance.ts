@@ -113,7 +113,12 @@ export async function ensureSandboxGovernance(o: {
   // v3 F6a (ADR 0076): the Reference Type Vocabulary's section is left out while the vocabulary is a draft: it is
   // "unpublished" (never refusing the approval) until a check publishes it (a placeholder sentence would not parse).
   const vocabulary = pack.rules.referenceTypes?.status === 'draft' ? pack.rules.referenceTypes.section : null;
-  const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))].filter((h) => h !== vocabulary);
+  // v3 F6b (ADR 0079): likewise the Navigation and Subject Index Tags section while the index tag rule is a draft
+  // (f6b-nav writes it when it publishes the rule).
+  const indexTags = pack.rules.indexTaxonomy?.status === 'draft' ? pack.rules.indexTaxonomy.section : null;
+  const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))].filter(
+    (h) => h !== vocabulary && h !== indexTags,
+  );
   // The section the vocabulary is published under (f6a-reftypes publishes it there).
   if (vocabulary && pack.rules.referenceTypes && !headings.includes(pack.rules.referenceTypes.under))
     headings.push(pack.rules.referenceTypes.under);
