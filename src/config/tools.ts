@@ -106,6 +106,12 @@ export const TOOLS_ENV_SCHEMA = z.object({
   // ---- v3 F6a.1 (ADR 0076 amendment 1, ADR 0061 amendment 1): bounds, and the warnings that name a hang
   /** The most Reference Type rows one "Accept all confident suggestions" decides (one request, one transaction). */
   REFTYPE_BULK_MAX: intFrom(500, 1, 5000),
+  // ---- v3 F10 (ADR 0078): the chronology repaired soon after an edit
+  /**
+   * How long after the last change snapshot that touched a chronology document (the Main table, an age table or an age
+   * timeline) the project's chronology check runs (debounced: a burst of edits is one check).
+   */
+  CHRONOLOGY_CHECK_DELAY_MS: intFrom(600_000, 1_000, 86_400_000),
   /** A request still running after this long is logged as a warning (method, URL, tool name; never the body). */
   SLOW_REQUEST_WARN_MS: intFrom(30_000, 1_000, 3_600_000),
   /** ...and again every this long while it runs. */
@@ -124,6 +130,8 @@ export const DEFAULT_WATCHDOG_SETTINGS = {
   memoryWarnFraction: 0.7,
 } as const;
 export const DEFAULT_REFTYPE_BULK_MAX = 500;
+/** v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS's default, 10 minutes. */
+export const DEFAULT_CHRONOLOGY_CHECK_DELAY_MS = 600_000;
 
 export interface ToolsSettings {
   readonly upload: {
@@ -148,6 +156,8 @@ export interface ToolsSettings {
   readonly artCache?: ArtCacheSettings;
   /** v3 F6a.1: REFTYPE_BULK_MAX (optional for callers built before F6a.1: the default applies). */
   readonly reftypeBulkMax?: number;
+  /** v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS. Optional: the default (10 minutes) applies. */
+  readonly chronologyCheckDelayMs?: number;
   /** v3 F6a.1: SLOW_REQUEST_WARN_MS. */
   readonly slowRequestWarnMs?: number;
   /** v3 F6a.1: SLOW_REQUEST_REPEAT_MS. */
@@ -257,6 +267,7 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   snapshots: DEFAULT_SNAPSHOT_SETTINGS,
   artCache: DEFAULT_ART_CACHE_SETTINGS,
   reftypeBulkMax: DEFAULT_REFTYPE_BULK_MAX,
+  chronologyCheckDelayMs: DEFAULT_CHRONOLOGY_CHECK_DELAY_MS,
   ...DEFAULT_WATCHDOG_SETTINGS,
   artCallMaxImages: DEFAULT_ART_CALL_MAX_IMAGES,
   artCallMaxGroups: DEFAULT_ART_CALL_MAX_GROUPS,
@@ -313,6 +324,7 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
     },
     artCache: { dir: e.ART_CACHE_DIR ?? null, maxBytes: e.ART_CACHE_MAX_MB * 1024 * 1024 },
     reftypeBulkMax: e.REFTYPE_BULK_MAX,
+    chronologyCheckDelayMs: e.CHRONOLOGY_CHECK_DELAY_MS,
     slowRequestWarnMs: e.SLOW_REQUEST_WARN_MS,
     slowRequestRepeatMs: e.SLOW_REQUEST_REPEAT_MS,
     eventLoopLagWarnMs: e.EVENT_LOOP_LAG_WARN_MS,

@@ -149,6 +149,11 @@ const CHRONOLOGY_TOOLS: ReadonlySet<string> = new Set([
   'delete_timeline_event',
   'sync_timeline_event',
   'chronology_count_fix',
+  // v3 F10 (ADR 0078): the four deterministic repairs.
+  'chronology_kcy_fix',
+  'chronology_uri_fix',
+  'chronology_order_fix',
+  'chronology_style_fix',
 ]);
 
 export interface StepClass {

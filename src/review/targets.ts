@@ -1036,6 +1036,11 @@ function chronologyUnit(
   // A delete with no creation of its replacement in the same change is a deletion (never reverted). A delete paired with
   // one (an event whose end was removed is made again; a row and event moved to another age) is an edit of its shape.
   const count = (k: TargetWrite['kind']) => record.target.writes.filter((w) => w.kind === k).length;
+  // v3 F10 (ADR 0078): rows put into calendar order are not put back out of it (the calendar decides the order).
+  if (count('row.move') > 0)
+    return refuse(
+      'a chronology change that put table rows into calendar order: it is not reverted (the calendar decides the order; move a row by hand if it must go elsewhere)',
+    );
   if (count('event.delete') > count('event.create') || count('row.delete') > count('row.insert')) {
     const del = record.target.writes.find((w) => w.kind === 'row.delete' || w.kind === 'event.delete')!;
     return refuse(

@@ -611,6 +611,26 @@ function CheckCard({
     // v2 E6 (ADR 0048): an event without a row: the proposal deletes only the event.
     const eventId =
       f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string' ? f.detail.eventId : null;
+    // v3 F10 (ADR 0078): the four repairs (a KCY from the calendar, a date in the confirmed style, an event's link,
+    // the rows in calendar order).
+    const repair = REPAIR_KIND[f.kind];
+    if (repair) {
+      const id = repair === 'uri' ? (typeof f.detail?.eventId === 'string' ? f.detail.eventId : null) : rowId;
+      if (repair !== 'order' && !id) return;
+      setProposing(key);
+      void run(() =>
+        api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
+          confirm: true,
+          project,
+          age: f.age,
+          kind: repair,
+          ...(repair === 'uri' ? { eventId: id } : repair === 'order' ? {} : { rowId: id }),
+        }),
+      )
+        .then((res) => done(key, res))
+        .finally(() => setProposing(null));
+      return;
+    }
     if (!rowId && !count && !eventId) return;
     // A fix that turns a range into a single date (or the reverse) is never one click.
     const shape = typeof f.detail?.shapeChange === 'string' ? f.detail.shapeChange : null;
@@ -847,7 +867,9 @@ function CheckCard({
                     // A count mismatch has a fix when the Main table has a row (a count) for the age.
                     (f.kind === 'count_mismatch' && typeof f.detail?.main === 'string') ||
                     // v2 E6: an event without a row is deleted (only the event).
-                    (f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string');
+                    (f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string') ||
+                    // v3 F10 (ADR 0078): the four repairs.
+                    REPAIR_KIND[f.kind] !== undefined;
                   const tableOnly =
                     (f.kind === 'row_without_event' || f.kind === 'unreadable_date') &&
                     typeof f.detail?.rowId === 'string';
@@ -1106,6 +1128,14 @@ function TableOnlyCard({
   );
 }
 
+/** v3 F10 (ADR 0078): the findings the four deterministic repairs fix, and the kind each proposes. */
+const REPAIR_KIND: Readonly<Record<string, 'kcy' | 'style' | 'uri' | 'order'>> = {
+  wrong_kcy: 'kcy',
+  date_text_differs: 'style',
+  wrong_uri: 'uri',
+  row_out_of_order: 'order',
+};
+
 // ================================================================================================ changes
 
 const TOOL: Record<ChronologyRecordView['tool'], string> = {
@@ -1114,6 +1144,10 @@ const TOOL: Record<ChronologyRecordView['tool'], string> = {
   delete_timeline_event: 'Deleted',
   sync_timeline_event: 'Repaired the timeline',
   chronology_count_fix: 'Set the Main count',
+  chronology_kcy_fix: 'Set a KCY from the calendar',
+  chronology_uri_fix: 'Set an event’s link',
+  chronology_order_fix: 'Put rows in calendar order',
+  chronology_style_fix: 'Wrote a date in the confirmed style',
 };
 
 function RecordsCard({ project, r }: { project: string | null; r: Resource<ChronologyRecordsResponse> }) {

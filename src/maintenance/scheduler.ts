@@ -116,6 +116,15 @@ export class MaintenanceScheduler {
         this.store.insert(def.id, wantEnabled, wantEnabled ? nextRun(def.defaultSchedule, now) : null, now);
         state = this.store.get(def.id)!;
       }
+      // v3 F10 (ADR 0078): a job on its default schedule whose default now comes round sooner (the chronology check,
+      // weekly until F10, nightly since) takes the new one at once, not after its old next run.
+      if (state.enabled && state.schedule === null && state.nextRunAt !== null && state.runningSince === null) {
+        const sooner = nextRun(def.defaultSchedule, now);
+        if (sooner < state.nextRunAt) {
+          this.store.update(def.id, { nextRunAt: sooner }, now);
+          state = this.store.get(def.id)!;
+        }
+      }
       if (state.runningSince !== null) {
         // The process died during a run. Say so; do not run it again as if nothing happened.
         this.store.recordRun(

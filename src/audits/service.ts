@@ -522,7 +522,11 @@ export class Audits {
       f.fix.kind === 'chronology_sync' ||
       f.fix.kind === 'chronology_count' ||
       f.fix.kind === 'chronology_orphan' ||
-      f.fix.kind === 'chronology_pair'
+      f.fix.kind === 'chronology_pair' ||
+      f.fix.kind === 'chronology_kcy' ||
+      f.fix.kind === 'chronology_style' ||
+      f.fix.kind === 'chronology_uri' ||
+      f.fix.kind === 'chronology_order'
     ) {
       const kind = f.fix.kind;
       if (kind === 'chronology_pair') {
@@ -538,26 +542,36 @@ export class Audits {
       const c = await this.d.chronology.proposeFix(
         actor,
         projectId,
-        kind === 'chronology_count'
-          ? { kind: 'count', age: String(f.fix.args.age) }
-          : kind === 'chronology_orphan'
-            ? { kind: 'orphan', age: String(f.fix.args.age), eventId: String(f.fix.args.eventId) }
-            : kind === 'chronology_pair'
-              ? {
-                  age: String(f.fix.args.age),
-                  rowId: opts.rowId!,
-                  eventId: String(f.fix.args.eventId),
-                  ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
-                }
-              : {
-                  age: String(f.fix.args.age),
-                  rowId: String(f.fix.args.rowId),
-                  // v2 E6 (ADR 0048): a range made a single date (or the reverse) only with the owner's confirmation.
-                  ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
-                  // v3 F2.1: the owner's choice after a refused, ambiguous pairing.
-                  ...(opts.eventId !== undefined ? { eventId: opts.eventId } : {}),
-                  ...(opts.createNew === true ? { createNew: true } : {}),
-                },
+        kind === 'chronology_kcy' || kind === 'chronology_style'
+          ? {
+              kind: kind === 'chronology_kcy' ? 'kcy' : 'style',
+              age: String(f.fix.args.age),
+              rowId: String(f.fix.args.rowId),
+            }
+          : kind === 'chronology_uri'
+            ? { kind: 'uri', age: String(f.fix.args.age), eventId: String(f.fix.args.eventId) }
+            : kind === 'chronology_order'
+              ? { kind: 'order', age: String(f.fix.args.age) }
+              : kind === 'chronology_count'
+                ? { kind: 'count', age: String(f.fix.args.age) }
+                : kind === 'chronology_orphan'
+                  ? { kind: 'orphan', age: String(f.fix.args.age), eventId: String(f.fix.args.eventId) }
+                  : kind === 'chronology_pair'
+                    ? {
+                        age: String(f.fix.args.age),
+                        rowId: opts.rowId!,
+                        eventId: String(f.fix.args.eventId),
+                        ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+                      }
+                    : {
+                        age: String(f.fix.args.age),
+                        rowId: String(f.fix.args.rowId),
+                        // v2 E6 (ADR 0048): a range made a single date (or the reverse) only with the owner's confirmation.
+                        ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+                        // v3 F2.1: the owner's choice after a refused, ambiguous pairing.
+                        ...(opts.eventId !== undefined ? { eventId: opts.eventId } : {}),
+                        ...(opts.createNew === true ? { createNew: true } : {}),
+                      },
       );
       r =
         c.status === 'proposal_captured'

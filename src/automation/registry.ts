@@ -27,6 +27,8 @@ export type Trait =
   | 'sidebar_link' // one non-current page removed from a Related Sources collection
   | 'fact' // one sidebar fact set to the value the page itself states (a number, a link back)
   | 'dateline' // a chapter's first line written from its own In-world Date
+  | 'timeline' // v3 F10: the timeline (an event, a link, a name tail) set from its table, the authority
+  | 'chronology_table' // v3 F10: a table cell set from the calendar engine, or rows put in calendar order
   // ---- never eligible
   | 'canon'
   | 'lifecycle'
@@ -60,7 +62,7 @@ export const NEVER_TRAITS: readonly Trait[] = [
 ];
 
 /** Where a code's findings come from, and whose fix it uses. */
-export type AutomationSource = 'audit' | 'appraisal' | 'retag';
+export type AutomationSource = 'audit' | 'appraisal' | 'retag' | 'chronology';
 
 /** What the automation reads back to verify a write, and compares with what it read before. */
 export type AutomationTarget = 'resource' | 'document' | 'asset';
@@ -102,6 +104,14 @@ export interface CodeEntry {
    * proposal). Only the owner's switch allows it.
    */
   readonly applyDirect?: true;
+  /**
+   * v3 F10 (ADR 0078): a chronology code's finding (the chronology check's own kind, read from its newest successful
+   * run) and the fix the chronology module plans for it.
+   */
+  readonly chronology?: {
+    readonly kind: string;
+    readonly fix: 'sync' | 'count' | 'kcy' | 'style' | 'uri' | 'order';
+  };
 }
 
 export class AutomationFlagError extends Error {
@@ -121,9 +131,13 @@ export function defineCode(e: CodeEntry): CodeEntry {
     throw new AutomationFlagError(`${e.code} cannot default to Propose: only a proposal-only code can.`);
   if (e.applyDirect === true && e.automatable !== 'propose')
     throw new AutomationFlagError(`${e.code}: only a proposal-only audit code can allow a direct Apply.`);
-  if (e.automatable === 'propose' && e.source !== 'audit')
+  if (e.automatable === 'propose' && e.source !== 'audit' && e.source !== 'chronology')
     throw new AutomationFlagError(
-      `${e.code} cannot be proposal-only: only an audit code’s fix is a proposal of its own.`,
+      `${e.code} cannot be proposal-only: only an audit or chronology code’s fix is a proposal of its own.`,
+    );
+  if (e.source === 'chronology' && (e.automatable !== 'propose' || e.applyDirect !== true || !e.chronology))
+    throw new AutomationFlagError(
+      `${e.code}: a chronology code is proposal-first with Apply allowed, and names the check's finding and its fix.`,
     );
   if (e.automatable === 'mechanical') {
     const bad = e.traits.filter((t) => NEVER_TRAITS.includes(t));
@@ -151,6 +165,8 @@ const TRAIT_WORDS: Readonly<Record<Trait, string>> = {
   sidebar_link: 'removes a sidebar link',
   fact: 'sets a fact',
   dateline: 'writes a dateline',
+  timeline: 'sets the timeline from its table',
+  chronology_table: 'sets a chronology table from the calendar',
   canon: 'changes canon',
   lifecycle: 'changes a lifecycle state',
   hold: 'needs the owner’s classification (a hold)',
@@ -408,6 +424,31 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example: 'An event no chronology row explains.',
     transformation: 'none: deleting an event is never automatic',
     traits: ['delete'],
+    note: 'v3 F10 (ADR 0078, C6): stays a judgement; "Propose a fix" on the Chronology page proposes deleting only the event.',
+  }),
+  defineCode({
+    code: 'chronology_event_in_tie',
+    source: 'audit',
+    name: 'Timeline event in a tie',
+    example: 'An event two rows of the same date could own.',
+    transformation: 'none: which row owns it is the owner’s pick',
+    traits: ['pick', 'judgement'],
+  }),
+  defineCode({
+    code: 'chronology_unreadable_date',
+    source: 'audit',
+    name: 'Table date the calendar cannot read',
+    example: 'A row whose Date cell reads “the long winter”.',
+    transformation: 'none: what the date is, is the owner’s',
+    traits: ['judgement'],
+  }),
+  defineCode({
+    code: 'chronology_not_found',
+    source: 'audit',
+    name: 'Chronology document not found',
+    example: 'The Fourth Age table is gone.',
+    transformation: 'none: the chronology’s documents are the owner’s',
+    traits: ['judgement'],
   }),
   defineCode({
     code: 'duplicate_asset_folders',
@@ -554,6 +595,127 @@ export const CATALOGUE: readonly CodeEntry[] = [
     automatable: 'propose',
     applyDirect: true,
   }),
+  // ======================================================================== v3 F10 (ADR 0078): the chronology, default Propose, Apply allowed
+  defineCode({
+    code: 'chronology_row_without_event',
+    source: 'chronology',
+    name: 'Chronology row without a timeline event',
+    example: 'A row “4A 563, 12 Thaw” added to the Fourth Age table by hand gets its timeline event.',
+    transformation:
+      'ONE proposal per row: sync_timeline_event’s plan (the table the authority): the row’s event created in its age’s lane, read live first, the row asserted unchanged inside the lock, the event verified, journalled and linked. Apply (only when the owner switches it) submits the same job; a fix that changes an event’s shape, a qualified date or a lapsed table-only mark is always proposed, with the reason; an ambiguous pairing, a date the engine cannot read and a table-only row are left for the owner',
+    traits: ['timeline'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'row_without_event', fix: 'sync' },
+  }),
+  defineCode({
+    code: 'chronology_date_mismatch',
+    source: 'chronology',
+    name: 'Chronology row and event disagree about the date',
+    example: 'The event of the row “4A 563, 12 Thaw” is on 13 Thaw: it is moved to the row’s date.',
+    transformation:
+      'ONE proposal per row: sync_timeline_event’s plan: the paired event’s minutes, detail, end and link set to the row’s date, read live first, the row asserted unchanged inside the lock, verified and journalled. Apply (only when the owner switches it) submits the same job; a change of the event’s shape (a range made a single date, or the reverse) is always proposed, your approval being its confirmation',
+    traits: ['timeline'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'date_mismatch', fix: 'sync' },
+  }),
+  defineCode({
+    code: 'chronology_name_drift',
+    source: 'chronology',
+    name: 'Event name no longer carries its row’s date',
+    example: 'A linked event still ends “– c. 4A 563” after its row’s Date cell became “c. 4A 564”.',
+    transformation:
+      'ONE proposal per row: sync_timeline_event’s plan: only the date tail the bridge wrote into the linked event’s name follows the row’s Date cell (the opening words kept), read live first, verified and journalled. Apply (only when the owner switches it) submits the same job',
+    traits: ['timeline'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'name_drift', fix: 'sync' },
+  }),
+  defineCode({
+    code: 'chronology_count_mismatch',
+    source: 'chronology',
+    name: 'Main count differs from its age’s table',
+    example: 'The Main table says 41 for the Fourth Age; its table has 42 rows: the count becomes 42.',
+    transformation:
+      'ONE proposal per age: the Main table’s Event count cell set to the age table’s row count, both read live, the count and the row count compared inside the lock, one block written with its If-Match chained, verified and journalled. Apply (only when the owner switches it) submits the same job',
+    traits: ['fact'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'count_mismatch', fix: 'count' },
+  }),
+  defineCode({
+    code: 'chronology_wrong_kcy',
+    source: 'chronology',
+    name: 'Wrong KCY value',
+    example: 'The row “4A 563, 12 Thaw” says KCY 1,250,307; the calendar engine says 1,250,308.',
+    transformation:
+      'ONE proposal per row: the row’s KCY cell set to the calendar engine’s value for its date, in the confirmed style, only when the date is complete and readable (a partial or qualified date has no fix); the row read live and compared inside the lock, one block written, verified and journalled; the before and after text shown. Apply (only when the owner switches it) submits the same job',
+    traits: ['chronology_table'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'wrong_kcy', fix: 'kcy' },
+  }),
+  defineCode({
+    code: 'chronology_wrong_uri',
+    source: 'chronology',
+    name: 'Event does not link to its age’s table',
+    example: 'A Fourth Age event links to nothing: its link becomes the Fourth Age table.',
+    transformation:
+      'ONE proposal per event: the event’s link set to its age’s table, the event read live and compared inside the lock, verified and journalled. Apply (only when the owner switches it) submits the same job',
+    traits: ['timeline'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'wrong_uri', fix: 'uri' },
+  }),
+  defineCode({
+    code: 'chronology_row_out_of_order',
+    source: 'chronology',
+    name: 'Chronology rows out of calendar order',
+    example: 'A row of 4A 560 below one of 4A 563 is moved above it.',
+    transformation:
+      'ONE proposal per age: the fewest rows moved into calendar order, only when the order is strict (every row involved has a readable date, no two tie, and no partial date could fall either side); otherwise it stays a judgement. The table read live, its rows and their order compared inside the lock, each row moved unchanged, its place verified and journalled; the order before and after shown. Apply (only when the owner switches it) submits the same job',
+    traits: ['chronology_table'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'row_out_of_order', fix: 'order' },
+  }),
+  defineCode({
+    code: 'chronology_date_text_differs',
+    source: 'chronology',
+    name: 'Date or KCY written differently from the confirmed style',
+    example: '“4A 563, 12 thaw” becomes “4A 563, 12 Thaw”; KCY “1250308” becomes “1,250,308”.',
+    transformation:
+      'ONE proposal per row: the Date cell written as the calendar engine writes the same date, and a right KCY written in the confirmed style (a qualified date is never rewritten); the row read live and compared inside the lock, one block written, verified and journalled; the before and after text shown. Apply (only when the owner switches it) submits the same job',
+    traits: ['chronology_table'],
+    target: 'document',
+    changes: [],
+    automatable: 'propose',
+    defaultMode: 'propose',
+    applyDirect: true,
+    chronology: { kind: 'date_text_differs', fix: 'style' },
+  }),
   defineCode({
     code: 'scope_overload',
     source: 'appraisal',
@@ -645,6 +807,8 @@ export function scopeOf(e: CodeEntry): string {
       : e.area === 'design'
         ? 'the Design References included'
         : 'excluding the Legacy Canon Archive and the Design References';
+  if (e.source === 'chronology')
+    return 'the project’s confirmed chronology (its Main table, its age tables and their timelines), as its newest check found it';
   return e.target === 'asset'
     ? 'the assets of the project’s asset library (their names only: never the image, its folder or its placements)'
     : `${SCOPE_PAGE}, ${area}`;

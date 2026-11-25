@@ -156,6 +156,8 @@ export const LIVE_TOOL_SETTINGS: Readonly<Record<string, readonly [Section, stri
   MCP_RESULT_MAX_CHARS: [null, 'resultMaxChars'],
   // v3 F6a.1 (ADR 0076 amendment 1): read on each use by the Reference Type service and the watchdog.
   REFTYPE_BULK_MAX: [null, 'reftypeBulkMax'],
+  // v3 F10 (ADR 0078): read each time a change snapshot schedules the chronology check.
+  CHRONOLOGY_CHECK_DELAY_MS: [null, 'chronologyCheckDelayMs'],
   SLOW_REQUEST_WARN_MS: [null, 'slowRequestWarnMs'],
   SLOW_REQUEST_REPEAT_MS: [null, 'slowRequestRepeatMs'],
   EVENT_LOOP_LAG_WARN_MS: [null, 'eventLoopLagWarnMs'],

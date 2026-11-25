@@ -131,6 +131,20 @@ export interface SnapshotServiceOptions {
    * runner for a copy here, so the nightly full snapshot reaches Drive within the hour. Never throws into the run.
    */
   readonly afterFull?: (projectId: string, snapshotId: string) => void | Promise<void>;
+  /**
+   * v3 F10 (ADR 0078, C3): called when a job's change snapshot is written, with the pages it took and, per page, the
+   * documents it took (`all`: the whole page). The chronology schedules its check here. Never throws into the snapshot.
+   */
+  readonly afterChange?: (projectId: string, change: ChangeTaken) => void;
+}
+
+/** v3 F10: what a change snapshot took (for `afterChange`). */
+export interface ChangeTaken {
+  readonly snapshotId: string;
+  readonly jobId: string;
+  /** The job's tool (its origin), when the job is known. */
+  readonly tool: string | null;
+  readonly pages: readonly { readonly pageId: string; readonly documents: readonly string[] | 'all' }[];
 }
 
 /** A run's or a change's outcome, for the maintenance job and the dashboard. */
@@ -1274,6 +1288,24 @@ export class SnapshotService {
     await this.writeSnapshot(manifest);
     this.index.clearOwed(owed.map((x) => x.id));
     this.taps.delete(jobId);
+    if (this.o.afterChange)
+      try {
+        this.o.afterChange(projectId, {
+          snapshotId: manifest.id,
+          jobId,
+          tool: job?.origin.tool ?? null,
+          pages: [...byPage]
+            .filter(([pageId, list]) => pageId !== '*' && !list.some((x) => x.piece === 'deleted'))
+            .map(([pageId, list]) => ({
+              pageId,
+              documents: list.some((x) => x.piece === 'page')
+                ? ('all' as const)
+                : [...new Set(list.filter((x) => x.piece === 'document').map((x) => x.ref))],
+            })),
+        });
+      } catch (e) {
+        this.o.log?.warn({ err: e, jobId }, 'the hook after a change snapshot failed');
+      }
     return {
       changed: true,
       snapshotId: manifest.id,
