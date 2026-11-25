@@ -7,35 +7,29 @@
  *   rule, tags `CANON, Character, Relationship`, both participants' Related Sources updated in the same proposal; a
  *   Working page with a canon partner leaves that link until promotion, with a warning). Refused when a character does
  *   not exist (CHARACTER_NOT_FOUND) or the pair already has a relationship owner (RELATIONSHIP_EXISTS, naming it).
- * - `arkona_add_character_art`: F3a's art step on its own: images from staged uploads, a ChatGPT `file` or an
- *   `upload_id` (staged on the bridge's server first), placed in the character's asset folder (found or created when
- *   the job runs), with semantic, extension-free, collision-checked names; the Art page created when missing, or
- *   extended under its "Reference Images" section. Each image needs its interpretation text.
+ * - `arkona_add_character_art`: planned by src/packs/art-groups.ts since v3 F7d (ADR 0077), its single-target form as
+ *   one group; the helpers here (the Art page, the lines naming a moved piece, the single form's placement words) are
+ *   shared with it.
  */
 import type { McpToolContext, McpToolResult } from '../mcp/server.js';
 import { errorResult, type ProjectDeps } from '../mcp/tools/shape.js';
-import type { FromMarkdownContext, LkBlock } from '../markdown/index.js';
-import { pageConverterContext } from '../pages/index.js';
 import { cleanPrefixes, key as nameKey, subjectOf } from '../registry/names.js';
 import type { TreeNode } from '../tree/index.js';
-import { resolveArchiveImages, stageForPack, type ArchiveImageRef, type ChatGptFile } from './intake.js';
+import type { ArchiveImageRef, ChatGptFile } from './intake.js';
 import {
   findCharacters,
-  planImages,
   planPackage,
-  withImages,
   type CharacterHit,
   type PackPlan,
-  type PackageImage,
   type PlanEnv,
 } from './engine/plan.js';
 import { textKey } from './engine/text.js';
 import type { LmrMode } from '../jobs/lmr-hook.js';
 import { characterEnv, finishPackage, packBasis } from './run.js';
-import { liveArtFolder, placeArt, type ArtPlace } from './art-place.js';
+import { liveArtFolder, type ArtPlace } from './art-place.js';
 import { knownOutfits } from '../art/placement.js';
 import { matchOutfit } from '../art/names.js';
-import type { ArtLine, ArtPlan, ImagePlacement } from './engine/plan.js';
+import type { ArtLine, ArtPlan } from './engine/plan.js';
 import { linesNaming } from '../art/lines.js';
 import { liveRead } from '../mcp/tools/repo.js';
 
@@ -229,6 +223,7 @@ export interface ArtImageInput {
   readonly interpretation?: string | undefined;
 }
 
+/** The single-target form's input (v3 F7: one call, one target; since v3 F7d planned as a one-group groups call). */
 export interface ArtInput {
   readonly character: string;
   /**
@@ -245,200 +240,6 @@ export interface ArtInput {
   readonly scope?: string | undefined;
   readonly markdown?: string | undefined;
   readonly status?: 'working' | 'authoritative' | undefined;
-}
-
-export async function runArt(
-  pd: ProjectDeps,
-  mctx: McpToolContext,
-  o: Run<ArtInput>,
-): Promise<McpToolResult> {
-  const b = await packBasis(pd, mctx, o.packId, o.tool);
-  if (!b.ok) return b.result;
-  const e = characterEnv(pd, mctx, o.tool, b.value, 'Character', o.lastMajorRevision);
-  if (!e.ok) return e.result;
-  const env = e.env;
-  const type = env.type;
-  const ch = oneCharacter(pd, env, o.input.character, 'character');
-  if (!ch.ok) return ch.result;
-  if (o.input.images.length === 0)
-    return errorResult({ code: 'IMAGES_REQUIRED', message: 'Give at least one image.' }, pd);
-  const twoSources = o.input.images.find(
-    (im) => im.archive !== undefined && (im.staged_id !== undefined || im.upload_id !== undefined),
-  );
-  if (twoSources)
-    return errorResult(
-      {
-        code: 'IMAGE_SOURCE_INVALID',
-        message: `${twoSources.label}: give archive, staged_id or upload_id, not two of them.`,
-      },
-      pd,
-    );
-  // v3 F7c (ADR 0075, Z4): archive entries first: a staged entry is its staged image; one not staged yet is planned
-  // from its header (the job waits for it); one that cannot be used is left out with its reason, never the others.
-  const fromArchives = resolveArchiveImages(pd, o.input.images);
-  if (fromArchives.images.length === 0)
-    return errorResult(
-      {
-        code: 'ARCHIVE_ENTRIES_UNAVAILABLE',
-        message: `None of the images can be used: ${fromArchives.notUsed.map((n) => `${n.label} (${n.code}: ${n.reason})`).join('; ')}`,
-        notUsed: fromArchives.notUsed,
-      },
-      pd,
-    );
-  const inputImages = fromArchives.images;
-  // 1. Each image's source: a staged image, or an upload or ChatGPT file staged now on the bridge's server.
-  const unsourced = inputImages.filter((im) => im.staged_id === undefined && im.upload_id === undefined);
-  if (
-    unsourced.length > 1 ||
-    (unsourced.length === 1 && !o.input.file) ||
-    (unsourced.length === 0 && o.input.file)
-  )
-    return errorResult(
-      {
-        code: 'IMAGE_SOURCE_INVALID',
-        message:
-          'Each image has exactly one source: staged_id, upload_id, or (for ONE image with neither) the attached file given as `file`.',
-      },
-      pd,
-    );
-  const staged: { from: string; staged_id: string; deduplicated: boolean }[] = [];
-  const images: PackageImage[] = [];
-  for (const im of inputImages) {
-    if (im.staged_id !== undefined && im.upload_id !== undefined)
-      return errorResult(
-        { code: 'IMAGE_SOURCE_INVALID', message: `${im.label}: give staged_id or upload_id, not both.` },
-        pd,
-      );
-    let id = im.staged_id;
-    if (id === undefined) {
-      const r = await stageForPack(
-        pd,
-        mctx,
-        o.tool,
-        im.upload_id !== undefined ? { upload_id: im.upload_id } : { file: o.input.file! },
-        im.label,
-      );
-      if (!r.ok)
-        return errorResult({ code: r.code, message: `${im.label}: ${r.message}`, ...(r.details ?? {}) }, pd);
-      id = r.stagedId;
-      staged.push({ from: r.source, staged_id: id, deduplicated: r.deduplicated });
-    }
-    images.push({
-      staged_id: id,
-      label: im.label,
-      ...(im.interpretation !== undefined ? { interpretation: im.interpretation } : {}),
-      ...(im.pending ? { pending: im.pending } : {}),
-    });
-  }
-  const pendingCount = images.filter((i) => i.pending).length;
-  const stagedNote = {
-    ...(staged.length > 0
-      ? {
-          stagedNow: staged,
-          stagedNote:
-            'These images were staged on the bridge’s server for this package (nothing is in LegendKeeper until the owner approves it). Calling again, give their staged_id.',
-        }
-      : {}),
-    ...(fromArchives.fromArchives.length > 0 ? { fromArchives: fromArchives.fromArchives } : {}),
-  };
-  // v3 F7c (ADR 0075, Z4): what the answer says of archive entries (its notes and warnings).
-  const archiveNotes =
-    pendingCount > 0
-      ? [
-          `${pendingCount} archive entr${pendingCount === 1 ? 'y is' : 'ies are'} not staged yet: planned from ${pendingCount === 1 ? 'its' : 'their'} header; the approved job waits for ${pendingCount === 1 ? 'it' : 'them'} (waiting_staging) and runs once staged. Never upload ${pendingCount === 1 ? 'it' : 'them'} again; follow bridge_archive_status.`,
-        ]
-      : [];
-  const archiveWarnings = fromArchives.notUsed.map((n) => ({
-    code: 'IMAGE_NOT_USED',
-    message: `${n.label} was left out (${n.code}): ${n.reason} The other images go ahead.`,
-    archive: n.archive,
-  }));
-  // 2. The character's Art page: extended when it has one, else made.
-  const subject = nameOf(env, ch.hit);
-  const index = indexOf(env, ch.hit);
-  const art = artPageOf(env, index, subject);
-  // 3. v3 F7 (ADR 0070, G2, G9): the character's folders read live, then where the images go.
-  const placed = await placeArt(
-    env,
-    ch.hit,
-    subject,
-    { outfit: o.input.outfit, newOutfit: o.input.newOutfit, arriving: images.length },
-    pd.services?.outfits,
-  );
-  if (!placed.ok) return placed.result;
-  const place = placed.value;
-  const placement = imagePlacementOf(place);
-  const moved = place.placement.kind === 'outfit' ? place.placement.moves : [];
-  const named = await piecesNamedOnPages(env, index, moved);
-  const artPlan = artPlanOf(place, subject, named.lines);
-  const lineNotes = [
-    ...(named.lines.length > 0
-      ? [
-          `${named.lines.length} line(s) on ${subject}'s pages name a piece this moves (they may state where it is): listed for you, never edited (linesForOwner).`,
-        ]
-      : []),
-    ...(named.unread.length > 0
-      ? [
-          `Could not be read now, so not checked for lines naming the moved piece: ${named.unread.join(', ')}.`,
-        ]
-      : []),
-  ];
-  if (!art) {
-    const plan = await planPackage(env, {
-      name: subject,
-      target: ch.hit.identity.id,
-      ...(o.input.status !== undefined ? { status: o.input.status } : {}),
-      imagePlacement: placement,
-      identity: {},
-      pages: [
-        {
-          role: type.assets.role,
-          scope: o.input.scope ?? `${subject}'s approved visual references`,
-          markdown:
-            o.input.markdown ??
-            `## Purpose\n\n${subject}'s approved visual references: each image below with what it establishes.\n`,
-          images,
-        },
-      ],
-    });
-    if (o.input.markdown === undefined)
-      plan.notes.push(
-        'The Art page’s Purpose is drafted (shown in the preview); give markdown for your own.',
-      );
-    plan.warnings.push(...archiveWarnings);
-    return finishPackage(pd, mctx, o, env, {
-      ...plan,
-      art: artPlan,
-      notes: [...plan.notes, ...artNotes(place), ...lineNotes, ...archiveNotes],
-      extra: {
-        ...(plan.extra ?? {}),
-        artPage: { create: plan.pages.find((p) => p.role === type.assets.role)?.rawName ?? null },
-        placement: placementSummary(place),
-        ...(named.lines.length ? { linesForOwner: named.lines } : {}),
-        ...stagedNote,
-      },
-    });
-  }
-  const plan = planArtExtension(env, ch.hit, subject, art, images, place);
-  // v3 F7.1 (ADR 0072): the character already has an index and several owners under a Compact Reference (the shape
-  // the audit's character_core_missing finds): this call adds no owner page, so it does not upgrade; it says so.
-  if (ch.hit.role === 'compact' && index)
-    plan.warnings.push({
-      code: 'CORE_MISSING',
-      message: `${ch.hit.identity.rawName} is still a Compact Character Reference at the head of ${index.rawName}, which has several owners: a character with an index and several owners has a Character Core. Upgrade it with arkona_create_character (target “${ch.hit.identity.rawName}”, upgradeToCore: true), or ask the owner to approve the audit's character_core_missing proposal.`,
-    });
-  plan.warnings.push(...archiveWarnings);
-  return finishPackage(pd, mctx, o, env, {
-    ...plan,
-    art: artPlan,
-    notes: [...plan.notes, ...artNotes(place), ...lineNotes, ...archiveNotes],
-    extra: {
-      ...(plan.extra ?? {}),
-      placement: placementSummary(place),
-      ...(named.lines.length ? { linesForOwner: named.lines } : {}),
-      ...stagedNote,
-    },
-  });
 }
 
 /**
@@ -494,19 +295,8 @@ export function artPageOf(env: PlanEnv, index: TreeNode | null, subject: string)
     : null;
 }
 
-/** v3 F7: the images' placement as planImages takes it. */
-function imagePlacementOf(place: ArtPlace): ImagePlacement {
-  const p = place.placement;
-  if (p.kind === 'design') return { subfolders: [], outfit: null };
-  return {
-    subfolders: p.subfolders,
-    outfit: p.outfit.name,
-    ...(p.moves.length > 0 ? { taken: new Set(p.moves.map((m) => m.name)) } : {}),
-  };
-}
-
 /** v3 F7: what the job needs besides the images (the moves, the outfit record, the Art page's place for them). */
-function artPlanOf(place: ArtPlace, subject: string, lines: readonly ArtLine[]): ArtPlan {
+export function artPlanOf(place: ArtPlace, subject: string, lines: readonly ArtLine[]): ArtPlan {
   const p = place.placement;
   const base = (place.layout?.character.path ?? []).join(' / ');
   const wardrobe = place.layout?.wardrobe ?? null;
@@ -534,7 +324,7 @@ function artPlanOf(place: ArtPlace, subject: string, lines: readonly ArtLine[]):
   };
 }
 
-function artNotes(place: ArtPlace): string[] {
+export function artNotes(place: ArtPlace): string[] {
   const p = place.placement;
   const read = `The character’s asset folders were read live first (${place.live.requests} request${place.live.requests === 1 ? '' : 's'}).`;
   if (p.kind === 'design') return [read, 'Design pieces: placed in the character’s own folder.'];
@@ -556,7 +346,7 @@ function artNotes(place: ArtPlace): string[] {
   ];
 }
 
-function placementSummary(place: ArtPlace): Record<string, unknown> {
+export function placementSummary(place: ArtPlace): Record<string, unknown> {
   const p = place.placement;
   if (p.kind === 'design') return { kind: 'design', folder: 'the character’s own folder' };
   return {
@@ -568,112 +358,6 @@ function placementSummary(place: ArtPlace): Record<string, unknown> {
     existingPieces: p.existing.length,
     total: p.total,
     moves: p.moves.map((m) => m.name),
-  };
-}
-
-/** New images on an existing Art page (design section 3): appended under its images section, in one proposal. */
-function planArtExtension(
-  env: PlanEnv,
-  hit: CharacterHit,
-  subject: string,
-  art: TreeNode,
-  pkgImages: readonly PackageImage[],
-  place: ArtPlace,
-): PackPlan {
-  const { pd, ctx, type, pack } = env;
-  const refusals: PackPlan['refusals'] = [];
-  const warnings: PackPlan['warnings'] = [];
-  const refuse = (code: string, message: string, more: Obj = {}) => refusals.push({ code, message, ...more });
-  const warn = (code: string, message: string, more: Obj = {}) => warnings.push({ code, message, ...more });
-  if (art.kind === 'barc')
-    refuse(
-      'TARGET_ARCHIVED',
-      `${art.rawName} is Archived: unarchive it first (unarchive_page, the owner's approval).`,
-    );
-  const status: 'working' | 'authoritative' = art.kind === 'bwrk' ? 'working' : 'authoritative';
-  const doc =
-    art.documents.find((d) => d.name === 'Main' && (d.type === 'page' || d.type === 'blank')) ??
-    (art.documents.filter((d) => d.type === 'page').length === 1
-      ? art.documents.find((d) => d.type === 'page')
-      : undefined);
-  if (!doc) refuse('ART_PAGE_UNREADABLE', `${art.rawName} has no main page document to add the images to.`);
-  const planned = planImages(env, {
-    page: art.rawName,
-    subject,
-    race: place.race,
-    images: pkgImages,
-    refuse,
-    warn,
-    placement: imagePlacementOf(place),
-  });
-  const base = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
-  const converter: FromMarkdownContext | undefined = base ? { ...base } : undefined;
-  if (!converter) refuse('TOOL_UNAVAILABLE', 'The repository tree cannot resolve names now.');
-  // v3 F7 (G5): design pieces under "Reference Images"; an outfit's under a heading naming it (found or made inside
-  // the job's lock, under the page's first "Wardrobe" heading, else a new "Wardrobe" section).
-  const outfit = place.placement.kind === 'outfit' ? place.placement.outfit : null;
-  const section = outfit ? outfit.name : type.assets.section;
-  const boundaries = [
-    ...(type.roles.find((r) => r.role === type.assets.role)?.warnMissing ?? []),
-    'Source Boundaries',
-    'Unresolved Material',
-  ];
-  const blocks: LkBlock[] =
-    converter && planned.length > 0 ? withImages([], planned, section, boundaries, converter) : [];
-  return {
-    pack,
-    type,
-    mode: 'extend',
-    subject,
-    status,
-    pages: [],
-    existing:
-      doc && planned.length > 0
-        ? [
-            {
-              kind: 'images',
-              page: ctx.types.resolveOne(art.id),
-              documentId: doc.id,
-              blocks,
-              section,
-              boundaries,
-              images: planned,
-              ...(outfit ? { outfit: { name: outfit.name, aliases: [...outfit.aliases] } } : {}),
-            },
-          ]
-        : [],
-    images: planned,
-    refusals: [
-      ...refusals,
-      ...(env.governance.state === 'current'
-        ? []
-        : [
-            {
-              code: 'PACK_NOT_CURRENT',
-              message: `${env.governance.message} Nothing can be proposed now (fail closed).`,
-              governance: { state: env.governance.state, sources: env.governance.sources },
-            },
-          ]),
-    ],
-    warnings,
-    replacements: [],
-    held: [],
-    governance: env.governance,
-    absent: { reservation: null, under: [], kind: 'art', images: planned.map((i) => i.stagedId) },
-    target: { identity: hit.identity, index: null, role: hit.role },
-    notes: [
-      outfit
-        ? `${art.rawName} exists: the images are added under its heading naming “${outfit.name}” (found anywhere on the page when the job runs; else made under the page’s first heading holding “Wardrobe”; else under a new “Wardrobe” section before its boundary sections).`
-        : `${art.rawName} exists: the images are added at the end of its “${section}” section (made before its boundary sections if it has none) when the job runs; nothing else on the page changes.`,
-    ],
-    extra: { artPage: { extend: art.rawName, id: art.id } },
-    ...(planned.some((i) => i.takeover)
-      ? {
-          takeovers: planned
-            .filter((i) => i.takeover)
-            .map((i) => ({ stagedId: i.stagedId, proposalId: i.takeover! })),
-        }
-      : {}),
   };
 }
 

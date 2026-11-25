@@ -1475,7 +1475,13 @@ character only after promotion). **In the job**: `RELATIONSHIP_EXISTS`.
 **`arkona_add_character_art`** `{ character, groups: [{ outfit?, newOutfit?, images: [{ staged_id? | upload_id? | archive?, label, interpretation }] }], artPage?: { scope?, temporalScope?, visualState?, dependencies?, related?, markdown?, status? }, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`,
 or the single-target form `{ character, outfit?, newOutfit?, images: [...], file?, scope?, markdown?, status?, … }`:
 reference images for an existing character. **Since v3 F7d** ([ADR 0077](adr/0077-v3-f7d-one-call-art.md)): a
-character's whole art set in ONE call (`groups`) and ONE proposal. A group without `outfit` holds the design pieces; a
+character's whole art set in ONE call (`groups`), one package (a proposal or a job by the tool's switch, as below; a
+proposal approved item by item). The single-target form is planned as a one-group call: it fills the same sidebar and
+takes `artPage` (`ART_PAGE_FIELD_TWICE` when `scope`, `markdown` or `status` is given in both places); its answer is as
+before. **Proposal or job**: the tool's switch in the pack (the Packs page; default "follow the scope"): at scope
+`propose` one proposal; at scope `write` a job, except a new Authoritative Art page or an Authoritative Compact
+Reference's upgrade (a canonical proposal) and what the owner's rails hold back (`proposedBecause`); so adding to an
+existing Art page at `write` is direct; "always propose" makes every call one proposal. A group without `outfit` holds the design pieces; a
 group with `outfit`, that outfit's. Planned once, together: the folders read live once, the outfit record once, each
 group matched (a near match refused unless `newOutfit`), groups naming the same outfit merged (a note), placement as
 below counting the outfit's recorded pieces plus this call's; ANY problem in any group refuses the whole call with every

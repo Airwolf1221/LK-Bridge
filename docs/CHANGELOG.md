@@ -29,6 +29,11 @@ sandbox check `f7d-art-set` is the owner's to run).
 - **Guidance** (A6, A7): the tool description, `upload_image_archive`'s and the guide's art section lead with `groups`
   and the archive path for a whole character.
 - **Sandbox**: `f7d-art-set` (D0 to D4), and its run on the mock.
+- **Review (ADR 0077 amendment 1)**: the single-target form is planned as a one-group call (the sidebar copies, the
+  identity page in Dependencies, `artPage`; `ART_PAGE_FIELD_TWICE`), its answers otherwise unchanged; the tool's
+  description and the guide say what the pack's switch does (default "follow the scope": a job at scope `write`, a
+  canonical proposal for a new Authoritative Art page or an Authoritative upgrade, one proposal at `propose` or when the
+  owner sets "always propose"), and `arkona_create_character`'s names its switch.
 - **Tests**: `test/f7d/` (groups, items, job, sidebar, core-upgrade, identity-copy-drift),
   `test/sandbox-mock/f7d-art-set.test.ts`; the settings' frozen table.
 

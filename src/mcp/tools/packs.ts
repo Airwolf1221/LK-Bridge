@@ -9,8 +9,8 @@
 import * as z from 'zod';
 import { characterBrief } from '../../packs/brief.js';
 import { COST_LINE, getArt, MAX_IMAGES } from '../../art/view/get-art.js';
-import { runArt, runRelationship } from '../../packs/character-tools.js';
-import { runArtGroups } from '../../packs/art-groups.js';
+import { runRelationship } from '../../packs/character-tools.js';
+import { runArtGroups, runArtSingle } from '../../packs/art-groups.js';
 import { runOwner, runPackage } from '../../packs/run.js';
 import { renameReport, runRename } from '../../packs/rename/run.js';
 import { runSplit, splitReport } from '../../packs/split/run.js';
@@ -327,7 +327,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       description:
         'The Arkona pack: builds a whole character from ONE package by Arkona’s rules: the right set of linked pages (only the domains you give), each from its template, named, placed under its race, its sidebar filled in template order, its tags COMPUTED (never typed), links resolved, images placed, then verified. Use it instead of separate creates for a new character, and with `target` to add new pages to an existing one (its name, alias or id). ' +
         'depth "compact": one Character Reference; "developed": an [INDEX] with a Character Core. status "working" (default): a Working set to promote later; "authoritative": canon. The six identity fields (givenName, surname, race, namingCulture, lifeState, temporalScope) are required: if one is unknown, ASK THE OWNER, never guess ("Unestablished" only with a reason the owner gave). At intake run arkona_name_check first (the naming-culture review); the preview lists the new name’s namesakes too: an exact full-name match is a NAMESAKE warning, also in the proposal’s summary (names may be shared: never refused); tell the person. ' +
-        'dryRun shows the full preview (pages, facts, tags, links, folders, every dash replaced, refusals and warnings) and writes nothing: preview first. Otherwise it is ONE proposal for the owner, whatever your scope; never resubmit it, follow it with bridge_proposal_status. A refusal names the fix. ' +
+        'dryRun shows the full preview (pages, facts, tags, links, folders, every dash replaced, refusals and warnings) and writes nothing: preview first. Otherwise, with this tool’s switch in the pack at its default (“always propose”, set by the owner on the Packs page), it is ONE proposal for the owner whatever your scope (a canonical one for status "authoritative"); never resubmit it, follow it with bridge_proposal_status. If the owner sets it to follow the scope, it runs as a job at scope `write` (canon still a canonical proposal). For a character’s art beyond its first Art page (outfits included), use arkona_add_character_art, which has its own switch. A refusal names the fix. ' +
         'Example: { "name": "Asagiri Ren", "depth": "compact", "identity": { "givenName": "Ren", "surname": "Asagiri", "race": "Foxian", "namingCulture": "Fujimatsuan", "lifeState": "Alive", "temporalScope": "5A 931" }, "pages": [{ "role": "compact", "scope": "Shrine guard", "markdown": "## Purpose\\n…" }], "dryRun": true, "project": "test" }. ' +
         `${STAGE_HINT} ` +
         'Cost: 4 to 8 reads to plan (3 of them the pack’s governance); the job about 20 reads and 19 writes for a compact character (one write per sidebar row), about 57 and 46 for a Core with a Biography and a Relationship, about 28 and 16 for an Art page with one image.',
@@ -618,11 +618,11 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       access: 'write',
       description:
         'The Arkona pack: adds reference images to an EXISTING character (`character`: name, alias or id). Do a character’s whole art set in one call; don’t wait for the Art page before adding outfits. ' +
-        'Use `groups`: one group per target, `{ outfit?, newOutfit?, images: [...] }`; a group with no `outfit` (or null) holds the DESIGN pieces (in the character’s own folder, named “<Character> - <Label>”); a group with `outfit` holds that outfit’s pieces (named “<Character> - <Outfit> - <Label>”). The whole call is planned at once: the character’s folders read live once, every group matched against its outfit record, and ONE proposal the owner approves item by item (“Art page” when it is new, “Design pieces”, one item per outfit; an outfit needs the Art page’s item). Any problem in any group refuses the whole call with EVERY problem listed (`problems`): fix them all and call again. Groups naming the same outfit are merged. `artPage` { scope, temporalScope, visualState, dependencies, related, markdown, status } fills the Art page’s sidebar: used when the page is made, applied only to EMPTY rows when it exists. The bridge copies the identity fields (Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture, Aliases) from the character’s Core or Compact Reference into empty rows, never overwriting a different value (reported), and adds the identity page to Dependencies; Temporal Scope and Visual State / Period are never copied: give them, or they are listed as still to fill. At most ART_CALL_MAX_GROUPS groups (40) and ART_CALL_MAX_IMAGES images (120) a call. ' +
+        'Use `groups`: one group per target, `{ outfit?, newOutfit?, images: [...] }`; a group with no `outfit` (or null) holds the DESIGN pieces (in the character’s own folder, named “<Character> - <Label>”); a group with `outfit` holds that outfit’s pieces (named “<Character> - <Outfit> - <Label>”). The whole call is planned at once (the character’s folders read live once, every group matched against its outfit record) as ONE package: when it is a proposal, the owner approves it item by item (“Art page” when it is new, “Design pieces”, one item per outfit; an outfit needs the Art page’s item). Any problem in any group refuses the whole call with EVERY problem listed (`problems`): fix them all and call again. Groups naming the same outfit are merged. `artPage` { scope, temporalScope, visualState, dependencies, related, markdown, status } fills the Art page’s sidebar: used when the page is made, applied only to EMPTY rows when it exists. The bridge copies the identity fields (Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture, Aliases) from the character’s Core or Compact Reference into empty rows, never overwriting a different value (reported), and adds the identity page to Dependencies; Temporal Scope and Visual State / Period are never copied: give them, or they are listed as still to fill. At most ART_CALL_MAX_GROUPS groups (40) and ART_CALL_MAX_IMAGES images (120) a call. ' +
         'The bridge decides every folder from the folders read live and the outfit record: an outfit’s only piece goes loose in Wardrobe; two or more go in Wardrobe / <Outfit> (made when missing, the loose piece moved into it in the same job); an outfit that has its folder takes them there. You never name a folder (Forms, Outfits and Details are retired). An outfit is matched by its name or an alias (case and spacing ignored); a name CLOSE to an existing outfit’s (e.g. “Imperial Regalia” beside “Supreme Imperial Regalia”) is refused with OUTFIT_NEAR_MATCH listing the candidates: use the exact name, or newOutfit: true if it really is another outfit. Names use the character’s full canonical name, are numbered if taken, never carry a file extension. On the Art page (ONE write): design pieces under “Reference Images”; each outfit’s under a heading naming it (found anywhere on the page, else made under the page’s first heading holding “Wardrobe”, else in a new “Wardrobe” section), in the order the groups were given. Each image needs `interpretation` (what it establishes); a bare image is refused. A Compact Reference becomes the Character Core automatically, in the same proposal, when this call makes the Art page and its character gains an index with several owners. A failed image never fails the rest: it is withdrawn (its blocks left off the page, why recorded) and the job’s result lists, per group, what was placed and what was not. ' +
-        'The single-target form (`outfit` plus `images`, up to 30 images) still works; use one form or the other, never both. ' +
+        'The single-target form (`outfit` plus `images`, up to 30 images; `scope`, `markdown`, `status` at the top level or in `artPage`, not both) still works: it is planned as a one-group call, so it fills the same sidebar and takes `artPage`; use one form or the other, never both. ' +
         'Sources: `staged_id` (from upload_image { stage: true } with NO destination, which proposes nothing), `upload_id` (prepare_image_upload), `archive` { id, entry } (an entry of a zip from upload_image_archive: the standard path for a whole character is upload_image_archive with `character`, look at the images, then ONE groups call naming the entries, then one proposal for the owner; one call may draw from several archives), or (single-target form only) in ChatGPT the attached `file`. An upload or file is staged on the bridge’s server first, even on a dry run (its staged_id is in the answer). An archive entry not staged yet is planned from its header and the job waits for it (waiting_staging). ' +
-        'dryRun shows the preview (per group: the folder decision, the asset names, the moves of loose pieces; the sidebar; the totals: reads, writes, uploads); otherwise ONE proposal for the owner whatever your scope: nothing reaches LegendKeeper until the owner approves it. Never resubmit it. ' +
+        'dryRun shows the preview (per group: the folder decision, the asset names, the moves of loose pieces; the sidebar; the totals: reads, writes, uploads); otherwise what happens follows this tool’s switch in the pack, which the owner sets on the Packs page; its default is “follow the scope”: at scope `propose` the call is ONE proposal for the owner; at scope `write` it runs as a job (direct: the owner reviews it afterwards), EXCEPT that making a new Authoritative Art page (a canon character’s), or upgrading an Authoritative Compact Reference to its Core, is a CANONICAL proposal the owner accepts as canon, and the owner’s safety rails can make it a proposal too (the answer’s `proposedBecause` says why). So adding to an existing Art page at scope `write` is direct. When the owner sets the tool to “always propose”, every call is ONE proposal whatever your scope. A proposal (`proposal_captured`) is never resubmitted: follow it with bridge_proposal_status; a job with bridge_job_status. ' +
         'Cost: 4 to 7 reads to plan, plus the live read of the character’s folders (one listing per folder, usually 2 to 5 reads) and of the identity page; the job about 4 reads and 3 writes per image (folders found or made, the upload, its check), one write for the Art page, one for each loose piece moved, one per sidebar row filled; about 27 reads and 16 writes more when it makes the Art page.',
       inputSchema: z.object({
         character: z.string().min(1).max(200).describe('An existing character (name, alias or id).'),
@@ -698,7 +698,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .strict()
           .optional()
           .describe(
-            'groups form: the Art page’s own sidebar fields, used when it is made, applied only to EMPTY rows when it exists.',
+            'The Art page’s own sidebar fields (either form), used when it is made, applied only to EMPTY rows when it exists.',
           ),
         images: z
           .array(artImage)
@@ -772,16 +772,29 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             return Promise.resolve(
               errorResult(
                 {
-                  code: args.artPage !== undefined ? 'ART_FORMS_MIXED' : 'IMAGES_REQUIRED',
+                  code: 'IMAGES_REQUIRED',
                   message:
-                    args.artPage !== undefined
-                      ? 'artPage goes with `groups`: give the images in groups (one per target).'
-                      : 'Give `groups` (the whole art set, one group per target) or, for one target, `images`.',
+                    'Give `groups` (the whole art set, one group per target) or, for one target, `images`.',
                 },
                 pd,
               ),
             );
-          return runArt(pd, mctx, {
+          // v3 F7d (review): the single-target form takes artPage too; a field given in both places is refused.
+          const twice = (['scope', 'markdown', 'status'] as const).filter(
+            (k) => args[k] !== undefined && args.artPage?.[k] !== undefined,
+          );
+          if (twice.length > 0)
+            return Promise.resolve(
+              errorResult(
+                {
+                  code: 'ART_PAGE_FIELD_TWICE',
+                  message: `${twice.join(', ')} given both at the top level and in artPage: give ${twice.length === 1 ? 'it' : 'them'} once.`,
+                  fields: twice,
+                },
+                pd,
+              ),
+            );
+          return runArtSingle(pd, mctx, {
             packId: 'arkona',
             tool: 'arkona_add_character_art',
             input: {
@@ -793,6 +806,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
               ...(args.scope !== undefined ? { scope: args.scope } : {}),
               ...(args.markdown !== undefined ? { markdown: args.markdown } : {}),
               ...(args.status !== undefined ? { status: args.status } : {}),
+              ...(args.artPage !== undefined ? { artPage: args.artPage } : {}),
             },
             dryRun: args.dryRun === true || args.preview === true,
             operationId: args.operation_id,

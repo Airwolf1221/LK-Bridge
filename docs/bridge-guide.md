@@ -364,8 +364,10 @@ naming the projects they work on). The Arkona pack has twenty-one tools. Ask for
 
 - **Preview first, then one proposal.** `dryRun: true` (or `preview: true`) writes nothing and returns the whole plan:
   pages, places, templates, facts, tags, links, images, warnings and refusals. Fix what it refuses, tell the person about
-  any warning that is a judgement call, then call again without `dryRun`. That call is **one proposal** for the owner,
-  whatever your scope. Never resubmit it: follow it with `bridge_proposal_status`. Once approved it runs as one job,
+  any warning that is a judgement call, then call again without `dryRun`. With the tool's switch at "always propose"
+  (the default of the creation tools, set by the owner on the Packs page) that call is **one proposal** for the owner,
+  whatever your scope; `arkona_add_character_art` follows your scope by default (its section says what that means).
+  Never resubmit a proposal: follow it with `bridge_proposal_status`. Once approved it runs as one job,
   which checks again before its first write that nothing it relies on changed meanwhile, and verifies what it wrote.
 - **Tags are computed, never typed.** A canon page leads with `CANON`, or with `AU` when it belongs to an alternate
   universe (Continuity Type AU: the owner's ruling of 16 November 2026); a Working page leads with `Working`. A tag you
@@ -555,8 +557,9 @@ page by page, and none of the checks. The tool never rewrites a page that exists
 **Preview first, then one proposal.** `dryRun: true` (or `preview: true`) writes nothing and returns the whole plan: the
 page tree (names, parents, positions), each page's template, facts, tags, Dependencies and Related Sources, the asset
 folders, every dash replaced, the tag slots held back, the warnings and the refusals. Fix what it refuses, tell the person
-about any warning that is a judgement call, then call again without `dryRun`. That call is **one proposal** for the owner,
-whatever your scope (`status: "authoritative"` makes it a canonical one). Never resubmit it: follow it with
+about any warning that is a judgement call, then call again without `dryRun`. With the tool's switch at its default
+("always propose", the owner's on the Packs page) that call is **one proposal** for the owner, whatever your scope
+(`status: "authoritative"` makes it a canonical one). Never resubmit it: follow it with
 `bridge_proposal_status`. Once approved it runs as one job, and the verify reads back the six identity fields one by
 one, the tags in order, every template row, each page's place, each link and each image.
 
@@ -851,7 +854,7 @@ for the Art page before adding outfits.** Give `groups`, one group per target, i
 
 A group without `outfit` (or with `null`) holds the design pieces; a group with `outfit` holds that outfit's pieces. The
 whole call is planned at once: the character's folders are read live once, each group is matched against the outfit
-record, and the call is ONE proposal the owner approves item by item: "Art page" (when the call makes it, with the
+record, and the call is ONE package; when it is a proposal the owner approves it item by item: "Art page" (when the call makes it, with the
 Compact Reference's upgrade to a Core when the Core rule needs it), "Design pieces", and one item per outfit; an outfit
 needs the "Art page" item when the page is new. A group the owner leaves out is not placed: its images stay staged for a
 later call. **Any problem in any group refuses the whole call, every problem listed (`problems`): fix them all, then
@@ -882,17 +885,28 @@ outfit's under a heading naming it (wherever it is on the page), else a new one 
 otherwise). Sources: `staged_id` (staged with no destination), `upload_id` (from `prepare_image_upload`) or `archive`
 `{ id, entry }`; an upload is staged first, even on a dry run, and its `staged_id` is in the answer.
 
+**Proposal or job.** The tool follows its switch in the pack, which the owner sets on the Packs page; its default is
+"follow the scope". At scope `propose` the call is ONE proposal for the owner. At scope `write` it runs as a job (direct:
+the owner reviews it afterwards), except that making a new Authoritative Art page (a canon character's), or upgrading an
+Authoritative Compact Reference to its Core, is a **canonical proposal** the owner accepts as canon; the owner's safety
+rails can make it a proposal too (`proposedBecause` says why). So adding to an existing Art page at scope `write` is
+direct. When the owner sets the tool to "always propose", every call is one proposal whatever your scope. Never resubmit
+a proposal (`proposal_captured`): follow it with `bridge_proposal_status`; follow a job with `bridge_job_status`.
+
 **When it runs.** One job: the page and the upgrade, the folders and moves, the uploads, the Art page's one write, the
 outfit records, the sidebar, then the read-back. A failed image never fails the rest: it is withdrawn (its blocks left
 off the page, why recorded), and the job's result (and `bridge_workstream_report`) lists, per group, what was placed and
 what was not. A long rate wait parks the job; it resumes where it stopped without uploading anything again.
 
 **One target only** (the earlier form) still works: `{ "character": "…", "outfit": "…", "images": [ … ] }` (up to 30
-images; in ChatGPT the attached `file` for one image). Use one form or the other, never both (`ART_FORMS_MIXED`).
+images; in ChatGPT the attached `file` for one image). It is planned as a one-group call, so it fills the same sidebar
+and takes `artPage` (`scope`, `markdown` and `status` at the top level or in `artPage`, not both:
+`ART_PAGE_FIELD_TWICE`). Use one form or the other, never both (`ART_FORMS_MIXED`).
 
 **A whole character from a zip: the standard path.** (1) `upload_image_archive` with `character`; (2) look at the images;
 (3) ONE `arkona_add_character_art` call with `groups`, each image as `{ "archive": { "id": "<archive_id>", "entry":
-"<entry>" }, "label": "…", "interpretation": "…" }`; (4) one proposal for the owner. In ChatGPT: attach the zip to
+"<entry>" }, "label": "…", "interpretation": "…" }`; (4) one proposal for the owner (or, at scope `write`, a job, as
+above). In ChatGPT: attach the zip to
 `upload_image_archive` (as `file`) and open the same zip in your own code tool to look at each image and write its
 interpretation. Elsewhere: `prepare_image_upload` with the zip (`content_type` `application/zip`), run its script, then
 `upload_image_archive { "upload_id": "…" }`. Every entry is listed at once (its `entry`, `path`, `folder`,

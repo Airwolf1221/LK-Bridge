@@ -31,7 +31,7 @@ import { decidePlacement, type Placement } from '../art/placement.js';
 import { outfitKey } from '../art/names.js';
 import { DEFAULT_ART_CALL_MAX_GROUPS, DEFAULT_ART_CALL_MAX_IMAGES } from '../config/tools.js';
 import type { LmrMode } from '../jobs/lmr-hook.js';
-import { resolveArchiveImages, stageForPack } from './intake.js';
+import { resolveArchiveImages, stageForPack, type ChatGptFile } from './intake.js';
 import {
   planExisting,
   planImages,
@@ -55,8 +55,18 @@ import type { TypeRules } from './types.js';
 import type { TreeNode } from '../tree/index.js';
 import { characterEnv, finishPackage, packBasis } from './run.js';
 import { liveArtFolder } from './art-place.js';
-import { artPageOf, indexOf, nameOf, oneCharacter, piecesNamedOnPages } from './character-tools.js';
-import type { ArtImageInput } from './character-tools.js';
+import {
+  artNotes,
+  artPageOf,
+  artPlanOf,
+  indexOf,
+  nameOf,
+  oneCharacter,
+  piecesNamedOnPages,
+  placementSummary,
+} from './character-tools.js';
+import type { ArtPlace } from './art-place.js';
+import type { ArtImageInput, ArtInput } from './character-tools.js';
 import type { OutfitRecord } from '../art/store.js';
 
 type Obj = Record<string, unknown>;
@@ -142,10 +152,150 @@ interface PlannedGroup {
 
 const problem = (code: string, message: string, more: Obj = {}): Issue => ({ code, message, ...more });
 
+/**
+ * v3 F7d (review): the single-target form's own parts (ChatGPT's one attached `file`, and the new Art page's `scope`,
+ * `markdown` and `status` given at the top level). With it, the groups planner plans the call as ONE group and answers
+ * as the single-target form always did: its sources (an archive entry that cannot be used is left out, with why, never
+ * the others), its first refusal alone (as its own error), its notes and `placement`, its job (approved whole when the
+ * package is not made of items; a failed image fails it). What it gains: the Art page's sidebar (A8, A9).
+ */
+interface SingleForm {
+  readonly file?: ChatGptFile | undefined;
+  readonly scope?: string | undefined;
+  readonly markdown?: string | undefined;
+  readonly status?: 'working' | 'authoritative' | undefined;
+}
+
+/**
+ * v3 F7d (review): `arkona_add_character_art`'s single-target form (`outfit` plus `images`): one group of the groups
+ * planner, so it fills the Art page's sidebar (the identity copies, the identity page in Dependencies, `artPage`) as a
+ * groups call does; everything else is as before.
+ */
+export async function runArtSingle(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  o: Run<ArtInput & { readonly artPage?: ArtPageFields | undefined }>,
+): Promise<McpToolResult> {
+  const { character, outfit, newOutfit, images, file, scope, markdown, status, artPage } = o.input;
+  return runArtGroups(
+    pd,
+    mctx,
+    {
+      ...o,
+      input: {
+        character,
+        groups: [
+          {
+            ...(outfit !== undefined ? { outfit } : {}),
+            ...(newOutfit !== undefined ? { newOutfit } : {}),
+            images,
+          },
+        ],
+        ...(artPage !== undefined ? { artPage } : {}),
+      },
+    },
+    { file, scope, markdown, status },
+  );
+}
+
+/** The single-target form's sources, exactly as before F7d (F7c's Z4: an unusable archive entry left out, with why). */
+async function sourceSingle(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  tool: string,
+  given: readonly ArtImageInput[],
+  file: ChatGptFile | undefined,
+): Promise<
+  | { ok: false; result: McpToolResult }
+  | {
+      ok: true;
+      images: PackageImage[];
+      stagedNow: { from: string; staged_id: string; deduplicated: boolean }[];
+      fromArchives: Obj[];
+      warnings: Issue[];
+      notes: string[];
+    }
+> {
+  const fail = (body: Obj) => ({ ok: false as const, result: errorResult(body as never, pd) });
+  if (given.length === 0) return fail({ code: 'IMAGES_REQUIRED', message: 'Give at least one image.' });
+  const twoSources = given.find(
+    (im) => im.archive !== undefined && (im.staged_id !== undefined || im.upload_id !== undefined),
+  );
+  if (twoSources)
+    return fail({
+      code: 'IMAGE_SOURCE_INVALID',
+      message: `${twoSources.label}: give archive, staged_id or upload_id, not two of them.`,
+    });
+  // v3 F7c (ADR 0075, Z4): archive entries first: a staged entry is its staged image; one not staged yet is planned
+  // from its header (the job waits for it); one that cannot be used is left out with its reason, never the others.
+  const arch = resolveArchiveImages(pd, given);
+  if (arch.images.length === 0)
+    return fail({
+      code: 'ARCHIVE_ENTRIES_UNAVAILABLE',
+      message: `None of the images can be used: ${arch.notUsed.map((n) => `${n.label} (${n.code}: ${n.reason})`).join('; ')}`,
+      notUsed: arch.notUsed,
+    });
+  const unsourced = arch.images.filter((im) => im.staged_id === undefined && im.upload_id === undefined);
+  if (unsourced.length > 1 || (unsourced.length === 1 && !file) || (unsourced.length === 0 && file))
+    return fail({
+      code: 'IMAGE_SOURCE_INVALID',
+      message:
+        'Each image has exactly one source: staged_id, upload_id, or (for ONE image with neither) the attached file given as `file`.',
+    });
+  const stagedNow: { from: string; staged_id: string; deduplicated: boolean }[] = [];
+  const images: PackageImage[] = [];
+  for (const im of arch.images) {
+    if (im.staged_id !== undefined && im.upload_id !== undefined)
+      return fail({
+        code: 'IMAGE_SOURCE_INVALID',
+        message: `${im.label}: give staged_id or upload_id, not both.`,
+      });
+    let id = im.staged_id;
+    if (id === undefined) {
+      const r = await stageForPack(
+        pd,
+        mctx,
+        tool,
+        im.upload_id !== undefined ? { upload_id: im.upload_id } : { file: file! },
+        im.label,
+      );
+      if (!r.ok) return fail({ code: r.code, message: `${im.label}: ${r.message}`, ...(r.details ?? {}) });
+      id = r.stagedId;
+      stagedNow.push({ from: r.source, staged_id: id, deduplicated: r.deduplicated });
+    }
+    images.push({
+      staged_id: id,
+      label: im.label,
+      ...(im.interpretation !== undefined ? { interpretation: im.interpretation } : {}),
+      ...(im.pending ? { pending: im.pending } : {}),
+    });
+  }
+  const pending = images.filter((i) => i.pending).length;
+  return {
+    ok: true,
+    images,
+    stagedNow,
+    fromArchives: arch.fromArchives,
+    warnings: arch.notUsed.map((n) => ({
+      code: 'IMAGE_NOT_USED',
+      message: `${n.label} was left out (${n.code}): ${n.reason} The other images go ahead.`,
+      archive: n.archive,
+    })),
+    notes:
+      pending > 0
+        ? [
+            `${pending} archive entr${pending === 1 ? 'y is' : 'ies are'} not staged yet: planned from ${pending === 1 ? 'its' : 'their'} header; the approved job waits for ${pending === 1 ? 'it' : 'them'} (waiting_staging) and runs once staged. Never upload ${pending === 1 ? 'it' : 'them'} again; follow bridge_archive_status.`,
+          ]
+        : [],
+  };
+}
+
 export async function runArtGroups(
   pd: ProjectDeps,
   mctx: McpToolContext,
   o: Run<ArtGroupsInput>,
+  /** v3 F7d (review): the single-target form, planned as this one group (see `SingleForm`). */
+  single?: SingleForm,
 ): Promise<McpToolResult> {
   const b = await packBasis(pd, mctx, o.packId, o.tool);
   if (!b.ok) return b.result;
@@ -156,7 +306,14 @@ export async function runArtGroups(
   const ch = oneCharacter(pd, env, o.input.character, 'character');
   if (!ch.ok) return ch.result;
   const groups = o.input.groups;
-  const page = o.input.artPage ?? {};
+  // The single-target form's top-level scope, markdown and status are the Art page's (given once: the handler refuses
+  // the same field in both places).
+  const page: ArtPageFields = {
+    ...(o.input.artPage ?? {}),
+    ...(single?.scope !== undefined ? { scope: single.scope } : {}),
+    ...(single?.markdown !== undefined ? { markdown: single.markdown } : {}),
+    ...(single?.status !== undefined ? { status: single.status } : {}),
+  };
 
   // A1: the limits (the call refused whole, before anything is read).
   const maxImages = pd.settings.artCallMaxImages ?? DEFAULT_ART_CALL_MAX_IMAGES;
@@ -186,7 +343,18 @@ export async function runArtGroups(
   const stagedNow: { from: string; staged_id: string; deduplicated: boolean }[] = [];
   const fromArchives: Obj[] = [];
   const sourced: PackageImage[][] = [];
-  for (const [gi, g] of groups.entries()) {
+  const singleWarnings: Issue[] = [];
+  const singleNotes: string[] = [];
+  if (single) {
+    const src = await sourceSingle(pd, mctx, o.tool, groups[0]?.images ?? [], single.file);
+    if (!src.ok) return src.result;
+    sourced.push(src.images);
+    stagedNow.push(...src.stagedNow);
+    fromArchives.push(...src.fromArchives);
+    singleWarnings.push(...src.warnings);
+    singleNotes.push(...src.notes);
+  }
+  for (const [gi, g] of single ? [] : groups.entries()) {
     const out: PackageImage[] = [];
     sourced.push(out);
     if (g.images.length === 0) {
@@ -269,7 +437,25 @@ export async function runArtGroups(
     string,
     { label: string; from: number[]; images: PackageImage[]; given: string | null; newOutfit: boolean }
   >();
-  for (const [gi, g] of groups.entries()) {
+  if (single) {
+    // The single-target form: its one group, its placement's refusal answered as its own error (as before F7d).
+    const g = groups[0]!;
+    const imgs = sourced[0]!;
+    const p = decide(g.outfit, g.newOutfit, imgs.length);
+    if (!p.ok)
+      return errorResult(
+        { code: p.code, message: p.message, ...(p.candidates ? { candidates: p.candidates } : {}) },
+        pd,
+      );
+    merged.set(p.kind === 'design' ? 'design' : `outfit:${outfitKey(p.outfit.name)}`, {
+      label: p.kind === 'design' ? 'Design pieces' : `Outfit ${p.outfit.name}`,
+      from: [0],
+      images: imgs,
+      given: g.outfit ?? null,
+      newOutfit: g.newOutfit === true,
+    });
+  }
+  for (const [gi, g] of single ? [] : groups.entries()) {
     const imgs = sourced[gi]!;
     if (g.outfit === undefined || g.outfit === null) {
       const d = merged.get('design') ?? {
@@ -413,6 +599,11 @@ export async function runArtGroups(
       };
     });
 
+  // The single-target form's placement, as its answer and its job have always described it.
+  const place: ArtPlace | null = single
+    ? { placement: planned[0]!.placement, race, characterFolderId, layout, live: folder.value.live }
+    : null;
+
   // 7. The plan: a new Art page (its sidebar planned with it), or the existing one extended (one write) with its sidebar
   // filled where empty, after the images.
   const sidebarView: Obj = {};
@@ -429,7 +620,8 @@ export async function runArtGroups(
       target: ch.hit.identity.id,
       ...(page.status !== undefined ? { status: page.status } : {}),
       identity: {},
-      imageGroups,
+      // The single-target form's images are the page's own, with its one placement (as before F7d).
+      ...(place ? { imagePlacement: placementOf(planned[0]!) } : { imageGroups }),
       pages: [
         {
           role: type.assets.role,
@@ -437,6 +629,7 @@ export async function runArtGroups(
           markdown:
             page.markdown ??
             `## Purpose\n\n${subject}'s approved visual references: each image below with what it establishes.\n`,
+          ...(place ? { images: planned[0]!.images } : {}),
           extraFacts,
           dependencies: [...new Set(deps)],
           ...(page.related ? { related: page.related } : {}),
@@ -445,7 +638,9 @@ export async function runArtGroups(
     });
     if (page.markdown === undefined)
       plan.notes.push(
-        'The Art page’s Purpose is drafted (shown in the preview); give artPage.markdown for your own.',
+        place
+          ? 'The Art page’s Purpose is drafted (shown in the preview); give markdown for your own.'
+          : 'The Art page’s Purpose is drafted (shown in the preview); give artPage.markdown for your own.',
       );
     const made = plan.pages.find((p) => p.role === type.assets.role);
     const tkeys = made?.templateKeys ?? [];
@@ -460,19 +655,22 @@ export async function runArtGroups(
       made?.linkTargets
         .find((l) => factKey(l.title) === factKey(pack.rules.sidebar.dependencies))
         ?.targets.map((t) => t.name) ?? [];
+    const identityCheck = idKv
+      ? { identityCheck: { page: ch.hit.identity, propertyId: idKv.id, rows: idKv.rows ?? [] } }
+      : {};
     plan = {
       ...plan,
-      art: {
-        characterName: subject,
-        characterFolderId,
-        outfit: null,
-        outfits,
-        groupOf,
-        report: reportOf(planned, plan.images),
-        ...(idKv
-          ? { identityCheck: { page: ch.hit.identity, propertyId: idKv.id, rows: idKv.rows ?? [] } }
-          : {}),
-      },
+      art: place
+        ? { ...artPlanOf(place, subject, named.lines), ...identityCheck }
+        : {
+            characterName: subject,
+            characterFolderId,
+            outfit: null,
+            outfits,
+            groupOf,
+            report: reportOf(planned, plan.images),
+            ...identityCheck,
+          },
       extra: {
         ...(plan.extra ?? {}),
         artPage: { create: made?.rawName ?? null },
@@ -491,17 +689,20 @@ export async function runArtGroups(
       page,
       idKv,
       sidebarView,
+      single: place !== null,
     });
     plan = {
       ...plan,
-      art: {
-        characterName: subject,
-        characterFolderId,
-        outfit: null,
-        outfits,
-        groupOf,
-        report: reportOf(planned, plan.images),
-      },
+      art: place
+        ? artPlanOf(place, subject, named.lines)
+        : {
+            characterName: subject,
+            characterFolderId,
+            outfit: null,
+            outfits,
+            groupOf,
+            report: reportOf(planned, plan.images),
+          },
     };
     if (ch.hit.role === 'compact' && index)
       plan.warnings.push({
@@ -514,6 +715,43 @@ export async function runArtGroups(
     plan.notes.push(
       `Still to fill on the Art page: ${stillToFill.join(' and ')} (not copied from the identity page: they are this page's own; give artPage.temporalScope or artPage.visualState).`,
     );
+  // The single-target form answers as it always did (its notes, `placement`, the archive entries left out), plus the
+  // sidebar.
+  if (place) {
+    plan.warnings.push(...singleWarnings);
+    return finishPackage(pd, mctx, o, env, {
+      ...plan,
+      notes: [
+        ...plan.notes,
+        ...artNotes(place),
+        ...(named.lines.length > 0
+          ? [
+              `${named.lines.length} line(s) on ${subject}'s pages name a piece this moves (they may state where it is): listed for you, never edited (linesForOwner).`,
+            ]
+          : []),
+        ...(named.unread.length > 0
+          ? [
+              `Could not be read now, so not checked for lines naming the moved piece: ${named.unread.join(', ')}.`,
+            ]
+          : []),
+        ...singleNotes,
+      ],
+      extra: {
+        ...(plan.extra ?? {}),
+        placement: placementSummary(place),
+        sidebar: sidebarView,
+        ...(named.lines.length ? { linesForOwner: named.lines } : {}),
+        ...(stagedNow.length > 0
+          ? {
+              stagedNow,
+              stagedNote:
+                'These images were staged on the bridge’s server for this package (nothing is in LegendKeeper until the owner approves it). Calling again, give their staged_id.',
+            }
+          : {}),
+        ...(fromArchives.length > 0 ? { fromArchives } : {}),
+      },
+    });
+  }
   const pendingCount = plan.images.filter((i) => i.pending).length;
   return finishPackage(pd, mctx, o, env, {
     ...plan,
@@ -641,6 +879,8 @@ async function extendArtPage(
     readonly page: ArtPageFields;
     readonly idKv: SidebarProperty | null;
     readonly sidebarView: Obj;
+    /** The single-target form: its one group appended by the F7 filler, as before F7d. */
+    readonly single?: boolean;
   },
 ): Promise<PackPlan> {
   const { pd, ctx, type, pack } = env;
@@ -682,7 +922,7 @@ async function extendArtPage(
       refuse,
       warn,
       placement: g.placement,
-      where: pg.label,
+      ...(o.single ? {} : { where: pg.label }),
     });
     all.push(...planned);
     const outfit = pg.placement.kind === 'outfit' ? pg.placement.outfit : null;
@@ -700,16 +940,30 @@ async function extendArtPage(
   const existing: ExistingChange[] = [];
   const pageRef = ctx.types.resolveOne(art.id);
   if (doc && all.length > 0)
-    existing.push({
-      kind: 'images',
-      page: pageRef,
-      documentId: doc.id,
-      blocks,
-      section: type.assets.section,
-      boundaries,
-      images: all,
-      groups,
-    });
+    existing.push(
+      o.single
+        ? {
+            // The single-target form: its one section (the outfit's heading, or the images section), as before F7d.
+            kind: 'images',
+            page: pageRef,
+            documentId: doc.id,
+            blocks,
+            section: groups[0]!.section,
+            boundaries,
+            images: all,
+            ...(groups[0]!.outfit ? { outfit: groups[0]!.outfit } : {}),
+          }
+        : {
+            kind: 'images',
+            page: pageRef,
+            documentId: doc.id,
+            blocks,
+            section: type.assets.section,
+            boundaries,
+            images: all,
+            groups,
+          },
+    );
 
   // A8, A9: the Art page's sidebar, read live: only empty rows are filled; a differing value is reported, never
   // overwritten; Dependencies gain the identity page.
@@ -841,7 +1095,11 @@ async function extendArtPage(
     absent: { reservation: null, under: [], kind: 'art', images: all.map((i) => i.stagedId) },
     target: { identity: o.hit.identity, index: null, role: o.hit.role },
     notes: [
-      `${art.rawName} exists: one write adds every group, in the order given: the design pieces at the end of its “${type.assets.section}” section, each outfit under its heading (found anywhere on the page when the job runs; else made under the page’s first heading holding “Wardrobe”; else under a new “Wardrobe” section). Nothing else on the page changes.`,
+      o.single
+        ? groups[0]?.outfit
+          ? `${art.rawName} exists: the images are added under its heading naming “${groups[0].outfit.name}” (found anywhere on the page when the job runs; else made under the page’s first heading holding “Wardrobe”; else under a new “Wardrobe” section before its boundary sections).`
+          : `${art.rawName} exists: the images are added at the end of its “${type.assets.section}” section (made before its boundary sections if it has none) when the job runs; nothing else on the page changes.`
+        : `${art.rawName} exists: one write adds every group, in the order given: the design pieces at the end of its “${type.assets.section}” section, each outfit under its heading (found anywhere on the page when the job runs; else made under the page’s first heading holding “Wardrobe”; else under a new “Wardrobe” section). Nothing else on the page changes.`,
     ],
     extra: { artPage: { extend: art.rawName, id: art.id } },
     ...(all.some((i) => i.takeover)

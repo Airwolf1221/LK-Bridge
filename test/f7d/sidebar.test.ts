@@ -115,3 +115,42 @@ describe('A8, A9: an existing Art page', () => {
     expect(withdrawn.some((x) => x.keys.includes('sidebar'))).toBe(true);
   });
 });
+
+describe('review: the single-target form is a one-group call of the same planner', () => {
+  it('a new Art page: the identity copies, the Core in Dependencies, artPage taken; its answer as before (placement, no groups)', async () => {
+    const id = await stage(w);
+    const args = {
+      outfit: 'Riding Leathers',
+      images: [img(id, 'Outfit Reference - Front')],
+      artPage: { temporalScope: '5A 920 - 5A 931' },
+    };
+    const dry = await call('Mehrana I al-Khalid', { ...args, dryRun: true });
+    expect(dry.isError, dry.text).toBe(false);
+    expect(dry.body.placement).toMatchObject({ kind: 'outfit', outfit: 'Riding Leathers', into: 'Wardrobe' });
+    expect(dry.body.groups).toBeUndefined();
+    expect(dry.body.sidebar.stillToFill).toEqual(['Visual State / Period']);
+    await run('Mehrana I al-Khalid', args);
+    const art = pageNamed(w, '[BSRC] Mehrana I al-Khalid - Character Art')!;
+    expect(rowOf(w, art.id, 'Canonical Display Name')).toBe('Mehrana I al-Khalid');
+    expect(rowOf(w, art.id, 'Aliases')).toBe('Mehrana al-Khalid');
+    // Her Core leaves Naming Culture blank: nothing to copy.
+    expect(rowOf(w, art.id, 'Naming Culture')).toBe('');
+    expect(rowOf(w, art.id, 'Temporal Scope')).toBe('5A 920 - 5A 931');
+    expect(rowOf(w, art.id, 'Visual State / Period')).toBe('');
+    expect(linksOf(w, art.id, 'Dependencies')).toEqual([C.mehrana1]);
+  });
+
+  it('an existing Art page: its empty copies filled after the images; a field given twice is refused', async () => {
+    const art = pageNamed(w, '[BSRC] Mehrana I al-Khalid - Character Art')!;
+    setRowOf(w, art.id, 'Personal / Given Name', '');
+    const id = await stage(w);
+    await run('Mehrana I al-Khalid', { images: [img(id, 'Primary Reference - Character Portrait')] });
+    expect(rowOf(w, art.id, 'Personal / Given Name')).toBe('Mehrana');
+    const twice = await call('Mehrana I al-Khalid', {
+      images: [img(await stage(w), 'Primary Reference - Profile')],
+      scope: 'One',
+      artPage: { scope: 'Two' },
+    });
+    expect(twice.body.error.code).toBe('ART_PAGE_FIELD_TWICE');
+  });
+});

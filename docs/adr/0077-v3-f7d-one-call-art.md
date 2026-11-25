@@ -136,3 +136,21 @@ copies and the Core in its Dependencies; cleaned up. Runs on the mock in the ord
   (`pack.art_groups`), one record kind (`art_groups`), one fix kind (`identity_copy`), one audit code.
 - Tests: `test/f7d/` (groups, items, job, sidebar, core-upgrade, identity-copy-drift) and
   `test/sandbox-mock/f7d-art-set.test.ts`.
+
+## Amendment 1 (25 November 2026, the owner's review)
+
+1. **The single-target form is a one-group call of the same planner** (`runArtSingle`, src/packs/art-groups.ts). It
+   gains the Art page's sidebar (A8: the identity copies into empty rows, the identity page in Dependencies) and takes
+   `artPage` (A9); `scope`, `markdown` and `status` may be given at the top level or in `artPage`, never both
+   (`ART_PAGE_FIELD_TWICE`). Its behaviour and answers are otherwise as before: its sources (ChatGPT's `file`; an
+   archive entry that cannot be used left out with why, never the others), its first refusal answered alone as its own
+   error, its notes and `placement`, its one section on an existing Art page (the F7 filler), its job without the
+   groups' withdrawal and report, its items (the package's own: the identity check is the Art page's item). The revert
+   planner ignores the identity check (it explains no write).
+2. **Proposal or job.** "ONE proposal whatever your scope" was wrong. The tool follows its switch in the pack (F3.4,
+   ADR 0055 decision D; the seed's default "follow the scope"): at scope `propose` one proposal; at scope `write` a job,
+   except that a new Authoritative Art page, or an Authoritative Compact Reference's upgrade to its Core, is a canonical
+   proposal, and the owner's rails can make it a proposal (`proposedBecause`); so adding to an existing Art page at
+   `write` is direct. The owner can set the tool to "always propose" on the Packs page. The tool's description and the
+   guide say exactly this; "one proposal" in this ADR means the package when it is a proposal. `arkona_create_character`
+   was right for its own switch (default "always propose"); its description now names the switch too.
