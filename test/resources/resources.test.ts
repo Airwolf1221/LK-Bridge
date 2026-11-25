@@ -30,9 +30,15 @@ beforeAll(async () => {
 });
 afterAll(async () => w.close());
 
+// v3 F6b (ADR 0079): with the Arkona pack attached `role` is required; these are subject indexes ([INDEX]).
 describe('create_index', () => {
   it('makes [INDEX] {name} from the type’s Index template under the category’s index, in alphabetical place, with no Status (v2 C2c)', async () => {
-    const r = await call('create_index', { name: 'Shrine Families', type: 'Character', category: 'Foxians' });
+    const r = await call('create_index', {
+      name: 'Shrine Families',
+      type: 'Character',
+      category: 'Foxians',
+      role: 'subject',
+    });
     expect(r.body, r.text).toMatchObject({
       status: 'written',
       verified: true,
@@ -56,14 +62,24 @@ describe('create_index', () => {
   });
 
   it('refuses an unknown type or category with the known ones, a duplicate name, and a parent under no type', async () => {
-    const t = await call('create_index', { name: 'X', type: 'Vehicle', parent: 'Characters' });
+    const t = await call('create_index', {
+      name: 'X',
+      type: 'Vehicle',
+      parent: 'Characters',
+      role: 'subject',
+    });
     expect(t.body.error).toMatchObject({ code: 'UNKNOWN_TYPE', types: ['Character'] });
-    const c = await call('create_index', { name: 'X', type: 'Character', category: 'Lizardfolk' });
+    const c = await call('create_index', {
+      name: 'X',
+      type: 'Character',
+      category: 'Lizardfolk',
+      role: 'subject',
+    });
     expect(c.body.error.code).toBe('UNKNOWN_CATEGORY');
     expect(c.body.error.categories).toEqual(expect.arrayContaining(['Foxians', 'Humans', 'Moon Elves']));
-    const d = await call('create_index', { name: 'shrine  families', category: 'Foxians' });
+    const d = await call('create_index', { name: 'shrine  families', category: 'Foxians', role: 'subject' });
     expect(d.body.error).toMatchObject({ code: 'INDEX_EXISTS' });
-    const n = await call('create_index', { name: 'Ports', parent: 'Locations' });
+    const n = await call('create_index', { name: 'Ports', parent: 'Locations', role: 'subject' });
     expect(n.body.error.code).toBe('UNKNOWN_TYPE');
     expect(n.body.error.message).toMatch(/under no type/);
   });

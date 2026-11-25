@@ -54,8 +54,9 @@ beforeAll(async () => {
   const { ARKONA_PACK } = await import('../../src/packs/arkona.js');
   // "Approved Narrow Automations" last: this mock appends an inserted block at the end of the page.
   // v3 F6a (ADR 0076): the Reference Type Vocabulary is not there until the owner publishes it (it reads "unpublished").
+  // v3 F6b (ADR 0079): likewise the Navigation and Subject Index Tags (unpublished while the index tag rule is a draft).
   const all = [...new Set(ARKONA_PACK.governance.flatMap((g) => g.sections ?? []))].filter(
-    (h) => h !== ARKONA_PACK.rules.referenceTypes?.section,
+    (h) => h !== ARKONA_PACK.rules.referenceTypes?.section && h !== ARKONA_PACK.rules.indexTaxonomy?.section,
   );
   const headings = [...all.filter((h) => h !== 'Approved Narrow Automations'), 'Approved Narrow Automations'];
   models.arkona.seedResource(GOV.resourceId, {

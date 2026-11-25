@@ -25,7 +25,19 @@ const EXPECTED: [string, string[]][] = [
   ['Monitoring', ['Errors', 'Journal', 'Tool calls', 'Workstreams']],
   ['Quality', ['Appraisal', 'Audits', 'Automation', 'Evaluation']],
   ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree', 'Tagging']],
-  ['Setup', ['Maintenance Jobs', 'Packs', 'Projects', 'Reference Types', 'Repository Mappings', 'Settings']],
+  [
+    'Setup',
+    // v3 F6b (ADR 0079): Index Classification.
+    [
+      'Index Classification',
+      'Maintenance Jobs',
+      'Packs',
+      'Projects',
+      'Reference Types',
+      'Repository Mappings',
+      'Settings',
+    ],
+  ],
 ];
 
 const main = () => screen.getByRole('navigation', { name: 'Main' });
@@ -92,6 +104,7 @@ describe('the sidebar', () => {
     ]);
     expect(groups.find(([g]) => g === 'Setup')![1]).toEqual([
       'backlog',
+      'Index Classification',
       'Maintenance Jobs',
       'Packs',
       'Projects',

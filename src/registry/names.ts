@@ -22,20 +22,20 @@ export type PrefixKind = 'index' | 'bsrc' | 'bwrk' | 'barc';
 export function cleanPrefixes(query: string): {
   name: string;
   prefix: PrefixKind | null;
-  /** v3 F6b: the last prefix exactly as a raw name carries it (`[NAV] ` for a navigation index), or null. */
-  rawPrefix: string | null;
+  /** v3 F6b: `[NAV] ` when the last prefix was `[NAV]` (an index of role nav); absent otherwise, so results read as before. */
+  rawPrefix?: string;
 } {
   let name = query.trim();
   let prefix: PrefixKind | null = null;
-  let rawPrefix: string | null = null;
+  let nav = false;
   for (let m = PREFIX.exec(name); m; m = PREFIX.exec(name)) {
     const word = m[1]!.toUpperCase();
     // v3 F6b: `[NAV]` is an index (role nav), so its kind is `index`.
-    prefix = (word === 'NAV' ? 'index' : word.toLowerCase()) as PrefixKind;
-    rawPrefix = `[${word}] `;
+    nav = word === 'NAV';
+    prefix = (nav ? 'index' : word.toLowerCase()) as PrefixKind;
     name = name.slice(m[0].length);
   }
-  return { name: name.trim(), prefix, rawPrefix };
+  return { name: name.trim(), prefix, ...(nav ? { rawPrefix: '[NAV] ' } : {}) };
 }
 
 export interface SingularGuess {

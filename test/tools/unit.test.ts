@@ -30,6 +30,7 @@ describe('tools configuration', () => {
       artCache: { dir: null, maxBytes: 500 * 1024 * 1024 },
       // v3 F6a.1 (ADR 0076 amendment 1, ADR 0061 amendment 1): the bulk accept's bound and the hang warnings.
       reftypeBulkMax: 500,
+      indexClassifyBulkMax: 500,
       slowRequestWarnMs: 30_000,
       slowRequestRepeatMs: 60_000,
       eventLoopLagWarnMs: 2_000,

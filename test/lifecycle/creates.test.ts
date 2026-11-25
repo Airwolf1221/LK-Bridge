@@ -161,10 +161,11 @@ describe('create_many_resources', () => {
 describe('create_index', () => {
   it('is refused under [INDEX] Working and [INDEX] Archived (they are flat)', async () => {
     for (const parent of [LIFECYCLE.working, LIFECYCLE.archived]) {
-      const r = await call('create_index', { name: 'Drafts', parent, type: 'Character' });
+      const r = await call('create_index', { name: 'Drafts', parent, type: 'Character', role: 'subject' });
       expect(r.body.error, r.text).toBeDefined();
     }
-    const r = await call('create_index', { name: 'Drafts', parent: LIFECYCLE.working });
+    // v3 F6b (ADR 0079): with the Arkona pack attached `role` is required.
+    const r = await call('create_index', { name: 'Drafts', parent: LIFECYCLE.working, role: 'subject' });
     expect(['LIFECYCLE_AREA', 'UNKNOWN_TYPE']).toContain(r.body.error.code);
   });
 });

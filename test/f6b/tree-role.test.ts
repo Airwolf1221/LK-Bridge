@@ -43,6 +43,7 @@ describe('classifyName and the index role', () => {
 
   it('a stray [NAV] is cleaned like any prefix, and a query "[NAV] X" asks for an index', () => {
     expect(cleanPrefixes('[NAV] Humans')).toEqual({ name: 'Humans', prefix: 'index', rawPrefix: '[NAV] ' });
+    expect(cleanPrefixes('[BWRK] Sky Ferry')).toEqual({ name: 'Sky Ferry', prefix: 'bwrk' });
     expect(cleanPrefixes('[nav]  [INDEX] Humans')).toMatchObject({ name: 'Humans', prefix: 'index' });
   });
 });
