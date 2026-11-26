@@ -396,9 +396,14 @@ export class RevertService {
         blocksByDoc.set(t.documentId, [...(blocksByDoc.get(t.documentId) ?? []), t]);
         continue;
       }
-      // v3 F3e (ADR 0059): what a split made is not reverted here: once the revert has run, those pages go to ONE
-      // deletion proposal (each only while it is exactly as the split made it).
-      if (split && t.kind === 'none' && t.creation === true) {
+      // v3 F3e (ADR 0059): what a split made is not reverted here: once the revert has run, those pages are deleted by the
+      // split's own follow-up (each only while it is exactly as the split made it; v3 F12: a job, no longer a proposal).
+      // Since F12 a page a job made is a generic target (and what it wrote on it is covered by that target).
+      const splitMade =
+        (t.kind === 'none' &&
+          (t.creation === true || t.coveredBy?.startsWith('entity:resource:') === true)) ||
+        (t.kind === 'entity' && t.undo.entity === 'resource' && t.undo.action === 'create');
+      if (split && splitMade) {
         plans.push({
           check: {
             key: t.key,
@@ -406,7 +411,7 @@ export class RevertService {
             page: t.page,
             what: t.what,
             state: 'nothing_to_do',
-            detail: `${t.what}: made by the split; proposed for deletion once the revert has run (only while it is as the split made it)`,
+            detail: `${t.what}: made by the split; deleted once the revert has run (only while it is as the split made it)`,
           },
         });
         continue;
@@ -473,7 +478,8 @@ export class RevertService {
         };
         if (check.state !== 'ready') return { check };
         // A follow-up alone (nothing for the job to write): the job still checks the target first, inside its lock.
-        const steps = parts.steps ?? (out.followUp ? [entityCheck(t.undo, t.page?.name ?? t.what, REVERT_CHECKER)] : []);
+        const steps =
+          parts.steps ?? (out.followUp ? [entityCheck(t.undo, t.page?.name ?? t.what, REVERT_CHECKER)] : []);
         return {
           check,
           steps,
@@ -614,7 +620,7 @@ export class RevertService {
       if (others.length > 0 && others.every((c) => c.deletion === true))
         return refuse(
           'DELETION',
-          `Job ${jobId} deleted what it changed, and a deletion is never reverted: use restore_resource (a page) or the journal’s pre-images (bridge_journal_lookup with jobId ${jobId}).`,
+          `Job ${jobId} deleted what it changed, and no record of it was kept (a delete from before F12): use restore_resource (a page) or the journal’s pre-images (bridge_journal_lookup with jobId ${jobId}).`,
         );
       if (others.length === 0)
         return refuse('NOTHING_TO_REVERT', `Everything job ${jobId} changed is already as it was before it.`);
@@ -787,7 +793,11 @@ export class RevertService {
           targets,
           images,
           ...(readyPlans.some((p) => p.followUp)
-            ? { followUps: readyPlans.filter((p) => p.followUp).map((p) => ({ key: p.check.key, ...p.followUp! })) }
+            ? {
+                followUps: readyPlans
+                  .filter((p) => p.followUp)
+                  .map((p) => ({ key: p.check.key, ...p.followUp! })),
+              }
             : {}),
         }),
         this.d.now(),
@@ -823,9 +833,14 @@ export class RevertService {
    * v3 F12 (ADR 0081): the lifecycle marker of a revert of a lifecycle job: the same pages, each back to the state its name
    * had before the job (`[BSRC]` Authoritative, `[BWRK]` Working, `[BARC]` Archived); undefined for any other job.
    */
-  private lifecycleBack(projectId: string, jobId: string, targets: readonly Target[]): LifecycleMarker | undefined {
-    const marker = (this.d.engine.jobOptions?.(projectId, jobId) as { lifecycle?: LifecycleMarker } | undefined)
-      ?.lifecycle;
+  private lifecycleBack(
+    projectId: string,
+    jobId: string,
+    targets: readonly Target[],
+  ): LifecycleMarker | undefined {
+    const marker = (
+      this.d.engine.jobOptions?.(projectId, jobId) as { lifecycle?: LifecycleMarker } | undefined
+    )?.lifecycle;
     if (!marker) return undefined;
     const stateOf = (name: unknown): 'authoritative' | 'working' | 'archived' | null => {
       if (typeof name !== 'string') return null;
@@ -1027,7 +1042,11 @@ export class RevertService {
       try {
         if (f.kind === 'recreate_pages') {
           if (!this.d.recreatePages) throw new Error('the snapshot restores are not available here');
-          done.push({ key: f.key, kind: f.kind, ...(await this.d.recreatePages(projectId, f.snapshotId, f.rootId)) });
+          done.push({
+            key: f.key,
+            kind: f.kind,
+            ...(await this.d.recreatePages(projectId, f.snapshotId, f.rootId)),
+          });
         } else if (f.kind === 'restore_document') {
           if (!this.d.restoreDocument) throw new Error('LegendKeeper’s restore is not available here');
           done.push({
@@ -1037,7 +1056,11 @@ export class RevertService {
           });
         } else {
           if (!this.d.reuploadAsset) throw new Error('the image pipeline is not available here');
-          done.push({ key: f.key, kind: f.kind, ...(await this.d.reuploadAsset(projectId, f.assetId, f.before)) });
+          done.push({
+            key: f.key,
+            kind: f.kind,
+            ...(await this.d.reuploadAsset(projectId, f.assetId, f.before)),
+          });
         }
       } catch (e) {
         this.d.log?.warn({ err: e, jobId, followUp: f.kind }, 'a revert’s follow-up failed');
@@ -1153,7 +1176,8 @@ const revertChecker: RegisteredChecker = async (ctx) => {
   // v3 F12 (ADR 0081): a generic undo's target, planned again inside the lock (its state must be what the plan saw).
   if (input.kind === 'entity') {
     const undo = (ctx.input as { undo?: EntityUndo }).undo;
-    if (!undo) return { differences: [{ path: ctx.label, expected: 'a revert target', actual: 'nothing to check' }] };
+    if (!undo)
+      return { differences: [{ path: ctx.label, expected: 'a revert target', actual: 'nothing to check' }] };
     const differences = await entityStillAsPlanned(undo, {
       jobId: '',
       read: async (op, params) => {

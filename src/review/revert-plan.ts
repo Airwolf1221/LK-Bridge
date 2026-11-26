@@ -876,7 +876,7 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
     // deletion proposed to the owner. The job only checks, inside its lock, that the asset is as the placement left it.
     return ready(
       t,
-      'its file goes back to the Staging page (kept on the bridge’s server), and deleting the placed image from the library is proposed to you; nothing is written to the staging folder',
+      'its file goes back to the Staging page (kept on the bridge’s server), and the placed image is deleted from the library by the same Revert (a job of its own); nothing is written to the staging folder',
       [check],
       {
         assets: [t.assetId],

@@ -127,6 +127,8 @@ export const ENTITIES: Readonly<Record<EntityKind, EntityDef>> = {
     update: 'updateProperty',
     remove: 'deleteProperty',
     container: ['resourceId'],
+    // A create takes no rank (it is placed last; LegendKeeper answers its rank).
+    serverFields: ['rank'],
   },
   propertyRow: {
     label: 'a sidebar row',
@@ -267,7 +269,11 @@ export interface EntityUndo {
   readonly sidebar?: readonly { readonly key: string; readonly value: string }[];
 }
 
-const pathOf = (def: EntityDef, path: Readonly<Record<string, string>>, withId: boolean): Record<string, string> => {
+const pathOf = (
+  def: EntityDef,
+  path: Readonly<Record<string, string>>,
+  withId: boolean,
+): Record<string, string> => {
   const out: Record<string, string> = {};
   for (const k of def.container) {
     const v = path[k];
@@ -303,7 +309,8 @@ async function live(
     if (typeof r.body.deletedAt === 'string') return { state: 'soft', entity: r.body };
     return { state: 'present', entity: r.body };
   }
-  const r = await io.read(def.list!, { path: pathOf(def, u.path, false) });
+  const listPath = pathOf(def, u.path, false);
+  const r = await io.read(def.list!, Object.keys(listPath).length > 0 ? { path: listPath } : {});
   const data: unknown[] = isObj(r.body) && Array.isArray(r.body.data) ? (r.body.data as unknown[]) : [];
   const id = def.idParam ? u.path[def.idParam] : undefined;
   const hit = data.find((x) => isObj(x) && x.id === id);
@@ -324,7 +331,8 @@ function fieldDiffs(label: string, want: Obj, have: Obj): Difference[] {
   const out: Difference[] = [];
   for (const [k, v] of Object.entries(want)) {
     if (SERVER.includes(k)) continue;
-    if (comparable(v) !== comparable(have[k])) out.push({ path: `${label}: ${k}`, expected: v, actual: have[k] });
+    if (comparable(v) !== comparable(have[k]))
+      out.push({ path: `${label}: ${k}`, expected: v, actual: have[k] });
   }
   return out;
 }
@@ -341,10 +349,26 @@ function createBody(def: EntityDef, opId: string, was: Obj): Obj {
   return out;
 }
 
+/** A board's content as `replaceBoardContent` takes it: its body's fields of the content read (no version, no pages). */
+function boardBody(was: Obj): Obj {
+  const fields = bodyFields('replaceBoardContent');
+  const out: Obj = {};
+  for (const [k, v] of Object.entries(was))
+    if (v !== undefined && v !== null && (fields.size > 0 ? fields.has(k) : k !== 'version' && k !== 'pages'))
+      out[k] = v;
+  return out;
+}
+
 /** Whether the registry takes these params for the operation (null), or why not. */
 function invalid(opId: string, params: OpParams): string | null {
-  const r = operationInputSchema(opId).safeParse({ ...params, ifMatch: 'v' });
+  // A versioned write takes the If-Match the job adds when it runs; an unversioned one takes none.
+  const schema = operationInputSchema(opId);
+  const r = schema.safeParse({ ...params, ifMatch: 'v' });
   if (r.success) return null;
+  if (r.error.issues.some((i) => i.path[0] === 'ifMatch' || /ifMatch/.test(i.message))) {
+    const bare = schema.safeParse(params);
+    if (bare.success) return null;
+  }
   const first = r.error.issues[0];
   return first ? `${first.path.join('.')}: ${first.message}` : 'not valid';
 }
@@ -376,11 +400,7 @@ export type EntityFollowUp =
   | { readonly kind: 'reupload_asset'; readonly assetId: string; readonly before: Obj };
 
 /** Plans one generic undo (see the module comment). */
-export async function planEntityUndo(
-  u: EntityUndo,
-  io: PlanIo,
-  journalOperation: Obj,
-): Promise<Outcome> {
+export async function planEntityUndo(u: EntityUndo, io: PlanIo, journalOperation: Obj): Promise<Outcome> {
   const def = ENTITIES[u.entity];
   const now = await live(u, io);
   const label = def.label;
@@ -393,7 +413,10 @@ export async function planEntityUndo(
   if (u.action === 'update') {
     if (now.state !== 'present') return { state: 'gone', detail: `${label} is gone` };
     if (!u.before || !u.left)
-      return { state: 'not_revertible', detail: `${label} was changed, but the journal holds no pre-image of it` };
+      return {
+        state: 'not_revertible',
+        detail: `${label} was changed, but the journal holds no pre-image of it`,
+      };
     if (u.entity === 'boardShapes' || u.entity === 'board') {
       const ids = u.shapeIds ?? [];
       const have = u.entity === 'board' ? (now.entity ?? {}) : Object.fromEntries(shapesOf(now.entity, ids));
@@ -407,21 +430,39 @@ export async function planEntityUndo(
       if (d.length > 0) return { state: 'changed', detail: `${label} changed since the job`, differences: d };
       const params: OpParams =
         u.entity === 'board'
-          ? { path: pathOf(def, u.path, false), body: u.before }
+          ? { path: pathOf(def, u.path, false), body: boardBody(u.before) }
           : { path: pathOf(def, u.path, false), body: { shapes: Object.values(u.before) } };
       const why = invalid(def.update!, params);
-      if (why) return { state: 'not_revertible', detail: `${label}: its old content is not one LegendKeeper takes (${why})` };
-      return { state: 'ready', detail: `${label} back as it was`, writes: [w(def.update!, params, `${label} back`)] };
+      if (why)
+        return {
+          state: 'not_revertible',
+          detail: `${label}: its old content is not one LegendKeeper takes (${why})`,
+        };
+      return {
+        state: 'ready',
+        detail: `${label} back as it was`,
+        writes: [w(def.update!, params, `${label} back`)],
+      };
     }
     const d = fieldDiffs(label, u.left, now.entity ?? {});
     if (d.length > 0) return { state: 'changed', detail: `${label} changed since the job`, differences: d };
     if (Object.keys(u.before).every((k) => comparable(u.before![k]) === comparable(now.entity?.[k])))
       return { state: 'nothing_to_do', detail: `${label} is already as it was before the job` };
     const body =
-      u.op === 'updateCalendar' ? createBody(def, 'updateCalendar', { ...now.entity, ...u.before }) : u.before;
+      u.op === 'updateCalendar'
+        ? // A whole calendar: what it was, and where the pre-image holds no value for a field, what it holds now.
+          createBody(def, 'updateCalendar', {
+            ...now.entity,
+            ...Object.fromEntries(Object.entries(u.before).filter(([, v]) => v !== null && v !== undefined)),
+          })
+        : u.before;
     const params: OpParams = { path: pathOf(def, u.path, true), body };
     const why = invalid(def.update!, params);
-    if (why) return { state: 'not_revertible', detail: `${label}: its old fields are not ones LegendKeeper takes (${why})` };
+    if (why)
+      return {
+        state: 'not_revertible',
+        detail: `${label}: its old fields are not ones LegendKeeper takes (${why})`,
+      };
     return {
       state: 'ready',
       detail: `${label}: ${Object.keys(u.before).join(', ')} back`,
@@ -439,7 +480,13 @@ export async function planEntityUndo(
       return {
         state: 'ready',
         detail: `${label} the job made deleted again`,
-        writes: [w('deleteBoardShapes', { path: pathOf(def, u.path, false), body: { ids: [...have.keys()] } }, label)],
+        writes: [
+          w(
+            'deleteBoardShapes',
+            { path: pathOf(def, u.path, false), body: { ids: [...have.keys()] } },
+            label,
+          ),
+        ],
       };
     }
     if (now.state !== 'present') return { state: 'gone', detail: `${label} is gone already` };
@@ -447,10 +494,16 @@ export async function planEntityUndo(
     if (u.entity === 'resource') {
       // A page: its documents at the versions the job left, and nothing put under it since but the job's own pages.
       for (const doc of u.documents ?? []) {
-        const r = await io.read('getDocument', { path: { resourceId: u.path.resourceId!, documentId: doc.id } });
+        const r = await io.read('getDocument', {
+          path: { resourceId: u.path.resourceId!, documentId: doc.id },
+        });
         const v = isObj(r.body) ? str(r.body.version) : undefined;
         if (r.exists && v !== undefined && v !== doc.version)
-          d.push({ path: `${label}: document ${doc.id}`, expected: `version ${doc.version}`, actual: `version ${v}` });
+          d.push({
+            path: `${label}: document ${doc.id}`,
+            expected: `version ${doc.version}`,
+            actual: `version ${v}`,
+          });
       }
       const kids = await io.read('listResources', { query: { parentId: u.path.resourceId!, limit: 100 } });
       const madeWith = new Set(u.madeWith ?? []);
@@ -481,10 +534,15 @@ export async function planEntityUndo(
     if (have.size > 0)
       return { state: 'changed', detail: `${label}: some are back already`, differences: [] };
     const was = u.before ? Object.values(u.before).filter(isObj) : [];
-    if (was.length === 0) return { state: 'not_revertible', detail: `${label}: the journal holds no copy of them` };
+    if (was.length === 0)
+      return { state: 'not_revertible', detail: `${label}: the journal holds no copy of them` };
     const params: OpParams = { path: pathOf(def, u.path, false), body: { shapes: was } };
     const why = invalid('createBoardShapes', params);
-    if (why) return { state: 'not_revertible', detail: `${label}: their copy is not one LegendKeeper takes (${why})` };
+    if (why)
+      return {
+        state: 'not_revertible',
+        detail: `${label}: their copy is not one LegendKeeper takes (${why})`,
+      };
     return { state: 'ready', detail: `${label} made again`, writes: [w('createBoardShapes', params, label)] };
   }
   if (now.state === 'present') return { state: 'nothing_to_do', detail: `${label} is back already` };
@@ -541,7 +599,8 @@ export async function planEntityUndo(
     body.id = str(u.before.id) ?? mintClientId();
   const params: OpParams = { path: pathOf(def, u.path, false), body };
   const why = invalid(def.create!, params);
-  if (why) return { state: 'not_revertible', detail: `${label}: its copy is not one LegendKeeper takes (${why})` };
+  if (why)
+    return { state: 'not_revertible', detail: `${label}: its copy is not one LegendKeeper takes (${why})` };
   const writes: StepSpec[] = [w(def.create!, params, `${label} made again`)];
   // A lane takes its events with it: each made again in it.
   if (u.entity === 'lane' && Array.isArray(u.before.events)) {
@@ -550,10 +609,16 @@ export async function planEntityUndo(
       if (!isObj(e)) continue;
       const eb = createBody(ev, 'createEvent', { ...e, laneId: body.id });
       eb.id = str(e.id) ?? mintClientId();
-      writes.push(w('createEvent', { path: pathOf(ev, u.path, false), body: eb }, `an event of the lane made again`));
+      writes.push(
+        w('createEvent', { path: pathOf(ev, u.path, false), body: eb }, `an event of the lane made again`),
+      );
     }
   }
-  return { state: 'ready', detail: `${label} made again from its copy${writes.length > 1 ? ` (with its ${writes.length - 1} events)` : ''}`, writes };
+  return {
+    state: 'ready',
+    detail: `${label} made again from its copy${writes.length > 1 ? ` (with its ${writes.length - 1} events)` : ''}`,
+    writes,
+  };
 }
 
 /** The check a generic undo's part of the revert job starts with (inside the job's locks; `review.revert`). */

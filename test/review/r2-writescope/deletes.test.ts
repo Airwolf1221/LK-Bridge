@@ -59,6 +59,7 @@ const infobox = {
 
 /** The project's custom calendar (as B2's world serves it), with a version that moves on a replace. */
 const calendar = { version: 1, months: 5, eras: 1, name: 'Kumikan Epochal' };
+let storedCalendar: Record<string, unknown> | null = null;
 
 beforeAll(async () => {
   w = await factsWorld({
@@ -116,8 +117,13 @@ beforeAll(async () => {
     calendar.eras = b.positiveEras?.length ?? 0;
     calendar.name = b.name ?? calendar.name;
     calendar.version++;
-    return { status: 200, body: { id: 'rp86pkdr', ...b, version: `cv${calendar.version}` } };
+    storedCalendar = { id: 'rp86pkdr', ...b, version: `cv${calendar.version}` };
+    return { status: 200, body: storedCalendar };
   });
+  // The listing answers the calendar as it was last replaced (Revert's check compares it with what the job left).
+  w.overrides.set(/\/calendars\/?$/, (req: MockRequest): MockResponse | undefined =>
+    req.method === 'GET' && storedCalendar ? { status: 200, body: { data: [storedCalendar] } } : undefined,
+  );
 }, 60_000);
 afterAll(async () => w?.close());
 
@@ -138,7 +144,10 @@ async function directThenRevertible(r: { body: Record<string, any>; text: string
     status: job.status,
     onReview,
     revertible: preview.eligible.ok && preview.notReverted === 0 && preview.ready > 0,
-    targets: preview.targets.map((t) => `${t.kind}:${t.state}: ${t.detail}`),
+    targets: preview.targets.map(
+      (t) =>
+        `${t.kind}:${t.state}: ${t.detail}${'differences' in t && t.differences ? ` ${JSON.stringify(t.differences).slice(0, 400)}` : ''}`,
+    ),
   };
 }
 const DIRECT = { status: 'succeeded', onReview: true, revertible: true };
@@ -152,7 +161,12 @@ describe('deletes of what LegendKeeper keeps beside pages', () => {
     });
     const out = await directThenRevertible(r);
     expect(out, `${r.text}\n${JSON.stringify(out)}`).toMatchObject(DIRECT);
-    expect(sent(n)).toContain(`DELETE /resources/${P.miyabi}/properties/relmiya1`);
+    expect(
+      sent(n).some(
+        (x) => x.startsWith('DELETE ') && x.includes(`/resources/${P.miyabi}/properties/relmiya1`),
+      ),
+      JSON.stringify(sent(n)),
+    ).toBe(true);
   });
 
   it('A0b: deleteBoardShapes (all three shapes) through lk_api_write runs directly; Revert can put them back', async () => {

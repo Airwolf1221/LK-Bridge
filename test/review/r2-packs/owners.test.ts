@@ -164,7 +164,13 @@ describe('promoteNation', () => {
       ).toEqual([]);
       const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, job.id);
       expect(rv.status, JSON.stringify(rv)).toBe('submitted');
-      if (rv.status === 'submitted') await engine().wait(PROJECT, rv.revertJobId, 30_000);
+      if (rv.status === 'submitted') {
+        const done = await engine().wait(PROJECT, rv.revertJobId, 30_000);
+        expect(
+          done.status,
+          `${JSON.stringify(done.lastError)} ${JSON.stringify(preview.targets.map((t) => [t.kind, t.what, t.state]))}`,
+        ).toBe('succeeded');
+      }
       expect(w.repo.res.get(O.tarim)!.parentId).toBe(tarim.parentId);
     } finally {
       // Whatever the revert left, the world as it was for ATK-11 (by hand, as in the app).

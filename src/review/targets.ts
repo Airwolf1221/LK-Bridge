@@ -324,7 +324,6 @@ const DELETIONS: Readonly<Record<string, { what: string; instead?: string }>> = 
   deleteBoardShapes: { what: 'board shapes deleted' },
 };
 
-
 /** Whether a step changed something (succeeded and not skipped), or may have (its outcome is unknown). */
 function wrote(s: StepRecord): 'yes' | 'maybe' | 'no' {
   if (s.opKind === 'read' || isBridgeStep(s.opId)) return 'no';
@@ -495,6 +494,11 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     else if (firstWhole && firstWhole === ss[0]) {
       const pre = preOf(firstWhole.stepNo);
       const blocks = isObj(pre) ? pre.blocks : undefined;
+      if (Array.isArray(blocks)) before = withoutVersions(blocks);
+    } else if (ss[0]!.opId === 'deleteBlock') {
+      // v3 F12: a low-level block delete keeps the document's blocks as they were (src/jobs/step-exec.ts).
+      const pre = preOf(ss[0]!.stepNo);
+      const blocks = isObj(pre) ? pre.documentBlocks : undefined;
       if (Array.isArray(blocks)) before = withoutVersions(blocks);
     }
     if (before) {
@@ -876,7 +880,10 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     if (PAGE_CREATES.has(s.opId) || s.opId === 'createManyResources') {
       const items =
         s.opId === 'createManyResources'
-          ? (Array.isArray(bodyOf(s.params).resources) ? (bodyOf(s.params).resources as unknown[]) : []).filter(isObj)
+          ? (Array.isArray(bodyOf(s.params).resources)
+              ? (bodyOf(s.params).resources as unknown[])
+              : []
+            ).filter(isObj)
           : [bodyOf(s.params)];
       const results =
         s.opId === 'createManyResources' && isObj(s.result) && Array.isArray(s.result.resources)
@@ -963,12 +970,14 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
           const by = laterWriteOf(t, later);
           return by ? { ...t, laterWrite: by } : t;
         });
-  // Page deletions of what the job made keep their children-first order (stable sort, by their creating step otherwise).
-  return marked.sort((a, b) =>
-    a.kind === 'entity' && b.kind === 'entity' && a.undo.entity === 'resource' && b.undo.entity === 'resource'
-      ? 0
-      : (a.steps[0] ?? 0) - (b.steps[0] ?? 0),
-  );
+  // Everything else in the order of its first step; then the pages the job made, deleted again last (so what the job
+  // moved under them has gone back first), children before their parents.
+  const madePage = (t: Target) =>
+    t.kind === 'entity' && t.undo.entity === 'resource' && t.undo.action === 'create';
+  return [
+    ...marked.filter((t) => !madePage(t)).sort((a, b) => (a.steps[0] ?? 0) - (b.steps[0] ?? 0)),
+    ...marked.filter(madePage),
+  ];
 }
 
 /** v3 F12: the pages a job made: what it left them as (name, parent, tags) and the documents it wrote (their versions). */
@@ -983,9 +992,17 @@ function createdPageTarget(
   page: (id: string | undefined | null) => PageRef | null,
 ): EntityTarget {
   let left: Obj = {
-    ...(typeof body.name === 'string' ? { name: body.name } : result?.name !== undefined ? { name: result.name } : {}),
+    ...(typeof body.name === 'string'
+      ? { name: body.name }
+      : result?.name !== undefined
+        ? { name: result.name }
+        : {}),
     parentId: str(body.parentId) ?? str(result?.parentId) ?? null,
-    ...(Array.isArray(body.tags) ? { tags: body.tags } : Array.isArray(result?.tags) ? { tags: result.tags } : {}),
+    ...(Array.isArray(body.tags)
+      ? { tags: body.tags }
+      : Array.isArray(result?.tags)
+        ? { tags: result.tags }
+        : {}),
   };
   const documents = new Map<string, string>();
   const sidebar = new Map<string, string>();
@@ -1019,7 +1036,18 @@ function createdPageTarget(
       left,
       before: null,
       documents: [...documents].map(([docId, version]) => ({ id: docId, version })),
-      madeWith: madePages.filter((x) => x !== id),
+      // The pages the job made, and the pages it moved here itself (their moves are reverted first, by their own targets).
+      madeWith: [
+        ...madePages.filter((x) => x !== id),
+        ...writes
+          .filter(
+            (w) =>
+              (w.opId === 'moveResource' || w.opId === 'updateResource') &&
+              str(bodyOf(w.params).parentId) === id &&
+              typeof w.params.path?.resourceId === 'string',
+          )
+          .map((w) => w.params.path!.resourceId!),
+      ],
       ...(sidebar.size > 0 ? { sidebar: [...sidebar].map(([key, value]) => ({ key, value })) } : {}),
     },
   };
@@ -1078,9 +1106,10 @@ function entityUndoOf(
       before: isObj(pre) ? pre : null,
     };
   const preObj = isObj(pre) ? pre : null;
-  const copy = preObj && isObj(preObj.copy) && typeof preObj.copy.snapshotId === 'string'
-    ? { snapshotId: preObj.copy.snapshotId, pages: Number(preObj.copy.pages ?? 1) }
-    : null;
+  const copy =
+    preObj && isObj(preObj.copy) && typeof preObj.copy.snapshotId === 'string'
+      ? { snapshotId: preObj.copy.snapshotId, pages: Number(preObj.copy.pages ?? 1) }
+      : null;
   if (ent.action === 'update') {
     // The fields the job wrote, as LegendKeeper answered them (else as sent), and their values before.
     const keys = Object.keys(body);
@@ -1101,7 +1130,8 @@ function entityUndoOf(
   }
   if (ent.action === 'create' || ent.action === 'restore') {
     const left: Obj = {};
-    for (const k of Object.keys(body)) if (k !== 'id') left[k] = res && res[k] !== undefined ? res[k] : body[k];
+    for (const k of Object.keys(body))
+      if (k !== 'id') left[k] = res && res[k] !== undefined ? res[k] : body[k];
     return { entity: ent.entity, action: ent.action, op: s.opId, path, left, before: null };
   }
   return { entity: ent.entity, action: 'delete', op: s.opId, path, left: null, before: preObj, copy };
@@ -1215,21 +1245,14 @@ function chronologyUnit(
     return refuse(
       'a chronology change that did not finish (its record is incomplete): resolve it on the Chronology page first',
     );
-  // A delete with no creation of its replacement in the same change is a deletion (never reverted). A delete paired with
-  // one (an event whose end was removed is made again; a row and event moved to another age) is an edit of its shape.
   const count = (k: TargetWrite['kind']) => record.target.writes.filter((w) => w.kind === k).length;
   // v3 F10 (ADR 0078): rows put into calendar order are not put back out of it (the calendar decides the order).
   if (count('row.move') > 0)
     return refuse(
       'a chronology change that put table rows into calendar order: it is not reverted (the calendar decides the order; move a row by hand if it must go elsewhere)',
     );
-  if (count('event.delete') > count('event.create') || count('row.delete') > count('row.insert')) {
-    const del = record.target.writes.find((w) => w.kind === 'row.delete' || w.kind === 'event.delete')!;
-    return refuse(
-      `a chronology change that deleted a ${del.kind === 'row.delete' ? 'table row' : 'timeline event'} (${tool}): a deletion is never reverted`,
-      true,
-    );
-  }
+  // v3 F12 (ADR 0081, D3): a deletion too is put back, from the journal's pre-images (a row where it stood, an event made
+  // again under a new id), as a delete paired with a creation always was.
   const inverse: TargetWrite[] = [];
   const oldRows: Record<string, Obj> = {};
   const oldEvents: Record<string, Obj> = {};

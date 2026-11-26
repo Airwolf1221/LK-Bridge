@@ -2318,6 +2318,22 @@ export class StepExecutor {
               read: async (opId, p) => (await this.readOp(job, step, opId, p)).body,
             });
         }
+        // v3 F12 (ADR 0081, D2): a block deleted through the low-level tools keeps the document's blocks as they were (one
+        // read), so Review's Revert puts the page text back block by block, where the block stood. The high-level tools'
+        // block writes carry their own check of the document before, which serves the same.
+        if (
+          !journalled &&
+          op.operationId === 'deleteBlock' &&
+          LOW_LEVEL_TOOL.test(job.origin.tool ?? '') &&
+          params.path?.resourceId &&
+          params.path.documentId
+        ) {
+          const r = await this.readOp(job, step, 'getDocumentBlocks', {
+            path: { resourceId: params.path.resourceId, documentId: params.path.documentId },
+          });
+          const blocks = (r.body as { blocks?: unknown } | undefined)?.blocks;
+          if (r.exists && Array.isArray(blocks)) copy = { ...copy, documentBlocks: blocks };
+        }
         if (!journalled) {
           const created = meta.verify === 'client-id' ? step.clientIds : [];
           journalId = this.d.journal.record({
@@ -3306,6 +3322,9 @@ function runsText(content: unknown): string | null {
  * v3 F12 (ADR 0081, D3): a journal entry's pre-image with the restorable copy a delete kept merged in (`copy`), whatever
  * the pre-image came from (the engine's read, the tool's own, or none).
  */
+/** The low-level tools, whose block deletes keep the document before (above). */
+const LOW_LEVEL_TOOL = /^(lk_api_write|lk_api_batch|lk_op_)/;
+
 function withCopy(pre: unknown, copy: Record<string, unknown>): { preImage?: unknown } {
   const hasCopy = Object.keys(copy).length > 0;
   if (pre === undefined) return hasCopy ? { preImage: copy } : {};
