@@ -8,6 +8,7 @@
  *   below that;
  * - failures become typed `{ error: { code, message, … } }` results, never thrown exceptions.
  */
+import type { NationTaxonomyService } from '../../packs/nations/service.js';
 import type { IndexClassifyService } from '../../packs/indextax/service.js';
 import type { AutomationService } from '../../automation/service.js';
 import type { Packs } from '../../packs/service.js';
@@ -132,6 +133,8 @@ export interface DiscoverServices {
   readonly referenceTypes?: ReferenceTypeService;
   /** v3 F6b (ADR 0079): arkona_index_classify's report, and the creation tools' index rule. */
   readonly indexClassify?: IndexClassifyService;
+  /** v3 F6c (ADR 0080): territories, nations and their subindexes (placement by role, create_index's role form). */
+  readonly nationTaxonomy?: NationTaxonomyService;
   /** v3 F7 (ADR 0070, G3): each character's outfits (placement of outfit art, the art layout audit). */
   readonly outfits?: OutfitStore;
   /** v3 F5b (ADR 0068): which finding codes the automation runs (bridge_info only; agents cannot change a setting). */

@@ -1221,6 +1221,25 @@ category; neither carries CANON. Inside Narratives the narrative tag grammar gov
 - **Never rename a prefix or retag an index yourself**: the owner's approved rows become proposals (`index_prefix`,
   `index_tags` in the audits).
 
+### Territories, nations and their subindexes
+
+A **territory** is a continent or a surviving Realmship with its own index (never a Lost Realmship). Its categories are
+the pack's: `<Territory> Polities`, `… Institutions`, `… Cultures`, `… Regions` and the rest, with `<Territory>
+Conflicts` inside its Historical Events. A **nation** is an index in its territory's Polities. A nation's subindexes
+follow ten **roles**, in this order: Government & Administration, Institutions, Historical Events, Military &
+Technology, Unique Magic & Technologies, Cultures, Settlements & Locations, Religion & Religious Administration,
+Household & Court, Historical Polities. A subindex is named **`<Nation> <Role>`**, the nation's short name first when it
+has one ("Cantha Settlements & Locations", "Jabal al-Noor Military & Technology"), and is `[NAV]`.
+
+- **Making one:** `create_index` with `roleFor` { nation, role } or { territory, category }: the bridge names it, places
+  it and records the role. Never invent a role or a variant of one; a role already bound is refused (`ROLE_BOUND`).
+- **Placement is by role** once the owner has seeded the Territory and Nation types (Repository Mappings):
+  `arkona_create_owner`'s home check finds a nation's subindex by its bound role, so a short name works; its answer says
+  which level it used (the nation's role, the nation index, or the territory's category) and why.
+- **The owner decides** every unmatched child (the Nation Subindexes page), and renames go through the audits
+  (`nation_subindex_nonstandard`); a missing category is `territory_category_missing`; a source outside its category's
+  homes is `category_home_mismatch`, a move the owner judges. Never rename, move or merge these indexes yourself.
+
 ## Many pages at once: query_facts and workstreams
 
 **`query_facts`** returns the same fields of many pages as ONE compact table (`columns` once, then `rows` as arrays;

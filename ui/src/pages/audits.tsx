@@ -551,6 +551,9 @@ function FindingRow({
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const [reason, setReason] = useState<string | null>(null);
+  // v3 F6c (ADR 0080): "Keep it here" on a source outside its category's homes (its reason, while being written).
+  const [keepReason, setKeepReason] = useState<string | null>(null);
+  const withReauthKeep = useReauth();
   const [note, setNote] = useState<string | null>(null);
   // v3 F4b (ADR 0064, D6): a consistency finding's values side by side, to pick the right one.
   const [picking, setPicking] = useState(false);
@@ -667,6 +670,23 @@ function FindingRow({
       () => api.post(`/audits/findings/${f.id}/unacknowledge`, { confirm: true, project }),
       'No longer acknowledged.',
     ).then((ok) => ok && reload());
+  const keepHome = () =>
+    void run(
+      () =>
+        withReauthKeep(() =>
+          api.post(`/audits/findings/${f.id}/keep-home`, {
+            confirm: true,
+            project,
+            reason: (keepReason ?? '').trim(),
+          }),
+        ),
+      'Kept here: silent until its tags or its parent change.',
+    ).then((ok) => {
+      if (ok) {
+        setKeepReason(null);
+        reload();
+      }
+    });
   // v3 F4a (ADR 0063): a governance finding naming an external skill: allow the name (a real skill used elsewhere).
   const skill =
     f.code === 'governance_external_name' && typeof f.evidence.name === 'string' ? f.evidence.name : null;
@@ -766,6 +786,15 @@ function FindingRow({
                   Re-check now
                 </Button>
               )}
+            {f.state === 'open' && f.code === 'category_home_mismatch' && (
+              <button
+                type="button"
+                className="small"
+                onClick={() => setKeepReason(keepReason === null ? '' : null)}
+              >
+                Keep it here…
+              </button>
+            )}
             {f.state === 'open' && skill && (
               <Button className="small" busy={busy} disabled={!project} onClick={() => void allowName()}>
                 Allow this name
@@ -800,6 +829,35 @@ function FindingRow({
       </tr>
       {picking && f.state === 'open' && (
         <ConsistencyPick findingId={f.id} project={project} colspan={colspan} reload={reload} />
+      )}
+      {keepReason !== null && (
+        <tr>
+          <td colSpan={colspan}>
+            <form
+              className="row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                keepHome();
+              }}
+            >
+              <label htmlFor={`keep-${f.id}`}>Reason</label>
+              <input
+                id={`keep-${f.id}`}
+                value={keepReason}
+                onChange={(e) => setKeepReason(e.target.value)}
+                placeholder="Why this page belongs where it is"
+                maxLength={1000}
+                required
+              />
+              <Button type="submit" busy={busy} disabled={keepReason.trim() === ''}>
+                Keep it here
+              </Button>
+              <span className="muted small-text">
+                Silent until the page’s tags or its parent change; recorded in the audit log.
+              </span>
+            </form>
+          </td>
+        </tr>
       )}
       {reason !== null && (
         <tr>

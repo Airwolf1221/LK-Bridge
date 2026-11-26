@@ -14,6 +14,8 @@ import {
   type PlacementKind,
   type Recipe,
   type RegistryType,
+  type RoleBinding,
+  type TaxonomyKind,
   type ReviewReason,
   type ReviewStatus,
   type TaxonomyEntry,
@@ -39,6 +41,19 @@ interface TypeRow {
   review: string;
   notes: string;
   taxonomy_seeded_at: number | null;
+  taxonomy_kind: TaxonomyKind | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface RoleRow {
+  project_id: string;
+  entry_id: string;
+  role: string;
+  node_id: string;
+  status: ReviewStatus;
+  reason: string;
+  origin: RoleBinding['origin'];
   created_at: number;
   updated_at: number;
 }
@@ -59,6 +74,7 @@ interface EntryRow {
   review: string;
   notes: string;
   origin: 'seed' | 'add_missing';
+  short_name: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -104,6 +120,8 @@ export interface NewType {
   status: ReviewStatus;
   review: readonly ReviewReason[];
   notes: string;
+  /** v3 F6c (ADR 0080): one of the five structural types (absent: an ordinary type). */
+  taxonomyKind?: TaxonomyKind | null;
 }
 
 export interface NewEntry {
@@ -119,6 +137,8 @@ export interface NewEntry {
   status: ReviewStatus;
   review: readonly ReviewReason[];
   origin: 'seed' | 'add_missing';
+  /** v3 F6c: a Nation entry's short name. */
+  shortName?: string | null;
 }
 
 export class RegistryStore {
@@ -153,6 +173,7 @@ export class RegistryStore {
       review: parse<ReviewReason[]>(r.review, []),
       notes: r.notes,
       taxonomySeededAt: r.taxonomy_seeded_at,
+      taxonomyKind: r.taxonomy_kind ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -210,8 +231,8 @@ export class RegistryStore {
       .prepare(
         `INSERT INTO registry_types (project_id, id, singular, plural, singular_key, plural_key, root_index_id,
            index_template_id, page_templates, asset_root_folder, placement_kind, placement_config, status, review, notes,
-           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           taxonomy_kind, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         this.projectId,
@@ -229,10 +250,19 @@ export class RegistryStore {
         t.status,
         j(t.review),
         t.notes,
+        t.taxonomyKind ?? null,
         at,
         at,
       );
     return this.requireType(id);
+  }
+
+  /** v3 F6c (ADR 0080): the project's structural type of this kind, or undefined. */
+  typeByKind(kind: TaxonomyKind): RegistryType | undefined {
+    const r = this.db
+      .prepare('SELECT * FROM registry_types WHERE project_id = ? AND taxonomy_kind = ?')
+      .get(this.projectId, kind) as TypeRow | undefined;
+    return r ? RegistryStore.typeView(r) : undefined;
   }
 
   updateType(id: string, t: NewType): RegistryType {
@@ -288,6 +318,11 @@ export class RegistryStore {
       this.db
         .prepare('UPDATE taxonomy_entries SET parent_id = NULL WHERE project_id = ? AND type_id = ?')
         .run(this.projectId, id);
+      this.db
+        .prepare(
+          'DELETE FROM registry_roles WHERE project_id = ? AND entry_id IN (SELECT id FROM taxonomy_entries WHERE project_id = ? AND type_id = ?)',
+        )
+        .run(this.projectId, this.projectId, id);
       this.db.prepare('DELETE FROM registry_types WHERE project_id = ? AND id = ?').run(this.projectId, id);
     });
   }
@@ -311,6 +346,7 @@ export class RegistryStore {
       review: parse<ReviewReason[]>(r.review, []),
       notes: r.notes,
       origin: r.origin,
+      shortName: r.short_name ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -352,8 +388,9 @@ export class RegistryStore {
     this.db
       .prepare(
         `INSERT INTO taxonomy_entries (project_id, id, type_id, plural, singular, singular_source, parent_id, aliases,
-           source_node_id, source_parent_node_id, asset_folder, status, review, notes, origin, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)`,
+           source_node_id, source_parent_node_id, asset_folder, status, review, notes, origin, short_name, created_at,
+           updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)`,
       )
       .run(
         this.projectId,
@@ -370,6 +407,7 @@ export class RegistryStore {
         e.status,
         j(e.review),
         e.origin,
+        e.shortName ?? null,
         at,
         at,
       );
@@ -388,12 +426,15 @@ export class RegistryStore {
       notes: string;
       status: ReviewStatus;
       review: readonly ReviewReason[];
+      /** v3 F6c: absent: kept as it is. */
+      shortName?: string | null;
     },
   ): TaxonomyEntry {
+    const before = this.requireEntry(id);
     this.db
       .prepare(
         `UPDATE taxonomy_entries SET singular = ?, singular_source = ?, aliases = ?, asset_folder = ?, parent_id = ?,
-           notes = ?, status = ?, review = ?, updated_at = ?
+           notes = ?, status = ?, review = ?, short_name = ?, updated_at = ?
          WHERE project_id = ? AND id = ?`,
       )
       .run(
@@ -405,6 +446,7 @@ export class RegistryStore {
         f.notes,
         f.status,
         j(f.review),
+        f.shortName !== undefined ? f.shortName : before.shortName,
         this.now(),
         this.projectId,
         id,
@@ -459,12 +501,129 @@ export class RegistryStore {
       );
     }
     this.tx(() => {
+      this.db
+        .prepare('DELETE FROM registry_roles WHERE project_id = ? AND entry_id = ?')
+        .run(this.projectId, id);
       this.db.prepare('DELETE FROM taxonomy_entries WHERE project_id = ? AND id = ?').run(this.projectId, id);
       this.db
         .prepare('DELETE FROM tree_node_links WHERE project_id = ? AND link = ? AND target = ?')
         .run(this.projectId, 'taxonomy', id);
     });
     return e;
+  }
+
+  /** v3 F6c (ADR 0080): an entry's review state (the seed's reasons), keeping everything else. */
+  setEntryReview(id: string, status: ReviewStatus, review: readonly ReviewReason[]): TaxonomyEntry {
+    this.db
+      .prepare(
+        'UPDATE taxonomy_entries SET status = ?, review = ?, updated_at = ? WHERE project_id = ? AND id = ?',
+      )
+      .run(status, j(review), this.now(), this.projectId, id);
+    return this.requireEntry(id);
+  }
+
+  // ============================================================================================ v3 F6c: roles
+
+  private static roleView(r: RoleRow): RoleBinding {
+    return {
+      projectId: r.project_id,
+      entryId: r.entry_id,
+      role: r.role,
+      nodeId: r.node_id,
+      status: r.status,
+      reason: r.reason,
+      origin: r.origin,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
+  }
+
+  /** Every role binding of the project (one query). */
+  allBindings(): RoleBinding[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM registry_roles WHERE project_id = ? ORDER BY entry_id, role')
+        .all(this.projectId) as RoleRow[]
+    ).map((r) => RegistryStore.roleView(r));
+  }
+
+  bindings(entryId: string): RoleBinding[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM registry_roles WHERE project_id = ? AND entry_id = ? ORDER BY role')
+        .all(this.projectId, entryId) as RoleRow[]
+    ).map((r) => RegistryStore.roleView(r));
+  }
+
+  binding(entryId: string, role: string): RoleBinding | undefined {
+    const r = this.db
+      .prepare('SELECT * FROM registry_roles WHERE project_id = ? AND entry_id = ? AND role = ?')
+      .get(this.projectId, entryId, role) as RoleRow | undefined;
+    return r ? RegistryStore.roleView(r) : undefined;
+  }
+
+  bindingByNode(nodeId: string): RoleBinding | undefined {
+    const r = this.db
+      .prepare('SELECT * FROM registry_roles WHERE project_id = ? AND node_id = ?')
+      .get(this.projectId, nodeId) as RoleRow | undefined;
+    return r ? RegistryStore.roleView(r) : undefined;
+  }
+
+  /**
+   * Binds an entry's role to one node. Refused (`ROLE_BOUND`, `NODE_BOUND`) when the role is bound to another node or
+   * the node to another role; binding the same pair again updates its status and reason.
+   */
+  bind(b: {
+    entryId: string;
+    role: string;
+    nodeId: string;
+    status: ReviewStatus;
+    reason?: string;
+    origin: RoleBinding['origin'];
+  }): RoleBinding {
+    const had = this.binding(b.entryId, b.role);
+    if (had && had.nodeId !== b.nodeId)
+      throw new RegistryError('ROLE_BOUND', `The role ${b.role} is bound to ${had.nodeId} already.`, {
+        entryId: b.entryId,
+        role: b.role,
+        nodeId: had.nodeId,
+      });
+    const other = this.bindingByNode(b.nodeId);
+    if (other && (other.entryId !== b.entryId || other.role !== b.role))
+      throw new RegistryError('NODE_BOUND', `${b.nodeId} is bound to the role ${other.role} already.`, {
+        entryId: other.entryId,
+        role: other.role,
+      });
+    const at = this.now();
+    this.db
+      .prepare(
+        `INSERT INTO registry_roles (project_id, entry_id, role, node_id, status, reason, origin, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (project_id, entry_id, role) DO UPDATE SET status = excluded.status, reason = excluded.reason,
+           updated_at = excluded.updated_at`,
+      )
+      .run(this.projectId, b.entryId, b.role, b.nodeId, b.status, b.reason ?? '', b.origin, at, at);
+    return this.binding(b.entryId, b.role)!;
+  }
+
+  unbind(entryId: string, role: string): boolean {
+    return (
+      this.db
+        .prepare('DELETE FROM registry_roles WHERE project_id = ? AND entry_id = ? AND role = ?')
+        .run(this.projectId, entryId, role).changes > 0
+    );
+  }
+
+  /** A cheap key that moves with any change of the project's entries or role bindings (caches are kept on it). */
+  structureKey(): string {
+    const r = this.db
+      .prepare(
+        `SELECT (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), 0) FROM taxonomy_entries WHERE project_id = ?) AS e,
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), 0) FROM registry_roles WHERE project_id = ?) AS r,
+                (SELECT COUNT(*) || ':' || COALESCE(MAX(updated_at), 0) FROM registry_types WHERE project_id = ?) AS t`,
+      )
+      .get(this.projectId, this.projectId, this.projectId) as { e: string; r: string; t: string };
+    return `${r.t}|${r.e}|${r.r}`;
   }
 
   /**

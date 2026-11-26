@@ -1,4 +1,5 @@
 import type { IndexClassifyService } from '../packs/indextax/service.js';
+import type { NationTaxonomyService } from '../packs/nations/service.js';
 import type { BackgroundRunner } from '../background.js';
 import type { Packs } from '../packs/service.js';
 import type { Appraisal } from '../appraisal/index.js';
@@ -102,6 +103,8 @@ export interface AdminRuntime {
   readonly referenceTypes?: ReferenceTypeService;
   /** v3 F6b (ADR 0079): the Index Classification page. */
   readonly indexClassify?: IndexClassifyService;
+  /** v3 F6c (ADR 0080): the Nation Subindexes page, the structural types' seeding, "Keep it here". */
+  readonly nationTaxonomy?: NationTaxonomyService;
   /** v3 F5b (ADR 0068): automatic actions for audits (the Automation page, the Overview's tile); optional for tests. */
   readonly automation?: AutomationService;
   /** v3 F5c (ADR 0069, H8): the workstreams and their reports (the Workstreams page); optional for tests. */

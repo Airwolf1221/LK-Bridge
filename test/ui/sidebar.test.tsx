@@ -27,10 +27,11 @@ const EXPECTED: [string, string[]][] = [
   ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree', 'Tagging']],
   [
     'Setup',
-    // v3 F6b (ADR 0079): Index Classification.
+    // v3 F6b (ADR 0079): Index Classification; v3 F6c (ADR 0080): Nation Subindexes.
     [
       'Index Classification',
       'Maintenance Jobs',
+      'Nation Subindexes',
       'Packs',
       'Projects',
       'Reference Types',
@@ -106,6 +107,7 @@ describe('the sidebar', () => {
       'backlog',
       'Index Classification',
       'Maintenance Jobs',
+      'Nation Subindexes',
       'Packs',
       'Projects',
       'Reference Types',

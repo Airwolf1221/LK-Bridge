@@ -41,7 +41,7 @@ import {
   findNation,
   homeTree,
   isPolities,
-  matchesHome,
+  homeMatchAmong,
   nationOf,
   nodesByPath,
   suggestHomes,
@@ -195,7 +195,8 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   const owners = rules.owners!;
   const otype = owners.types.find((x) => textKey(x.name) === textKey(input.type))!;
   const type = ownerTypeRules(rules, otype);
-  const t = homeTree(ctx, owners);
+  // v3 F6c (ADR 0080, C5): placement by role once the registry's Territory or Nation type is seeded.
+  const t = homeTree(ctx, owners, pd.services?.nationTaxonomy?.roleView(ctx.projectId) ?? null);
   const refusals: Issue[] = [];
   const warnings: Issue[] = [];
   const replacements: Replacement[] = [];
@@ -452,6 +453,7 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       'homeOverride needs a reason (it is printed in the proposal for the owner).',
     );
   let homeFits: string | null = null;
+  let homeLevel: { level: string; why: string } | null = null;
   let overridden = false;
   const allowed = homeRules.map((r) => describeHome(t, r));
   const notAllowed = (n: TreeNode, why: string) => {
@@ -495,9 +497,12 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
         );
       else home = { kind: 'planned', key: 'subindex' };
     } else {
-      const rule = homeRules.find((r) => matchesHome(t, n, r));
-      if (rule) homeFits = describeHome(t, rule);
-      else if (override) {
+      const m = homeMatchAmong(t, n, homeRules);
+      const rule = m?.rule;
+      if (m) {
+        homeFits = describeHome(t, m.rule);
+        homeLevel = { level: m.level, why: m.why };
+      } else if (override) {
         overridden = true;
         warn(
           'HOME_OVERRIDDEN',
@@ -549,13 +554,26 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
           (r): r is Extract<HomeRule, { kind: 'category' }> => r.kind === 'category' && r.level === 'nation',
         )
         .map((r) => r.category);
-      const fits =
-        k(subName).startsWith(`${k(natName)} `) && cats.some((c) => k(`${natName} ${c}`) === k(subName));
+      // v3 F6c (ADR 0080, C2): once the Nation type is seeded, a nation's subindex is `<Nation> <Role>` (its short name
+      // first), for the roles the type's nation-level categories name.
+      const nat = natNode ? t.roles?.nations.get(natNode.id) : undefined;
+      const allowedNames =
+        t.roles?.nationSeeded && nat
+          ? [
+              ...new Set(
+                cats
+                  .map((c) => t.roles!.roleForCategory(c))
+                  .filter((r): r is string => r !== null)
+                  .map((r) => `${nat.shortName ?? natName} ${r}`),
+              ),
+            ]
+          : cats.map((c) => `${natName} ${c}`);
+      const fits = allowedNames.some((x) => k(x) === k(subName));
       if (!fits && !override)
         refuse(
           'SUBINDEX_NOT_ALLOWED',
-          `createSubindex “${subName}” is not a national subindex a ${otype.name} lives in: ${cats.length ? cats.map((c) => `“${natName} ${c}”`).join(' or ') : 'it has none'}.`,
-          { allowed: cats.map((c) => `${natName} ${c}`) },
+          `createSubindex “${subName}” is not a national subindex a ${otype.name} lives in: ${allowedNames.length ? allowedNames.map((x) => `“${x}”`).join(' or ') : 'it has none'}.`,
+          { allowed: allowedNames },
         );
       if (natNode) {
         const there = t.children(natNode.id).find((c) => k(c.displayName) === k(subName));
@@ -1182,6 +1200,8 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
               name: home.node.rawName,
               path: home.node.path.names.join(' / '),
               fits: homeFits,
+              // v3 F6c (C5): which level of placement the home was found at, and why.
+              ...(homeLevel ? { placement: homeLevel } : {}),
               ...(overridden ? { override } : {}),
             }
           : home?.kind === 'planned'
@@ -1208,8 +1228,25 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
           },
         }
       : {}),
-    ...(navPage && navPlan
-      ? { taxonomy: [{ resourceId: navPage.id, plural: navPlan.name, parentNodeId: navPlan.parent.id }] }
+    ...((navPage && navPlan) || (promote && nationPage)
+      ? {
+          taxonomy: [
+            ...(navPage && navPlan
+              ? [{ resourceId: navPage.id, plural: navPlan.name, parentNodeId: navPlan.parent.id }]
+              : []),
+            // v3 F6c (ADR 0080): a promoted nation's new index is recorded in the Nation type (once it is seeded).
+            ...(promote && nationPage
+              ? [
+                  {
+                    resourceId: nationPage.id,
+                    plural: nationName!,
+                    parentNodeId: promote.polities.id,
+                    kind: 'nation' as const,
+                  },
+                ]
+              : []),
+          ],
+        }
       : {}),
     ...(overridden && override ? { summaryNote: `home override: ${override}` } : {}),
   };

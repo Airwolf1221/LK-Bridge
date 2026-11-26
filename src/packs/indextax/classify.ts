@@ -34,6 +34,7 @@ import type { NodeScanRow } from '../../tree/index.js';
 import { continuityOf, placeOf, rootsOf, type NNode, type NView } from '../../narrative/layout.js';
 import type { IndexTaxonomyRules, NarrativeRules } from '../types.js';
 import type { SubjectKind } from './rules.js';
+import { hasNationRoles, matchNationChild, roleKey, type NameMapping } from '../nations/roles.js';
 
 export const RULE_IDS = [
   'top_level',
@@ -124,6 +125,16 @@ export interface ClassifyInput {
   readonly owners: { readonly nations: string; readonly worldPrefix: string } | null;
   readonly narrative: NarrativeRules | null;
   readonly characters: readonly CharacterTaxonomy[];
+  /**
+   * v3 F6c (ADR 0080): the owner's Nation Subindexes decisions the nation subindex rule reads besides the pack's roles and
+   * variants: names mapped to a role, names kept as specialist subindexes, and the Nation entries' short names (by the
+   * nation index's id), so F6b's classification and F6c agree.
+   */
+  readonly nationSubindex?: {
+    readonly mappings: readonly NameMapping[];
+    readonly specialists: readonly string[];
+    readonly shortNames: ReadonlyMap<string, string>;
+  };
 }
 
 export interface Verdict {
@@ -233,10 +244,20 @@ export function* classifySteps(input: ClassifyInput, chunk = 100): Generator<voi
       }
     }
     if (parent && isNation(parent)) {
-      const sub = s.nationSubindexes.some((w) => {
-        const wk = nameKeyOf(w);
-        return k === wk || k === `${key(parent)} ${wk}`;
-      });
+      // v3 F6c (ADR 0080): with the pack's nation roles, C2's matching (the three forms, accents aside, the variants and
+      // the owner's mappings); a specialist subindex the owner kept is a subindex too. Without them, F6b's word list.
+      const ns = input.nationSubindex;
+      const sub = hasNationRoles(rules)
+        ? matchNationChild(
+            rules,
+            n.displayName,
+            [parent.displayName, ...(ns?.shortNames.get(parent.id) ? [ns.shortNames.get(parent.id)!] : [])],
+            ns?.mappings ?? [],
+          ) !== null || (ns?.specialists ?? []).some((x) => roleKey(x) === roleKey(n.displayName))
+        : s.nationSubindexes.some((w) => {
+            const wk = nameKeyOf(w);
+            return k === wk || k === `${key(parent)} ${wk}`;
+          });
       if (sub) out.push('nation_subindex');
     }
     // The registry's character taxonomy.

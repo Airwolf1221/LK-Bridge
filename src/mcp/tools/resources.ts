@@ -45,6 +45,16 @@ import {
   type IndexRole,
 } from '../../tree/classify.js';
 import { templateNameOf } from '../../packs/indextax/rules.js';
+import { roleBindingStep } from '../../packs/nations/records.js';
+import {
+  canonicalRole,
+  categoryParentOf,
+  hasNationRoles,
+  nationRolesOf,
+  roleKey,
+  territoryCategoriesOf,
+  unifiedName,
+} from '../../packs/nations/roles.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import {
@@ -266,12 +276,28 @@ export async function finishCreate(
     readonly summary: string;
     /** v2 C2c: pages besides those with a status that the job places in a lifecycle area (a Working character's index). */
     readonly markerPages?: readonly { readonly id: string; readonly to: null }[];
+    /**
+     * v3 F6c (ADR 0080): steps after the pages' (a role binding's `bridge.record`, run only once the pages are made and
+     * verified), each with its label and its line in the proposal.
+     */
+    readonly extraSteps?: readonly {
+      readonly step: StepSpec;
+      readonly label: string;
+      readonly operation: Obj;
+    }[];
   },
 ): Promise<CreateOutcome> {
   const { pd, mctx, ctx, tool } = cc;
   const planned = planCreateJob(ctx, pages, { batch: o.batch, tool });
   if (!planned.ok) return { kind: 'answer', result: planned.result };
-  const { job } = planned.value;
+  const job = o.extraSteps?.length
+    ? {
+        ...planned.value.job,
+        steps: [...planned.value.job.steps, ...o.extraSteps.map((x) => x.step)],
+        labels: [...planned.value.job.labels, ...o.extraSteps.map((x) => x.label)],
+        operations: [...planned.value.job.operations, ...o.extraSteps.map((x) => x.operation)],
+      }
+    : planned.value.job;
   const rules = canonRules(pd, ctx.projectId);
   // v2 C2c: the job declares the lifecycle state it gives each page; an Authoritative page is canon.
   const marker = createMarker(tool, [
@@ -360,13 +386,16 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
     title: 'Create an index',
     access: 'write',
     description:
-      'Creates an index in its place among its siblings. `role` "nav" makes a [NAV] page, an index that only groups or routes (a race or racial group, a category index, a nation subindex, an act), from the “[NAV] AI Navigation” template (resolved by name; missing: refused with TEMPLATE_MISSING); `role` "subject" makes an [INDEX] page, an index about one subject (a character, a nation, a continent, a culture family, a story), from its type’s Index template. On a project with the Arkona pack `role` is required; elsewhere it defaults to subject. Give `parent`, or `type` and `category` (the category’s index is then the parent). Content pages are create_resource; a character’s own index is made by create_character. An index has no status and is never made under Working or Archived. An unknown type or category is refused with the known ones. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 5 reads and 1 write.',
+      'Creates an index in its place among its siblings. `role` "nav" makes a [NAV] page, an index that only groups or routes (a race or racial group, a category index, a nation subindex, an act), from the “[NAV] AI Navigation” template (resolved by name; missing: refused with TEMPLATE_MISSING); `role` "subject" makes an [INDEX] page, an index about one subject (a character, a nation, a continent, a culture family, a story), from its type’s Index template. On a project with the Arkona pack `role` is required; elsewhere it defaults to subject. Give `parent`, or `type` and `category` (the category’s index is then the parent). For a nation subindex or a territory category use the role form, `roleFor` { nation, role } or { territory, category } (once the owner has seeded those registry types): the bridge names it (<Nation> <Role>, the nation’s short name first; <Territory> <Category>), places it, makes it [NAV], records the role once the job succeeds, and refuses a role already bound (ROLE_BOUND); never invent a role’s name. Content pages are create_resource; a character’s own index is made by create_character. An index has no status and is never made under Working or Archived. An unknown type or category is refused with the known ones. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 5 reads and 1 write.',
     inputSchema: z.object({
       name: z
         .string()
         .min(1)
         .max(500)
-        .describe('The index’s name, without its prefix ([NAV] or [INDEX], added).'),
+        .optional()
+        .describe(
+          'The index’s name, without its prefix ([NAV] or [INDEX], added). With `roleFor` the bridge names it.',
+        ),
       role: z
         .enum(['nav', 'subject'])
         .optional()
@@ -381,6 +410,15 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
         .max(200)
         .optional()
         .describe('A taxonomy category of the type, e.g. Foxians.'),
+      roleFor: z
+        .union([
+          z.object({ nation: z.string().min(1).max(200), role: z.string().min(1).max(100) }).strict(),
+          z.object({ territory: z.string().min(1).max(200), category: z.string().min(1).max(100) }).strict(),
+        ])
+        .optional()
+        .describe(
+          'The role form: { nation, role } (a nation subindex, e.g. { "nation": "Cantha", "role": "Institutions" }) or { territory, category } (e.g. { "territory": "Salahad", "category": "Regions" }). The name, the parent and [NAV] follow from it.',
+        ),
       dryRun: dryRunArg,
       operation_id: operationIdArg,
       project: projectArg,
@@ -391,202 +429,355 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
         const rc = repoContext(pd);
         if (!rc.ok) return rc.result;
         const ctx = rc.ctx;
-        return withRequest(pd, mctx, 'create_index', args, null, async () => {
-          const name = cleanName(args.name);
-          if (!name) return refusal(pd, 'INVALID_PARAMS', 'An index name (1 to 200 characters) is required.');
-          // v3 F6b (ADR 0079, T11): the index's role. Required where a pack carries the index rules; subject elsewhere.
-          const taxonomy = pd.services?.indexClassify?.packFor(pd.project.id) ?? null;
-          const role: IndexRole | undefined = args.role ?? (taxonomy ? undefined : 'subject');
-          if (!role)
-            return refusal(
-              pd,
-              'ROLE_REQUIRED',
-              'Say which kind of index: role "nav" ([NAV], an index that only groups or routes: a race or racial group, a category index, a nation subindex, an act) or "subject" ([INDEX], an index about one subject: a character, a nation, a continent, a culture family, a story). Never guess it from the name: ask the person when unsure.',
-            );
-          const taxRules = taxonomy?.approved?.indexTaxonomy ?? taxonomy?.current.indexTaxonomy ?? null;
-          let navTemplate: { id: string; name: string } | null = null;
-          if (role === 'nav') {
-            const want = templateNameOf(taxRules, 'nav');
-            const t = await resolveTemplate(pd, mctx, ctx, 'create_index', want);
-            if (!t.ok)
-              return refusal(
-                pd,
-                'TEMPLATE_MISSING',
-                `The template “${want}” is missing, so no [NAV] index can be made. The owner makes it as a copy of “${templateNameOf(taxRules, 'subject')}”; until then nothing is created.`,
-                { template: want },
-              );
-            navTemplate = { id: t.value.id, name: t.value.name ?? want };
-          }
-          const store = ctx.types.store;
-          const types = store.listTypes();
-          const known = types.map((t) => t.singular);
-          let type = args.type !== undefined ? store.typeByName(args.type) : undefined;
-          if (args.type !== undefined && !type) {
-            return refusal(
-              pd,
-              'UNKNOWN_TYPE',
-              `No type named “${args.type}”. Types: ${known.join(', ') || 'none yet'}.`,
-              {
-                types: known,
-              },
-            );
-          }
-          // The category: a taxonomy entry of the type (or of the one type that has it).
-          let categoryNode: TreeNode | null = null;
-          if (args.category !== undefined) {
-            const k = key(cleanPrefixes(args.category).name);
-            const pool = type ? [type] : types;
-            const hits = pool.flatMap((t) =>
-              store
-                .entries(t.id)
-                .filter(
-                  (e) => key(e.plural) === k || key(e.singular) === k || e.aliases.some((a) => key(a) === k),
-                )
-                .map((e) => ({ t, e })),
-            );
-            if (hits.length !== 1) {
-              const labels = pool.flatMap((t) => store.entries(t.id).map((e) => e.plural));
-              return refusal(
-                pd,
-                hits.length === 0 ? 'UNKNOWN_CATEGORY' : 'CATEGORY_AMBIGUOUS',
-                hits.length === 0
-                  ? `No category “${args.category}”${type ? ` of ${type.plural}` : ''}. Categories: ${labels.join(', ') || 'none (seed the taxonomy first)'}.`
-                  : `“${args.category}” is a category of ${hits.length} types; name the type.`,
-                { categories: labels.slice(0, 200) },
-              );
-            }
-            type = hits[0]!.t;
-            categoryNode = ctx.tree.node(ctx.projectId, hits[0]!.e.sourceNodeId).data;
-            if (!categoryNode) {
-              return refusal(
-                pd,
-                'CATEGORY_SOURCE_MISSING',
-                `The index of the category “${hits[0]!.e.plural}” is no longer in the tree.`,
-              );
-            }
-          }
-          let parent: TreeNode;
-          if (args.parent !== undefined) {
-            const r = resolveParent(ctx, args.parent);
-            if (!r.ok) return { kind: 'answer', result: r.result };
-            parent = r.value;
-            if (categoryNode && parent.id !== categoryNode.id && !parent.path.ids.includes(categoryNode.id)) {
-              return refusal(
-                pd,
-                'CATEGORY_MISMATCH',
-                `“${parent.displayName}” is not the index of the category “${categoryNode.displayName}” or under it.`,
-              );
-            }
-          } else if (categoryNode) parent = categoryNode;
-          else if (role === 'subject' && type?.rootIndexId) {
-            const root = ctx.tree.node(ctx.projectId, type.rootIndexId).data;
-            if (!root)
-              return refusal(
-                pd,
-                'TYPE_ROOT_MISSING',
-                `The type ${type.singular} has no root index in the tree.`,
-              );
-            parent = root;
-          } else {
-            return refusal(
-              pd,
-              'INVALID_PARAMS',
-              'Give parent, or type and category (or type alone for its root index).',
-            );
-          }
-          // The type: given, or the one whose root index holds the parent (the nearest). v3 F6b: a [NAV] needs none (its
-          // template is "[NAV] AI Navigation", by name).
-          if (!type && role === 'subject') {
-            const owners = types
-              .filter(
-                (t) =>
-                  t.rootIndexId && (parent.id === t.rootIndexId || parent.path.ids.includes(t.rootIndexId)),
-              )
-              .sort(
-                (a, b) => parent.path.ids.indexOf(b.rootIndexId!) - parent.path.ids.indexOf(a.rootIndexId!),
-              );
-            type = owners[0];
-            if (!type) {
-              return refusal(
-                pd,
-                'UNKNOWN_TYPE',
-                `“${parent.displayName}” is under no type’s root index, so the bridge does not know which Index template to use. Name a type: ${known.join(', ') || 'none yet'}.`,
-                { types: known },
-              );
-            }
-          } else if (
-            type?.rootIndexId &&
-            parent.id !== type.rootIndexId &&
-            !parent.path.ids.includes(type.rootIndexId)
-          ) {
-            return refusal(
-              pd,
-              'TYPE_MISMATCH',
-              `“${parent.displayName}” is not under the ${type.plural} index.`,
-            );
-          }
-          const templateId = navTemplate?.id ?? type?.indexTemplateId ?? null;
-          if (!templateId) {
-            return refusal(
-              pd,
-              'TEMPLATE_NOT_CONFIGURED',
-              `The type ${type?.singular ?? '(none)'} has no Index template; the owner sets it on the Repository Mappings page.`,
-            );
-          }
-          const twin = sibling(ctx, parent.id, 'index', name);
-          if (twin) {
-            return refusal(
-              pd,
-              'INDEX_EXISTS',
-              `“${parent.displayName}” already has an index named “${twin.displayName}”.`,
-              {
-                existing: nodeView(twin),
-              },
-            );
-          }
-          const cc = createCtx(pd, mctx, ctx, 'create_index');
-          // v2 C2c: [INDEX] Working and [INDEX] Archived are flat: no index is made under either (a Working
-          // character's own index is create_character's).
-          const area = lifecycleAreaOf(cc, parent);
-          if (area !== null) {
-            return refusal(
-              pd,
-              'LIFECYCLE_AREA',
-              `“${parent.displayName}” is [INDEX] ${area === 'working' ? cc.lifecycle.indexNames.working : cc.lifecycle.indexNames.archived} or under it: those indexes are flat, so no index is made there (a Working character’s own index is made by create_character).`,
-            );
-          }
-          const id = newPage({
-            key: 'index',
-            rawName: `${ROLE_PREFIX[role]}${name}`,
-            parent: { existing: parent.id },
-            templateId,
-            facts: null,
-            parentName: parent.rawName,
-            templateName: navTemplate
-              ? `“${navTemplate.name}”`
-              : `the ${type?.singular ?? ''} Index template`,
-          });
-          const facts = await planNewPageFacts(cc, {
-            pageId: id.id,
-            pageName: id.rawName,
-            templateId,
-            status: null,
-            what: id.rawName,
-          });
-          if (!facts.ok) return { kind: 'answer', result: facts.result };
-          return finishCreate(cc, [{ ...id, facts: facts.value }], {
-            batch: false,
-            dryRun: args.dryRun === true,
-            extraHead: {
-              role,
-              ...(type ? { type: type.singular } : {}),
-              ...(categoryNode ? { category: categoryNode.displayName } : {}),
-            },
-            summary: `create_index: ${id.rawName} under ${parent.rawName}`,
-          });
-        });
+        return withRequest(pd, mctx, 'create_index', args, null, () => planCreateIndex(pd, mctx, ctx, args));
       }),
   });
+}
+
+/** create_index's arguments, as the tool and the `territory_category` fix give them. */
+export interface CreateIndexArgs {
+  readonly name?: string | undefined;
+  readonly role?: IndexRole | undefined;
+  readonly parent?: string | undefined;
+  readonly type?: string | undefined;
+  readonly category?: string | undefined;
+  readonly roleFor?:
+    | { readonly nation: string; readonly role: string }
+    | { readonly territory: string; readonly category: string }
+    | undefined;
+  readonly dryRun?: boolean | undefined;
+}
+
+/**
+ * create_index's plan and job (v2 C2b; v3 F6b's role; v3 F6c's role form). Exported for the audits'
+ * `territory_category` fix, which makes the missing category index through this same path.
+ */
+export async function planCreateIndex(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  ctx: RepoCtx,
+  args: CreateIndexArgs,
+): Promise<CreateOutcome> {
+  // v3 F6c (ADR 0080, C5): the role form names, places and binds the index.
+  const form = args.roleFor ? roleForm(pd, ctx, args) : null;
+  if (form && !form.ok) return form.refusal;
+  const governed = form?.ok ? form : null;
+  const name = governed ? governed.name : args.name !== undefined ? cleanName(args.name) : null;
+  if (!name) return refusal(pd, 'INVALID_PARAMS', 'An index name (1 to 200 characters) is required.');
+  // v3 F6b (ADR 0079, T11): the index's role. Required where a pack carries the index rules; subject elsewhere.
+  const taxonomy = pd.services?.indexClassify?.packFor(pd.project.id) ?? null;
+  const role: IndexRole | undefined = governed ? 'nav' : (args.role ?? (taxonomy ? undefined : 'subject'));
+  if (!role)
+    return refusal(
+      pd,
+      'ROLE_REQUIRED',
+      'Say which kind of index: role "nav" ([NAV], an index that only groups or routes: a race or racial group, a category index, a nation subindex, an act) or "subject" ([INDEX], an index about one subject: a character, a nation, a continent, a culture family, a story). Never guess it from the name: ask the person when unsure.',
+    );
+  const taxRules = taxonomy?.approved?.indexTaxonomy ?? taxonomy?.current.indexTaxonomy ?? null;
+  let navTemplate: { id: string; name: string } | null = null;
+  if (role === 'nav') {
+    const want = templateNameOf(taxRules, 'nav');
+    const t = await resolveTemplate(pd, mctx, ctx, 'create_index', want);
+    if (!t.ok)
+      return refusal(
+        pd,
+        'TEMPLATE_MISSING',
+        `The template “${want}” is missing, so no [NAV] index can be made. The owner makes it as a copy of “${templateNameOf(taxRules, 'subject')}”; until then nothing is created.`,
+        { template: want },
+      );
+    navTemplate = { id: t.value.id, name: t.value.name ?? want };
+  }
+  const store = ctx.types.store;
+  const types = store.listTypes();
+  const known = types.map((t) => t.singular);
+  let type = args.type !== undefined ? store.typeByName(args.type) : undefined;
+  if (args.type !== undefined && !type) {
+    return refusal(
+      pd,
+      'UNKNOWN_TYPE',
+      `No type named “${args.type}”. Types: ${known.join(', ') || 'none yet'}.`,
+      {
+        types: known,
+      },
+    );
+  }
+  // The category: a taxonomy entry of the type (or of the one type that has it).
+  let categoryNode: TreeNode | null = null;
+  if (args.category !== undefined) {
+    const k = key(cleanPrefixes(args.category).name);
+    const pool = type ? [type] : types;
+    const hits = pool.flatMap((t) =>
+      store
+        .entries(t.id)
+        .filter((e) => key(e.plural) === k || key(e.singular) === k || e.aliases.some((a) => key(a) === k))
+        .map((e) => ({ t, e })),
+    );
+    if (hits.length !== 1) {
+      const labels = pool.flatMap((t) => store.entries(t.id).map((e) => e.plural));
+      return refusal(
+        pd,
+        hits.length === 0 ? 'UNKNOWN_CATEGORY' : 'CATEGORY_AMBIGUOUS',
+        hits.length === 0
+          ? `No category “${args.category}”${type ? ` of ${type.plural}` : ''}. Categories: ${labels.join(', ') || 'none (seed the taxonomy first)'}.`
+          : `“${args.category}” is a category of ${hits.length} types; name the type.`,
+        { categories: labels.slice(0, 200) },
+      );
+    }
+    type = hits[0]!.t;
+    categoryNode = ctx.tree.node(ctx.projectId, hits[0]!.e.sourceNodeId).data;
+    if (!categoryNode) {
+      return refusal(
+        pd,
+        'CATEGORY_SOURCE_MISSING',
+        `The index of the category “${hits[0]!.e.plural}” is no longer in the tree.`,
+      );
+    }
+  }
+  let parent: TreeNode;
+  if (governed) parent = governed.parent;
+  else if (args.parent !== undefined) {
+    const r = resolveParent(ctx, args.parent);
+    if (!r.ok) return { kind: 'answer', result: r.result };
+    parent = r.value;
+    if (categoryNode && parent.id !== categoryNode.id && !parent.path.ids.includes(categoryNode.id)) {
+      return refusal(
+        pd,
+        'CATEGORY_MISMATCH',
+        `“${parent.displayName}” is not the index of the category “${categoryNode.displayName}” or under it.`,
+      );
+    }
+  } else if (categoryNode) parent = categoryNode;
+  else if (role === 'subject' && type?.rootIndexId) {
+    const root = ctx.tree.node(ctx.projectId, type.rootIndexId).data;
+    if (!root)
+      return refusal(pd, 'TYPE_ROOT_MISSING', `The type ${type.singular} has no root index in the tree.`);
+    parent = root;
+  } else {
+    return refusal(
+      pd,
+      'INVALID_PARAMS',
+      'Give parent, or type and category (or type alone for its root index).',
+    );
+  }
+  // The type: given, or the one whose root index holds the parent (the nearest). v3 F6b: a [NAV] needs none (its
+  // template is "[NAV] AI Navigation", by name).
+  if (!type && role === 'subject') {
+    const owners = types
+      .filter(
+        (t) => t.rootIndexId && (parent.id === t.rootIndexId || parent.path.ids.includes(t.rootIndexId)),
+      )
+      .sort((a, b) => parent.path.ids.indexOf(b.rootIndexId!) - parent.path.ids.indexOf(a.rootIndexId!));
+    type = owners[0];
+    if (!type) {
+      return refusal(
+        pd,
+        'UNKNOWN_TYPE',
+        `“${parent.displayName}” is under no type’s root index, so the bridge does not know which Index template to use. Name a type: ${known.join(', ') || 'none yet'}.`,
+        { types: known },
+      );
+    }
+  } else if (
+    type?.rootIndexId &&
+    parent.id !== type.rootIndexId &&
+    !parent.path.ids.includes(type.rootIndexId)
+  ) {
+    return refusal(pd, 'TYPE_MISMATCH', `“${parent.displayName}” is not under the ${type.plural} index.`);
+  }
+  const templateId = navTemplate?.id ?? type?.indexTemplateId ?? null;
+  if (!templateId) {
+    return refusal(
+      pd,
+      'TEMPLATE_NOT_CONFIGURED',
+      `The type ${type?.singular ?? '(none)'} has no Index template; the owner sets it on the Repository Mappings page.`,
+    );
+  }
+  const twin = sibling(ctx, parent.id, 'index', name);
+  if (twin) {
+    return refusal(
+      pd,
+      'INDEX_EXISTS',
+      `“${parent.displayName}” already has an index named “${twin.displayName}”.`,
+      {
+        existing: nodeView(twin),
+      },
+    );
+  }
+  const cc = createCtx(pd, mctx, ctx, 'create_index');
+  // v2 C2c: [INDEX] Working and [INDEX] Archived are flat: no index is made under either (a Working
+  // character's own index is create_character's).
+  const area = lifecycleAreaOf(cc, parent);
+  if (area !== null) {
+    return refusal(
+      pd,
+      'LIFECYCLE_AREA',
+      `“${parent.displayName}” is [INDEX] ${area === 'working' ? cc.lifecycle.indexNames.working : cc.lifecycle.indexNames.archived} or under it: those indexes are flat, so no index is made there (a Working character’s own index is made by create_character).`,
+    );
+  }
+  const id = newPage({
+    key: 'index',
+    rawName: `${ROLE_PREFIX[role]}${name}`,
+    parent: { existing: parent.id },
+    templateId,
+    facts: null,
+    parentName: parent.rawName,
+    templateName: navTemplate ? `“${navTemplate.name}”` : `the ${type?.singular ?? ''} Index template`,
+  });
+  const facts = await planNewPageFacts(cc, {
+    pageId: id.id,
+    pageName: id.rawName,
+    templateId,
+    status: null,
+    what: id.rawName,
+  });
+  if (!facts.ok) return { kind: 'answer', result: facts.result };
+  return finishCreate(cc, [{ ...id, facts: facts.value }], {
+    batch: false,
+    dryRun: args.dryRun === true,
+    extraHead: {
+      role,
+      ...(type ? { type: type.singular } : {}),
+      ...(categoryNode ? { category: categoryNode.displayName } : {}),
+      ...(governed ? { roleFor: { [governed.kind]: governed.ownerName, role: governed.role } } : {}),
+    },
+    summary: `create_index: ${id.rawName} under ${parent.rawName}${governed ? ` (${governed.ownerName}’s ${governed.role})` : ''}`,
+    ...(governed
+      ? {
+          extraSteps: [
+            {
+              step: roleBindingStep({
+                ownerNodeId: governed.ownerNodeId,
+                role: governed.role,
+                nodeId: id.id,
+              }),
+              label: `bind ${id.rawName} as ${governed.ownerName}’s ${governed.role}`,
+              operation: {
+                tool: 'create_index',
+                kind: 'role_binding',
+                summaryLabel: `${id.rawName}: bound as ${governed.ownerName}’s ${governed.role} (Repository Mappings) once it is made`,
+              },
+            },
+          ],
+        }
+      : {}),
+  });
+}
+
+type RoleFormResult =
+  | {
+      readonly ok: true;
+      readonly kind: 'nation' | 'territory';
+      readonly name: string;
+      readonly parent: TreeNode;
+      readonly role: string;
+      readonly ownerNodeId: string;
+      readonly ownerName: string;
+    }
+  | { readonly ok: false; readonly refusal: CreateOutcome };
+
+/**
+ * v3 F6c (ADR 0080, C5): `roleFor` { nation, role } or { territory, category }: the entry (by its index's id, name or a
+ * nation's short name) of a SEEDED Territory or Nation type, the role (the pack's), refused when it is bound already;
+ * the name C2's form (`<Nation> <Role>`, the short name first; `<Territory> <Category>`), the parent the nation's or
+ * territory's index (Conflicts: the bound Historical Events). A `name` that is not that name is refused.
+ */
+function roleForm(pd: ProjectDeps, ctx: RepoCtx, args: CreateIndexArgs): RoleFormResult {
+  const no = (code: string, message: string, more: Obj = {}): RoleFormResult => ({
+    ok: false,
+    refusal: refusal(pd, code, message, more),
+  });
+  const rf = args.roleFor!;
+  const svc = pd.services?.nationTaxonomy;
+  const rules = svc?.rulesFor(ctx.projectId) ?? null;
+  if (!rules || !hasNationRoles(rules.tax))
+    return no(
+      'NO_NATION_ROLES',
+      'The role form needs the pack’s nation roles and territory categories (the Arkona pack from arkona-2026-11-27-f6c); none is attached here.',
+    );
+  if (args.role !== undefined && args.role !== 'nav')
+    return no(
+      'ROLE_FORM_NAV',
+      'A nation subindex or a territory category is a [NAV] index: leave role out, or give "nav".',
+    );
+  const kind = 'nation' in rf ? ('nation' as const) : ('territory' as const);
+  const store = ctx.types.store;
+  const type = store.typeByKind(kind);
+  if (!type || type.taxonomySeededAt === null)
+    return no(
+      'NOT_SEEDED',
+      `The ${kind === 'nation' ? 'Nation' : 'Territory'} type is not seeded yet: the owner seeds it on the Repository Mappings page. Until then give parent and name.`,
+    );
+  const want = 'nation' in rf ? rf.nation : rf.territory;
+  const k = key(cleanPrefixes(want).name);
+  const hits = store.entries(type.id).filter((e) => {
+    const n = ctx.tree.node(ctx.projectId, e.sourceNodeId).data;
+    return (
+      e.sourceNodeId === want.trim() ||
+      key(e.plural) === k ||
+      (n !== null && key(n.displayName) === k) ||
+      (e.shortName !== null && key(e.shortName) === k)
+    );
+  });
+  if (hits.length !== 1)
+    return no(
+      hits.length === 0 ? 'UNKNOWN_ENTRY' : 'ENTRY_AMBIGUOUS',
+      hits.length === 0
+        ? `No ${type.singular} entry is named “${want}”.`
+        : `“${want}” names ${hits.length} ${type.plural}; give the index’s id.`,
+      { candidates: hits.map((e) => ({ id: e.sourceNodeId, name: e.plural })) },
+    );
+  const e = hits[0]!;
+  const owner = ctx.tree.node(ctx.projectId, e.sourceNodeId).data;
+  if (!owner) return no('ENTRY_SOURCE_MISSING', `${e.plural}’s index is no longer in the tree.`);
+  let role: string | null;
+  let parent: TreeNode | null = owner;
+  let name: string;
+  if ('nation' in rf) {
+    role = canonicalRole(rules.tax, rf.role);
+    if (!role)
+      return no(
+        'ROLE_UNKNOWN',
+        `“${rf.role}” is not a nation role. Roles: ${nationRolesOf(rules.tax).join('; ')}.`,
+        {
+          roles: nationRolesOf(rules.tax),
+        },
+      );
+    name = unifiedName({ displayName: owner.displayName, shortName: e.shortName }, role);
+  } else {
+    const cats = territoryCategoriesOf(rules.tax);
+    role = cats.find((c) => roleKey(c) === roleKey(rf.category)) ?? null;
+    if (!role)
+      return no(
+        'ROLE_UNKNOWN',
+        `“${rf.category}” is not a territory category. Categories: ${cats.join('; ')}.`,
+        {
+          categories: cats,
+        },
+      );
+    const parentCat = categoryParentOf(rules.tax, role);
+    if (parentCat) {
+      const pc = cats.find((c) => roleKey(c) === roleKey(parentCat)) ?? parentCat;
+      const b = store.binding(e.id, pc);
+      parent = b ? ctx.tree.node(ctx.projectId, b.nodeId).data : null;
+      if (!parent)
+        return no(
+          'CATEGORY_PARENT_UNBOUND',
+          `${role} sits inside ${owner.displayName}’s ${pc}, which is not bound yet: make (or bind) ${owner.displayName} ${pc} first.`,
+        );
+    }
+    name = `${owner.displayName} ${role}`;
+  }
+  const bound = store.binding(e.id, role);
+  if (bound)
+    return no('ROLE_BOUND', `${e.plural}’s ${role} is bound already (${bound.nodeId}); nothing is made.`, {
+      bound: { id: bound.nodeId },
+    });
+  if (args.name !== undefined && key(cleanName(args.name) ?? '') !== key(name))
+    return no(
+      'NAME_NOT_GOVERNED',
+      `The role form names the index “${name}” (${kind === 'nation' ? '<Nation> <Role>' : '<Territory> <Category>'}); leave name out, or give that.`,
+      { name },
+    );
+  return { ok: true, kind, name, parent, role, ownerNodeId: owner.id, ownerName: owner.displayName };
 }
 
 // ============================================================================================ create_resource

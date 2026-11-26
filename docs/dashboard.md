@@ -308,6 +308,30 @@ of continents and Realmships, Setting Framework's and Divine Realms' categories,
 religion category words, the out-of-scope areas), one per line. Saving makes a new pack version, approved on the Packs
 page before the report uses it.
 
+## Nation Subindexes (v3 F6c)
+
+In the Setup group, after Index Classification ([ADR 0080](adr/0080-v3-f6c-territories-nations-and-subindexes.md)).
+Every direct child index of every nation (a Nation entry once that type is seeded on Repository Mappings, else an index
+directly in a `<Territory> Polities` index): the nation, the child (its current name, linked), its pages, the role its
+name matches and how (a role name, an approved variant, or your mapping; bare, `<Nation> <word>` or `<Nation> - <word>`),
+the unified name it would take (`<Nation> <Role>`, the nation's short name first) and its status. A child the Index
+Classification approved as a subject index is not listed; a child whose classification is not approved yet is listed and
+marked. Two children of one nation with one role are a **collision**: neither is renamed. A name that names two roles
+("Government & Institutions") lists the index's pages with their primary category tags.
+
+Filters: status, nation, name, collisions only. Per row: **Accept**, **Map to a role** (with "for every page with this
+name": every nation's child of that exact name not decided yet, one request, at most `NATION_SUBINDEX_BULK_MAX` (500)),
+**Keep as a specialist subindex**, **Not a subindex**, and **Undo** until the rename is applied. Every decision asks for
+the step-up and is recorded in the audit log. Nothing is renamed here: accepted and mapped rows become
+`nation_subindex_nonstandard` findings in the Audits, which Automation can run (default Off).
+
+### Repository Mappings › Territories and nations (v3 F6c)
+
+The five structural types (Territory, Nation, Divine Realm, Culture family, Religion family): **Seed** each, Territory
+first, then Nation (entries come only from rows you approved on Index Classification; matched rows not approved are
+counted as "classify first"), then **Add missing**. **Entries** shows each entry's bound roles (and why one needs
+review) and, for a Nation, its **short name**, used only to name its subindexes.
+
 ## Asset Tree (v2 A4)
 
 The **Asset Tree** page shows the selected project's asset library as the bridge knows it: status, counts, the build

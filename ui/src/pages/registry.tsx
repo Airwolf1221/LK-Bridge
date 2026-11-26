@@ -4,6 +4,7 @@ import { Badge, Button, Empty, ErrorNote, Loading, useAction, useConfirm } from 
 import { fmtTime } from '../format';
 import { useReloadOn } from '../hooks';
 import { useProjectApi, useScopedApi } from '../project';
+import { StructuralTypesCard } from './territories';
 import { Link } from '../router';
 
 /**
@@ -150,6 +151,7 @@ export function RegistrySections() {
             </div>
           )}
           <TypesCard data={reg.data} onChanged={reg.reload} />
+          <StructuralTypesCard />
           {typeId && types.some((t) => t.id === typeId) && (
             <TaxonomyCard types={types} typeId={typeId} onType={setTypeId} onChanged={reg.reload} />
           )}

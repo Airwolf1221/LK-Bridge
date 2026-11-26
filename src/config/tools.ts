@@ -109,6 +109,9 @@ export const TOOLS_ENV_SCHEMA = z.object({
   // ---- v3 F6b (ADR 0079): the index classification's bulk approve
   /** The most index rows one "Approve all as proposed" decides (one request, one transaction). */
   INDEX_CLASSIFY_BULK_MAX: intFrom(500, 1, 5000),
+  // ---- v3 F6c (ADR 0080): the Nation Subindexes page's "for every page with this name"
+  /** The most nation children one "Map to a role, for every page with this name" decides (one request, one transaction). */
+  NATION_SUBINDEX_BULK_MAX: intFrom(500, 1, 5000),
   // ---- v3 F10 (ADR 0078): the chronology repaired soon after an edit
   /**
    * How long after the last change snapshot that touched a chronology document (the Main table, an age table or an age
@@ -135,6 +138,8 @@ export const DEFAULT_WATCHDOG_SETTINGS = {
 export const DEFAULT_REFTYPE_BULK_MAX = 500;
 /** v3 F6b (ADR 0079): INDEX_CLASSIFY_BULK_MAX's default. */
 export const DEFAULT_INDEX_CLASSIFY_BULK_MAX = 500;
+/** v3 F6c (ADR 0080): NATION_SUBINDEX_BULK_MAX's default. */
+export const DEFAULT_NATION_SUBINDEX_BULK_MAX = 500;
 /** v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS's default, 10 minutes. */
 export const DEFAULT_CHRONOLOGY_CHECK_DELAY_MS = 600_000;
 
@@ -163,6 +168,8 @@ export interface ToolsSettings {
   readonly reftypeBulkMax?: number;
   /** v3 F6b (ADR 0079): INDEX_CLASSIFY_BULK_MAX. Optional: the default (500) applies. */
   readonly indexClassifyBulkMax?: number;
+  /** v3 F6c (ADR 0080): NATION_SUBINDEX_BULK_MAX. Optional: the default (500) applies. */
+  readonly nationSubindexBulkMax?: number;
   /** v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS. Optional: the default (10 minutes) applies. */
   readonly chronologyCheckDelayMs?: number;
   /** v3 F6a.1: SLOW_REQUEST_WARN_MS. */
@@ -275,6 +282,7 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   artCache: DEFAULT_ART_CACHE_SETTINGS,
   reftypeBulkMax: DEFAULT_REFTYPE_BULK_MAX,
   indexClassifyBulkMax: DEFAULT_INDEX_CLASSIFY_BULK_MAX,
+  nationSubindexBulkMax: DEFAULT_NATION_SUBINDEX_BULK_MAX,
   chronologyCheckDelayMs: DEFAULT_CHRONOLOGY_CHECK_DELAY_MS,
   ...DEFAULT_WATCHDOG_SETTINGS,
   artCallMaxImages: DEFAULT_ART_CALL_MAX_IMAGES,
@@ -333,6 +341,7 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
     artCache: { dir: e.ART_CACHE_DIR ?? null, maxBytes: e.ART_CACHE_MAX_MB * 1024 * 1024 },
     reftypeBulkMax: e.REFTYPE_BULK_MAX,
     indexClassifyBulkMax: e.INDEX_CLASSIFY_BULK_MAX,
+    nationSubindexBulkMax: e.NATION_SUBINDEX_BULK_MAX,
     chronologyCheckDelayMs: e.CHRONOLOGY_CHECK_DELAY_MS,
     slowRequestWarnMs: e.SLOW_REQUEST_WARN_MS,
     slowRequestRepeatMs: e.SLOW_REQUEST_REPEAT_MS,

@@ -962,8 +962,38 @@ export const indexTaxonomyRulesSchema = z
       .strict(),
     /** Areas reported but never proposed (by index name, prefix aside): Working, Archive, Legacy, Design References. */
     outOfScope: z.array(indexName).max(20),
+    /**
+     * v3 F6c (ADR 0080; the owner's rulings of 26 November 2026): the ten nation roles, in order. A nation's subindex is
+     * named `<Nation> <Role>` (the Nation entry's short name, else the nation index's display name). Absent (an older
+     * version): no nation roles, and F6b's `structural.nationSubindexes` stands alone.
+     */
+    nationRoles: z.array(text(100)).min(1).max(30).optional(),
+    /** v3 F6c: the approved variants of a role's name (`Government & Institutions` → Government & Administration). */
+    nationRoleVariants: z
+      .array(z.object({ variant: text(100), role: text(100) }).strict())
+      .max(60)
+      .optional(),
+    /**
+     * v3 F6c: a territory category that lives inside another one (`Conflicts` inside `Historical Events`), by name.
+     * Every other category of `structural.continentCategories` sits directly in its territory's index.
+     */
+    categoryParents: z.record(text(100), text(100)).optional(),
+    /** v3 F6c: the Realmship parents whose Realmships are not territories (Lost Realmships). */
+    lostRealmshipParents: z.array(indexName).max(10).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((r, ctx) => {
+    if (!r.nationRoles) return;
+    const roles = new Set(r.nationRoles.map((x) => x.toLowerCase()));
+    if (roles.size !== r.nationRoles.length)
+      ctx.addIssue({ code: 'custom', message: 'a nation role is named twice' });
+    for (const v of r.nationRoleVariants ?? [])
+      if (!roles.has(v.role.toLowerCase()))
+        ctx.addIssue({
+          code: 'custom',
+          message: `the variant “${v.variant}” maps to no nation role (${v.role})`,
+        });
+  });
 export type IndexTaxonomyRules = z.infer<typeof indexTaxonomyRulesSchema>;
 
 export const packRulesSchema = z

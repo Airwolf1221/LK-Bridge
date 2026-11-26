@@ -9,6 +9,30 @@ import { packRulesSchema, type HomeRule, type PackRules, type PackSeed } from '.
 
 const STATUS = '$status';
 
+/** v3 F6c (ADR 0080; the owner's ruling of 26 November 2026): the ten nation roles, in this order. */
+const NATION_ROLES = [
+  'Government & Administration',
+  'Institutions',
+  'Historical Events',
+  'Military & Technology',
+  'Unique Magic & Technologies',
+  'Cultures',
+  'Settlements & Locations',
+  'Religion & Religious Administration',
+  'Household & Court',
+  'Historical Polities',
+] as const;
+/** v3 F6c: the approved variants, each mapping to a role. */
+const NATION_ROLE_VARIANTS: readonly { readonly variant: string; readonly role: string }[] = [
+  { variant: 'Government & Institutions', role: 'Government & Administration' },
+  { variant: 'Institutions & Education', role: 'Institutions' },
+  { variant: 'History & Conflicts', role: 'Historical Events' },
+  { variant: 'Settlements & Infrastructure', role: 'Settlements & Locations' },
+  { variant: 'Settlements & Historic City-States', role: 'Settlements & Locations' },
+  { variant: 'Historical Polities & Integration', role: 'Historical Polities' },
+  { variant: 'Founding Polities & Regions', role: 'Historical Polities' },
+];
+
 // v3 F3b (ADR 0052): the homes of the owner type table (docs/design/F3b-owner-tools.md, section 1.1), as data.
 const continent = (category: string): HomeRule => ({ kind: 'category', level: 'continent', category });
 const nationCategory = (category: string): HomeRule => ({ kind: 'category', level: 'nation', category });
@@ -1404,6 +1428,13 @@ const rules: PackRules = packRulesSchema.parse({
       summary:
         'T11 (the F6 taxonomy design, approved with the owner’s amendments T11, T12 and T14): an index that only groups or routes is [NAV] <name> and carries exactly Navigation; an index about one subject (a character, a nation or polity, a continent, a Realmship or a named Divine Realm, a culture or religion family, a story) is [INDEX] <name> and carries its subject’s primary category; neither carries CANON. In every parent: [NAV] first, then [INDEX], then sources, each alphabetical (the narrative number order still applies inside a story). Atomic, predictable structure wins over current names. Not yet recorded in Source Formatting or the Controlled Native Tagging Standard: the owner’s reviewer writes the three sections after deploy.',
     },
+    {
+      key: 'nation-subindex-roles',
+      date: '2026-11-26',
+      by: 'owner',
+      summary:
+        'F6c (the F6 taxonomy design, T3 to T5 as amended, approved 23 November 2026): a nation’s subindexes follow one list of ten roles, in this order: Government & Administration, Institutions, Historical Events, Military & Technology, Unique Magic & Technologies, Cultures, Settlements & Locations, Religion & Religious Administration, Household & Court, Historical Polities. A subindex is named <Nation> <Role>, where <Nation> is the nation’s short name when it has one (Cantha), else the nation index’s display name (Jabal al-Noor Military & Technology); the prefix stays [NAV]. A child whose name matches no role or approved variant is never guessed: it goes to the owner, who maps it, keeps it as a specialist subindex, or rules it not a subindex. Not yet recorded in Source Formatting’s Nation-Centred Territorial Navigation: the owner’s reviewer writes it after deploy.',
+    },
   ],
   // v3 F6b (ADR 0079; design T11, T12): navigation and subject indexes. The tag rule is a draft until the Tagging
   // Standard's "Navigation and Subject Index Tags" section exists (its pin reads unpublished meanwhile, never refusing the
@@ -1484,25 +1515,20 @@ const rules: PackRules = packRulesSchema.parse({
         'Lunar Realms',
         'Planetary Realms',
       ],
-      nationSubindexes: [
-        'Institutions',
-        'Government & Administration',
-        'Cultures',
-        'Historical Events',
-        'History',
-        'Settlements & Locations',
-        'Unique Magic & Technologies',
-        'Religions',
-        'Laws',
-        'Programmes',
-        'Education',
-        'Ceremonies',
-        'Conditions',
-      ],
+      // v3 F6c (ADR 0080): derived from `nationRoles` and `nationRoleVariants` below (replacing F6b's stopgap list), so
+      // F6b's classification and the Nation Subindexes report agree; the owner's mappings are added at run time.
+      nationSubindexes: [...NATION_ROLES, ...NATION_ROLE_VARIANTS.map((v) => v.variant)],
       cultureCategories: ['Cultures'],
       religionCategories: ['Religions'],
     },
     outOfScope: ['Working', 'Archive', 'Archived', 'Legacy Canon Archive', 'Design References'],
+    // v3 F6c (ADR 0080; the owner's rulings of 26 November 2026): the ten nation roles, in order, and the approved
+    // variants of their names. A nation's subindex is `<Nation> <Role>` (the entry's short name, else the display name).
+    nationRoles: [...NATION_ROLES],
+    nationRoleVariants: NATION_ROLE_VARIANTS.map((v) => ({ ...v })),
+    // The territory categories are `structural.continentCategories` (the one source); Conflicts sits in Historical Events.
+    categoryParents: { Conflicts: 'Historical Events' },
+    lostRealmshipParents: ['Lost Realmships'],
   },
 });
 
@@ -1543,8 +1569,14 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // `-f6b` (ADR 0079, 25 November 2026; session F6b): navigation and subject indexes (`indexTaxonomy`: T11's ordering and
   // tag rule, a draft until published, and the classification report's structural lists), and the Tagging Standard's
   // "Navigation and Subject Index Tags" pinned (unpublished until the owner's reviewer writes it).
-  seed: 'arkona-2026-11-25-f6b',
+  // `-f6c` (ADR 0080, 27 November 2026; session F6c): the nation roles and their approved variants
+  // (`indexTaxonomy.nationRoles`, `nationRoleVariants`), the nation subindex words derived from them for F6b's
+  // classifier, the territory categories' nesting (Conflicts in Historical Events), the Lost Realmships, and the ruling
+  // `nation-subindex-roles`. No new pinned section: Source Formatting's "Nation-Centred Territorial Navigation" is pinned
+  // already, so the reviewer's paragraph shows as governance drift and the owner approves again.
+  seed: 'arkona-2026-11-27-f6c',
   supersedes: [
+    'arkona-2026-11-25-f6b',
     'arkona-2026-11-24-f6a',
     'arkona-2026-11-23-f7b',
     'arkona-2026-11-23-f5c',

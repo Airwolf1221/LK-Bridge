@@ -348,6 +348,9 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'Arkona characters': 'package gate identity',
   'Arkona owners': 'home nation polity institution place species race',
   'Navigation and subject indexes': 'nav index prefix classify classification role routing',
+  // v3 F6c (ADR 0080): "nation" also names Arkona owners, so the subindex words lead here.
+  'Territories, nations and their subindexes':
+    'territory territories subindex subindexes continent realmship short',
   // Not "finding": it stands for "audit" (a synonym group), which must keep leading to "Audit findings".
   'Arkona appraisal': 'appraise appraisal impact digest hygiene',
   'Arkona splits': 'split monolith trigger fragmentation destination',

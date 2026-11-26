@@ -46,7 +46,14 @@ import {
 } from './context.js';
 import { narrativeCompare } from '../narrative/names.js';
 import { AuditError } from './errors.js';
-import { proposeFix as proposeFixVia, type CoreUpgrader, type FixResult } from './fixes.js';
+import {
+  proposeFix as proposeFixVia,
+  type CoreUpgrader,
+  type FixResult,
+  type TerritoryCategoryCreator,
+} from './fixes.js';
+import type { NationAuditInput } from '../packs/nations/service.js';
+import { nationTaxonomyCheck } from './checks/nation-taxonomy.js';
 import {
   extractResource,
   extractSidebar,
@@ -90,6 +97,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'reference-types', run: referenceTypesCheck },
   // v3 F6b (ADR 0079): approved index classifications not yet carried out (index_prefix, index_tags).
   { id: 'index-taxonomy', run: indexTaxonomyCheck },
+  // v3 F6c (ADR 0080): territories, nations and their subindexes (each of the three switchable per project).
+  { id: 'nation-taxonomy', run: nationTaxonomyCheck },
   { id: 'facts', run: factsCheck },
   { id: 'lifecycle', run: lifecycleCheck },
   { id: 'keep-regions', run: keepRegionsCheck },
@@ -175,6 +184,13 @@ export interface AuditDeps {
   readonly referenceTypes?: (projectId: string) => ReferenceTypeAuditInput | null;
   /** v3 F6b (ADR 0079): the approved index taxonomy and rows. */
   readonly indexTaxonomy?: (projectId: string) => IndexTaxonomyAuditInput | null;
+  /** v3 F6c (ADR 0080): territories, nations and their subindexes (the three checks). */
+  readonly nationTaxonomy?: (projectId: string) => Promise<NationAuditInput | null>;
+  /** v3 F6c: a nation subindex decision as it stands now, for the rename fix (null: undone). */
+  readonly nationSubindexDecision?: (
+    projectId: string,
+    pageId: string,
+  ) => { readonly id: string; readonly action: string; readonly role: string | null } | null;
   /** v3 F6a: a decision as it stands now, for the `reference_type` fix (null: undone). */
   readonly referenceTypeDecision?: (
     projectId: string,
@@ -218,6 +234,12 @@ export class Audits {
   private coreUpgrader: CoreUpgrader | null = null;
   setCoreUpgrader(u: CoreUpgrader | null): void {
     this.coreUpgrader = u;
+  }
+
+  /** v3 F6c (ADR 0080): the `territory_category` fix's creator (create_index's role form), set by the runtime. */
+  private territoryCreator: TerritoryCategoryCreator | null = null;
+  setTerritoryCategoryCreator(c: TerritoryCategoryCreator | null): void {
+    this.territoryCreator = c;
   }
 
   /** Closes a run a restart interrupted. */
@@ -421,6 +443,7 @@ export class Audits {
         settings,
         governance ? governanceInput(governance, model, cfg) : null,
         await this.consistencyItems(projectId),
+        await this.nationTaxonomyInput(projectId),
       );
       const drafts: FindingDraft[] = [];
       for (const c of CHECKS) {
@@ -593,6 +616,8 @@ export class Audits {
           ...(this.coreUpgrader ? { coreUpgrade: this.coreUpgrader } : {}),
           ...(opts.direct === true ? { direct: true } : {}),
           ...(this.d.referenceTypeDecision ? { referenceTypeDecision: this.d.referenceTypeDecision } : {}),
+          ...(this.d.nationSubindexDecision ? { nationSubindexDecision: this.d.nationSubindexDecision } : {}),
+          ...(this.territoryCreator ? { territoryCategory: this.territoryCreator } : {}),
           // v3 F6b (ADR 0079): T11's order where the approved pack carries it (and as the narrative order's fallback).
           ...(this.indexTaxonomyInput(projectId)?.navOrdering ? { navOrder: true } : {}),
           narrativeOrder: (() => {
@@ -803,6 +828,17 @@ export class Audits {
 
   /** v3 F4c (ADR 0065): the narrative audit's input for a project, or null. */
   /** v3 F6b (ADR 0079): the approved index taxonomy and rows, or null (none, or unreadable: logged). */
+  /** v3 F6c (ADR 0080): the three territory and nation checks' input (null: none, or it could not be read). */
+  async nationTaxonomyInput(projectId: string): Promise<NationAuditInput | null> {
+    if (!this.d.nationTaxonomy) return null;
+    try {
+      return await this.d.nationTaxonomy(projectId);
+    } catch (e) {
+      this.d.log?.warn({ err: e, projectId }, 'the territory and nation checks’ input could not be read');
+      return null;
+    }
+  }
+
   indexTaxonomyInput(projectId: string): IndexTaxonomyAuditInput | null {
     if (!this.d.indexTaxonomy) return null;
     try {
@@ -851,6 +887,7 @@ export class Audits {
     settings: Readonly<ProjectSettings>,
     governance: GovernanceAuditInput | null = null,
     consistency: readonly ConsistencyAuditItem[] | null = null,
+    nationTaxonomy: NationAuditInput | null = null,
   ): AuditContext {
     const registry = this.d.registry.forProject(projectId).store;
     const chron = this.d.chronology;
@@ -1015,6 +1052,7 @@ export class Audits {
           }
         : {}),
       ...(this.d.indexTaxonomy ? { indexTaxonomy: this.indexTaxonomyInput(projectId) } : {}),
+      ...(nationTaxonomy ? { nationTaxonomy } : {}),
     });
   }
 

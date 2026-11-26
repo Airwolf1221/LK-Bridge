@@ -626,6 +626,44 @@ export const CATALOGUE: readonly CodeEntry[] = [
     defaultMode: 'propose',
     applyDirect: true,
   }),
+  // ======================================================================== v3 F6c (ADR 0080): default Off, Apply allowed
+  defineCode({
+    code: 'nation_subindex_nonstandard',
+    source: 'audit',
+    name: 'Nation subindex name (<Nation> <Role>)',
+    example:
+      '“[NAV] Government & Institutions” in Cantha, accepted on the Nation Subindexes page as its Government & Administration, becomes “[NAV] Cantha Government & Administration”.',
+    transformation:
+      'ONE proposal per subindex the owner accepted or mapped on the Nation Subindexes page (undecided rows wait there; two subindexes for one role are never renamed): one updateResource of the display name to <Nation> <Role> (the short name first), the prefix, the id, the parent, the tags and every link kept. The owner’s decision and the page read live first (either changed since the finding: nothing proposed), checked inside the lock, read back; the proposal shows the name before and after. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s rename is what the canon guard decides',
+    traits: ['rename', 'canon'],
+    target: 'resource',
+    changes: ['name'],
+    automatable: 'propose',
+    applyDirect: true,
+  }),
+  defineCode({
+    code: 'territory_category_missing',
+    source: 'audit',
+    name: 'Missing territory category index',
+    example:
+      'Salahad has no Regions index: “[NAV] Salahad Regions” is made in it, empty, and bound as its Regions.',
+    transformation:
+      'ONE proposal per missing category of a Territory entry (never under Lost Realmships or Divine Realms): create_index’s role form makes the empty [NAV] <Territory> <Category> from the “[NAV] AI Navigation” template, in its place by T11’s order with its tags (Conflicts inside the bound Historical Events), refused when the role is bound meanwhile; the role binding is recorded once the job succeeds. Apply (only when the owner switches it) submits the same job, every guard judging it',
+    traits: ['create'],
+    target: 'resource',
+    changes: [],
+    automatable: 'propose',
+    applyDirect: true,
+  }),
+  defineCode({
+    code: 'category_home_mismatch',
+    source: 'audit',
+    name: 'Source outside its category’s homes',
+    example: 'A Culture source sitting directly in a Polities index.',
+    transformation:
+      'none: moving a source to another home is the owner’s judgement (the finding offers ONE move proposal to the nearest allowed home, or “Keep it here”)',
+    traits: ['judgement'],
+  }),
   // ======================================================================== v3 F10 (ADR 0078): the chronology, default Propose, Apply allowed
   defineCode({
     code: 'chronology_row_without_event',

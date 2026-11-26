@@ -25,6 +25,9 @@ import { registerPackEngine } from './packs/engine/checks.js';
 import { OutfitStore } from './art/store.js';
 import { PACK_CHECKS } from './packs/engine/job.js';
 import { addPackTaxonomyEntry, renamePackTaxonomyEntry } from './packs/taxonomy.js';
+import { NationTaxonomyService } from './packs/nations/service.js';
+import { ROLE_RECORD_STORE } from './packs/nations/records.js';
+import { bridgeTerritoryCategoryCreator } from './packs/nations/category-fix.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
 import { listDropsReader } from './policy/list-drops.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
@@ -230,6 +233,8 @@ export interface Runtime {
   readonly referenceTypes: ReferenceTypeService;
   /** v3 F6b (ADR 0079): the index classification report and decisions. */
   readonly indexClassify: IndexClassifyService;
+  /** v3 F6c (ADR 0080): territories, nations and their subindexes (seeding, roles, the report, the checks' input). */
+  readonly nationTaxonomy: NationTaxonomyService;
   /** v3 F6a.1: background work actions start (governance re-checks, "Run audit now"), awaited on stop. */
   readonly background: BackgroundRunner;
   /** v3 F5a (ADR 0067, H10): the reconciliation of writes whose outcome is unknown. */
@@ -988,6 +993,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const detachReferenceTypes = referenceTypes.start();
   // v3 F6b (ADR 0079): navigation and subject indexes: the classification report, the owner's decisions, and the
   // index codes' and T11's ordering input (from the approved pack and the approved rows).
+  const nationRef: { current: NationTaxonomyService | null } = { current: null };
   const indexClassify = new IndexClassifyService({
     db: o.db,
     packs,
@@ -996,7 +1002,38 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
     bulkMax: () => toolsSettings.indexClassifyBulkMax,
+    // v3 F6c (ADR 0080): the owner's Nation Subindexes mappings feed the nation subindex rule (the two reports agree).
+    nationSubindex: (projectId) => nationRef.current?.classifierInput(projectId) ?? null,
   });
+  // v3 F6c (ADR 0080): territories, nations and their subindexes: the five structural types' seeding, the role
+  // bindings placement reads, the Nation Subindexes report and decisions, and the three checks' input.
+  const nationTaxonomy = new NationTaxonomyService({
+    db: o.db,
+    packs,
+    tree,
+    registry,
+    indexClassify,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    bulkMax: () => toolsSettings.nationSubindexBulkMax,
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+  });
+  nationRef.current = nationTaxonomy;
+  const unregisterRoleRecords = engine.registerRecordHandler((job, _step, params) => {
+    const r = ((params.body ?? {}) as { record?: Record<string, unknown> }).record ?? {};
+    if (
+      r.kind === 'role_binding' &&
+      typeof r.ownerNodeId === 'string' &&
+      typeof r.role === 'string' &&
+      typeof r.nodeId === 'string'
+    )
+      return nationTaxonomy.recordBinding(
+        job.projectId,
+        { ownerNodeId: r.ownerNodeId, role: r.role, nodeId: r.nodeId },
+        job.approvedBy ?? job.principalId,
+      );
+    return { recorded: null };
+  }, ROLE_RECORD_STORE);
   const audits: Audits = new Audits({
     db: o.db,
     snapshots,
@@ -1030,6 +1067,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     referenceTypes: (projectId) => referenceTypes.auditInput(projectId),
     // v3 F6b (ADR 0079): the approved index taxonomy and rows (index_prefix, index_tags, T11's ordering).
     indexTaxonomy: (projectId) => indexClassify.auditInput(projectId),
+    // v3 F6c (ADR 0080): territories, nations and their subindexes (the three checks), and the rename fix's stale check.
+    nationTaxonomy: (projectId) => nationTaxonomy.auditInput(projectId),
+    nationSubindexDecision: (projectId, pageId) => nationTaxonomy.decisionNow(projectId, pageId),
     referenceTypeDecision: (projectId, id) => referenceTypes.decisionNow(projectId, id),
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
     consistency: async (projectId) =>
@@ -1673,6 +1713,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       referenceTypes,
       // v3 F6b (ADR 0079): arkona_index_classify, and the creation tools' index rule.
       indexClassify,
+      // v3 F6c (ADR 0080): placement by role, create_index's role form.
+      nationTaxonomy,
       // v3 F5b (ADR 0068): which codes the automation runs (bridge_info tells agents; they cannot change it).
       automation,
       // v3 F5c (ADR 0069, H8): workstream labels and their report.
@@ -1686,6 +1728,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   splits.setArchiver(bridgeArchiver(toolDeps));
   // v3 F7.1 (ADR 0072): the audit's character_core_missing fix, planned by the character tool's own planner.
   audits.setCoreUpgrader(bridgeCoreUpgrader(toolDeps));
+  // v3 F6c (ADR 0080): the audit's territory_category fix, made through create_index's own role form.
+  audits.setTerritoryCategoryCreator(bridgeTerritoryCategoryCreator(toolDeps));
   // v3 F4b (ADR 0064, D6): the owner's pick is one proposal, planned with the tool layer (the chronology's row tools).
   consistency.setPicker(bridgePicker(toolDeps));
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
@@ -1811,6 +1855,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     retag,
     referenceTypes,
     indexClassify,
+    nationTaxonomy,
     background,
     outcomes,
     automation,
@@ -1944,6 +1989,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     detachReview();
     detachRestores();
     unregisterPackEngine();
+    unregisterRoleRecords();
     detachPackTools();
     for (const off of detachToolList) off();
     await run('the repository tree', tree.stop(), w.treesMs);

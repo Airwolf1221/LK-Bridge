@@ -88,6 +88,8 @@ const routes = (extra: Record<string, unknown> = {}) => ({
     tree: { status: 'ready', reason: null },
   },
   'GET /registry/drift': { latest: null, recent: [] },
+  // v3 F6c (ADR 0080): the Territories and nations card.
+  'GET /registry/structural': { types: [], rules: null },
   ...extra,
 });
 

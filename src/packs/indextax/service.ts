@@ -68,6 +68,16 @@ export interface IndexClassifyDeps {
   readonly now: () => number;
   /** INDEX_CLASSIFY_BULK_MAX, read on each use (default 500). */
   readonly bulkMax?: () => number | undefined;
+  /**
+   * v3 F6c (ADR 0080): the owner's Nation Subindexes mappings, specialist names and the Nation entries' short names, for
+   * the nation subindex rule, with a key that moves when they change (the base is cached on it).
+   */
+  readonly nationSubindex?: (projectId: string) => {
+    readonly key: string;
+    readonly mappings: readonly { readonly name: string; readonly role: string }[];
+    readonly specialists: readonly string[];
+    readonly shortNames: ReadonlyMap<string, string>;
+  } | null;
 }
 
 export interface ReportRow {
@@ -228,7 +238,8 @@ export class IndexClassifyService {
     const charKey = chars
       .map((c) => `${c.rootIndexId}:${c.unknownIndexName}:${[...c.entryIds].sort().join(',')}`)
       .join(';');
-    return [this.d.tree.queries.version(projectId), r.pack.id, rulesVersion, charKey].join('|');
+    const ns = this.d.nationSubindex?.(projectId)?.key ?? '';
+    return [this.d.tree.queries.version(projectId), r.pack.id, rulesVersion, charKey, ns].join('|');
   }
 
   private *baseSteps(projectId: string, key: string, chars: CharacterTaxonomy[]): Generator<void, Base> {
@@ -249,6 +260,10 @@ export class IndexClassifyService {
           : null,
         narrative: rules.narrative ?? null,
         characters: chars,
+        ...(() => {
+          const ns = this.d.nationSubindex?.(projectId);
+          return ns ? { nationSubindex: ns } : {};
+        })(),
       },
       IndexClassifyService.CHUNK,
     );
@@ -446,6 +461,11 @@ export class IndexClassifyService {
       ...filter,
       status: ['proposed'],
     }).map((r) => r.id);
+  }
+
+  /** v3 F6c (ADR 0080): every row of the report (the seeding of the structural types reads the approved ones). */
+  allRows(projectId: string): readonly ReportRow[] {
+    return this.rows(projectId, this.baseNow(projectId));
   }
 
   row(projectId: string, pageId: string): ReportRow | null {
