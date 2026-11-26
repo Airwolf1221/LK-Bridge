@@ -166,8 +166,8 @@ describe('all 24 sandbox checks run through the harness', () => {
   const dir = join(import.meta.dirname, '..', 'sandbox');
   const files = readdirSync(dir).filter((f) => f.endsWith('.test.ts'));
 
-  it('there are 30 (v3 F7c: f7c-archive; v3 F6a: f6a-reftypes; v3 F7d: f7d-art-set; v3 F10: f10-chronology; v3 F6b: f6b-nav; v3 F6c: f6c-territory), and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
-    expect(files).toHaveLength(30);
+  it('there are 31 (v3 F7c: f7c-archive; v3 F6a: f6a-reftypes; v3 F7d: f7d-art-set; v3 F10: f10-chronology; v3 F6b: f6b-nav; v3 F6c: f6c-territory; v3 F12: f12-direct), and each has the step frame and an afterAll that runs what is left of the clean-up', () => {
+    expect(files).toHaveLength(31);
     for (const f of files) {
       const s = readFileSync(join(dir, f), 'utf8');
       expect(s, f).toMatch(/sandboxRun\(\{ name: '[a-z0-9-]+'/);
@@ -201,6 +201,7 @@ describe('all 24 sandbox checks run through the harness', () => {
       'tagging-f5a.ts',
       'f7d-art-set.ts', // v3 F7d (ADR 0077)
       'f6c-territory.ts', // v3 F6c (ADR 0080)
+      'f12-direct.ts', // v3 F12 (ADR 0081)
     ];
     expect(runners.every((f) => files.includes(f.replace(/\.ts$/, '.test.ts')))).toBe(true);
     for (const f of runners) {

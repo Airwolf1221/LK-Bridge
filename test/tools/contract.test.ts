@@ -3,10 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { operations } from '../../src/lk/registry.js';
 import { startStack, type Stack } from './helpers.js';
 import { exampleInput, routeFor, specRespond } from './spec-mock.js';
+import { AGENT_REFUSED } from '../../src/review/write-kinds.js';
 
 /**
  * Chunk 3 criterion: every one of the 89 operations has a passing contract test through lk_api_read or
- * lk_api_write. The mock LK answers each request from the OpenAPI spec's response schemas (spec-mock.ts); the
+ * lk_api_write (member administration's being its refusal for agents, v3 F12). The mock LK answers each request from the OpenAPI spec's response schemas (spec-mock.ts); the
  * stateful model of chunk 2 is used for the flow tests in e2e.test.ts and guards.test.ts.
  */
 let stack: Stack;
@@ -40,6 +41,14 @@ describe('all registry operations through lk_api_read / lk_api_write', () => {
       );
     }
     const r = await stack.call(client, tool, args);
+    // v3 F12 (ADR 0081): member administration has no Revert, so it is refused for every agent (the owner does it in the
+    // LegendKeeper app), LK_ALLOW_MEMBER_ADMIN or not: its contract is the refusal, and nothing reaches LegendKeeper.
+    if (op.operationId in AGENT_REFUSED) {
+      expect(r.isError, r.text.slice(0, 600)).toBe(true);
+      expect(r.body.error.code).toBe('POLICY_DENIED');
+      expect(stack.mock.calls.slice(before).filter((c) => c.method !== 'GET')).toEqual([]);
+      return;
+    }
     expect(r.isError, r.text.slice(0, 600)).toBe(false);
     expect(r.footer).toMatch(/^budget \(test\): /); // v2 A1: the footer names the project
     expect(['succeeded', 'queued']).toContain(r.body.status);

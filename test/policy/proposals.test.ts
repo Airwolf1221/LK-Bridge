@@ -718,7 +718,7 @@ describe('crash during approval', () => {
 });
 
 describe('member administration', () => {
-  it('is denied at propose and write scope unless LK_ALLOW_MEMBER_ADMIN=true', async () => {
+  it('is denied for agents at propose and write scope (v3 F12: by the policy gate, whatever LK_ALLOW_MEMBER_ADMIN says)', async () => {
     const { r, origin } = await setup('write');
     const proposer = makePat(r.db, r.policy, 'proposer', 'propose', () => r.h.clock.now());
     for (const o of [origin, mcpOriginFor(proposer.principal)]) {
@@ -727,7 +727,7 @@ describe('member administration', () => {
         r.e,
         r.e.engine.run('removeMember', { path: { userId: 'u1' } }, { project: PROJECT, origin: o }),
       );
-      expect((out.error as { code?: string }).code).toBe('MEMBER_ADMIN_DISABLED');
+      expect((out.error as { code?: string }).code).toBe('POLICY_DENIED');
     }
     expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
     expect(writesAtMock(r)).toEqual([]);

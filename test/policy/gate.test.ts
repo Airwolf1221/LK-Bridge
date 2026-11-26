@@ -17,6 +17,7 @@ import type { OperationDef } from '../../src/lk/registry-types.js';
 import { issueApprovalToken } from '../../src/policy/approval.js';
 import { SCOPES, UPLOAD_OPERATIONS, createPolicy, type Policy, type Scope } from '../../src/policy/index.js';
 import { makePat, mcpOriginFor } from './helpers.js';
+import { AGENT_REFUSED } from '../../src/review/write-kinds.js';
 
 /** v2 A1: every policy decision is for one project (an approval only covers its own). */
 const PROJECT = 'proj_mock';
@@ -57,12 +58,13 @@ const ask = (
   );
 
 /**
- * What the scope table in docs/policy.md says each operation gets from the gate. Member administration follows the
- * scope here; the engine's guard then refuses it unless LK_ALLOW_MEMBER_ADMIN=true (tested in proposals.test.ts and
- * test/tools/guards.test.ts), so the setting does not change the gate's answer.
+ * What the scope table in docs/policy.md says each operation gets from the gate. Member administration is refused for
+ * every agent at every scope (v3 F12, ADR 0081: it has no Revert; the owner does it in the LegendKeeper app), whatever
+ * LK_ALLOW_MEMBER_ADMIN says, so the setting does not change the gate's answer.
  */
 function expected(scope: Scope, def: OperationDef): PolicyDecision['decision'] {
   if (def.kind === 'read') return 'allow';
+  if (def.operationId in AGENT_REFUSED) return 'deny';
   // v1: uploads are not proposable (docs/policy.md).
   if (scope === 'propose' && UPLOAD_OPERATIONS.has(def.operationId)) return 'deny';
   return scope === 'write' ? 'allow' : scope === 'propose' ? 'propose' : 'deny';

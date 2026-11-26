@@ -54,6 +54,7 @@ describe('tools configuration', () => {
       keepWeekly: 8,
       keepDays: 30,
       softDeleteDays: 30,
+      deleteCopyDays: 90, // v3 F12 (ADR 0081): DELETE_COPY_RETENTION_DAYS
     });
     expect(
       loadToolsConfig({ SNAPSHOT_KEEP_FULL_DAYS: '14', SNAPSHOT_KEEP_WEEKLY: '4', SNAPSHOT_KEEP_DAYS: '7' })

@@ -115,12 +115,12 @@ describe('engine guards through the tools', () => {
     expect(model.resources.get('res1')!.deletedAt).toBeDefined();
   });
 
-  it('refuses member administration unless enabled', async () => {
+  it('refuses member administration for agents (v3 F12: the policy gate, at every scope)', async () => {
     const r = await stack.call(client, 'lk_api_write', {
       operationId: 'inviteMember',
       params: { body: { email: 'a@example.test' } },
     });
-    expect(r.body.error.code).toBe('MEMBER_ADMIN_DISABLED');
+    expect(r.body.error.code).toBe('POLICY_DENIED');
   });
 
   it('batch validation refuses the whole batch up front', async () => {
@@ -131,7 +131,7 @@ describe('engine guards through the tools', () => {
         { operationId: 'inviteMember', params: { body: { email: 'a@example.test' } } },
       ],
     });
-    expect(r.body.error.code).toBe('MEMBER_ADMIN_DISABLED');
+    expect(r.body.error.code).toBe('POLICY_DENIED');
     expect(stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length).toBe(before);
   });
 
