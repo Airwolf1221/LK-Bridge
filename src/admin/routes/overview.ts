@@ -107,6 +107,8 @@ export const registerOverview: Register = (api, ctx) => {
       budget: budget
         ? {
             queues: budget.snapshot.queues,
+            // v3 F9 amendment 1 (ADR 0074): what holds each waiting class (tier, floor, when it frees).
+            waits: budget.snapshot.waits ?? [],
             gauges: headline.map((t) => budget.snapshot.tiers[t]),
           }
         : null,

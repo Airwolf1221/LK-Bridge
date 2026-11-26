@@ -6,6 +6,7 @@
  * | ------------------------- | -------------------------------------------------------------------------------- |
  * | read-only mode            | at once (the engine's own override, `engine.controls.setReadOnly`)               |
  * | reserve floors            | at once (`governor.setReserveFloors`), and at every start                        |
+ * | day floors (F9 amend. 1)  | at once (`governor.setDayReserveFloors`), and at every start                     |
  * | per-operation tool exposure, member administration, journal retention, tier limits | at the next start |
  *
  * The second group is built into components at construction (the tool list, the policy gate, the governor's windows),
@@ -13,13 +14,15 @@
  * difference until then. A stored value that no longer validates is ignored (the environment value is used).
  */
 import * as z from 'zod';
-import { bulkOrderMessage, effectiveBulkFloor } from '../config/floors.js';
+import { bulkOrderMessage, dayOrderMessage, effectiveBulkFloor } from '../config/floors.js';
 import type { Config } from '../config/index.js';
 import type { Db } from '../db/open.js';
 import { TIER_IDS, type TierId } from '../lk/registry-types.js';
 
 export const SETTING_KEYS = {
   reserveFloors: 'dash.reserve_floors',
+  // v3 F9 amendment 1 (ADR 0074): the daily tier's floors, all four together.
+  dayReserveFloors: 'dash.reserve_day_floors',
   exposePerOpTools: 'dash.expose_per_op_tools',
   allowMemberAdmin: 'dash.allow_member_admin',
   journal: 'dash.journal_retention',
@@ -64,6 +67,22 @@ export interface FloorsInForce {
   readonly bulk: number;
 }
 
+/**
+ * v3 F9 amendment 1 (ADR 0074): the dashboard's day floors (the daily tier's). Always all four, in the same order as the
+ * floors: interactive <= job <= maintenance <= bulk.
+ */
+export const dayFloorsShape = z.object({
+  interactive: z.number().min(0).max(1),
+  job: z.number().min(0).max(1),
+  maintenance: z.number().min(0).max(1),
+  bulk: z.number().min(0).max(1),
+});
+export const dayFloorsSchema = dayFloorsShape.superRefine((f, ctx) => {
+  const order = dayOrderMessage(f);
+  if (order !== null) ctx.addIssue({ code: 'custom', message: order });
+});
+export type DayReserveFloors = z.infer<typeof dayFloorsSchema>;
+
 export const journalSchema = z.object({
   retentionDays: z.number().int().min(1).max(3650),
   maxBytes: z
@@ -83,6 +102,7 @@ export type TierLimitOverrides = z.infer<typeof tierLimitsSchema>;
 
 export interface StoredSettings {
   readonly reserveFloors: ReserveFloors | null;
+  readonly dayReserveFloors: DayReserveFloors | null;
   readonly exposePerOpTools: boolean | null;
   readonly allowMemberAdmin: boolean | null;
   readonly journal: JournalRetention | null;
@@ -111,6 +131,7 @@ function readValid<T>(db: Db, key: string, schema: z.ZodType<T>): T | null {
 export function readStoredSettings(db: Db): StoredSettings {
   return {
     reserveFloors: readValid(db, SETTING_KEYS.reserveFloors, reserveFloorsSchema),
+    dayReserveFloors: readValid(db, SETTING_KEYS.dayReserveFloors, dayFloorsSchema),
     exposePerOpTools: readValid(db, SETTING_KEYS.exposePerOpTools, z.boolean()),
     allowMemberAdmin: readValid(db, SETTING_KEYS.allowMemberAdmin, z.boolean()),
     journal: readValid(db, SETTING_KEYS.journal, journalSchema),
@@ -132,6 +153,7 @@ export function applyStoredSettings(config: Config, db: Db): Config {
     governor: {
       ...config.governor,
       ...(s.reserveFloors ? { reserveFloors: withBulk(s.reserveFloors, config.governor.bulkFloorSet) } : {}),
+      ...(s.dayReserveFloors ? { dayReserveFloors: s.dayReserveFloors } : {}),
     },
     journal: s.journal ?? config.journal,
     mcp: { ...config.mcp, ...(s.exposePerOpTools !== null ? { exposePerOpTools: s.exposePerOpTools } : {}) },

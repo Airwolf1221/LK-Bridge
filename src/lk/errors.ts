@@ -5,6 +5,7 @@
  */
 import { ConnectionError, LegendKeeperError } from '@legendkeeper/sdk';
 import type { BudgetTierId } from './governor/groups.js';
+import type { ClassWait } from './governor/types.js';
 
 /**
  * v3 F5a (ADR 0067, H11): `client` is a call the client cancelled (its own abort): not the bridge's fault, recorded as
@@ -141,6 +142,11 @@ export class BudgetWaitError extends BridgeLkError {
   /** The documented tier, or a learned operation tier (`group:<name>`, v2 E5.5) that must wait. */
   readonly tier: BudgetTierId;
   readonly retryAtMs: number;
+  /**
+   * v3 F9 amendment 1 (ADR 0074): what held the call, with the floor's row, the floor and when it frees, in figures and
+   * words (`wait.text`). Set by the governor; absent on an error made elsewhere.
+   */
+  readonly wait: ClassWait | undefined;
 
   constructor(init: {
     tier: BudgetTierId;
@@ -148,6 +154,7 @@ export class BudgetWaitError extends BridgeLkError {
     opId?: string | undefined;
     message?: string;
     cause?: BridgeLkError;
+    wait?: ClassWait;
   }) {
     const at = Number.isFinite(init.retryAtMs) ? new Date(init.retryAtMs).toISOString() : 'never';
     super({
@@ -162,6 +169,7 @@ export class BudgetWaitError extends BridgeLkError {
     });
     this.tier = init.tier;
     this.retryAtMs = init.retryAtMs;
+    this.wait = init.wait;
   }
 }
 

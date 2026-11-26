@@ -30,12 +30,14 @@ import {
   contactEmailSchema,
   journalSchema,
   readStoredSettings,
+  dayFloorsSchema,
   reserveFloorsSchema,
   tierLimitsSchema,
   withBulk,
   writeStoredSetting,
   type FloorsInForce,
   type JournalRetention,
+  type DayReserveFloors,
   type ReserveFloors,
   type TierLimitOverrides,
 } from './runtime-settings.js';
@@ -725,6 +727,32 @@ export function createAdminActions(d: AdminDeps) {
       }
       writeStoredSetting(store.db, SETTING_KEYS.reserveFloors, value, OWNER, store.now());
       audit('budget.set_reserve_floors', null, before, governors[0]?.settings.reserveFloors ?? next);
+      return next;
+    },
+    /**
+     * v3 F9 amendment 1 (ADR 0074): the daily tier's floors, bridge-wide like the floors (every project's governor gets
+     * the same). All four together, in order (interactive <= job <= maintenance <= bulk), refused otherwise; `null`
+     * goes back to the environment's (RESERVE_DAY_FLOOR_*, or the defaults). Returns the day floors in force.
+     */
+    setDayReserveFloors(value: DayReserveFloors | null): DayReserveFloors {
+      const refuse = (message: string) => new AdminHttpError(400, 'INVALID_INPUT', message);
+      let next: DayReserveFloors;
+      if (value === null) next = d.runtime.envConfig.governor.dayReserveFloors;
+      else {
+        const parsed = dayFloorsSchema.safeParse(value);
+        if (!parsed.success) throw refuse(parsed.error.issues.map((i) => i.message).join('; '));
+        next = parsed.data;
+      }
+      const governors = projects.clients().map((c) => c.client.governor);
+      const before = governors[0]?.settings.dayReserveFloors ?? null;
+      try {
+        for (const g of governors)
+          g.setDayReserveFloors({ P1: next.interactive, P2: next.job, P3: next.maintenance, P4: next.bulk });
+      } catch (e) {
+        throw refuse(e instanceof Error ? e.message : 'Invalid day floors');
+      }
+      writeStoredSetting(store.db, SETTING_KEYS.dayReserveFloors, value, OWNER, store.now());
+      audit('budget.set_day_reserve_floors', null, before, governors[0]?.settings.dayReserveFloors ?? next);
       return next;
     },
     setExposePerOpTools(value: boolean | null): void {

@@ -34,5 +34,6 @@ export {
   type GroupTierId,
 } from './groups.js';
 export { formatBudgetFooter } from './footer.js';
+export { CLASS_WORDS, freesInWords, rowWords, tierWords, waitText, type WaitFigures } from './wait-text.js';
 export { parseRateHeaders, parseRetryAfter, captureResponse, type RateHeaders } from './headers.js';
 export * from './types.js';

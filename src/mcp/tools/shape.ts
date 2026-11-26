@@ -299,6 +299,7 @@ export function errorFromThrown(e: unknown, deps: Pick<ProjectDeps, 'projects' |
         code: 'BUDGET_EXHAUSTED',
         message: e.message,
         tier: e.tier,
+        ...(e.waiting ? { waiting: e.waiting } : {}),
         retryAt: new Date(e.retryAtMs).toISOString(),
         retryAfterSeconds: Math.max(0, Math.ceil((e.retryAtMs - Date.now()) / 1000)),
         hint: BUDGET_HINT,

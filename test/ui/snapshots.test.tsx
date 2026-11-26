@@ -240,6 +240,38 @@ describe('the Snapshots page', () => {
     expect(within(copies).getByText('nightly-20261111T023000Z.db.gz')).toBeInTheDocument();
   });
 
+  it('v3 F9 amendment 1: says what holds the running full snapshot, and since when the daily tier has', async () => {
+    const r = response();
+    installApi(
+      routes({
+        'GET /snapshots': {
+          ...r,
+          overview: {
+            ...r.overview,
+            bulkWait:
+              'bulk waiting: the daily tier is at 85.0% and bulk may use it up to 85% (frees in 4 h 24 min)',
+            dayHold: {
+              runId: 'run1',
+              sinceMs: NOW - 600_000,
+              lastSeenMs: NOW,
+              holding: true,
+              endedAtMs: null,
+              text: 'bulk waiting: the daily tier is at 85.0% and bulk may use it up to 85% (frees in 4 h 24 min)',
+              freesAtMs: NOW + 15_840_000,
+            },
+          },
+        },
+      }),
+    );
+    renderApp('/ui/snapshots');
+    expect(await screen.findByTestId('bulk-wait')).toHaveTextContent(
+      'Now bulk waiting: the daily tier is at 85.0% and bulk may use it up to 85% (frees in 4 h 24 min).',
+    );
+    expect(screen.getByTestId('day-hold')).toHaveTextContent(
+      /The full snapshot is held by the daily tier’s floor \(since .*\): bulk waiting: the daily tier is at 85\.0%.*It goes on from the page it reached when the tier frees/,
+    );
+  });
+
   it('warns when the next full snapshot does not fit, and when the nightly copy is old', async () => {
     const r = response();
     installApi(

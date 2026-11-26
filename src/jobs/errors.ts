@@ -425,15 +425,26 @@ export class BudgetExhaustedError extends JobsError {
     readonly retryAtMs: number,
     cause?: unknown,
   ) {
+    // v3 F9 amendment 1 (ADR 0074): the governor's account of the wait (tier, floor, when it frees), when it gave one.
+    const waiting = (cause as { wait?: { text?: unknown } } | undefined)?.wait?.text;
     super(
       'BUDGET_EXHAUSTED',
-      `Rate budget exhausted (${tier}); retry at ${new Date(retryAtMs).toISOString()}`,
+      `Rate budget exhausted (${tier})${typeof waiting === 'string' ? `: ${waiting}` : ''}; retry at ${new Date(retryAtMs).toISOString()}`,
       {},
       cause === undefined ? undefined : { cause },
     );
+    this.waiting = typeof waiting === 'string' ? waiting : null;
   }
+  /** v3 F9 amendment 1: what held the call, in words, or null. */
+  readonly waiting: string | null;
   override toJSON() {
-    return { ...super.toJSON(), opId: this.opId, tier: this.tier, retryAtMs: this.retryAtMs };
+    return {
+      ...super.toJSON(),
+      opId: this.opId,
+      tier: this.tier,
+      retryAtMs: this.retryAtMs,
+      ...(this.waiting ? { waiting: this.waiting } : {}),
+    };
   }
 }
 

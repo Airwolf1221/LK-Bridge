@@ -207,12 +207,31 @@ export interface OperationTierSnapshot {
   inFlight: number;
 }
 
+/**
+ * v3 F9 amendment 1 (ADR 0074): what holds a class's queued work: the tier, the row of floors it falls under, the
+ * class's floor on that row and when it frees, with the governor's sentence for it.
+ */
+export interface ClassWait {
+  priority: PriorityClass;
+  queued: number;
+  cause: 'tier' | 'refused' | 'pacing' | 'agents' | 'in-flight';
+  tier: string | null;
+  row: 'minute-hour' | 'day' | null;
+  floor: number | null;
+  used: number | null;
+  limit: number | null;
+  freesAtMs: number | null;
+  text: string;
+}
+
 export interface BudgetSnapshot {
   atMs: number;
   tiers: Record<TierId, TierSnapshot>;
   /** v2 E5.5: learned operation limits (absent from a bridge before E5.5). */
   operationTiers?: OperationTierSnapshot[];
   queues: Record<PriorityClass, number>;
+  /** v3 F9 amendment 1: each class with queued work and what holds it (absent from a bridge before it). */
+  waits?: ClassWait[];
   inFlight: number;
   writeSpacingMs: number;
   nextWriteAtMs: number | null;
@@ -261,7 +280,12 @@ export interface Overview {
   automation?: AutomationOvernight | null;
   writes: { state: 'running' | 'paused' | 'draining'; perMinute: number };
   /** Null when the project has no governor now (its key is not in use). */
-  budget: { queues: Record<PriorityClass, number>; gauges: TierSnapshot[] } | null;
+  budget: {
+    queues: Record<PriorityClass, number>;
+    /** v3 F9 amendment 1: what holds each waiting class. */
+    waits?: ClassWait[];
+    gauges: TierSnapshot[];
+  } | null;
   /** OPS2: the owner's sign-in and the secret store. */
   /** v2 E1b: the off-site copy's health (absent from a bridge without it). */
   offsite?: { state: 'not_set_up' | 'ok' | 'warning' | 'bad'; messages: string[] } | null;
@@ -420,6 +444,13 @@ export interface BudgetSamples {
   }[];
 }
 
+export interface DayFloors {
+  interactive: number;
+  job: number;
+  maintenance: number;
+  bulk: number;
+}
+
 export interface BudgetsResponse extends BudgetPayload {
   project?: ProjectRef;
   tierOrder: TierId[];
@@ -430,6 +461,12 @@ export interface BudgetsResponse extends BudgetPayload {
     stored: { interactive: number; job: number; maintenance: number; bulk?: number } | null;
     /** v3 F9: the bulk floor is set (saved here or in the environment) rather than following the default. */
     bulkExplicit: boolean;
+  };
+  /** v3 F9 amendment 1 (ADR 0074): the daily tier's floors (the row above applies to the minute and hour tiers). */
+  dayReserveFloors?: {
+    current: DayFloors;
+    environment: DayFloors;
+    stored: DayFloors | null;
   };
   projectDrift: TierSnapshot['drift'];
   samples: BudgetSamples;
@@ -1776,6 +1813,18 @@ export interface SnapshotOverview {
   nextFullEstimate?: number | null;
   runs?: SnapshotRunView[];
   owed?: number;
+  /** v3 F9 amendment 1 (ADR 0074): what holds bulk (P4) now, in the governor's words, or null. */
+  bulkWait?: string | null;
+  /** v3 F9 amendment 1: the latest full run's hold by the daily tier's floor (in memory: a restart forgets it). */
+  dayHold?: {
+    runId: string;
+    sinceMs: number;
+    lastSeenMs: number;
+    holding: boolean;
+    endedAtMs: number | null;
+    text: string;
+    freesAtMs: number | null;
+  } | null;
   findings: SnapshotFindingView[];
   notices: SnapshotNoticeView[];
 }

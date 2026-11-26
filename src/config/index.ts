@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { DEFAULT_LK_BASE_URL } from '../lk/constants.js';
 import { TIER_IDS, type TierId } from '../lk/registry-types.js';
-import { DEFAULT_BULK_FLOOR, effectiveBulkFloor } from './floors.js';
+import { DEFAULT_BULK_FLOOR, DEFAULT_DAY_FLOORS, dayOrderMessage, effectiveBulkFloor } from './floors.js';
 import { bool, fraction, intFrom } from './schema-helpers.js';
 
 /** Published LK limits (PLAN §1.2). `null` = no published number, handled reactively only. */
@@ -79,6 +79,11 @@ export const MAIN_ENV_SCHEMA = z.object({
   // v3 F9 (ADR 0074): bulk (P4). Unset, it is the default raised to the maintenance floor if that is higher
   // (`effectiveBulkFloor`); set, it must be at least the maintenance floor.
   RESERVE_FLOOR_BULK: fraction(DEFAULT_BULK_FLOOR),
+  // v3 F9 amendment 1 (ADR 0074): the daily tier's own floors (the four above apply to the minute and hour tiers).
+  RESERVE_DAY_FLOOR_INTERACTIVE: fraction(DEFAULT_DAY_FLOORS.interactive),
+  RESERVE_DAY_FLOOR_JOB: fraction(DEFAULT_DAY_FLOORS.job),
+  RESERVE_DAY_FLOOR_MAINTENANCE: fraction(DEFAULT_DAY_FLOORS.maintenance),
+  RESERVE_DAY_FLOOR_BULK: fraction(DEFAULT_DAY_FLOORS.bulk),
   WRITE_SPACING_MS: intFrom(500, 0, 60000),
   WRITE_SPACING_STRETCHED_MS: intFrom(1200, 0, 60000),
 
@@ -138,6 +143,16 @@ export interface Config {
     };
     /** v3 F9: RESERVE_FLOOR_BULK as the environment sets it, or null when it is unset (the bulk floor is derived). */
     readonly bulkFloorSet: number | null;
+    /**
+     * v3 F9 amendment 1 (ADR 0074): the daily tier's floors (RESERVE_DAY_FLOOR_*). `reserveFloors` applies to the minute
+     * and hour tiers only.
+     */
+    readonly dayReserveFloors: {
+      readonly interactive: number;
+      readonly job: number;
+      readonly maintenance: number;
+      readonly bulk: number;
+    };
     readonly writeSpacingMs: number;
     readonly writeSpacingStretchedMs: number;
   };
@@ -357,6 +372,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ]);
   }
   const bulk = effectiveBulkFloor(maintenance, bulkFloorSet);
+  // v3 F9 amendment 1: the day floors keep the same order, checked on their own.
+  const dayReserveFloors = {
+    interactive: e.RESERVE_DAY_FLOOR_INTERACTIVE,
+    job: e.RESERVE_DAY_FLOOR_JOB,
+    maintenance: e.RESERVE_DAY_FLOOR_MAINTENANCE,
+    bulk: e.RESERVE_DAY_FLOOR_BULK,
+  };
+  const dayOrder = dayOrderMessage(dayReserveFloors);
+  if (dayOrder !== null) throw new ConfigError([`RESERVE_DAY_FLOOR_*: ${dayOrder}`]);
   return {
     env: e.NODE_ENV,
     logLevel: e.LOG_LEVEL,
@@ -374,6 +398,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     governor: {
       reserveFloors: { interactive, job, maintenance, bulk },
       bulkFloorSet,
+      dayReserveFloors,
       writeSpacingMs: e.WRITE_SPACING_MS,
       writeSpacingStretchedMs: e.WRITE_SPACING_STRETCHED_MS,
     },

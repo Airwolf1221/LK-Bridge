@@ -39,6 +39,8 @@ const ROUTES: Record<string, Route> = {
   'POST /api/admin/jobs/:id/revert': { kind: 'asks', params: { id: 'job_r4x' }, body: { confirm: true } },
   // ---- budgets and writers
   'PUT /api/admin/budgets/reserve-floors': { kind: 'asks', body: { reset: true, confirm: true } },
+  // v3 F9 amendment 1 (ADR 0074): the daily tier's floors, a setting.
+  'PUT /api/admin/budgets/reserve-day-floors': { kind: 'asks', body: { reset: true, confirm: true } },
   'PUT /api/admin/writers/max': { kind: 'asks', body: { value: 2, confirm: true } },
   'POST /api/admin/writes/pause': { kind: 'one-click' },
   'POST /api/admin/writes/resume': { kind: 'asks' },

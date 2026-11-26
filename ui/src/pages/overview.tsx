@@ -3,6 +3,7 @@ import { fmtAgo, fmtInt } from '../format';
 import { useNow } from '../hooks';
 import { useLiveBudget, useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { Link } from '../router';
+import { WaitReasons } from './budgets';
 import type { AutomationOvernight, Overview, ProjectStatusSummary } from '../types';
 
 /** Every project whose status is not `active` (a refused key, a mismatched id, not checked yet, no key), with why. */
@@ -120,6 +121,7 @@ export function OverviewPage() {
   const budget = d.budget;
   const gauges = budget ? (live ? budget.gauges.map((g) => live.snapshot.tiers[g.tier]) : budget.gauges) : [];
   const queues = live?.snapshot.queues ?? budget?.queues;
+  const waits = live?.snapshot.waits ?? budget?.waits;
   const perMinute = live?.writesPerMinute ?? d.writes.perMinute;
   const h = d.health;
   const own = d.controls.project;
@@ -282,6 +284,7 @@ export function OverviewPage() {
               Waiting for budget: interactive {queues.P1} · jobs {queues.P2} · maintenance {queues.P3} · bulk{' '}
               {queues.P4} · dashboard {queues.P0}
             </p>
+            <WaitReasons waits={waits} />
           </>
         ) : (
           <p className="muted">

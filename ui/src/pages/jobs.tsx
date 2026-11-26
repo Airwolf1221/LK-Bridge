@@ -585,6 +585,9 @@ function JobDetailView({ id }: { id: string }) {
                 {/* v3 F7c (ADR 0075): a job waiting for archive entries to be staged says so in words. */}
                 {job.waitReason.held === 'waiting_staging' && typeof job.waitReason.message === 'string' ? (
                   <>Waiting for archive entries to be staged: {job.waitReason.message}</>
+                ) : typeof job.waitReason.text === 'string' ? (
+                  // v3 F9 amendment 1 (ADR 0074): a budget wait in the governor's words (tier, floor, when it frees).
+                  <>Waiting for budget: {job.waitReason.text}</>
                 ) : (
                   <>
                     Waiting: <span className="mono">{JSON.stringify(job.waitReason)}</span>
