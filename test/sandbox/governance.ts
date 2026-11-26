@@ -16,8 +16,10 @@
  * touched or read. When every source is already reachable, it does nothing.
  */
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
+import { effectiveVocabulary } from '../../src/packs/reftypes/service.js';
 import type { Runtime } from '../../src/runtime.js';
 import type { RawLk } from './f4b-probe.js';
+import { buildGovernanceBlocks } from './governance-blocks.js';
 import { SWEEP_SENTENCE } from './automation-f5b.js';
 import { SUPPLEMENTARY_SENTENCE } from './tagging-f5a.js';
 
@@ -110,38 +112,27 @@ export async function ensureSandboxGovernance(o: {
   if (documentId === '') throw new Error(`the governance page ${resourceId} came back with no document`);
   const code = packId === ARKONA_PACK.id ? ARKONA_PACK.governance : [];
   const sources = [...pack.governance, ...code.filter((g) => !pack.governance.some((x) => x.key === g.key))];
-  // v3 F6a (ADR 0076): the Reference Type Vocabulary's section is left out while the vocabulary is a draft: it is
-  // "unpublished" (never refusing the approval) until a check publishes it (a placeholder sentence would not parse).
-  const vocabulary = pack.rules.referenceTypes?.status === 'draft' ? pack.rules.referenceTypes.section : null;
-  // v3 F6b (ADR 0079): likewise the Navigation and Subject Index Tags section while the index tag rule is a draft
-  // (f6b-nav writes it when it publishes the rule).
-  const indexTags = pack.rules.indexTaxonomy?.status === 'draft' ? pack.rules.indexTaxonomy.section : null;
-  const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))].filter(
-    (h) => h !== vocabulary && h !== indexTags,
-  );
-  // The section the vocabulary is published under (f6a-reftypes publishes it there).
-  if (vocabulary && pack.rules.referenceTypes && !headings.includes(pack.rules.referenceTypes.under))
-    headings.push(pack.rules.referenceTypes.under);
-  const supplementary = pack.rules.retag?.supplementary?.section;
-  const sweep = pack.rules.automation?.section ?? ARKONA_PACK.rules.automation?.section;
-  const blocks: Obj[] = [{ kind: 'heading', level: 1, content: [{ text: o.label }] }];
-  for (const h of headings)
-    blocks.push(
-      { kind: 'heading', level: 2, content: [{ text: h }] },
-      {
-        kind: 'paragraph',
-        content: [
-          {
-            text:
-              h === supplementary
-                ? SUPPLEMENTARY_SENTENCE
-                : h === sweep
-                  ? SWEEP_SENTENCE
-                  : `The rules of ${h}.`,
-          },
-        ],
-      },
-    );
+  // v3 F6a/F6b (ADR 0076, 0079): the Reference Type Vocabulary and the Navigation and Subject Index Tags sections are
+  // left out while their rules are drafts (the pins read "unpublished", never refusing the approval) and written for
+  // real, from the copied pack state, once the owner has published them (a placeholder would not parse). A pinned
+  // section the bridge parses that this helper cannot write fails here, naming the heading. See governance-blocks.ts.
+  const vocab = pack.rules.referenceTypes;
+  const projectId = rt.projects.list().find((p) => p.name.toLowerCase() === o.projectName.toLowerCase())?.id;
+  // The lists "Publish vocabulary" writes: the pack's vocabulary and the owner's decisions (the copied database's).
+  const vocabulary =
+    vocab?.status === 'published' && typeof projectId === 'string'
+      ? effectiveVocabulary(vocab, rt.referenceTypes.store.decisions(projectId)).lists
+      : null;
+  const built = buildGovernanceBlocks({
+    label: o.label,
+    sources,
+    rules: pack.rules,
+    vocabulary,
+    supplementarySentence: SUPPLEMENTARY_SENTENCE,
+    sweepSentence: SWEEP_SENTENCE,
+    fallbackSweepSection: ARKONA_PACK.rules.automation?.section,
+  });
+  const { blocks, headings } = built;
   const path = `/resources/${resourceId}/docs/${documentId}/blocks`;
   const doc = await raw.request('getDocumentBlocks', 'GET', path);
   await raw.request('replaceDocumentBlocks', 'PUT', path, { blocks }, { ifMatch: String(doc.version) });
@@ -159,7 +150,7 @@ export async function ensureSandboxGovernance(o: {
     documentId,
     detail:
       `governance (read from ${reach.missing.length > 0 ? `${reach.missing.join(', ')}, not registered here` : `${reach.projects.join(', ')}, left untouched`}) pointed at the throwaway page ` +
-      `${resourceId}, ${headings.length} pinned headings; pack version ${rt.packs.get(packId)!.approved!.version} ` +
+      `${resourceId}, ${headings.length} pinned headings${built.published.length > 0 ? `, written as published: ${built.published.join('; ')}` : ''}; pack version ${rt.packs.get(packId)!.approved!.version} ` +
       'approved (temporary database only)',
   };
 }
