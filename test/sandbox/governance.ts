@@ -19,9 +19,7 @@ import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import { effectiveVocabulary } from '../../src/packs/reftypes/service.js';
 import type { Runtime } from '../../src/runtime.js';
 import type { RawLk } from './f4b-probe.js';
-import { buildGovernanceBlocks } from './governance-blocks.js';
-import { SWEEP_SENTENCE } from './automation-f5b.js';
-import { SUPPLEMENTARY_SENTENCE } from './tagging-f5a.js';
+import { buildGovernanceBlocks, SUPPLEMENTARY_SENTENCE, SWEEP_SENTENCE } from './governance-blocks.js';
 
 type Obj = Record<string, any>;
 

@@ -28,14 +28,14 @@
  * timeout (test/sandbox/steps.ts), and again from the test file's `afterAll`; the report names what must be deleted by
  * hand. Cost: about 14 writes and 60 reads.
  */
-import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import { ProjectStore } from '../../src/projects/index.js';
 import type { RawLk } from './f4b-probe.js';
 import { deleteProbe } from './f4b-probe.js';
 import { snapshotPagesOnly } from './page-snapshot.js';
 import type { SoakRuntime } from './soak.js';
 import { sandboxRun, type SandboxRun } from './steps.js';
-import { SUPPLEMENTARY_SENTENCE } from './tagging-f5a.js';
+import { ensureSandboxGovernance } from './governance.js';
+import { SWEEP_SENTENCE } from './governance-blocks.js';
 import { copyBridgeState } from './write-scope.js';
 
 type Obj = Record<string, any>;
@@ -46,9 +46,7 @@ export interface AutomationCheckItem {
   readonly detail: string;
 }
 
-/** The block-id sweep's paragraph, in the words the owner's brief quotes. */
-export const SWEEP_SENTENCE =
-  'Assign Block IDs Sweep (owner approval, 17 November 2026): enabling it is the activation, and this approval establishes no wider repair whitelist.';
+export { SWEEP_SENTENCE } from './governance-blocks.js';
 
 const CANON_ROWS = [
   { key: 'Status', text: 'Authoritative' },
@@ -134,68 +132,20 @@ export async function runAutomationCheck(
           ...(rootId ? { parentId: rootId } : {}),
         });
         made.index = String(index.id);
-        const gov = await raw.request('createResource', 'POST', '/resources', {
-          name: `lk-bridge f5b governance ${stamp}`,
+        const g = await ensureSandboxGovernance({
+          rt,
+          raw,
+          projectName: name,
+          packId: 'arkona',
           parentId: made.index,
-          documents: [{ name: 'Main', type: 'page' }],
+          label: `lk-bridge f5b governance ${stamp}`,
+          always: true,
         });
-        page.gov = String(gov.id);
-        const docs = (gov.documents ?? []) as Obj[];
-        page.govDoc = String((docs.find((d) => d.name === 'Main') ?? docs[0])?.id ?? '');
-        if (page.govDoc === '') throw new Error(`the governance page ${page.gov} came back with no document`);
-        const automation = pack.rules.automation!;
-        // The pack's sources and the seed's (Repository Automation is the seed's since F5b), by key.
-        const sources = [
-          ...pack.governance,
-          ...ARKONA_PACK.governance.filter((g) => !pack.governance.some((x) => x.key === g.key)),
-        ];
-        const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))].filter(
-          // v3 F6a (ADR 0076): the draft vocabulary's section stays unpublished (a placeholder would not parse).
-          (h) => !(pack.rules.referenceTypes?.status === 'draft' && h === pack.rules.referenceTypes.section),
-        );
-        const blocks: Obj[] = [
-          { kind: 'heading', level: 1, content: [{ text: 'lk-bridge f5b governance' }] },
-        ];
-        for (const h of headings)
-          blocks.push(
-            { kind: 'heading', level: 2, content: [{ text: h }] },
-            {
-              kind: 'paragraph',
-              content: [
-                {
-                  text:
-                    h === pack.rules.retag?.supplementary?.section
-                      ? SUPPLEMENTARY_SENTENCE
-                      : h === automation.section
-                        ? SWEEP_SENTENCE
-                        : `The rules of ${h}.`,
-                },
-              ],
-            },
-          );
-        const doc = await raw.request(
-          'getDocumentBlocks',
-          'GET',
-          `/resources/${page.gov}/docs/${page.govDoc}/blocks`,
-        );
-        await raw.request(
-          'replaceDocumentBlocks',
-          'PUT',
-          `/resources/${page.gov}/docs/${page.govDoc}/blocks`,
-          { blocks },
-          { ifMatch: String(doc.version) },
-        );
-        // The temporary database only: every governance source pointed at the throwaway page, then approved.
-        rt.packs.store.setGovernance(
-          'arkona',
-          sources.map((g) => ({ ...g, project: name, resourceId: page.gov, documentId: page.govDoc })),
-        );
-        await rt.packs.commands.approve('owner', 'arkona');
-        const g = await rt.packs.governance('arkona');
-        if (g.state !== 'current') throw new Error(`the pack is ${g.state}: ${g.message}`);
+        page.gov = g.resourceId ?? '';
+        page.govDoc = g.documentId ?? '';
         const state = await a.governanceState(pid);
         if (!state.ok) throw new Error(`automation’s governance: ${state.message}`);
-        return `index ${made.index}, governance ${page.gov}; pack version ${rt.packs.get('arkona')!.approved!.version} approved (temporary database)`;
+        return `index ${made.index}, governance ${page.gov}; ${g.detail}`;
       },
     );
     if (!ok1) return items;

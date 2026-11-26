@@ -25,6 +25,14 @@ import type { PackRules } from '../../src/packs/types.js';
 
 type Obj = Record<string, any>;
 
+/** The Tagging Standard's section as Arkona's page has it (23 November 2026), verbatim. */
+export const SUPPLEMENTARY_SENTENCE =
+  'Under the Exact Tag Grammar’s provision for a deliberately approved exception, the author has approved these existing tags as permitted supplementary tags on any eligible owner (author ruling, 23 November 2026): Cosmology, Chronology and Setting Framework. A permitted supplementary tag is kept, after the grammar’s slots, wherever it appears. It is not a primary category or a specialist function, it is never added to a page by inference or by an audit, and it is never proposed for removal as incidental. Adding a tag to this list, or removing one, is an author decision recorded here.';
+
+/** The block-id sweep's paragraph, in the words the owner's brief quotes. */
+export const SWEEP_SENTENCE =
+  'Assign Block IDs Sweep (owner approval, 17 November 2026): enabling it is the activation, and this approval establishes no wider repair whitelist.';
+
 /** The sections of a pack's rules that name a governance source (`source` and `section`), by the path of the rule. */
 export function pinnedRuleSections(rules: unknown): { readonly path: string; readonly section: string }[] {
   const out: { path: string; section: string }[] = [];

@@ -5,6 +5,7 @@
  * (test/sandbox/governance-blocks.ts); a published rule is written in its real form, a draft is left out as before, and a
  * parsed section it cannot write fails at once, naming the heading.
  */
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import { indexTagSectionText, parseIndexTagSection } from '../../src/packs/indextax/rules.js';
@@ -141,5 +142,13 @@ describe('the throwaway governance page’s blocks', () => {
   it('a heading pinned both as a plain section and as the vocabulary’s would get a placeholder: an error', () => {
     const odd = { ...input(), sources: [{ sections: ['reference type vocabulary'] }] };
     expect(() => buildGovernanceBlocks(odd)).toThrow(/reference type vocabulary/i);
+  });
+
+  it('no sandbox check builds a governance page of its own (the placeholder text lives in governance-blocks.ts only)', () => {
+    const dir = new URL('../sandbox/', import.meta.url);
+    const offenders = readdirSync(dir)
+      .filter((f) => f.endsWith('.ts') && f !== 'governance-blocks.ts')
+      .filter((f) => /The rules of \$\{/.test(readFileSync(new URL(f, dir), 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });

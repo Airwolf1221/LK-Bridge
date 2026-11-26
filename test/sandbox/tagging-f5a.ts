@@ -32,6 +32,7 @@
 import { ProjectStore } from '../../src/projects/index.js';
 import type { RawLk } from './f4b-probe.js';
 import { deleteProbe } from './f4b-probe.js';
+import { ensureSandboxGovernance } from './governance.js';
 import { snapshotPagesOnly } from './page-snapshot.js';
 import type { SoakRuntime } from './soak.js';
 import { sandboxRun, type SandboxRun } from './steps.js';
@@ -45,9 +46,7 @@ export interface TaggingCheckItem {
   readonly detail: string;
 }
 
-/** The Tagging Standard's section as Arkona's page has it (23 November 2026), verbatim. */
-export const SUPPLEMENTARY_SENTENCE =
-  'Under the Exact Tag Grammar’s provision for a deliberately approved exception, the author has approved these existing tags as permitted supplementary tags on any eligible owner (author ruling, 23 November 2026): Cosmology, Chronology and Setting Framework. A permitted supplementary tag is kept, after the grammar’s slots, wherever it appears. It is not a primary category or a specialist function, it is never added to a page by inference or by an audit, and it is never proposed for removal as incidental. Adding a tag to this list, or removing one, is an author decision recorded here.';
+export { SUPPLEMENTARY_SENTENCE } from './governance-blocks.js';
 
 /** The incidental tag on the second probe page (an exception everywhere: no rule lists it). */
 export const PROBE_TAG = 'lkbf5aprobe';
@@ -131,58 +130,20 @@ export async function runTaggingCheck(
           ...(rootId ? { parentId: rootId } : {}),
         });
         made.index = String(index.id);
-        const gov = await raw.request('createResource', 'POST', '/resources', {
-          name: `lk-bridge f5a governance ${stamp}`,
+        const gov = await ensureSandboxGovernance({
+          rt,
+          raw,
+          projectName: name,
+          packId: 'arkona',
           parentId: made.index,
-          documents: [{ name: 'Main', type: 'page' }],
+          label: `lk-bridge f5a governance ${stamp}`,
+          always: true,
         });
-        const govId = String(gov.id);
-        const docs = (gov.documents ?? []) as Obj[];
-        const docId = String((docs.find((d) => d.name === 'Main') ?? docs[0])?.id ?? '');
-        if (docId === '') throw new Error(`the governance page ${govId} came back with no document`);
-        const headings = [...new Set(pack.governance.flatMap((g) => g.sections ?? []))].filter(
-          // v3 F6a (ADR 0076): the draft vocabulary's section stays unpublished (a placeholder would not parse).
-          (h) => !(pack.rules.referenceTypes?.status === 'draft' && h === pack.rules.referenceTypes.section),
-        );
-        const blocks: Obj[] = [
-          { kind: 'heading', level: 1, content: [{ text: 'lk-bridge f5a governance' }] },
-        ];
-        for (const h of headings)
-          blocks.push(
-            { kind: 'heading', level: 2, content: [{ text: h }] },
-            {
-              kind: 'paragraph',
-              content: [
-                {
-                  text:
-                    h === pack.rules.retag!.supplementary!.section
-                      ? SUPPLEMENTARY_SENTENCE
-                      : `The rules of ${h}.`,
-                },
-              ],
-            },
-          );
-        const doc = await raw.request('getDocumentBlocks', 'GET', `/resources/${govId}/docs/${docId}/blocks`);
-        await raw.request(
-          'replaceDocumentBlocks',
-          'PUT',
-          `/resources/${govId}/docs/${docId}/blocks`,
-          { blocks },
-          {
-            ifMatch: String(doc.version),
-          },
-        );
-        // The temporary database only: every governance source pointed at the throwaway page, then approved.
-        rt.packs.store.setGovernance(
-          'arkona',
-          pack.governance.map((g) => ({ ...g, project: name, resourceId: govId, documentId: docId })),
-        );
-        await rt.packs.commands.approve('owner', 'arkona');
+        const govId = gov.resourceId ?? '';
         const g = await rt.packs.governance('arkona');
-        if (g.state !== 'current') throw new Error(`the pack is ${g.state}: ${g.message}`);
         if (g.supplementary?.state !== 'same')
           throw new Error(`the Approved Supplementary Tags read ${JSON.stringify(g.supplementary ?? null)}`);
-        return `index ${made.index}, governance ${govId}; pack version ${rt.packs.get('arkona')!.approved!.version} approved (temporary database); supplementary: ${g.supplementary.tags.join(', ')}`;
+        return `index ${made.index}, governance ${govId}; ${gov.detail}; supplementary: ${g.supplementary.tags.join(', ')}`;
       },
     );
     if (!ok1) return items;
