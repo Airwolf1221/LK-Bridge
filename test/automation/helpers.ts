@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON replies */
 /**
  * v3 F5b (ADR 0068): the owner's dashboard session in a test world: requests to the admin API with the session cookie
- * and CSRF token, and the step-up set (or lapsed) directly on the session, as the admin tests do.
+ * and CSRF token, and the step-up set (or lapsed) directly on the session, as the admin tests do (ADR 0081: no
+ * automation route asks for one).
  */
 import { ADMIN_CSRF_PURPOSE } from '../../src/admin/guard.js';
 import { PUBLIC_URL } from '../tools/helpers.js';
@@ -10,9 +11,9 @@ import type { RetagWorld } from '../packs/retag-world.js';
 export interface OwnerHttp {
   get(path: string): Promise<{ status: number; json: any }>;
   post(path: string, body: unknown): Promise<{ status: number; json: any }>;
-  /** The step-up made now (it holds for ten minutes). */
+  /** The step-up made now (ADR 0081: automation needs none; kept for the tests that set one). */
   stepUp(): void;
-  /** The step-up lapsed (eleven minutes ago). */
+  /** No step-up on the session (long lapsed). */
   expire(): void;
 }
 
@@ -41,6 +42,6 @@ export function ownerHttp(w: Pick<RetagWorld, 'stack'>): OwnerHttp {
       return { status: res.status, json: await res.json() };
     },
     stepUp: () => setReauth(Math.floor(Date.now() / 1000)),
-    expire: () => setReauth(Math.floor(Date.now() / 1000) - 660),
+    expire: () => setReauth(0),
   };
 }

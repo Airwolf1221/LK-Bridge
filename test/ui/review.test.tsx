@@ -14,30 +14,22 @@ import { baseRoutes, installApi, profiles, renderApp, useDom, type Call } from '
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
-
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 300_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
-async function reauthenticate(user: ReturnType<typeof userEvent.setup>) {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-}
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const reauthenticate = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
+};
 
 const item = (over: Record<string, unknown> = {}) => ({
   jobId: 'job_direct1',
@@ -148,7 +140,7 @@ describe('the Review page', () => {
 
   it('Revert shows what would be put back, needs a tick for a partial revert, then the password', async () => {
     const user = userEvent.setup();
-    const gate = needsReauth(() => ({ revert: { revertJobId: 'job_revert1', message: 'submitted' } }));
+    const gate = answersAtOnce(() => ({ revert: { revertJobId: 'job_revert1', message: 'submitted' } }));
     const api = installApi({
       ...baseRoutes(),
       ...reviewRoutes(),

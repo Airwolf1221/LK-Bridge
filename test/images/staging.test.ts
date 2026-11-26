@@ -311,7 +311,7 @@ describe('the dashboard’s Staging API', () => {
     expect(w.stack.runtime.images.staged(PROJECT, id)!.staged).toBe(true);
   });
 
-  it('needs the owner session and CSRF; allowing a delete without bytes needs re-authentication', async () => {
+  it('needs the owner session and CSRF; allowing a delete without bytes needs no fresh code (ADR 0081)', async () => {
     w = await imagesWorld();
     const anon = await fetch(`${w.stack.base}/api/admin/staging?project=test`);
     expect(anon.status).toBe(401);
@@ -326,10 +326,6 @@ describe('the dashboard’s Staging API', () => {
       body: new Uint8Array(fixture('alpha.png')),
     });
     expect(noCsrf.status).toBe(403);
-    const refused = await o.post('/staging/allow-delete?project=test', { assetId: 'a1', confirm: true });
-    expect(refused.status).toBe(403);
-    expect((refused.json.error as { code: string }).code).toBe('REAUTH_REQUIRED');
-    o.reauth();
     const ok = await o.post('/staging/allow-delete?project=test', { assetId: 'a1', confirm: true });
     expect(ok.status, JSON.stringify(ok.json)).toBe(200);
     expect(w.stack.runtime.images.store.overrides(PROJECT)[0]).toMatchObject({ assetId: 'a1', usedAt: null });

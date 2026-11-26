@@ -930,6 +930,16 @@ const SPECS: readonly Spec[] = [
     applies: 'next_start',
   },
   {
+    key: 'AUTH_STEP_UP_WINDOW_SECONDS',
+    schema: 'auth',
+    group: 'dashboard',
+    label: 'Fresh authenticator code lasts',
+    description:
+      'How long a fresh authenticator code (or the password without one) lasts on its session for the credential changes that ask for one: the password, the authenticator, recovery codes, connections, tokens and keys.',
+    unit: UNITS.secondsAsMinutes,
+    applies: 'next_start',
+  },
+  {
     key: 'AUTH_REFRESH_GRACE_SECONDS',
     schema: 'auth',
     group: 'dashboard',

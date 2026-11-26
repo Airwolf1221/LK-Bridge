@@ -2,8 +2,9 @@
 /**
  * ADR 0062 (the owner's request after CR-2026-11-R3): the dashboard's session lasts 30 days from its last use, in an
  * HttpOnly, Secure, SameSite=Strict cookie, and is kept on the server (it survives a restart and can be revoked); "Sign
- * out everywhere" ends them all; sensitive actions need a step-up (the authenticator code within the last ten minutes, or
- * the password when no authenticator is set up), approving a proposal of a guarded kind among them; and the three pages
+ * out everywhere" ends them all; the credential changes need a step-up (ADR 0081: the authenticator code within the
+ * last 12 hours, `AUTH_STEP_UP_WINDOW_SECONDS`, or the password when no authenticator is set up), and nothing else does,
+ * approving a proposal included; and the three pages
  * reached from another site (the OAuth consent page, Google Drive's return, a link to the dashboard) bounce once so the
  * Strict cookie comes with them. Mocks only.
  */
@@ -247,7 +248,7 @@ describe('Sign out everywhere (ADR 0062 decision 4)', () => {
   });
 });
 
-describe('the step-up (ADR 0062 decision 5)', () => {
+describe('the step-up (ADR 0062 decision 5, narrowed by ADR 0081)', () => {
   it('without an authenticator: the password; with one: its code or a recovery code, never the password alone', async () => {
     s = await startAdminStack();
     const stack = s;
@@ -258,8 +259,9 @@ describe('the step-up (ADR 0062 decision 5)', () => {
     expect((await reauth({ password: 'not-the-password' })).json.error.code).toBe('REAUTH_FAILED');
     const byPassword = await reauth({ password: stack.bridge.password });
     expect(byPassword.status, byPassword.text).toBe(200);
-    expect(byPassword.json.until).toBeGreaterThan(Date.now() + 590_000);
-    expect(byPassword.json.until).toBeLessThanOrEqual(Date.now() + 601_000);
+    // ADR 0081: it lasts AUTH_STEP_UP_WINDOW_SECONDS, 12 hours by default.
+    expect(byPassword.json.until).toBeGreaterThan(Date.now() + 43_190_000);
+    expect(byPassword.json.until).toBeLessThanOrEqual(Date.now() + 43_201_000);
 
     // The authenticator is set up (itself a sensitive change, so within the step-up).
     const enrol = await stack.post('/api/admin/security/totp/enrol', {});
@@ -285,22 +287,21 @@ describe('the step-up (ADR 0062 decision 5)', () => {
     expect((await stack.get('/api/admin/session')).json.totpEnabled).toBe(true);
   });
 
-  it('lasts ten minutes', async () => {
+  it('lasts 12 hours by default (ADR 0081: AUTH_STEP_UP_WINDOW_SECONDS; was 10 minutes)', async () => {
     s = await startAdminStack();
     const stack = s;
-    const contact = (value: string) =>
-      stack.put('/api/admin/settings/contact-email', { value, confirm: true });
-    setReauth(stack, nowS() - 590);
-    expect((await contact('owner@example.test')).status).toBe(200);
-    setReauth(stack, nowS() - 601);
-    const late = await contact('owner2@example.test');
+    const probe = () => stack.post('/api/admin/clients/connections/remove-inactive', {});
+    setReauth(stack, nowS() - 12 * 3600 + 10);
+    expect((await probe()).status).toBe(200);
+    setReauth(stack, nowS() - 12 * 3600 - 1);
+    const late = await probe();
     expect(late.status).toBe(403);
     expect(late.json.error.code).toBe('REAUTH_REQUIRED');
-    expect(late.json.error.message).toMatch(/10 minutes/);
+    expect(late.json.error.message).toMatch(/12 hours/);
   });
 
-  // The owner's rule (ADR 0062, accepted 19 November 2026): tightening is one click, loosening asks.
-  it('loosening asks (settings, keys, a raise, read-only off, resuming writes); tightening is one click', async () => {
+  // ADR 0081 (the owner, 26 November 2026: "A code at sign-in is enough"): only the credential changes ask.
+  it('only the credential changes ask; settings, a profile’s tool list, the brakes and their release do not', async () => {
     s = await startAdminStack();
     const stack = s;
     await stack.runtime.ready;
@@ -322,43 +323,37 @@ describe('the step-up (ADR 0062 decision 5)', () => {
       const r = await step(method, path, body);
       expect(r.status, `${method} ${path}: ${r.text}`).toBe(200);
     };
-    // Settings and keys ask, both ways.
-    await asks('PUT', '/settings/tier-limits', { value: null, confirm: true });
-    await asks('PUT', '/budgets/reserve-floors', { reset: true, confirm: true });
-    await asks('PUT', '/writers/max', { value: 2, confirm: true });
-    await asks('POST', '/maintenance/snapshot-full/enable');
-    await asks('PUT', '/maintenance/snapshot-full/schedule', { schedule: null });
-    await asks('PUT', '/tool-calls/retention', { days: 30 });
-    await asks('PUT', '/clients/settings/stale-after-days', { days: 30 });
-    await asks('PUT', `/clients/profiles/${profile.id}/low-level-tools`, { show: true });
+    // Settings need no fresh code.
+    await oneClick('PUT', '/settings/tier-limits', { value: null, confirm: true });
+    await oneClick('PUT', '/budgets/reserve-floors', { reset: true, confirm: true });
+    await oneClick('PUT', '/writers/max', { value: 2, confirm: true });
+    await oneClick('POST', '/maintenance/snapshot-full/enable');
+    await oneClick('PUT', '/maintenance/snapshot-full/schedule', { schedule: null });
+    await oneClick('PUT', '/tool-calls/retention', { days: 30, confirm: true });
+    await oneClick('PUT', '/clients/settings/stale-after-days', { days: 30 });
+    await oneClick('PUT', `/clients/profiles/${profile.id}/low-level-tools`, { show: true });
+    // A token, and a connection's scope changed either way, ask.
     await asks('POST', '/clients/pats', { name: 'r3 key', profileId: profile.id });
-    // A raise asks; a lowering is one click.
     await asks('PUT', `/clients/profiles/${profile.id}/scope`, { scope: 'write', confirmRaise: true });
+    await asks('PUT', `/clients/profiles/${profile.id}/scope`, { scope: 'read' });
     expect(stack.policy.store.getProfile(profile.id)?.scope).toBe('propose');
-    await oneClick('PUT', `/clients/profiles/${profile.id}/scope`, { scope: 'read' });
-    expect(stack.policy.store.getProfile(profile.id)?.scope).toBe('read');
-    // Read-only on is one click; off asks.
+    // Read-only, pausing and draining, both ways, are one click.
     await oneClick('PUT', '/settings/read-only', { value: true, confirm: true });
     expect(stack.runtime.engine.queries.controls().readOnly).toBe(true);
-    await asks('PUT', '/settings/read-only', { value: false, confirm: true });
-    expect(stack.runtime.engine.queries.controls().readOnly).toBe(true);
-    // Pausing and draining are one click; resuming and undraining release a brake, so they ask.
-    await oneClick('POST', '/writes/pause');
-    await asks('POST', '/writes/resume');
-    expect(stack.runtime.engine.queries.controls().writesPaused).toBe(true);
-    await oneClick('POST', '/writes/drain');
-    await asks('POST', '/writes/undrain');
-    // Revoking a connection is one click.
-    await oneClick('POST', `/clients/connections/${conn.pat.id}/revoke`);
-    // With the step-up, the loosenings go through.
-    setReauth(stack, Math.floor(Date.now() / 1000));
     await oneClick('PUT', '/settings/read-only', { value: false, confirm: true });
+    await oneClick('POST', '/writes/pause');
     await oneClick('POST', '/writes/resume');
+    await oneClick('POST', '/writes/drain');
     await oneClick('POST', '/writes/undrain');
     expect(stack.runtime.engine.queries.controls()).toMatchObject({ readOnly: false, writesPaused: false });
+    // Revoking a connection asks now (the owner listed revoking).
+    await asks('POST', `/clients/connections/${conn.pat.id}/revoke`);
+    setReauth(stack, nowS());
+    await oneClick('POST', `/clients/connections/${conn.pat.id}/revoke`);
+    await oneClick('PUT', `/clients/profiles/${profile.id}/scope`, { scope: 'read' });
   });
 
-  it('a project: read-only on and draining are one click; off and resuming ask', async () => {
+  it('a project: read-only and draining are one click both ways', async () => {
     s = await startAdminStack();
     const stack = s;
     await stack.runtime.ready;
@@ -367,18 +362,14 @@ describe('the step-up (ADR 0062 decision 5)', () => {
     const put = (path: string, body: unknown) => stack.put(`/api/admin/projects/${name}${path}`, body);
     expect((await put('/read-only', { value: true, confirm: true })).status).toBe(200);
     const off = await put('/read-only', { value: false, confirm: true });
-    expect(off.status, off.text).toBe(403);
-    expect(off.json.error.code).toBe('REAUTH_REQUIRED');
+    expect(off.status, off.text).toBe(200);
     expect((await put('/draining', { value: true })).status).toBe(200);
     const undrain = await put('/draining', { value: false });
-    expect(undrain.status, undrain.text).toBe(403);
-    setReauth(stack, Math.floor(Date.now() / 1000));
-    expect((await put('/read-only', { value: false, confirm: true })).status).toBe(200);
-    expect((await put('/draining', { value: false })).status).toBe(200);
+    expect(undrain.status, undrain.text).toBe(200);
   });
 });
 
-describe('approving a proposal of a guarded kind (ADR 0062 decision 5: the rails)', () => {
+describe('approving a proposal (ADR 0081: never a fresh code)', () => {
   /** A pending proposal of `steps`, captured as a bridge tool captures one. */
   async function proposal(stack: AdminStack, tag: string, steps: unknown[]): Promise<string> {
     const r = (await stack.runtime.engine.submit({
@@ -401,7 +392,7 @@ describe('approving a proposal of a guarded kind (ADR 0062 decision 5: the rails
       params: { body: { name: `${tag} ${i}` } },
     }));
 
-  it('a delete, or more than 10 pages, needs the step-up; two new pages do not; rejecting never does', async () => {
+  it('a delete, more than 10 pages, a bulk approval and a rejection go through without a step-up', async () => {
     s = await startAdminStack();
     const stack = s;
     await stack.runtime.ready;
@@ -411,6 +402,9 @@ describe('approving a proposal of a guarded kind (ADR 0062 decision 5: the rails
       { op: 'deleteResource', params: { path: { resourceId: 'r3gone00001' } } },
     ]);
     const bulk = await proposal(stack, 'bulk', creates('r3 bulk', 11));
+    const together = await proposal(stack, 'together', [
+      { op: 'deleteResource', params: { path: { resourceId: 'r3gone00003' } } },
+    ]);
     const rejected = await proposal(stack, 'reject', [
       { op: 'deleteResource', params: { path: { resourceId: 'r3gone00002' } } },
     ]);
@@ -418,29 +412,15 @@ describe('approving a proposal of a guarded kind (ADR 0062 decision 5: the rails
 
     for (const id of [deletes, bulk]) {
       const r = await stack.post(`/api/admin/proposals/${id}/approve`, {});
-      expect(r.status, r.text).toBe(403);
-      expect(r.json.error.code).toBe('REAUTH_REQUIRED');
-    }
-    // "Approve selected" of several: one guarded among them is enough to ask.
-    const together = await stack.post('/api/admin/proposals/bulk', {
-      action: 'approve',
-      ids: [plain, deletes],
-    });
-    expect(together.status, together.text).toBe(403);
-    expect([state(plain), state(deletes), state(bulk)]).toEqual(['pending', 'pending', 'pending']);
-
-    const r1 = await stack.post(`/api/admin/proposals/${rejected}/reject`, {});
-    expect(r1.status, r1.text).toBe(200);
-    const r2 = await stack.post(`/api/admin/proposals/${plain}/approve`, {});
-    expect(r2.status, r2.text).toBe(200);
-    expect(state(plain)).not.toBe('pending');
-
-    setReauth(stack, nowS());
-    for (const id of [deletes, bulk]) {
-      const r = await stack.post(`/api/admin/proposals/${id}/approve`, {});
       expect(r.status, r.text).toBe(200);
       expect(state(id)).not.toBe('pending');
     }
+    const both = await stack.post('/api/admin/proposals/bulk', { action: 'approve', ids: [plain, together] });
+    expect(both.status, both.text).toBe(200);
+    expect([state(plain), state(together)].every((x) => x !== 'pending')).toBe(true);
+    const r1 = await stack.post(`/api/admin/proposals/${rejected}/reject`, {});
+    expect(r1.status, r1.text).toBe(200);
+    expect(stack.services.owner.peekSession(stack.sessionToken)?.reauthAt ?? null).toBeNull();
   });
 });
 

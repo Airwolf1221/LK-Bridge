@@ -1694,7 +1694,7 @@ export class Consistency {
    * "Pick the right value" (D6): the owner picks one side's value (`side`, a value's key) or types one (`value`); every
    * page whose value disagrees with it gets an edit, in ONE proposal of items (one per page). The picked side, and any
    * value that agrees with the pick, is never touched; a deliberate gap and a value inherited from Main CANON are never
-   * edited (listed). Never runs without the owner: the dashboard's step-up action calls it.
+   * edited (listed). Never runs without the owner: the dashboard's action calls it.
    */
   async pick(o: {
     readonly projectId: string;

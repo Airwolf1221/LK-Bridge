@@ -40,7 +40,7 @@ const reauth = () =>
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
+    .run(null, s.services.sessionHash(s.sessionToken)); // no step-up at all
 
 /** One direct write by the agent (an alias on a page), run to its end. */
 async function directWrite(): Promise<string> {
@@ -99,13 +99,9 @@ describe('the Review API', () => {
 });
 
 describe('Revert through the API', () => {
-  it('needs the owner’s re-authentication, and every attempt is audited as job.revert', async () => {
+  it('needs no fresh code (ADR 0081), and every attempt is audited as job.revert', async () => {
     const jobId = await directWrite();
     expire();
-    const refused = await s.post(`/api/admin/jobs/${jobId}/revert`, { confirm: true });
-    expect(refused.status).toBe(403);
-    expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
-    reauth();
     // The preview reads. The job only created a page, which Revert deletes again while untouched (v3 F12, ADR 0081);
     // this stack's mock answers every read with a stub page (another name, a page under it), so it reads as changed
     // since, and is kept.
@@ -129,7 +125,6 @@ describe('Revert through the API', () => {
   });
 
   it('an unknown job is 404, audited too', async () => {
-    reauth();
     const r = await s.post('/api/admin/jobs/job_unknown/revert', { confirm: true });
     expect(r.status).toBe(404);
     expect(s.audit('job.revert')[0]!.target).toBe('job_unknown');

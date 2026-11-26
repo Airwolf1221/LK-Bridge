@@ -12,31 +12,24 @@ import { baseRoutes, installApi, job, renderApp, step, useDom, type Call } from 
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const SOURCE = '[BSRC] Zahra al-Rashid - Character Reference';
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 300_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
-async function reauthenticate(user: ReturnType<typeof userEvent.setup>) {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-}
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const reauthenticate = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
+};
 
 const dest = (key: string, label: string, sections: string) => ({
   id: `dest:${key}`,
@@ -152,7 +145,7 @@ describe('a split’s phase 1 on its job page', () => {
   };
 
   it('names the split where it stopped, and Revert only proposes deleting the pages it made', async () => {
-    const gate = needsReauth(() => ({
+    const gate = answersAtOnce(() => ({
       revert: {
         status: 'proposed',
         deletionProposalId: 'prop_del',

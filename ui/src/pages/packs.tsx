@@ -2,20 +2,19 @@ import { Fragment, useState } from 'react';
 import { ApiError, api } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { useApi } from '../hooks';
-import { useReauth } from '../reauth';
 import type { PackGovernance, PackHomeRule, PackOwners, PackView, PacksResponse } from '../types';
 
 /**
  * Packs (v3 F3a, ADR 0050): each setting pack's rules, read-only (they are data, versioned; the token
  * maps below make a new version), the governance sources the rules were derived from with the versions the owner
- * approved, the projects the pack is attached to (and its template ids there), and its versions. Two changes, each asking
- * for the step-up (ADR 0062): **Approve this pack version** (records every governance source's document version, read now)
+ * approved, the projects the pack is attached to (and its template ids there), and its versions. Two changes (ADR 0081: no
+ * fresh code): **Approve this pack version** (records every governance source's document version, read now)
  * and **Save token maps** (race and culture → tag token: a new version, which then waits for approval). Until the
  * current version is approved and every source is as approved, the pack's tools compute no tags (fail closed).
  *
  * ADR 0052 amendment (16 November 2026): when a pinned section cannot be found (an approval refused with
  * GOVERNANCE_SECTION_MISSING, or a governance check after a page renamed a pinned heading), each missing heading is shown
- * beside a picker of that page's actual headings, in order with their levels. **Re-map** (password again, audited) makes
+ * beside a picker of that page's actual headings, in order with their levels. **Re-map** (audited) makes
  * a new version holding the new mapping, which the owner then approves with the rest of the version.
  */
 const STATE_TONE: Record<PackGovernance['state'], 'ok' | 'warn' | 'bad'> = {
@@ -61,7 +60,6 @@ export function PacksPage() {
 
 function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }) {
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [gov, setGov] = useState<PackGovernance | null>(null);
   const check = () =>
@@ -84,14 +82,14 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/approve`, { confirm: true }),
-          ).catch((e: unknown) => {
-            // A pinned heading not found: show the governance as read, with the picker for each missing heading.
-            if (e instanceof ApiError && e.code === 'GOVERNANCE_SECTION_MISSING' && e.extra.governance)
-              setGov(e.extra.governance as PackGovernance);
-            throw e;
-          }),
+          api
+            .post<{ governance: PackGovernance }>(`/packs/${pack.id}/approve`, { confirm: true })
+            .catch((e: unknown) => {
+              // A pinned heading not found: show the governance as read, with the picker for each missing heading.
+              if (e instanceof ApiError && e.code === 'GOVERNANCE_SECTION_MISSING' && e.extra.governance)
+                setGov(e.extra.governance as PackGovernance);
+              throw e;
+            }),
         `${pack.name} version ${pack.version} approved.`,
       ).then((x) => {
         if (x) setGov(x.governance);
@@ -248,7 +246,7 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
 
 /**
  * ADR 0052 amendment: each pinned heading the page no longer has, beside a picker of the page's actual headings (in order,
- * indented by level). Re-mapping asks for a confirmation and the password again; the new mapping is a new version.
+ * indented by level). Re-mapping asks for a confirmation; the new mapping is a new version.
  */
 function PinRemap({
   pack,
@@ -313,7 +311,6 @@ function RemapRow({
   onRemapped: (g: PackGovernance) => void;
 }) {
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [to, setTo] = useState('');
   const outline = source.outline ?? [];
@@ -331,14 +328,12 @@ function RemapRow({
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/sections`, {
-              source: source.key,
-              from: heading,
-              to,
-              confirm: true,
-            }),
-          ),
+          api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/sections`, {
+            source: source.key,
+            from: heading,
+            to,
+            confirm: true,
+          }),
         `Pinned heading re-mapped: approve version ${pack.version + 1} to use it.`,
       ).then((x) => {
         if (x) onRemapped(x.governance);
@@ -385,7 +380,6 @@ const toMap = (rows: Row[]) =>
 
 function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void }) {
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [race, setRace] = useState<Row[]>(() => toRows(pack.rules.tags.race));
   const [culture, setCulture] = useState<Row[]>(() => toRows(pack.rules.tags.culture));
@@ -407,21 +401,19 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.put(`/packs/${pack.id}/tokens`, {
-              race: toMap(race),
-              culture: toMap(culture),
-              ...(pack.rules.retag
-                ? {
-                    excludedRoutineTags: routine
-                      .split('\n')
-                      .map((x) => x.trim())
-                      .filter((x) => x !== ''),
-                  }
-                : {}),
-              confirm: true,
-            }),
-          ),
+          api.put(`/packs/${pack.id}/tokens`, {
+            race: toMap(race),
+            culture: toMap(culture),
+            ...(pack.rules.retag
+              ? {
+                  excludedRoutineTags: routine
+                    .split('\n')
+                    .map((x) => x.trim())
+                    .filter((x) => x !== ''),
+                }
+              : {}),
+            confirm: true,
+          }),
         'Token maps saved: approve the new version to use them.',
       ).then(onChanged);
     });
@@ -674,4 +666,3 @@ function Owners({ pack, owners }: { pack: PackView; owners: PackOwners }) {
     </details>
   );
 }
-

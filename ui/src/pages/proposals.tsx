@@ -637,8 +637,7 @@ function BulkBar({
                   <>
                     <p>
                       Each one is checked against LegendKeeper again, then run one at a time. A proposal whose
-                      targets have changed becomes conflicted and runs nothing. If any of them triggers a
-                      safety rail, you are asked for your authenticator code first.
+                      targets have changed becomes conflicted and runs nothing.
                     </p>
                     {canon.length > 0 && (
                       <p className="note note-warn small-text">
@@ -704,7 +703,7 @@ function BulkBar({
 
 /**
  * v3 F5a (ADR 0067, H4): "Reject all conflicted": every conflicted proposal the filter matches, across pages. A brake:
- * one confirmation, no step-up. The server refuses if the set changed since the count shown.
+ * one confirmation. The server refuses if the set changed since the count shown.
  */
 function RejectAllConflicted({
   count,

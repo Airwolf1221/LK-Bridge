@@ -4,7 +4,7 @@
  * - `GET /art/outfits`: the characters with outfits, one character's outfits (`folderId`), the recent seedings;
  * - `POST /art/outfits/seed` (audited `art.seed`): reads one character's folders LIVE and lists what G3's rules found,
  *   ambiguous names included, for the owner's review; nothing is recorded yet;
- * - `POST /art/outfits/seed/:id/save` (re-authenticated; audited `art.seed_save`) and `…/discard`;
+ * - `POST /art/outfits/seed/:id/save` (audited `art.seed_save`) and `…/discard`;
  * - `POST /art/outfits/:id/aliases` and `POST /art/outfits/:id/aliases/remove` (audited `art.alias_add`,
  *   `art.alias_remove`): the owner's aliases.
  *
@@ -13,7 +13,6 @@
 import * as z from 'zod';
 import { seedOutfits } from '../../art/seed.js';
 import { OutfitError } from '../../art/store.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectFor, projectParam, type Register } from './util.js';
 
@@ -99,7 +98,6 @@ export const registerArt: Register = (api, ctx) => {
   });
 
   api.post('/art/outfits/seed/:id/save', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: z.string().min(1).max(64) }), req.params);
     const b = parseInput(z.object({ project: projectParam }).loose(), req.body);
     const p = projectFor(ctx, req, b.project);

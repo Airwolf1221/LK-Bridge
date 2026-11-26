@@ -723,7 +723,6 @@ function VerifyCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void 
 // ================================================================================================ folders
 
 function FolderCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void }) {
-  const withReauth = useReauth();
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const old = d.folders.filter((f) => f.generation !== d.folder.generation && f.deletedAt === null);
@@ -739,7 +738,7 @@ function FolderCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void 
     });
     if (ok)
       void run(
-        () => withReauth(() => api.post(`/offsite/folders/${f.generation}/delete`, { confirm: true })),
+        () => api.post(`/offsite/folders/${f.generation}/delete`, { confirm: true }),
         'Deletion requested.',
       ).then((r) => r && onChanged());
   };
@@ -752,10 +751,9 @@ function FolderCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void 
       acknowledge: 'This folder is mine and I want to copy into it',
     });
     if (ok)
-      void run(
-        () => withReauth(() => api.post('/offsite/adopt', { confirm: true })),
-        'The folder will be used.',
-      ).then((r) => r && onChanged());
+      void run(() => api.post('/offsite/adopt', { confirm: true }), 'The folder will be used.').then(
+        (r) => r && onChanged(),
+      );
   };
   return (
     <section className="card" aria-labelledby="folder-h">
@@ -815,8 +813,6 @@ function FolderCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void 
 // ================================================================================================ settings
 
 function SettingsCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void }) {
-  // v2 E4 (RV1-4): a change that weakens a protection asks for the password again (the bridge says which).
-  const withReauth = useReauth();
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const s = d.settings;
@@ -848,7 +844,7 @@ function SettingsCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => voi
       if (!ack) return;
     }
     const r = await run(
-      () => withReauth(() => api.put('/offsite/settings', { settings, acknowledgeNewFolder: ack })),
+      () => api.put('/offsite/settings', { settings, acknowledgeNewFolder: ack }),
       'Settings saved.',
     );
     if (r) onChanged();

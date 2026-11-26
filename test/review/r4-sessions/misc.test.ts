@@ -7,7 +7,8 @@
  *   30-second marker from another site's page, so that the owner's own next link to the bridge is not bounced.
  * - SE-50: `AUTH_SESSION_TTL_SECONDS` outside 5 minutes to 30 days.
  * - SE-51: a job the owner paused (one of ADR 0062 decision 6's brakes) resumed from a session that has not stepped up
- *   (the owner's decision, ADR 0066 part B, question 3: it asks).
+ *   (ADR 0066 part B, question 3, had it ask; ADR 0081: it does not).
+ * - SE-52: another method or spelling of a route that asks for the step-up (ADR 0081: a credential change).
  *
  * Each asserts the safe behaviour.
  */
@@ -115,16 +116,18 @@ describe('more of the session model', () => {
     s = await startAdminStack();
     const stack = s;
     const owner = notSteppedUp(stack);
-    const body = { value: true, confirm: true };
+    // ADR 0081: the default scope for new connections is a credential change (it asks).
+    const before = stack.policy.commands.getDefaultScope('owner');
+    const body = { scope: 'write', confirmRaise: true };
     const tries: [string, string, Record<string, string>?][] = [
-      ['PATCH', '/api/admin/settings/member-admin'],
-      ['POST', '/api/admin/settings/member-admin'],
-      ['PUT', '/api/admin/settings/member-admin/'],
-      ['PUT', '/api/admin/settings/member-admin?x=1'],
-      ['PUT', '/api/admin/settings//member-admin'],
-      ['PUT', '/api/admin/settings/Member-Admin'],
-      ['PUT', '/api/admin/settings/member-admin%2f'],
-      ['POST', '/api/admin/settings/member-admin', { 'x-http-method-override': 'PUT' }],
+      ['PATCH', '/api/admin/clients/default-scope'],
+      ['POST', '/api/admin/clients/default-scope'],
+      ['PUT', '/api/admin/clients/default-scope/'],
+      ['PUT', '/api/admin/clients/default-scope?x=1'],
+      ['PUT', '/api/admin/clients//default-scope'],
+      ['PUT', '/api/admin/clients/Default-Scope'],
+      ['PUT', '/api/admin/clients/default-scope%2f'],
+      ['POST', '/api/admin/clients/default-scope', { 'x-http-method-override': 'PUT' }],
       ['DELETE', '/api/admin/clients/profiles/r4x/scope'],
     ];
     const reached: string[] = [];
@@ -135,12 +138,12 @@ describe('more of the session model', () => {
       if (!asked && !refused) reached.push(`${method} ${path} → ${r.status} ${r.text.slice(0, 120)}`);
     }
     expect(reached).toEqual([]);
-    expect(stack.runtime.engine.queries.controls().allowMemberAdmin ?? false).toBe(false);
+    expect(stack.policy.commands.getDefaultScope('owner')).toBe(before);
   });
 
-  // CR-2026-11-R4: the owner's decision (ADR 0066 part B, question 3, accepted 21 November 2026): resuming a paused job
-  // asks for the step-up. On the reviewed code a paused job was resumed with one click.
-  it('SE-51: resuming a job the owner paused (releasing that brake) asks for the step-up', async () => {
+  // ADR 0066 part B, question 3 had resuming a paused job ask for the step-up; ADR 0081 (the owner, 26 November 2026):
+  // it does not (a code at sign-in is enough).
+  it('SE-51: resuming a job the owner paused (releasing that brake) needs no step-up', async () => {
     s = await startAdminStack();
     const stack = s;
     await stack.runtime.ready;
@@ -162,15 +165,10 @@ describe('more of the session model', () => {
       const paused = await owner.call('POST', `/api/admin/jobs/${sub.jobId}/pause?project=${PROJECT}`, {});
       expect(paused.status, paused.text).toBe(200); // the brake: one click
       const resumed = await owner.call('POST', `/api/admin/jobs/${sub.jobId}/resume?project=${PROJECT}`, {});
-      expect({ status: resumed.status, code: resumed.json?.error?.code ?? null }).toEqual({
-        status: 403,
-        code: 'REAUTH_REQUIRED',
+      expect({ status: resumed.status, code: resumed.json?.error?.code ?? null }, resumed.text).toEqual({
+        status: 200,
+        code: null,
       });
-      // Nothing was released: the job is paused, or its pause still waits for the step its first write is held at.
-      const job = stack.runtime.engine.queries.getJob(PROJECT, sub.jobId!);
-      expect(job?.status === 'paused' || job?.pauseRequested === true, JSON.stringify(job?.status)).toBe(
-        true,
-      );
     } finally {
       release();
     }

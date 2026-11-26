@@ -30,7 +30,7 @@
  *
  * Each page is read live first (the plan's reads); a value no longer there is not planned and is listed. It never edits
  * the side the owner picked, and never runs without the owner's pick: agents can only suggest. Approval, selective
- * approval, the rails ("bulk over 10 pages" asks for the step-up at approval) and Revert work as for any proposal; Last
+ * approval, the rails and Revert work as for any proposal; Last
  * Major Revision follows the owner's rule (the engine measures each page's change).
  */
 import { textChange } from '../jobs/text-change.js';

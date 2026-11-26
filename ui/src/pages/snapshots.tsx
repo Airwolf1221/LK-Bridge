@@ -215,7 +215,8 @@ function RestoreForm({
         <>
           <p>{result?.plan.summary ?? 'The restore previewed below.'}</p>
           <p className="small-text">
-            It runs at once as one job, checked again against the page as it is now; follow it on the Jobs page.
+            It runs at once as one job, checked again against the page as it is now; follow it on the Jobs
+            page.
           </p>
         </>
       ),
@@ -1039,7 +1040,9 @@ function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: stri
   const finish = async (id: string) => {
     const yes = await confirm({
       title: 'Finish this restore?',
-      message: <p>The restore is planned again for only what the page still lacks, and runs at once as one job.</p>,
+      message: (
+        <p>The restore is planned again for only what the page still lacks, and runs at once as one job.</p>
+      ),
       confirmLabel: 'Finish',
     });
     if (!yes) return;
@@ -1547,8 +1550,8 @@ export function SnapshotsPage() {
       <p className="muted">
         The bridge keeps its own copies of every page under the AI REPOSITORY: a full snapshot every night
         (which catches edits made in the LegendKeeper app within a day) and one after every bridge write. Each
-        piece is stored once, and an image that has not changed is not downloaded again. A restore is previewed,
-        then confirmed, and runs at once as one job.
+        piece is stored once, and an image that has not changed is not downloaded again. A restore is
+        previewed, then confirmed, and runs at once as one job.
       </p>
       <StoreCard d={d} />
       <Problems d={d} />

@@ -8,7 +8,7 @@
  * - **Cached and paged** (F6a.1's lesson): the base (every verdict) is built in chunks that yield to the event loop and
  *   cached on the tree's version, the pack's rules version and the registry's character taxonomy; the rows are built from
  *   the base under the decisions in memory. A decision never rebuilds the base.
- * - **The owner's decisions** (dashboard only, the step-up, audited): approve (as proposed), change (to nav or subject),
+ * - **The owner's decisions** (dashboard only, audited): approve (as proposed), change (to nav or subject),
  *   leave undecided; a bulk approve within a filter, ONE request by ids, ONE transaction, bounded by
  *   INDEX_CLASSIFY_BULK_MAX and idempotent.
  * - **The structural lists** (the pack's exact names) edited on the page: a new pack version the owner approves.
@@ -475,7 +475,7 @@ export class IndexClassifyService {
 
   // ============================================================================================ decisions
 
-  /** One decision on one row (the owner only: the dashboard's step-up). Audited `indexclassify.decide`. */
+  /** One decision on one row (the owner only, on the dashboard). Audited `indexclassify.decide`. */
   decide(
     actor: string,
     projectId: string,

@@ -6,19 +6,17 @@
  *   what it did or skipped, its journal of changes), the bridge-wide pause, the caps, the latest runs, and the codes
  *   that are never automatic. Reads only the bridge's own data.
  * - `GET /automation/governance`: whether Repository Automation lets automation run (one read of each governance source).
- * - `POST /automation/codes/:code` `{ mode, confirm }`: the owner changes a code's setting (ALWAYS the step-up, as the
- *   design asks); the governance paragraph is written or amended first. Audited `automation.set_mode`.
- * - `POST /automation/codes/:code/resume`: a paused code resumed (the step-up: it releases a brake).
- * - `POST /automation/pause`: "Pause all automation", one click, no step-up (a brake). `POST /automation/resume`: the
- *   step-up.
- * - `POST /automation/run`: "Run automation now" in the project (the step-up). `wait: true` answers when it has finished.
+ * - `POST /automation/codes/:code` `{ mode, confirm }`: the owner changes a code's setting (ADR 0081: no fresh code,
+ *   a code at sign-in is enough); the governance paragraph is written or amended first. Audited `automation.set_mode`.
+ * - `POST /automation/codes/:code/resume`: a paused code resumed.
+ * - `POST /automation/pause`: "Pause all automation" (a brake). `POST /automation/resume`.
+ * - `POST /automation/run`: "Run automation now" in the project. `wait: true` answers when it has finished.
  * - `GET /automation/runs/:id`: a run and its items.
  * - `GET /automation/overnight`: what automation did in the last 24 hours (the Overview's tile).
  */
 import * as z from 'zod';
 import { AutomationError, type AutomationService } from '../../automation/service.js';
 import { CATALOGUE, ELIGIBLE, NEVER_TRAITS } from '../../automation/registry.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectParam, type Register, projectFor } from './util.js';
 
@@ -96,8 +94,6 @@ export const registerAutomation: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    // ADR 0068 (the design: "changing a setting is an owner action with the step-up"): every change asks.
-    requireReauth(ctx.deps.services, req);
     const p = projectFor(ctx, req, b.project);
     return wrap(() => automation().setMode('owner', p.id, params.code, b.mode));
   });
@@ -105,7 +101,6 @@ export const registerAutomation: Register = (api, ctx) => {
   api.post('/automation/codes/:code/resume', async (req) => {
     const params = parseInput(z.object({ code: codeSchema }), req.params);
     const b = parseInput(z.object({ project: projectParam, confirm: z.literal(true) }).strict(), req.body);
-    requireReauth(ctx.deps.services, req);
     const p = projectFor(ctx, req, b.project);
     return wrap(() => {
       automation().resume('owner', p.id, params.code);
@@ -113,7 +108,7 @@ export const registerAutomation: Register = (api, ctx) => {
     });
   });
 
-  // "Pause all automation": a brake, one click (ADR 0062's rule). Resuming releases it: the step-up.
+  // "Pause all automation": a brake, one click. Resuming releases it (ADR 0081: no fresh code either).
   api.post('/automation/pause', async (req) => {
     parseInput(z.object({ confirm: z.literal(true) }).strict(), req.body);
     return wrap(() => {
@@ -124,7 +119,6 @@ export const registerAutomation: Register = (api, ctx) => {
 
   api.post('/automation/resume', async (req) => {
     parseInput(z.object({ confirm: z.literal(true) }).strict(), req.body);
-    requireReauth(ctx.deps.services, req);
     return wrap(() => {
       automation().setGlobalPause('owner', false);
       return automation().store.global();
@@ -136,7 +130,6 @@ export const registerAutomation: Register = (api, ctx) => {
       z.object({ project: projectParam, confirm: z.literal(true), wait: z.boolean().optional() }).strict(),
       req.body,
     );
-    requireReauth(ctx.deps.services, req);
     const p = projectFor(ctx, req, b.project);
     const a = automation();
     ctx.deps.runtime.policy.store.audit('owner', 'automation.run_now', p.id, null, { project: p.id });

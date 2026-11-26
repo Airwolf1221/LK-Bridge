@@ -7,8 +7,8 @@ import { useProjectApi, useScopedApi } from '../project';
 
 /**
  * v3 F7c (ADR 0075, Z6): the image archives (zips) on the Asset Tree page: each archive's rows with their status,
- * expected time and reason, the three limits kept apart (holding, processing, the hourly brake), and a Discard button
- * (it asks you to confirm it is you first). Everything here is on the bridge's own server: nothing reaches LegendKeeper
+ * expected time and reason, the three limits kept apart (holding, processing, the hourly brake), and a Discard button.
+ * Everything here is on the bridge's own server: nothing reaches LegendKeeper
  * until a placement job runs.
  */
 
@@ -118,7 +118,6 @@ export function ArchivesCard() {
               : ''}
             . Images already staged stay on the Staging page.
           </p>
-          <p className="muted small-text">You will be asked to confirm it is you first.</p>
         </>
       ),
       confirmLabel: 'Discard the archive',

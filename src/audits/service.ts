@@ -297,7 +297,7 @@ export class Audits {
    * v3 F4a (ADR 0063): the owner allows the skill a `governance_external_name` finding names (a real skill used
    * elsewhere): the name joins the audit settings' allowed names, the governance check never reports it again, and its
    * open findings go now. Audited (`audits.allow_name`). Withdrawn by removing it from the allowed names in the audit
-   * settings (which asks for the step-up, as every settings change does).
+   * settings.
    */
   allowName(
     actor: string,

@@ -6,8 +6,8 @@
  *   earlier picks. Reads the bridge's own data only.
  * - `POST /api/admin/audits/findings/:id/consistency-pick` `{ side? (with shown?) | value?, confirm: true }`: the owner
  *   picks one side's value or types one; the bridge builds ONE proposal editing every page that disagrees
- *   (src/consistency/fix.ts). A step-up action (ADR 0062, as a pack-level decision): the authenticator code within ten
- *   minutes. Audited `consistency.pick`. Agents can never pick: they suggest (`arkona_consistency_suggest`).
+ *   (src/consistency/fix.ts). ADR 0081: no fresh code (ADR 0062 had asked one). Audited `consistency.pick`. Agents
+ *   can never pick: they suggest (`arkona_consistency_suggest`).
  *   CR-2026-11-R4 (PK-51): a side is one of the values the dashboard showed (the audit's stored values,
  *   `SIDE_NOT_FOUND` otherwise), `shown` is its value as shown (the dashboard sends it; the stored value when absent),
  *   and the pick is refused with `SIDE_CHANGED` when the side reads otherwise now: the bridge proposes only a value the
@@ -17,7 +17,6 @@ import * as z from 'zod';
 import { AuditError, type Audits } from '../../audits/index.js';
 import { ConsistencyError } from '../../consistency/service.js';
 import { PickError } from '../../consistency/fix.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectParam, type Register, projectFor } from './util.js';
 
@@ -110,8 +109,6 @@ export const registerConsistency: Register = (api, ctx) => {
         }),
       req.body,
     );
-    // ADR 0062: a pack-level decision (the owner's pick of canon), so the step-up is required.
-    requireReauth(ctx.deps.services, req);
     const p = projectFor(ctx, req, b.project);
     const f = finding(p.id, id);
     if (f.state !== 'open')

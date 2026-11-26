@@ -57,10 +57,8 @@ describe('G3: seeding and aliases on the dashboard', () => {
     expect(w.stack.runtime.outfits.forCharacter(PROJECT, folder)).toEqual([]);
   });
 
-  it('Save asks for the step-up, then records; aliases are the owner’s', async () => {
+  it('Save records without a step-up (ADR 0081); aliases are the owner’s', async () => {
     owner.expire();
-    expect((await owner.post(`/art/outfits/seed/${seedId}/save`, {})).status).toBe(403);
-    owner.stepUp();
     const saved = await owner.post(`/art/outfits/seed/${seedId}/save`, {});
     expect(saved.status, JSON.stringify(saved.json)).toBe(200);
     expect(saved.json.outfits).toHaveLength(4);

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { qs } from '../api';
 import { useProjectApi, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 
 /**
@@ -17,7 +16,7 @@ import { Link } from '../router';
  * **Accept all matched (n)** accepts every undecided row matched by a role name or an approved variant, with no collision
  * and an approved [NAV] classification (never an unmatched, colliding or unapproved row), in ONE request; the count is
  * shown before you confirm, at most NATION_SUBINDEX_BULK_MAX at a time, and each row can be undone on its own.
- * Every decision asks for the step-up and is recorded in the audit log. Nothing is renamed here: accepted and mapped rows
+ * Every decision is recorded in the audit log. Nothing is renamed here: accepted and mapped rows
  * become `nation_subindex_nonstandard` findings in the Audits, which the Automation page can run (default Off).
  *
  * Two children of one nation with one role are a collision: neither is renamed (merge or re-map first; the bridge never
@@ -262,21 +261,18 @@ function SubindexRow({
   onChanged: () => void;
 }) {
   const api = useProjectApi();
-  const withReauth = useReauth();
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const [mapping, setMapping] = useState(false);
   const [role, setRole] = useState(row.role ?? roles[0] ?? '');
   const [all, setAll] = useState(false);
   const post = (path: string, body: Record<string, unknown>, done: string) =>
-    void run(() => withReauth(() => api.post(path, { pageId: row.id, confirm: true, ...body })), done).then(
-      (x) => {
-        if (x) {
-          setMapping(false);
-          onChanged();
-        }
-      },
-    );
+    void run(() => api.post(path, { pageId: row.id, confirm: true, ...body }), done).then((x) => {
+      if (x) {
+        setMapping(false);
+        onChanged();
+      }
+    });
   const decide = (action: string, extra: Record<string, unknown> = {}) =>
     post('/nation-subindexes/decide', { action, ...extra }, `${row.name}: recorded.`);
   const map = () => {
@@ -404,7 +400,6 @@ function AcceptAll({
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   if (acceptable.count === 0) return null;
   const ids = acceptable.ids.slice(0, bulkMax);
@@ -425,12 +420,11 @@ function AcceptAll({
       confirmLabel: `Accept ${ids.length}`,
     }).then((ok) => {
       if (!ok) return;
-      void run(
-        () => withReauth(() => api.post('/nation-subindexes/accept-all', { ids, confirm: true })),
-        'Accepted.',
-      ).then((x) => {
-        if (x) onChanged();
-      });
+      void run(() => api.post('/nation-subindexes/accept-all', { ids, confirm: true }), 'Accepted.').then(
+        (x) => {
+          if (x) onChanged();
+        },
+      );
     });
   return (
     <p data-accept-all>

@@ -40,7 +40,7 @@ function owner(world: AuditsWorld) {
     get: (path: string) => request('GET', path),
     post: (path: string, body: unknown = {}) => request('POST', path, body),
     put: (path: string, body: unknown = {}) => request('PUT', path, body),
-    /** The owner steps up (the window for sensitive actions is ten minutes, ADR 0062). */
+    /** The owner steps up (ADR 0081: only credential changes ask, within 12 hours). */
     reauth: () =>
       world.stack.db
         .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
@@ -167,7 +167,7 @@ describe('the dashboard API', () => {
     expect((await o.post(`/audits/findings/${split.id}/propose-fix${q}`, {})).status).toBe(400); // confirm is required
   });
 
-  it('the rules editor: seeded defaults from the registry, saved only after a re-authentication, audited, validated', async () => {
+  it('the rules editor: seeded defaults from the registry, saved without a fresh code (ADR 0081), audited, validated', async () => {
     w = await auditsWorld();
     const o = owner(w);
     const cfg = await o.get(`/audits/config${q}`);
@@ -195,11 +195,7 @@ describe('the dashboard API', () => {
       tagSource: { pageId: A.tagdef, documentId: w.mainOf(A.tagdef) },
       settings: { reportUnmatched: false },
     };
-    const denied = await o.put(`/audits/config${q}`, body);
-    expect(denied.status).toBe(403);
-    expect(denied.json.error.code).toBe('REAUTH_REQUIRED');
     expect((await o.get(`/audits/config${q}`)).json.seeded).toBe(true);
-    o.reauth();
     const bad = await o.put(`/audits/config${q}`, { confirm: true, rules: [{ ...rule, selectors: {} }] });
     expect(bad.status).toBe(400);
     expect((await o.put(`/audits/config${q}`, { rules: [rule] })).status).toBe(400); // confirm is required

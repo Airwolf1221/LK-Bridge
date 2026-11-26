@@ -1,14 +1,13 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- parsed JSON replies in tests */
 /**
- * CR-2026-11 round 4 (sessions), the guarded rails at approval through every approval route (ADR 0062 decision 5):
- * `POST /proposals/:id/approve` (with and without a selection), `/approve-as-canon`, and `/proposals/bulk` ("Approve
- * selected"). The attempts: approve a guarded proposal (a delete, more than 10 pages, an asset delete or move, a restore)
- * by a route, an order of ids or a selection that might be judged on less than the whole proposal; and an operation that
- * deletes but is not in the rails' table (member administration).
+ * CR-2026-11 round 4 (sessions), every approval route, as ADR 0081 now has them (the owner, 26 November 2026: "A code
+ * at sign-in is enough"): `POST /proposals/:id/approve` (with and without a selection), `/approve-as-canon`, and
+ * `/proposals/bulk` ("Approve selected") never ask for a fresh authenticator code, whatever the proposal holds (a
+ * delete, more than 10 pages, an asset delete or move, a restore, a member removed). ADR 0062 decision 5 had asked for
+ * one of the guarded kinds; the cases are the review's.
  *
  * Modelled: each proposal is captured through the engine as a bridge tool captures one (`internal`, `forceProposal`),
- * as test/auth/sessions-r3.test.ts does. The session has not stepped up. The safe behaviour: 403 REAUTH_REQUIRED and the
- * proposal stays pending.
+ * as test/auth/sessions-r3.test.ts does. The session has not stepped up.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { PROJECT, startAdminStack, type AdminStack } from '../../admin/helpers.js';
@@ -65,10 +64,12 @@ const refused = (r: { status: number; json: any }) => ({
   status: r.status,
   code: (r.json?.error?.code as string | undefined) ?? null,
 });
-const ASKS = { status: 403, code: 'REAUTH_REQUIRED' };
+/** ADR 0081: the approval routes never answer REAUTH_REQUIRED. */
+const neverAsks = (r: { status: number; json: any }) =>
+  expect(refused(r).code, JSON.stringify(r.json)).not.toBe('REAUTH_REQUIRED');
 
-describe('every approval route judges the whole proposal', () => {
-  it('SE-09: "Approve selected" of only the harmless item of a proposal that also deletes still asks', async () => {
+describe('no approval route asks for a fresh code (ADR 0081)', () => {
+  it('SE-09: "Approve selected" of only the harmless item of a proposal that also deletes does not ask', async () => {
     const { stack, owner } = await boot();
     const id = await proposal(
       stack,
@@ -87,11 +88,12 @@ describe('every approval route judges the whole proposal', () => {
       ],
     );
     const r = await owner.call('POST', `/api/admin/proposals/${id}/approve`, { items: ['se09:new'] });
-    expect(refused(r)).toEqual(ASKS);
-    expect(state(stack, id)).toBe('pending');
+    neverAsks(r);
+    expect(r.status, r.text).toBe(200);
+    expect(state(stack, id)).not.toBe('pending');
   });
 
-  it('SE-10: bulk approve with the guarded id after an unknown one and a repeated plain one still asks (and both canon routes)', async () => {
+  it('SE-10: bulk approve of a delete among an unknown id and a repeated plain one does not ask (nor the canon routes)', async () => {
     const { stack, owner } = await boot();
     const plain = await proposal(stack, 'se10 plain', [
       { op: 'createResource', params: { body: { name: 'r4 se10' } } },
@@ -103,23 +105,22 @@ describe('every approval route judges the whole proposal', () => {
       action: 'approve',
       ids: ['prop_does_not_exist', plain, plain, gone],
     });
-    expect(refused(r)).toEqual(ASKS);
-    expect([state(stack, plain), state(stack, gone)]).toEqual(['pending', 'pending']);
-    // "Approve and accept as canon" in bulk, and the single canonical route, judge it the same way.
+    neverAsks(r);
+    expect(r.status, r.text).toBe(200);
+    // "Approve and accept as canon" in bulk, and the single canonical route: no step-up either.
     const canonBulk = await owner.call('POST', '/api/admin/proposals/bulk', {
       action: 'approve-as-canon',
       ids: [gone],
       confirm: true,
     });
-    expect(refused(canonBulk)).toEqual(ASKS);
+    neverAsks(canonBulk);
     const canonOne = await owner.call('POST', `/api/admin/proposals/${gone}/approve-as-canon`, {
       confirm: true,
     });
-    expect(refused(canonOne)).toEqual(ASKS);
-    expect(state(stack, gone)).toBe('pending');
+    neverAsks(canonOne);
   });
 
-  it('SE-11: a restore, an asset delete, an asset move and 11 new pages each ask', async () => {
+  it('SE-11: a restore, an asset delete, an asset move and 11 new pages: none asks', async () => {
     const { stack, owner } = await boot();
     const cases = {
       restore: await proposal(stack, 'se11 restore', [
@@ -143,18 +144,25 @@ describe('every approval route judges the whole proposal', () => {
     const out: Record<string, unknown> = {};
     for (const [k, id] of Object.entries(cases))
       out[k] = refused(await owner.call('POST', `/api/admin/proposals/${id}/approve`, {}));
-    expect(out).toEqual({ restore: ASKS, assetDelete: ASKS, assetMove: ASKS, eleven: ASKS });
+    const ok = { status: 200, code: null };
+    // A restore is a canonical change: it needs "Approve and accept as canon", never a step-up.
+    expect(out).toEqual({
+      restore: { status: 409, code: 'CANONICAL_APPROVAL_REQUIRED' },
+      assetDelete: ok,
+      assetMove: ok,
+      eleven: ok,
+    });
   });
 
-  it('SE-12: a proposal that removes a project member (member administration on) asks like any delete', async () => {
-    // Member administration is off by default and switching it on asks for the step-up; with it on, `removeMember`
-    // removes someone from the LegendKeeper project, which is a removal however the rails' table names it.
+  it('SE-12: a proposal that removes a project member (member administration on) does not ask', async () => {
+    // Member administration is off by default; with it on, `removeMember` removes someone from the LegendKeeper
+    // project. ADR 0081: approving it needs no fresh code, as any approval.
     const { stack, owner } = await boot({ LK_ALLOW_MEMBER_ADMIN: 'true' });
     const id = await proposal(stack, 'se12', [
       { op: 'removeMember', params: { path: { userId: 'r4member012' } } },
     ]);
     const r = await owner.call('POST', `/api/admin/proposals/${id}/approve`, {});
-    expect(refused(r)).toEqual(ASKS);
-    expect(state(stack, id)).toBe('pending');
+    neverAsks(r);
+    expect(r.status, r.text).toBe(200);
   });
 });

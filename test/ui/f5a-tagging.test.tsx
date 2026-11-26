@@ -12,7 +12,6 @@ import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers'
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const POLICY = { packId: 'arkona', version: 17, label: 'v1.8', digest: 'cd'.repeat(32), sources: [] };
 const RUN = {
   id: 'rtg_a461df416ac3ce1b',
@@ -62,20 +61,14 @@ const exception = {
   ],
 };
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed || (c.body as { dryRun?: boolean } | undefined)?.dryRun === true
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 600_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
@@ -91,10 +84,10 @@ const routes = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const passwordDialog = async (user: ReturnType<typeof userEvent.setup>) => {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const passwordDialog = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
 };
 
 describe('H2: an exception’s owner actions', () => {
@@ -114,7 +107,7 @@ describe('H2: an exception’s owner actions', () => {
   });
 
   it('"Keep this tag here" needs a reason, a confirmation and the step-up', async () => {
-    const gate = needsReauth(() => ({ ruling: { tag: 'Lore' } }));
+    const gate = answersAtOnce(() => ({ ruling: { tag: 'Lore' } }));
     const api = installApi(
       routes({ 'POST /tagging/keep-here': gate.route, 'POST /security/reauth': gate.reauth }),
     );
@@ -148,7 +141,7 @@ describe('H2: an exception’s owner actions', () => {
       'Chronology and Setting Framework',
       'Chronology, Setting Framework and Lore',
     );
-    const gate = needsReauth((c) =>
+    const gate = answersAtOnce((c) =>
       (c.body as { dryRun?: boolean }).dryRun
         ? {
             dryRun: true,
@@ -209,8 +202,8 @@ describe('H4: Apply all corrections', () => {
     expect(screen.queryByRole('button', { name: /Approve all these batches/ })).toBeNull();
   });
 
-  it('batches answered as proposals: approves all of them together after the step-up', async () => {
-    const gate = needsReauth(() => ({
+  it('batches answered as proposals: approves all of them together (no fresh code, ADR 0081)', async () => {
+    const gate = answersAtOnce(() => ({
       results: [
         { id: 'prop_b1', ok: true, state: 'executing' },
         { id: 'prop_b2', ok: false, state: 'conflicted', error: { message: 'a target changed' } },

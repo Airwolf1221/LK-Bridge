@@ -12,7 +12,6 @@ import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers'
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const row = (o: Record<string, unknown>) => ({
   displayName: String(o.name).replace(/^\[\w+\] /, ''),
   path: `AI REPOSITORY / Characters / ${String(o.name)}`,
@@ -103,27 +102,21 @@ const response = {
   now: Date.now(),
 };
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 600_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
-const passwordDialog = async (user: ReturnType<typeof userEvent.setup>) => {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const passwordDialog = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
 };
 
 const rowEl = async (id: string) =>
@@ -157,7 +150,7 @@ describe('the Index Classification page', () => {
   });
 
   it('Approve asks for the step-up and sends the decision', async () => {
-    const gate = needsReauth(() => ({ decision: { id: 'icd_1' }, row: {} }));
+    const gate = answersAtOnce(() => ({ decision: { id: 'icd_1' }, row: {} }));
     const api = installApi({
       ...baseRoutes(),
       'GET /index-classification': response,
@@ -177,7 +170,7 @@ describe('the Index Classification page', () => {
   });
 
   it('Change: nav or subject, with the subject’s kind', async () => {
-    const gate = needsReauth(() => ({ decision: { id: 'icd_2' }, row: {} }));
+    const gate = answersAtOnce(() => ({ decision: { id: 'icd_2' }, row: {} }));
     const api = installApi({
       ...baseRoutes(),
       'GET /index-classification': response,
@@ -204,7 +197,7 @@ describe('the Index Classification page', () => {
   });
 
   it('Approve all as proposed: the filter’s ids in ONE request, at most the bound', async () => {
-    const gate = needsReauth((c) => ({
+    const gate = answersAtOnce((c) => ({
       approved: (c.body as { ids: string[] }).ids.length,
       skipped: 0,
       remaining: 1,
@@ -226,7 +219,7 @@ describe('the Index Classification page', () => {
     expect(confirm).toHaveTextContent('Approve the first 3 of 4 proposed rows?');
     await user.click(within(confirm).getByRole('button', { name: 'Approve all' }));
     await passwordDialog(user);
-    await waitFor(() => expect(api.find('POST', '/index-classification/bulk-approve')).toHaveLength(2));
+    await waitFor(() => expect(api.find('POST', '/index-classification/bulk-approve')).toHaveLength(1)); // sent once: no step-up
     expect(api.find('POST', '/index-classification/bulk-approve').at(-1)!.body).toEqual({
       ids: ['hh', 'ms', 'x1'],
       confirm: true,
@@ -234,7 +227,7 @@ describe('the Index Classification page', () => {
   });
 
   it('the structural lists save as a new pack version, one name per line', async () => {
-    const gate = needsReauth(() => ({ changed: true, pack: { id: 'arkona', version: 32 } }));
+    const gate = answersAtOnce(() => ({ changed: true, pack: { id: 'arkona', version: 32 } }));
     const api = installApi({
       ...baseRoutes(),
       'GET /index-classification': response,
@@ -247,7 +240,7 @@ describe('the Index Classification page', () => {
     await user.type(box, '\nLost Realmships');
     await user.click(screen.getByRole('button', { name: 'Save as a new pack version' }));
     await passwordDialog(user);
-    await waitFor(() => expect(api.find('PUT', '/index-classification/structural')).toHaveLength(2));
+    await waitFor(() => expect(api.find('PUT', '/index-classification/structural')).toHaveLength(1)); // sent once: no step-up
     const body = api.find('PUT', '/index-classification/structural').at(-1)!.body as {
       structural: { named: string[] };
       outOfScope: string[];

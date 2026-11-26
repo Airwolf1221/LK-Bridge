@@ -12,8 +12,6 @@ import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers'
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
-
 const pack = (over: Record<string, unknown> = {}) => ({
   id: 'arkona',
   name: 'Arkona',
@@ -59,20 +57,14 @@ const pack = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 300_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
@@ -230,7 +222,7 @@ describe('the Packs page', () => {
 
   it('approving asks for a confirmation and the password again, then sends confirm: true', async () => {
     const user = userEvent.setup();
-    const gate = needsReauth(() => ({
+    const gate = answersAtOnce(() => ({
       pack: pack(),
       governance: {
         state: 'current',
@@ -251,16 +243,14 @@ describe('the Packs page', () => {
     const confirm = await screen.findByRole('alertdialog');
     expect(confirm).toHaveTextContent(/version 2/);
     await user.click(within(confirm).getByRole('button', { name: 'Approve this version' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-    await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull(); // ADR 0081: no step-up
     await screen.findByText(/Arkona version 2 approved\./);
     expect(api.find('POST', '/packs/arkona/approve').at(-1)!.body).toEqual({ confirm: true });
   });
 
   it('saves edited token maps after a confirmation (a new version)', async () => {
     const user = userEvent.setup();
-    const gate = needsReauth(() => ({ pack: pack({ version: 3 }) }));
+    const gate = answersAtOnce(() => ({ pack: pack({ version: 3 }) }));
     const api = installApi({
       ...baseRoutes(),
       'GET /packs': { packs: [pack()] },
@@ -277,9 +267,7 @@ describe('the Packs page', () => {
     await user.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save token maps' }),
     );
-    const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-    await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull(); // ADR 0081: no step-up
     await screen.findByText(/Token maps saved/);
     const sent = api.find('PUT', '/packs/arkona/tokens').at(-1)!.body as {
       race: Record<string, string>;
@@ -322,7 +310,7 @@ describe('the Packs page', () => {
         },
       ],
     };
-    const gate = needsReauth(() => ({
+    const gate = answersAtOnce(() => ({
       pack: pack({ version: 3 }),
       governance: {
         ...missingGov,
@@ -389,9 +377,7 @@ describe('the Packs page', () => {
     const confirm = await screen.findByRole('alertdialog');
     expect(confirm).toHaveTextContent(/becomes “Closed Primary Categories and Specialist Functions”/);
     await user.click(within(confirm).getByRole('button', { name: 'Re-map this heading' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-    await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull(); // ADR 0081: no step-up
     await screen.findByText(/Pinned heading re-mapped: approve version 3 to use it\./);
     expect(api.find('POST', '/packs/arkona/sections').at(-1)!.body).toEqual({
       source: 'tagging-standard',

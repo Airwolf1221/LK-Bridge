@@ -12,7 +12,6 @@ import {
 import { fmtAgo, fmtBytes, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectApi, useProjectReloadOn, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import type {
   StagedImageView,
   StagingActionResponse,
@@ -263,7 +262,6 @@ function Uploader({ maxBytes, onDone }: { maxBytes: number; onDone: () => void }
 
 function AllowDelete({ onDone }: { onDone: () => void }) {
   const projectApi = useProjectApi();
-  const withReauth = useReauth();
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const [assetId, setAssetId] = useState('');
@@ -280,10 +278,7 @@ function AllowDelete({ onDone }: { onDone: () => void }) {
         }).then((ok) => {
           if (!ok) return;
           void run(
-            () =>
-              withReauth(() =>
-                projectApi.post('/staging/allow-delete', { assetId: assetId.trim(), confirm: true }),
-              ),
+            () => projectApi.post('/staging/allow-delete', { assetId: assetId.trim(), confirm: true }),
             'Allowed once, for an hour.',
           ).then(onDone);
         });

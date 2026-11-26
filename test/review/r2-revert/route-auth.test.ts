@@ -38,7 +38,7 @@ const reauth = () =>
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
+    .run(null, s.services.sessionHash(s.sessionToken)); // no step-up on the session (ADR 0081)
 
 async function directWrite(): Promise<string> {
   const r = await s.runtime.engine.run(
@@ -76,12 +76,10 @@ describe('who may start a revert', () => {
     expect(s.audit('job.revert')).toHaveLength(before);
   });
 
-  it('without a fresh re-authentication, or without the CSRF token, nothing is planned', async () => {
+  it('without the CSRF token, or from another site, nothing is planned (ADR 0081: no fresh code is asked)', async () => {
     const jobId = await directWrite();
     const before = s.audit('job.revert').length;
     expire();
-    expect((await s.post(`/api/admin/jobs/${jobId}/revert`, { confirm: true })).status).toBe(403);
-    reauth();
     expect((await s.post(`/api/admin/jobs/${jobId}/revert`, { confirm: true }, { csrf: null })).status).toBe(
       403,
     );

@@ -1,4 +1,3 @@
-import { requireReauth } from '../guard.js';
 import * as z from 'zod';
 import { AdminHttpError } from '../http.js';
 import { redactDeep } from '../redact.js';
@@ -112,7 +111,6 @@ export const registerSettings: Register = (api, ctx) => {
   api.put('/settings/config/:key', (req) => {
     const { key } = parseInput(keyParam, req.params);
     const b = parseInput(setBody, req.body);
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     return {
       entry: need().set(key, 'amount' in b ? { amount: b.amount, unit: b.unit } : { value: b.value }),
     };
@@ -120,13 +118,11 @@ export const registerSettings: Register = (api, ctx) => {
   api.post('/settings/config/:key/reset', (req) => {
     const { key } = parseInput(keyParam, req.params);
     parseInput(z.object({ confirm }), req.body);
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     return { entry: need().reset(key) };
   });
   /** S7: drains, flushes and exits 75; systemd starts the bridge again. Under systemd only. */
   api.post('/bridge/restart', (req, reply) => {
     parseInput(z.object({ confirm }), req.body);
-    requireReauth(ctx.deps.services, req); // ADR 0062: as sensitive as any setting
     if (!cfg) throw new AdminHttpError(503, 'RESTART_UNAVAILABLE', 'This runtime cannot restart.');
     try {
       cfg.restart.request('owner');
@@ -140,36 +136,28 @@ export const registerSettings: Register = (api, ctx) => {
 
   api.put('/settings/read-only', (req) => {
     const b = parseInput(nullableBool, req.body);
-    // ADR 0062 (the owner's rule): switching read-only on is one click (a brake); switching it off asks for the step-up.
-    if (engine.queries.controls().readOnly && !(b.value ?? envConfig.lk.readOnly))
-      requireReauth(ctx.deps.services, req);
     actions.setReadOnly(b.value);
     return { settings: view() };
   });
   api.put('/settings/expose-per-op-tools', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     actions.setExposePerOpTools(parseInput(nullableBool, req.body).value);
     return { settings: view() };
   });
   api.put('/settings/member-admin', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     actions.setAllowMemberAdmin(parseInput(nullableBool, req.body).value);
     return { settings: view() };
   });
   api.put('/settings/contact-email', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(z.object({ value: contactEmailSchema.nullable(), confirm }), req.body);
     actions.setContactEmail(b.value);
     return { settings: view() };
   });
   api.put('/settings/journal-retention', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(z.object({ value: journalSchema.nullable(), confirm }), req.body);
     actions.setJournalRetention(b.value);
     return { settings: view() };
   });
   api.put('/settings/tier-limits', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(z.object({ value: tierLimitsSchema.nullable(), confirm }), req.body);
     actions.setTierLimits(b.value);
     return { settings: view() };

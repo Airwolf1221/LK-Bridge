@@ -11,7 +11,6 @@ import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers'
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const POLICY = { packId: 'arkona', version: 7, label: 'v1.8', digest: 'ab'.repeat(32), sources: [] };
 const RUN = {
   id: 'rtg_0123456789abcdef',
@@ -109,20 +108,14 @@ const hold = {
   classification: null,
 };
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 300_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
@@ -172,7 +165,7 @@ describe('the Tagging page', () => {
   });
 
   it('a hold is classified from the closed list after a confirmation and the password again', async () => {
-    const gate = needsReauth(() => ({
+    const gate = answersAtOnce(() => ({
       classification: { pageId: 'rttwo001', primary: 'Culture', specialist: 'Language' },
     }));
     const api = installApi(
@@ -194,9 +187,7 @@ describe('the Tagging page', () => {
     await user.click(within(card).getByRole('button', { name: 'Classify' }));
     const confirm = await screen.findByRole('alertdialog');
     await user.click(within(confirm).getByRole('button', { name: 'Classify' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-    await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull(); // ADR 0081: no step-up
     await screen.findByText(/Classified: the next audit uses it\./);
     expect(api.find('POST', '/tagging/classify').at(-1)!.body).toEqual({
       pageId: 'rttwo001',

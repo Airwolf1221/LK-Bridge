@@ -36,8 +36,8 @@ async function goTo(page: Page, name: string | RegExp, exact = false) {
 }
 
 /**
- * ADR 0062: a sensitive change (a setting, a key) asks for the step-up in a dialog: without an authenticator, the
- * password. The change then goes on by itself.
+ * ADR 0062, ADR 0081: a credential change (a key, a token, a connection, the password) asks for the step-up in a
+ * dialog: without an authenticator, the password. The change then goes on by itself. Nothing else asks.
  */
 async function stepUp(page: Page) {
   const dialog = page.getByRole('dialog', { name: 'Confirm it’s you' });
@@ -149,10 +149,10 @@ test('a job runs while the Jobs, Budgets and Writers pages update live', async (
   await expect(page.locator('[data-slot][data-state="busy"]')).toContainText('replaceDocumentBlocks');
   await expect(page.getByTestId('writes-per-minute')).not.toHaveText('0', { timeout: 10_000 });
 
-  // WRITERS_MAX changes without a restart (a setting: the step-up first, ADR 0062).
+  // WRITERS_MAX changes without a restart (a setting: ADR 0081, no step-up).
   await page.getByLabel('Writer slots').selectOption('3');
   await page.getByRole('button', { name: 'Apply' }).click();
-  await stepUp(page);
+  await expect(page.getByRole('dialog', { name: 'Confirm it’s you' })).toHaveCount(0);
   await expect(page.locator('[data-slot]')).toHaveCount(3);
 
   // Budgets: the writes gauge has moved.
@@ -164,9 +164,7 @@ test('a job runs while the Jobs, Budgets and Writers pages update live', async (
   await goTo(page, 'Jobs', true);
   await page.getByRole('button', { name: 'History' }).click();
   await expect(page.locator(`tr[data-job="${jobId}"]`)).toContainText('Succeeded', { timeout: 30_000 });
-  const expected = stepUpRefusal('PUT', /\/api\/admin\/writers\/max/);
-  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
-  expect(problems.filter((p) => !expected(p))).toEqual([]);
+  expect(problems).toEqual([]); // no 403: nothing asked for the step-up
 });
 
 test('reviews a proposal as a readable diff and approves it; a token is shown once', async ({
@@ -181,13 +179,12 @@ test('reviews a proposal as a readable diff and approves it; a token is shown on
   const row = page.locator(`tr[data-proposal="${proposalId}"]`);
   await expect(row).toContainText('Scribe');
 
-  // CR-2026-11-R4: approving this proposal (an lk_api_write document replace that drops the page's block, a delete for
-  // the rails, ADR 0057 decision 4) needs the step-up (ADR 0062 decision 5). The token is made first: it asks for the
-  // step-up, which then holds for 10 minutes, so the approval below goes through without asking again.
+  // A token is a credential: it asks for the step-up (ADR 0081). Approving the proposal below (an lk_api_write document
+  // replace that drops the page's block) never does, whatever it holds (ADR 0081).
   await goTo(page, 'Clients & Access', true);
   await page.getByLabel('Name', { exact: true }).fill('Playwright laptop');
   await page.getByRole('button', { name: 'Create token' }).click();
-  await stepUp(page); // ADR 0062: a token is a key
+  await stepUp(page); // ADR 0081: a token is a key
   const token = (await page.getByTestId('pat-token').textContent()) ?? '';
   expect(token).toMatch(/^lkb_pat_/);
   await page.getByRole('button', { name: 'I have copied it' }).click();
@@ -401,7 +398,7 @@ test('v3 F5a: the Proposals page filters, selects and rejects in bulk with one c
 
 // ============================================================================================ v3 F5b (ADR 0068)
 
-test('v3 F5b: "Pause all automation" is one click; resuming asks for the step-up', async ({ page }) => {
+test('v3 F5b: "Pause all automation" is one click; resuming needs no step-up either', async ({ page }) => {
   const problems = watch(page);
   await signIn(page, '/ui');
   await goTo(page, 'Automation', true);
@@ -413,14 +410,11 @@ test('v3 F5b: "Pause all automation" is one click; resuming asks for the step-up
   expect(problems.filter((p) => /HTTP 403/.test(p))).toEqual([]);
   await brake.getByRole('button', { name: 'Resume automation' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Resume' }).click();
-  await stepUp(page);
   await expect(brake.getByText('Running')).toBeVisible();
-  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/resume\?project=test/);
-  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
-  expect(problems.filter((p) => !expected(p))).toEqual([]);
+  expect(problems).toEqual([]); // ADR 0081: no step-up
 });
 
-test('v3 F5b: a code’s setting is changed with the step-up and recorded in Repository Automation', async ({
+test('v3 F5b: a code’s setting is changed (no step-up) and recorded in Repository Automation', async ({
   page,
   request,
 }) => {
@@ -436,10 +430,8 @@ test('v3 F5b: a code’s setting is changed with the step-up and recorded in Rep
   const confirmDialog = page.getByRole('alertdialog');
   await expect(confirmDialog).toContainText('Approved Narrow Automations');
   await confirmDialog.getByRole('button', { name: 'Change the setting' }).click();
-  await stepUp(page);
   await expect(row.locator('.badge').first()).toHaveText('Propose automatically', { timeout: 15_000 });
-  // Back Off, by keyboard: the labelled select, then Tab to Change and Enter (the step-up holds for ten minutes on this
-  // session, so it is not asked again).
+  // Back Off, by keyboard: the labelled select, then Tab to Change and Enter.
   await row.getByLabel('Setting for Decorative blank paragraphs').selectOption('off');
   await row.getByLabel('Setting for Decorative blank paragraphs').focus();
   await page.keyboard.press('Tab');
@@ -447,9 +439,7 @@ test('v3 F5b: a code’s setting is changed with the step-up and recorded in Rep
   await page.keyboard.press('Enter');
   await page.getByRole('alertdialog').getByRole('button', { name: 'Change the setting' }).click();
   await expect(row.locator('.badge').first()).toHaveText('Off', { timeout: 15_000 });
-  const expected = stepUpRefusal('POST', /\/api\/admin\/automation\/codes\/blank_paragraphs\?project=test/);
-  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
-  expect(problems.filter((p) => !expected(p))).toEqual([]);
+  expect(problems).toEqual([]); // ADR 0081: no step-up
 });
 
 test('v3 F5b: the Overview shows what automation did overnight, linking to Review and Proposals', async ({
@@ -495,7 +485,7 @@ test('v3 F5c: the Workstreams page lists a workstream and opens its report', asy
   expect(problems).toEqual([]);
 });
 
-test('v3 F8: every setting by group; an edit and a reset with the step-up; search; a bootstrap setting read-only', async ({
+test('v3 F8: every setting by group; an edit and a reset (no step-up); search; a bootstrap setting read-only', async ({
   page,
 }) => {
   const problems = watch(page);
@@ -507,15 +497,14 @@ test('v3 F8: every setting by group; an edit and a reset with the step-up; searc
   await expect(frames).toContainText('300 frames');
   await expect(frames).toContainText('default');
   await expect(frames).toContainText('Applies at once');
-  // Edit: confirmation, then the step-up; the value is saved here and applies at once.
+  // Edit: confirmation (ADR 0081: no step-up); the value is saved here and applies at once.
   await frames.getByRole('button', { name: 'Edit Most frames in an animation' }).click();
   await frames.getByLabel('New value (frames)').fill('250');
   await frames.getByRole('button', { name: 'Save' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Save' }).click();
-  await stepUp(page);
   await expect(frames).toContainText('250 frames', { timeout: 15_000 });
   await expect(frames).toContainText('saved here');
-  // Reset: back to the default (the step-up holds for ten minutes on this session).
+  // Reset: back to the default.
   await frames.getByRole('button', { name: 'Reset Most frames in an animation' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: 'Reset' }).click();
   await expect(frames).toContainText('300 frames', { timeout: 15_000 });
@@ -546,9 +535,7 @@ test('v3 F8: every setting by group; an edit and a reset with the step-up; searc
   await expect(restart.getByRole('button', { name: 'Restart the bridge' })).toBeDisabled();
   await expect(restart).toContainText('not running under systemd');
   await expect(page.getByRole('region', { name: 'Recent changes' })).toContainText('settings.config_reset');
-  const expected = stepUpRefusal('PUT', /\/api\/admin\/settings\/config\/IMAGE_MAX_FRAMES/);
-  expect(problems.filter((p) => /HTTP 403/.test(p))).toHaveLength(1);
-  expect(problems.filter((p) => !expected(p))).toEqual([]);
+  expect(problems).toEqual([]); // ADR 0081: no step-up
 });
 
 test('the 25 November 2026 freeze: the Snapshots page browses pages a page of results at a time, and a page’s history', async ({

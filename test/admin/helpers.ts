@@ -39,6 +39,8 @@ export interface AdminStackOptions {
   readonly opTiers?: readonly MockOpTier[];
   readonly respond?: (req: MockRequest) => MockResponse | undefined;
   readonly env?: Record<string, string>;
+  /** ADR 0081: the auth schema's own variables (for example `AUTH_STEP_UP_WINDOW_SECONDS`). */
+  readonly authEnv?: Record<string, string>;
   readonly admin?: Partial<AdminSettings>;
   /** Maintenance settings. Default: the scheduler is off, so nothing runs on a timer behind a test's back. */
   readonly maintenance?: Partial<MaintenanceSettings>;
@@ -160,6 +162,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     OWNER_PASSWORD_HASH: hash,
     SESSION_SECRET: throwawaySecret(),
     JWT_SIGNING_KEY: throwawaySecret(),
+    ...o.authEnv,
   });
   const adminSettings = defaultAdminSettings({
     streamHeartbeatMs: 200,

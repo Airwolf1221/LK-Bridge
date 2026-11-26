@@ -98,14 +98,14 @@ const REFUSED = {
   body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm it is you first.' } },
 };
 
-/** Two settings that need the step-up, and the step-up itself (good for `goodCode` or `goodPassword`). */
+/** Two connection-scope changes that need the step-up (ADR 0081), and the step-up itself (`goodCode` or `goodPassword`). */
 function stepUpRoutes(o: { totp: boolean; goodCode?: string; goodPassword?: string }) {
   let stepped = false;
   const setting = () => (stepped ? { settings: {} } : REFUSED);
   return {
-    'GET /security': { totp: { enabled: o.totp } },
-    'PUT /settings/read-only': setting,
-    'PUT /settings/member-admin': setting,
+    'GET /security': { totp: { enabled: o.totp }, reauth: { until: null, windowSeconds: 43_200 } },
+    'PUT /clients/default-scope': setting,
+    'PUT /clients/profiles/p1/scope': setting,
     'POST /security/reauth': (c: Call) => {
       const b = c.body as { totp?: string; password?: string };
       const ok = o.totp ? b.totp === o.goodCode : b.password === o.goodPassword;
@@ -115,7 +115,7 @@ function stepUpRoutes(o: { totp: boolean; goodCode?: string; goodPassword?: stri
           body: { error: { code: 'REAUTH_FAILED', message: 'Those details were not recognised.' } },
         };
       stepped = true;
-      return { until: Date.now() + 600_000 };
+      return { until: Date.now() + 43_200_000 };
     },
   };
 }
@@ -125,13 +125,13 @@ function TwoChanges({ done }: { done: (r: string) => void }) {
     <button
       type="button"
       onClick={() => {
-        api.put('/settings/read-only', { value: true }).then(
-          () => done('read-only saved'),
-          (e: unknown) => done(`read-only: ${e instanceof ApiError ? e.code : String(e)}`),
+        api.put('/clients/default-scope', { scope: 'read' }).then(
+          () => done('default scope saved'),
+          (e: unknown) => done(`default scope: ${e instanceof ApiError ? e.code : String(e)}`),
         );
-        api.put('/settings/member-admin', { value: false }).then(
-          () => done('member-admin saved'),
-          (e: unknown) => done(`member-admin: ${e instanceof ApiError ? e.code : String(e)}`),
+        api.put('/clients/profiles/p1/scope', { scope: 'read' }).then(
+          () => done('profile scope saved'),
+          (e: unknown) => done(`profile scope: ${e instanceof ApiError ? e.code : String(e)}`),
         );
       }}
     >
@@ -140,8 +140,8 @@ function TwoChanges({ done }: { done: (r: string) => void }) {
   );
 }
 
-describe('the step-up dialog (ADR 0062 decision 5)', () => {
-  it('any change refused asks once for the authenticator code only; a wrong code keeps the owner here; both are sent again', async () => {
+describe('the step-up dialog (ADR 0062 decision 5, ADR 0081)', () => {
+  it('any change refused (a credential change) asks once for the authenticator code only; a wrong code keeps the owner here; both are sent again', async () => {
     const user = userEvent.setup();
     const onUnauth = vi.fn();
     const original = apiConfig.onUnauthenticated;
@@ -159,7 +159,10 @@ describe('the step-up dialog (ADR 0062 decision 5)', () => {
       const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
       expect(screen.getAllByRole('dialog')).toHaveLength(1); // two refusals, one dialog
       expect(within(dialog).queryByLabelText('Password')).toBeNull();
-      expect(dialog).toHaveTextContent(/an authenticator code again\. It lasts ten minutes\./);
+      // ADR 0081: the window as the bridge reports it (`reauth.windowSeconds`), not a fixed ten minutes.
+      await waitFor(() =>
+        expect(dialog).toHaveTextContent(/an authenticator code again\. It lasts 12 hours\./),
+      );
       const code = within(dialog).getByLabelText('Authenticator code (or a recovery code)');
 
       await user.type(code, '000000');
@@ -173,10 +176,12 @@ describe('the step-up dialog (ADR 0062 decision 5)', () => {
       await user.clear(code);
       await user.type(code, '123456');
       await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-      await waitFor(() => expect([...results].sort()).toEqual(['member-admin saved', 'read-only saved']));
+      await waitFor(() =>
+        expect([...results].sort()).toEqual(['default scope saved', 'profile scope saved']),
+      );
       expect(screen.queryByRole('dialog')).toBeNull();
-      expect(calls.find('PUT', '/settings/read-only')).toHaveLength(2);
-      expect(calls.find('PUT', '/settings/member-admin')).toHaveLength(2);
+      expect(calls.find('PUT', '/clients/default-scope')).toHaveLength(2);
+      expect(calls.find('PUT', '/clients/profiles/p1/scope')).toHaveLength(2);
       expect(calls.find('POST', '/security/reauth').map((c) => c.body)).toEqual([
         { totp: '000000' },
         { totp: '123456' },
@@ -202,9 +207,12 @@ describe('the step-up dialog (ADR 0062 decision 5)', () => {
     expect(within(dialog).queryByLabelText('Authenticator code (or a recovery code)')).toBeNull();
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() =>
-      expect([...results].sort()).toEqual(['member-admin: REAUTH_CANCELLED', 'read-only: REAUTH_CANCELLED']),
+      expect([...results].sort()).toEqual([
+        'default scope: REAUTH_CANCELLED',
+        'profile scope: REAUTH_CANCELLED',
+      ]),
     );
-    expect(calls.find('PUT', '/settings/read-only')).toHaveLength(1);
+    expect(calls.find('PUT', '/clients/default-scope')).toHaveLength(1);
     expect(calls.find('POST', '/security/reauth')).toHaveLength(0);
   });
 });
@@ -229,7 +237,7 @@ describe('Sign out everywhere (ADR 0062 decision 4)', () => {
             recoveryCodesLeft: 9,
             enrolmentPending: false,
           },
-          reauth: { until: null, windowSeconds: 600 },
+          reauth: { until: null, windowSeconds: 43_200 },
           sessions: { active: 3, thisEndsAt: Date.now() + 30 * 86_400_000 },
           store: { available: true, problem: null, keyId: 'k', stored: 1, unreadable: 0, underPrevious: 0 },
           canManageKeys: true,

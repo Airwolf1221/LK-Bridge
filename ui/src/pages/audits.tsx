@@ -4,7 +4,6 @@ import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useCon
 import { fmtAgo, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 import { rowCandidates, tieFromError, TieChoices, type TieCandidate } from './chronology-ties';
 import { ConsistencyPick } from './consistency-pick';
@@ -34,8 +33,7 @@ import type {
  *   reason, "Apply fix" (v3 F12, ADR 0081: confirmed in a dialog, then one job at once; the audit itself never applies anything) and "Re-check now" (the only two
  *   requests that read LegendKeeper).
  * - Runs: each with its duration and snapshot.
- * - Rules and settings: the rules editor (saving asks you to sign in again, as the canon rules do), the
- *   tag-definition source and the audit settings.
+ * - Rules and settings: the rules editor, the tag-definition source and the audit settings (ADR 0081: no fresh code).
  */
 
 const SEVERITY_TONE: Record<AuditSeverity, 'bad' | 'warn' | 'info'> = {
@@ -93,8 +91,8 @@ export function AuditsPage() {
       </PageHeader>
       <p className="muted">
         What the audits found in the newest full snapshot (and the change snapshots since). Findings only:
-        nothing here changes your world until you ask. “Apply fix…” says what it does, then runs it as one job (on
-        the <Link to="/jobs">Jobs</Link> page).
+        nothing here changes your world until you ask. “Apply fix…” says what it does, then runs it as one job
+        (on the <Link to="/jobs">Jobs</Link> page).
       </p>
       {!overview.data ? (
         overview.error ? (
@@ -553,7 +551,6 @@ function FindingRow({
   const [reason, setReason] = useState<string | null>(null);
   // v3 F6c (ADR 0080): "Keep it here" on a source outside its category's homes (its reason, while being written).
   const [keepReason, setKeepReason] = useState<string | null>(null);
-  const withReauthKeep = useReauth();
   const [note, setNote] = useState<string | null>(null);
   // v3 F4b (ADR 0064, D6): a consistency finding's values side by side, to pick the right one.
   const [picking, setPicking] = useState(false);
@@ -687,13 +684,11 @@ function FindingRow({
   const keepHome = () =>
     void run(
       () =>
-        withReauthKeep(() =>
-          api.post(`/audits/findings/${f.id}/keep-home`, {
-            confirm: true,
-            project,
-            reason: (keepReason ?? '').trim(),
-          }),
-        ),
+        api.post(`/audits/findings/${f.id}/keep-home`, {
+          confirm: true,
+          project,
+          reason: (keepReason ?? '').trim(),
+        }),
       'Kept here: silent until its tags or its parent change.',
     ).then((ok) => {
       if (ok) {
@@ -1120,7 +1115,6 @@ function RulesEditor({
   reload: () => void;
 }) {
   const { run, busy } = useAction();
-  const withReauth = useReauth();
   const [rules, setRules] = useState<RuleDraft[]>(cfg.effectiveRules.map(draftOf));
   const [useDefaults, setUseDefaults] = useState(cfg.seeded);
   const [settings, setSettings] = useState<AuditSettingsView>(cfg.settings);
@@ -1137,7 +1131,7 @@ function RulesEditor({
   const set = (i: number, patch: Partial<RuleDraft>) =>
     setRules(rules.map((r, k) => (k === i ? { ...r, ...patch } : r)));
   const save = (body: Record<string, unknown>, ok: string) =>
-    void run(() => withReauth(() => api.put('/audits/config', { confirm: true, project, ...body })), ok).then(
+    void run(() => api.put('/audits/config', { confirm: true, project, ...body }), ok).then(
       (r) => r && reload(),
     );
   const pick = (pageId: string) => {
@@ -1157,7 +1151,6 @@ function RulesEditor({
         A rule selects pages (by Reference Type, a registry type and role, a name prefix, an ancestor’s name,
         or a kind; all the given selectors must match) and names the template their sidebar and tabs are
         compared with. Overlapping rules, duplicate names and unmatched pages are findings, never guesses.
-        Saving asks you to sign in again.
       </p>
       <label className="row">
         <input type="checkbox" checked={useDefaults} onChange={(e) => setUseDefaults(e.target.checked)} /> Use

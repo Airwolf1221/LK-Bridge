@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { qs } from '../api';
 import { useProjectApi, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 
 /**
@@ -15,7 +14,7 @@ import { Link } from '../router';
  * Filter, then per row **Approve** (as proposed), **Change** (to nav or subject, with the subject's kind) or **Leave
  * undecided**. **Approve all as proposed** takes every proposed row of the filter (every page of it, not only the one
  * shown): their ids in ONE request, at most INDEX_CLASSIFY_BULK_MAX at a time, decided in one transaction (running it
- * again touches only the rows still proposed). Every decision asks for the step-up and is recorded in the audit log.
+ * again touches only the rows still proposed). Every decision is recorded in the audit log.
  * Nothing is renamed or retagged here: approved rows become proposals through the audits (`index_prefix`,
  * `index_tags`), which the Automation page runs (default Propose).
  *
@@ -286,17 +285,13 @@ export function IndexClassificationPage() {
 
 function IndexRow({ row, subjects, onChanged }: { row: Row; subjects: string[]; onChanged: () => void }) {
   const api = useProjectApi();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [changing, setChanging] = useState(false);
   const [role, setRole] = useState<Role>(row.proposed === 'nav' ? 'subject' : 'nav');
   const [subject, setSubject] = useState<string>(row.subject ?? '');
   const decide = (body: Record<string, unknown>, done: string) =>
     void run(
-      () =>
-        withReauth(() =>
-          api.post('/index-classification/decide', { pageId: row.id, confirm: true, ...body }),
-        ),
+      () => api.post('/index-classification/decide', { pageId: row.id, confirm: true, ...body }),
       done,
     ).then((x) => {
       if (x) {
@@ -398,7 +393,6 @@ function BulkApprove({
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   if (all.length === 0) return null;
   const ids = all.slice(0, bulkMax);
@@ -419,7 +413,7 @@ function BulkApprove({
     }).then((ok) => {
       if (!ok) return;
       void run(
-        () => withReauth(() => api.post('/index-classification/bulk-approve', { ids, confirm: true })),
+        () => api.post('/index-classification/bulk-approve', { ids, confirm: true }),
         'Approved.',
       ).then((x) => {
         if (x) onChanged();
@@ -444,7 +438,6 @@ function StructuralCard({
   onChanged: () => void;
 }) {
   const api = useProjectApi();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const text = (v: string[] | string | undefined) => (Array.isArray(v) ? v.join('\n') : (v ?? ''));
   const [draft, setDraft] = useState<Record<string, string>>(() => ({
@@ -459,13 +452,11 @@ function StructuralCard({
   const save = () =>
     void run(
       () =>
-        withReauth(() =>
-          api.put('/index-classification/structural', {
-            structural: Object.fromEntries(LIST_LABELS.map(([k]) => [k, lines(draft[k] ?? '')])),
-            outOfScope: lines(draft.outOfScope ?? ''),
-            confirm: true,
-          }),
-        ),
+        api.put('/index-classification/structural', {
+          structural: Object.fromEntries(LIST_LABELS.map(([k]) => [k, lines(draft[k] ?? '')])),
+          outOfScope: lines(draft.outOfScope ?? ''),
+          confirm: true,
+        }),
       'Saved as a new pack version: approve it on the Packs page.',
     ).then((x) => {
       if (x) onChanged();

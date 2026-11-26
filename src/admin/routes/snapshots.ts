@@ -38,7 +38,6 @@ import type { Rehearsals } from '../../snapshots/rehearsal.js';
 import { RestoreError } from '../../snapshots/restore.js';
 import type { Restores } from '../../snapshots/restores.js';
 import type { SnapshotService } from '../../snapshots/service.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import {
   closedSignal,
@@ -469,7 +468,10 @@ export const registerSnapshots: Register = (api, ctx) => {
           confirm: z.literal(true).optional(),
         })
         .strict()
-        .refine((v) => v.dryRun === true || v.confirm === true, 'an image restore needs confirm: true (or dryRun)'),
+        .refine(
+          (v) => v.dryRun === true || v.confirm === true,
+          'an image restore needs confirm: true (or dryRun)',
+        ),
       req.body,
     );
     const project = ctx.project(q.project);
@@ -538,8 +540,7 @@ export const registerSnapshots: Register = (api, ctx) => {
 
   /**
    * Starts a rehearsal (the owner's job): it runs in the background, and its row records its progress and results.
-   * CR-2026-11-R4 (ADR 0066 part B, question 4, the owner's decision): it writes into a sandbox project, so it asks for
-   * the step-up (ADR 0062); its plan (no request to LegendKeeper) stays one click.
+   * ADR 0081: no fresh code (CR-2026-11-R4 had asked one).
    */
   api.post('/snapshots/rehearsals', async (req, reply) => {
     const b = parseInput(
@@ -555,7 +556,6 @@ export const registerSnapshots: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    requireReauth(ctx.deps.services, req);
     const { rehearsals } = services();
     try {
       const row = await rehearsals.start({
@@ -591,7 +591,6 @@ export const registerSnapshots: Register = (api, ctx) => {
   api.post('/snapshots/rehearsals/:id/delete-root', async (req) => {
     const { id } = parseInput(z.object({ id: z.string().regex(/^rh_[0-9a-f]{16}$/) }), req.params);
     parseInput(z.object({ confirm: z.literal(true) }), req.body);
-    requireReauth(ctx.deps.services, req); // ADR 0062: a delete (the guarded rails' first kind)
     const { rehearsals } = services();
     try {
       const row = await rehearsals.deleteRoot(id);

@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON replies in tests */
 /**
  * CR-2026-11 round 4 (sessions), the step-up's window (ADR 0062 decision 5: the authenticator code, or a recovery code,
- * on THIS session within the last 10 minutes; the password only without an authenticator). The attempts: a step-up
+ * on THIS session within the window, now `AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours by default (ADR 0081; was 10
+ * minutes); the password only without an authenticator). The route each attempt is tried on is one that still asks
+ * (ADR 0081: a credential change; `STEP_UP_PROBE`). The attempts: a step-up
  * counted on another session; one surviving Sign out everywhere or a password change; a code or recovery code used twice
  * (once to sign in, once to step up); an older code after a newer one; the password where the code is due; a step-up
- * recorded in the future (the clock set back); the 10-minute boundary; the step-up landing on a session revoked while
+ * recorded in the future (the clock set back); the 12-hour boundary; the step-up landing on a session revoked while
  * its password was being checked; the step-up and sign-in limits counted apart.
  *
  * The safe behaviour asserted in each: refused (403 REAUTH_REQUIRED for the action, 401 REAUTH_FAILED for the step-up).
@@ -13,6 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { totp } from '../../../src/auth/totp.js';
 import { startAdminStack, type AdminStack } from '../../admin/helpers.js';
 import { Browser, startBridge } from '../../auth/helpers.js';
+import { STEP_UP_PROBE } from '../../auth/stepup-routes.js';
 import { asksStepUp, nowS, ownerSession } from './helpers.js';
 
 let s: AdminStack | undefined;
@@ -21,8 +24,7 @@ afterEach(async () => {
   s = undefined;
 });
 
-const CONTACT = '/api/admin/settings/contact-email';
-const contact = { value: 'owner@example.test', confirm: true };
+const PROBE = STEP_UP_PROBE;
 
 /** An admin stack with the authenticator set up (through its own stepped-up session), and its recovery codes. */
 async function withAuthenticator(): Promise<{ stack: AdminStack; secret: string; recovery: string[] }> {
@@ -36,13 +38,13 @@ async function withAuthenticator(): Promise<{ stack: AdminStack; secret: string;
   return { stack, secret, recovery: confirmed.json.recoveryCodes as string[] };
 }
 
-describe('the step-up belongs to one session, for ten minutes', () => {
+describe('the step-up belongs to one session, for the window (12 hours)', () => {
   it('SE-17: a step-up on one session does not count on another session', async () => {
     s = await startAdminStack();
     const a = ownerSession(s, s.bridge.publicUrl, s.sessionToken); // stepped up (the stack's own)
     const b = ownerSession(s, s.bridge.publicUrl); // signed in elsewhere, not stepped up
-    expect((await a.call('PUT', CONTACT, contact)).status).toBe(200);
-    asksStepUp(await b.call('PUT', CONTACT, contact), 'the other session');
+    expect((await a.call('POST', PROBE, {})).status).toBe(200);
+    asksStepUp(await b.call('POST', PROBE, {}), 'the other session');
     expect(b.reauthAt()).toBeNull();
   });
 
@@ -53,12 +55,12 @@ describe('the step-up belongs to one session, for ten minutes', () => {
     expect((await a.call('POST', '/api/admin/security/sessions/revoke-all', { confirm: true })).status).toBe(
       200,
     );
-    expect((await a.call('PUT', CONTACT, contact)).status).toBe(401);
+    expect((await a.call('POST', PROBE, {})).status).toBe(401);
     const browser = new Browser(s.bridge);
     expect((await browser.login()).status).toBe(200);
     const fresh = ownerSession(s, s.bridge.publicUrl, browser.cookies.get(s.services.owner.sessionCookie));
     expect(fresh.reauthAt()).toBeNull();
-    asksStepUp(await fresh.call('PUT', CONTACT, contact), 'the new sign-in');
+    asksStepUp(await fresh.call('POST', PROBE, {}), 'the new sign-in');
   });
 
   it('SE-19: a password change ends the other sessions, their step-ups with them', async () => {
@@ -66,13 +68,13 @@ describe('the step-up belongs to one session, for ten minutes', () => {
     const a = ownerSession(s, s.bridge.publicUrl, s.sessionToken);
     const other = ownerSession(s, s.bridge.publicUrl);
     other.setReauth(nowS());
-    expect((await other.call('PUT', CONTACT, contact)).status).toBe(200);
+    expect((await other.call('POST', PROBE, {})).status).toBe(200);
     const r = await a.call('POST', '/api/admin/security/password', {
       currentPassword: s.bridge.password,
       newPassword: 'r4 a new long password',
     });
     expect(r.status, r.text).toBe(200);
-    expect((await other.call('PUT', CONTACT, contact)).status).toBe(401);
+    expect((await other.call('POST', PROBE, {})).status).toBe(401);
     expect(other.row().revoked_at).not.toBeNull();
   });
 
@@ -134,17 +136,17 @@ describe('the step-up belongs to one session, for ten minutes', () => {
       expect(r.status, JSON.stringify(Object.keys(body))).toBe(r.status === 400 ? 400 : 401);
       expect(b.reauthAt()).toBeNull();
     }
-    asksStepUp(await b.call('PUT', CONTACT, contact), 'after the refused step-ups');
+    asksStepUp(await b.call('POST', PROBE, {}), 'after the refused step-ups');
   });
 
   it('SE-23: a step-up recorded in the future (the clock set back) does not count', async () => {
     s = await startAdminStack();
     const b = ownerSession(s, s.bridge.publicUrl);
     b.setReauth(nowS() + 3600);
-    asksStepUp(await b.call('PUT', CONTACT, contact), 'a step-up an hour ahead');
+    asksStepUp(await b.call('POST', PROBE, {}), 'a step-up an hour ahead');
   });
 
-  it('SE-24: the boundary: 600 seconds after the step-up it holds, 601 it does not (the clock of the bridge)', async () => {
+  it('SE-24: the boundary: 43,200 seconds after the step-up it holds, 43,201 it does not (the clock of the bridge)', async () => {
     const bridge = await startBridge();
     try {
       const owner = bridge.services.owner;
@@ -155,7 +157,7 @@ describe('the step-up belongs to one session, for ten minutes', () => {
         const session = owner.getSession(token)!;
         return owner.reauthUntil(session) !== null;
       };
-      expect([at(599), at(1), at(1)]).toEqual([true, true, false]);
+      expect([at(43_199), at(1), at(1)]).toEqual([true, true, false]);
     } finally {
       await bridge.close();
     }

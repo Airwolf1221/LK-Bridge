@@ -104,8 +104,6 @@ export const registerProjects: Register = (api, ctx) => {
   api.put('/projects/:name/draining', (req) => {
     const { name } = parseInput(nameParam, req.params);
     const b = parseInput(z.object({ value: z.boolean() }), req.body);
-    // ADR 0062 (the owner's rule): pausing and draining is one click; resuming it (releasing the brake) asks.
-    if (!b.value && projects.find(name)?.draining === true) requireReauth(ctx.deps.services, req);
     return ctx.actions.setProjectDraining(name, b.value);
   });
 
@@ -117,9 +115,8 @@ export const registerProjects: Register = (api, ctx) => {
     return ctx.actions.removeProject(name);
   });
 
-  /** v3 F2 (ADR 0049 decision 3): "Make default": stores the default project. Re-authentication; audited. */
+  /** v3 F2 (ADR 0049 decision 3): "Make default": stores the default project. Audited (ADR 0081: no fresh code). */
   api.post('/projects/:name/default', (req) => {
-    requireReauth(ctx.deps.services, req);
     const { name } = parseInput(nameParam, req.params);
     parseInput(z.object({ confirm: z.literal(true) }), req.body);
     return ctx.actions.makeDefaultProject(name);
@@ -130,8 +127,6 @@ export const registerProjects: Register = (api, ctx) => {
     const b = parseInput(z.object({ value: z.boolean(), confirm: z.literal(true) }), req.body);
     const p = projects.find(name);
     if (!p?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${name} with stored data`);
-    // ADR 0062 (the owner's rule): read-only on is one click (a brake); off asks for the step-up.
-    if (!b.value && p.readOnly) requireReauth(ctx.deps.services, req);
     const after = ctx.actions.setProjectReadOnly(p.id, b.value);
     return { project: after };
   });
@@ -146,10 +141,6 @@ export const registerProjects: Register = (api, ctx) => {
       }),
       req.body,
     );
-    // ADR 0062 (the owner's rule: tightening is one click, loosening asks): every project setting asks for the step-up
-    // (R2-51's Status of pages agents create among them), except switching ChatGPT's file source off, which is one click
-    // (ADR 0057 decision 7: switching it on, or back to its default, on, lets an agent make the bridge download more).
-    if (!(b.key === 'fileSourceEnabled' && b.value === false)) requireReauth(ctx.deps.services, req);
     return { project: ctx.actions.setProjectSetting(name, b.key, b.value) };
   });
 
@@ -167,11 +158,9 @@ export const registerProjects: Register = (api, ctx) => {
 
   /**
    * v2 C2a: replaces the rules (`rules: null` restores the defaults); `confirm: true` required. Audited. C2d (ADR 0036
-   * decision 4, the owner's): any change, a rule switched off and `rules: []` included, needs the owner to have signed
-   * in again within the last 10 minutes (ADR 0062), as the other sensitive actions do (ADR 0028).
+   * decision 4, the owner's) asked a step-up of any change; ADR 0081: no fresh code (a code at sign-in is enough).
    */
   api.put('/projects/:name/canon', (req) => {
-    requireReauth(ctx.deps.services, req);
     const { name } = parseInput(nameParam, req.params);
     const b = parseInput(
       z.object({

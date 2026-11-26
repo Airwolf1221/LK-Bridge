@@ -4,9 +4,9 @@
  * REAL stack on the mock LegendKeeper (test/consistency/world.ts, plus eleven pages restating Leila Darvish's birth):
  *
  * - only Contradictory pairs become findings, with stable codes, and they clear when the pages agree;
- * - the pick needs the step-up; it plans one item per disagreeing page and never touches the side picked, and (v3 F12,
- *   ADR 0081) runs at once as ONE job, with no proposal, a pick of more than 10 pages included; a typed value edits the
- *   identity page too; an agent's suggestion is shown and applies nothing; Revert works.
+ * - the pick needs no fresh code (ADR 0081); it plans one item per disagreeing page and never touches the side picked,
+ *   and (v3 F12, ADR 0081) runs at once as ONE job, with no proposal, a pick of more than 10 pages included; a typed
+ *   value edits the identity page too; an agent's suggestion is shown and applies nothing; Revert works.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Finding } from '../../src/audits/types.js';
@@ -106,7 +106,7 @@ describe('the audits’ consistency category (D5)', () => {
 });
 
 describe('“Pick the right value” (D6)', () => {
-  it('shows both values side by side; the pick needs the step-up, and nothing is proposed without it', async () => {
+  it('shows both values side by side; a pick from a session not stepped up is not asked for a step-up', async () => {
     const f = findingOf('Katsuragi Yamato', 'consistency_birth');
     const o = ownerClient(w);
     const v = await o.get(`/audits/findings/${f.id}/consistency?project=test`);
@@ -114,12 +114,12 @@ describe('“Pick the right value” (D6)', () => {
     expect(v.json.values.map((x: any) => x.value)).toEqual(['Isar 3rd, 4A 300', '4A 305']);
     expect(v.json.values[0].page.id).toBe(K.katsu);
     const before = proposals();
+    // A side the dashboard never showed: refused for that (ADR 0081: never for a missing step-up), nothing proposed.
     const refused = await o.post(`/audits/findings/${f.id}/consistency-pick?project=test`, {
       confirm: true,
-      side: v.json.values[0].key,
+      side: 'not-a-side-shown',
     });
-    expect(refused.status).toBe(403);
-    expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
+    expect(refused.json.error.code).toBe('SIDE_NOT_FOUND');
     expect(proposals()).toBe(before);
   });
 
@@ -220,7 +220,7 @@ describe('“Pick the right value” (D6)', () => {
     expect(textOf(K.yasminBio)).toContain('She was born in 4A 90 by another count.');
   });
 
-  it('a pick of more than 10 pages runs at once as ONE job editing all of them (v3 F12: no bulk rail, no proposal)', async () => {
+  it('a pick of more than 10 pages runs at once as ONE job editing all of them, with no fresh code (v3 F12, ADR 0081)', async () => {
     const f = findingOf('Leila Darvish', 'consistency_birth');
     expect((f.evidence.restatements as unknown[]).length).toBe(11);
     const o = ownerClient(w);

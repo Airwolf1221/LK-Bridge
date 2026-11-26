@@ -84,9 +84,9 @@ export function ConsistencyPick({
       title: 'Pick this value?',
       message: (
         <p>
-          <strong>{choice.label}</strong> becomes the value: the bridge edits every page that disagrees with it
-          (never the side you picked), at once, as one job. Each page is checked again first; follow it on the
-          Jobs page.
+          <strong>{choice.label}</strong> becomes the value: the bridge edits every page that disagrees with
+          it (never the side you picked), at once, as one job. Each page is checked again first; follow it on
+          the Jobs page.
         </p>
       ),
       confirmLabel: 'Pick and apply',
@@ -217,7 +217,8 @@ export function ConsistencyPick({
                 {result.jobId ? (
                   <>
                     Applying as job <code>{result.jobId}</code> ({result.items.length} page
-                    {result.items.length === 1 ? '' : 's'}): follow it on the <Link to="/jobs">Jobs</Link> page.
+                    {result.items.length === 1 ? '' : 's'}): follow it on the <Link to="/jobs">Jobs</Link>{' '}
+                    page.
                   </>
                 ) : (
                   <>

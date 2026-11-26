@@ -1,7 +1,9 @@
 /**
  * The Off-site copy page's API (v2 E1b, ADR 0043; docs/dashboard.md › Off-site copy), behind the owner session, Origin and
- * CSRF like every admin route. Saving the Google client, connecting, disconnecting, setting the encryption keys, deleting
- * an old Drive folder and adopting a folder all need a step-up within the last 10 minutes (`requireReauth`, ADR 0062).
+ * CSRF like every admin route. Saving the Google client, connecting, disconnecting and setting the encryption keys (the
+ * credentials) need a fresh authenticator code within the window (`requireReauth`; ADR 0081:
+ * `AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours); the settings, deleting an old Drive folder and adopting a folder do not (a
+ * code at sign-in is enough).
  *
  * - `GET /offsite`: everything the page shows (never a secret: the client ID, the secret's last four characters, the
  *   account, whether keys are set and when).
@@ -122,7 +124,6 @@ export const registerOffsite: Register = (api, ctx) => {
   });
 
   api.put('/offsite/settings', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(
       z.object({
         settings: z.record(z.string(), z.unknown()),
@@ -130,10 +131,7 @@ export const registerOffsite: Register = (api, ctx) => {
       }),
       req.body,
     );
-    // v2 E4 (RV1-4; ADR 0046 decision 3) asked the re-authentication of a change that weakens a protection of the copy
-    // (the monthly verify switched off, fewer verified objects, the stale-copy warning later, removed pieces kept on Drive
-    // for fewer days, another folder); ADR 0062 asks it of every change of these settings (checked above), times,
-    // bandwidth and transfers included.
+    // ADR 0081: no fresh code (ADR 0046 decision 3 and ADR 0062 had asked one; the settings are not a credential).
     const r = guardedSync(() => svc().updateSettings(b.settings, b.acknowledgeNewFolder === true));
     audit('offsite.settings', 'settings', { ...r.settings, newFolder: r.newFolder?.path ?? null });
     return r;
@@ -154,7 +152,6 @@ export const registerOffsite: Register = (api, ctx) => {
   });
 
   api.post('/offsite/folders/:generation/delete', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const { generation } = parseInput(z.object({ generation: z.coerce.number().int().min(1) }), req.params);
     parseInput(confirmBody, req.body);
     await guarded(() => svc().deleteFolder(generation));
@@ -163,7 +160,6 @@ export const registerOffsite: Register = (api, ctx) => {
   });
 
   api.post('/offsite/adopt', (req) => {
-    requireReauth(ctx.deps.services, req);
     parseInput(confirmBody, req.body);
     const f = guardedSync(() => svc().adoptFolder());
     audit('offsite.folder_adopted', f.path);

@@ -3,7 +3,8 @@
  * itself, before a choice that lets a connection do more (an existing profile's scope raised, a new profile above the
  * default scope, a connection on a profile at scope `write`), and goes on with the same pending request once it
  * succeeds. The step-up is the authenticator code (or a recovery code), or the password without one; it is counted
- * against the sign-in limits, logged and audited as the dashboard's is, and holds for 10 minutes on the session. An
+ * against the sign-in limits, logged and audited as the dashboard's is, and holds on the session for the window (ADR 0081:
+ * `AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours). An
  * ordinary connection at `read` or `propose`, a lowering, and a session that stepped up within the window are not asked.
  * The refusals themselves are the review's (test/review/r4-sessions/consent-stepup.test.ts). Mocks only.
  */
@@ -125,7 +126,7 @@ describe('the step-up on the consent page', () => {
     const code = codeOf(done);
     expect(code, `${done.status} ${await done.clone().text()}`).toBeTruthy();
     expect(b.policy.store.getProfile(p.id)!.scope).toBe('write');
-    expect(reauthAt(b, browser)).not.toBeNull(); // the session has stepped up (for 10 minutes)
+    expect(reauthAt(b, browser)).not.toBeNull(); // the session has stepped up (for 12 hours)
     expect(stepUpAudits(b)).toEqual([
       { ok: true, via: 'consent' },
       { ok: false, reason: 'invalid', via: 'consent' },
@@ -138,7 +139,7 @@ describe('the step-up on the consent page', () => {
     expect((await post(browser, c, { ...confirmed, stepup_password: b.password })).status).toBe(400);
   });
 
-  it('with the authenticator, its code (never the password); a new profile above the default; the window then holds for 10 minutes', async () => {
+  it('with the authenticator, its code (never the password); a new profile above the default; the window then holds for 12 hours', async () => {
     const b = (bridge = await startBridge({ totp: true }));
     const secret = b.totpSecret!;
     const browser = new Browser(b);
@@ -153,6 +154,7 @@ describe('the step-up on the consent page', () => {
     expect(html).toContain('New connections start at read, the default.');
     expect(html).toContain('name="stepup_totp"');
     expect(html).not.toContain('name="stepup_password"');
+    expect(html).toContain('checked within the last 12 hours'); // ADR 0081: the window, from the setting
     expect(b.policy.store.getProfileByLabel('r4 writer')).toBeUndefined();
 
     // The password is not the step-up once the authenticator is set up, in either field.
@@ -170,8 +172,11 @@ describe('the step-up on the consent page', () => {
     const writer = b.policy.store.getProfileByLabel('r4 writer')!;
     const again = await consent(b, browser, CLAUDE);
     expect(codeOf(await post(browser, again, { profile: writer.id, scope: 'keep' }))).toBeTruthy();
-    // Ten minutes later it is.
-    b.clock.advance(601);
+    // Eleven hours later it still is not; over 12 hours later it is.
+    b.clock.advance(11 * 3600);
+    const within = await consent(b, browser, CLAUDE);
+    expect(codeOf(await post(browser, within, { profile: writer.id, scope: 'keep' }))).toBeTruthy();
+    b.clock.advance(3600 + 1);
     const later = await consent(b, browser, CLAUDE);
     const asks = await post(browser, later, { profile: writer.id, scope: 'keep' });
     expect(asks.status).toBe(200);

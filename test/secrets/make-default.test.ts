@@ -24,10 +24,10 @@ describe('Make default while the env file names another default', () => {
   });
   afterAll(() => m?.close());
 
-  it('needs a fresh re-authentication', async () => {
-    const r = await m.admin.post('/projects/gamma/default', { confirm: true });
-    expect(r.status).toBe(403);
-    expect(r.json.error.code).toBe('REAUTH_REQUIRED');
+  it('needs no fresh code (ADR 0081), but a confirmation', async () => {
+    const r = await m.admin.post('/projects/gamma/default', {});
+    expect(r.status).toBe(400);
+    expect(r.json.error.code).not.toBe('REAUTH_REQUIRED');
     expect((await projects(m)).storedDefault).toBe('alpha');
   });
 

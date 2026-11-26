@@ -3,8 +3,9 @@
  * R3-RETAG (pass 3): "owner classification needs re-authentication and agents can't set it" (ADR 0060
  * decision 4), through the dashboard's API (`POST /api/admin/tagging/classify` and `/unclassify`): an agent's
  * bearer token (a PAT and a real OAuth access token, both valid at /mcp), a foreign or missing Origin, a missing
- * CSRF token, a cross-site request, and a stale re-authentication. The harness is the real bridge
- * (test/admin/helpers.ts) against the mock.
+ * CSRF token, a cross-site request. ADR 0081 (the owner, 26 November 2026: "A code at sign-in is enough"): the owner's
+ * classification no longer needs a fresh re-authentication (RT-92 and RT-93 now assert that). The harness is the real
+ * bridge (test/admin/helpers.ts) against the mock.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fullFlow } from '../../auth/helpers.js';
@@ -104,32 +105,22 @@ describe('the classification route', () => {
     expect(classified()).toBeNull();
   });
 
-  it('RT-92: a stale re-authentication (10 minutes and 1 second, ADR 0062) is refused; a fresh one is accepted', async () => {
-    reauthAt(601);
-    const stale = await s.post('/api/admin/tagging/classify', BODY);
-    expect(stale.status).toBe(403);
-    expect(stale.json.error.code).toBe('REAUTH_REQUIRED');
-    expect(classified()).toBeNull();
-    reauthAt(0);
+  it('RT-92: a stale re-authentication (or none) is not refused (ADR 0081): the owner classifies and withdraws', async () => {
+    reauthAt(12 * 3600 + 1);
     const ok = await s.post('/api/admin/tagging/classify', BODY);
     expect(ok.status, JSON.stringify(ok.json)).toBe(200);
     expect(classified()).toMatchObject({ primary: 'Culture', by: 'owner' });
     // Withdrawing it: the same rules.
-    reauthAt(601);
-    expect(
-      (await s.post('/api/admin/tagging/unclassify', { pageId: 'r3adm001', confirm: true })).status,
-    ).toBe(403);
-    expect(classified()).not.toBeNull();
+    const gone = await s.post('/api/admin/tagging/unclassify', { pageId: 'r3adm001', confirm: true });
+    expect(gone.status, JSON.stringify(gone.json)).toBe(200);
+    expect(classified()).toBeNull();
+    expect((await s.post('/api/admin/tagging/classify', BODY)).status).toBe(200);
   });
 
-  it('RT-93: a re-authentication of ANOTHER owner session does not count for this one', async () => {
-    reauthAt(601);
-    // Every other session of the owner re-authenticated now (as if the owner confirmed on another device).
-    s.db
-      .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash <> ?')
-      .run(Math.floor(Date.now() / 1000), s.services.sessionHash(s.sessionToken));
+  it('RT-93: another owner session’s re-authentication is not needed either (ADR 0081)', async () => {
+    reauthAt(12 * 3600 + 1);
     const r = await s.post('/api/admin/tagging/classify', { ...BODY, primary: 'Polity' });
-    expect(r.status).toBe(403);
-    expect(classified()).toMatchObject({ primary: 'Culture' });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(classified()).toMatchObject({ primary: 'Polity' });
   });
 });

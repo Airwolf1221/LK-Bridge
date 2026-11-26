@@ -27,7 +27,6 @@ import {
 import { fmtAgo, fmtTime, prettyJson } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 import type {
   ResumeView,
@@ -62,8 +61,8 @@ const show = (v: unknown) =>
 
 /**
  * Revert a finished direct-write job (owner): reads what a revert would do now (each target read live), asks for
- * confirmation (and, when some targets would not be reverted, a deliberate yes to a partial revert), then the owner's
- * step-up (ADR 0062: the authenticator code, or the password without one), and submits ONE revert job.
+ * confirmation (and, when some targets would not be reverted, a deliberate yes to a partial revert), and submits ONE revert
+ * job (ADR 0081: no fresh code).
  */
 export function RevertButton({
   jobId,
@@ -79,7 +78,6 @@ export function RevertButton({
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const toast = useToast();
-  const withReauth = useReauth();
   const { withProject } = useProject();
   const start = async () => {
     const r = await run(() =>
@@ -100,8 +98,8 @@ export function RevertButton({
         message: (
           <p>
             Nothing had left the source, so there is nothing to put back. The {made} page
-            {made === 1 ? '' : 's'} it made {made === 1 ? 'is' : 'are'} deleted (each only while it is exactly as
-            the split made it; a copy is kept first).
+            {made === 1 ? '' : 's'} it made {made === 1 ? 'is' : 'are'} deleted (each only while it is exactly
+            as the split made it; a copy is kept first).
           </p>
         ),
         confirmLabel: 'Delete them',
@@ -109,11 +107,9 @@ export function RevertButton({
       });
       if (!yes) return;
       const out = await run(() =>
-        withReauth(() =>
-          api.post<{ revert: { message: string } }>(
-            withProject(`/jobs/${encodeURIComponent(jobId)}/revert`, project),
-            { confirm: true, confirmPartial: false },
-          ),
+        api.post<{ revert: { message: string } }>(
+          withProject(`/jobs/${encodeURIComponent(jobId)}/revert`, project),
+          { confirm: true, confirmPartial: false },
         ),
       );
       if (out) {
@@ -154,8 +150,8 @@ export function RevertButton({
           {made > 0 && (
             <p data-testid="revert-split-pages">
               A split: once the revert has run, the {made} page{made === 1 ? '' : 's'} it made{' '}
-              {made === 1 ? 'is' : 'are'} deleted (each only while it is exactly as the split made it; a copy is
-              kept first).
+              {made === 1 ? 'is' : 'are'} deleted (each only while it is exactly as the split made it; a copy
+              is kept first).
             </p>
           )}
           <ul className="revert-targets">
@@ -191,18 +187,16 @@ export function RevertButton({
     if (!ok) return;
     const done = await run(
       () =>
-        withReauth(() =>
-          api.post<{ revert: { revertJobId: string; message: string } }>(
-            withProject(`/jobs/${encodeURIComponent(jobId)}/revert`, project),
-            // CR-2026-11-R2 (R2-23): a partial revert names the targets the owner confirmed; refused if they changed.
-            partial
-              ? {
-                  confirm: true,
-                  confirmPartial: true,
-                  confirmed: p.targets.filter((t) => t.state === 'ready').map((t) => t.key),
-                }
-              : { confirm: true, confirmPartial: false },
-          ),
+        api.post<{ revert: { revertJobId: string; message: string } }>(
+          withProject(`/jobs/${encodeURIComponent(jobId)}/revert`, project),
+          // CR-2026-11-R2 (R2-23): a partial revert names the targets the owner confirmed; refused if they changed.
+          partial
+            ? {
+                confirm: true,
+                confirmPartial: true,
+                confirmed: p.targets.filter((t) => t.state === 'ready').map((t) => t.key),
+              }
+            : { confirm: true, confirmPartial: false },
         ),
       'Revert submitted.',
     );
@@ -482,9 +476,7 @@ export function ReviewPage() {
             : 'No direct writes here.'}
         </Empty>
       ) : (
-        groupsOf(data.items).map((g) => (
-          <ReviewGroup key={g.key} group={g} onChanged={r.reload} />
-        ))
+        groupsOf(data.items).map((g) => <ReviewGroup key={g.key} group={g} onChanged={r.reload} />)
       )}
     </>
   );
@@ -522,8 +514,9 @@ function ReviewGroup({ group, onChanged }: { group: Group; onChanged: () => void
       title: `Mark ${open.length} item${open.length === 1 ? '' : 's'} reviewed?`,
       message: (
         <p>
-          Every unreviewed item of {group.workstream ? `the workstream “${group.workstream}”` : 'no workstream'}{' '}
-          by {group.connection} is marked reviewed. Nothing in LegendKeeper changes.
+          Every unreviewed item of{' '}
+          {group.workstream ? `the workstream “${group.workstream}”` : 'no workstream'} by {group.connection}{' '}
+          is marked reviewed. Nothing in LegendKeeper changes.
         </p>
       ),
       confirmLabel: 'Mark reviewed',

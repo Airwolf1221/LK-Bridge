@@ -23,7 +23,7 @@ function security(over: Record<string, unknown> = {}) {
     username: 'owner',
     password: { source: 'store', problem: null },
     totp: { enabled: false, source: null, problem: null, recoveryCodesLeft: 0, enrolmentPending: false },
-    reauth: { until: null, windowSeconds: 600 },
+    reauth: { until: null, windowSeconds: 43_200 },
     sessions: { active: 1, thisEndsAt: Date.now() + 30 * 86_400_000 },
     store: { available: true, problem: null, keyId: 'k', stored: 1, unreadable: 0, underPrevious: 0 },
     canManageKeys: true,
@@ -168,14 +168,14 @@ describe('a failed check keeps the owner where they are, and says so', () => {
     };
     try {
       const calls = installApi({
-        'PUT /settings/member-admin': (_c: Call) => err(403, 'REAUTH_REQUIRED', 'Confirm it is you first.'),
+        'PUT /clients/default-scope': (_c: Call) => err(403, 'REAUTH_REQUIRED', 'Confirm it is you first.'),
       });
       const e = await api
-        .put('/settings/member-admin', { value: true, confirm: true })
+        .put('/clients/default-scope', { scope: 'write', confirmRaise: true })
         .catch((x: unknown) => x);
       expect(e instanceof ApiError && e.code).toBe('REAUTH_REQUIRED');
       expect(asked).toBe(1);
-      expect(calls.find('PUT', '/settings/member-admin')).toHaveLength(2);
+      expect(calls.find('PUT', '/clients/default-scope')).toHaveLength(2);
       await waitFor(() => expect(apiConfig.onUnauthenticated).not.toHaveBeenCalled());
     } finally {
       apiConfig.onUnauthenticated = original;

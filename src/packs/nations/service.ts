@@ -1017,7 +1017,7 @@ export class NationTaxonomyService {
 
   // ============================================================================================ decisions
 
-  /** One decision on one row (the owner only: the dashboard's step-up). Audited `nationsubindex.decide`. */
+  /** One decision on one row (the owner only, on the dashboard). Audited `nationsubindex.decide`. */
   decide(
     actor: string,
     projectId: string,
@@ -1172,7 +1172,7 @@ export class NationTaxonomyService {
   static readonly ACCEPT_BATCH = 25;
 
   /**
-   * "Accept all matched" (the step-up; audited `nationsubindex.accept_all`): ONE request, by ids (the page sends the rows
+   * "Accept all matched" (audited `nationsubindex.accept_all`): ONE request, by ids (the page sends the rows
    * its GET counted) or every acceptable row of the filter; at most NATION_SUBINDEX_BULK_MAX (the rest counted as
    * `remaining`). The rows are read ONCE at the start (F6a.1's lesson: no per-row rebuild); each batch is one transaction,
    * every row in it checked again against the decisions store (one decided meanwhile is skipped); a yield between

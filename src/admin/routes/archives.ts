@@ -4,14 +4,13 @@
  *
  * - `GET /archives`: the project's archives (most recent first), each with its rows (status, expected time, held by,
  *   queue position, reason), and the three limits kept apart (holding, processing, the hourly brake).
- * - `POST /archives/:id/discard` (re-authenticated, step-up): discards the archive: its unfinished entries are
+ * - `POST /archives/:id/discard`: discards the archive: its unfinished entries are
  *   discarded (an art job waiting for one leaves that image out) and its server copy removed. Staged images stay staged.
  *
  * Server-local only: nothing here calls LegendKeeper. Every discard is audited (`archive.discard`).
  */
 import * as z from 'zod';
 import type { ImageService } from '../../images/service.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectParam, type Register } from './util.js';
 
@@ -44,7 +43,6 @@ export const registerArchives: Register = (api, ctx) => {
   });
 
   api.post('/archives/:id/discard', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const q = parseInput(projectQuery, req.query);
     const { id } = parseInput(idParams, req.params);
     const project = ctx.project(q.project);

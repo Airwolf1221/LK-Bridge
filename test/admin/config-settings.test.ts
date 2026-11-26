@@ -7,7 +7,7 @@
  * - validation: ranges, whole numbers, enums, rules between settings, and display-unit conversions;
  * - apply modes: two `now` settings change behaviour at once (an image limit, a timeout); a `next_start` one is pending;
  * - bootstrap settings and secrets cannot be edited through the API; no admin response carries a secret's value;
- * - every change is in Recent changes with its old and new value, behind the step-up;
+ * - every change is in Recent changes with its old and new value (ADR 0081: no fresh authenticator code);
  * - "Restart the bridge": drain, exit 75 (a fake exit), recorded as the owner's request; disabled outside systemd.
  */
 import { mkdtempSync, readFileSync } from 'node:fs';
@@ -232,7 +232,7 @@ describe('the Settings page’s model, on the real bridge', () => {
     );
   });
 
-  it('every change is in Recent changes with its old and new value, and needs the step-up', async () => {
+  it('every change is in Recent changes with its old and new value, and needs no step-up (ADR 0081)', async () => {
     await put(s, 'MAINTENANCE_DEFER_SECONDS', { value: 30 });
     await reset(s, 'MAINTENANCE_DEFER_SECONDS');
     const audit = (await s.get('/api/admin/audit?limit=5')).json.entries;
@@ -251,14 +251,11 @@ describe('the Settings page’s model, on the real bridge', () => {
     s.db
       .prepare('UPDATE auth_owner_sessions SET reauth_at = NULL WHERE session_hash = ?')
       .run(s.services.sessionHash(s.sessionToken));
-    for (const r of [
-      await put(s, 'MAINTENANCE_DEFER_SECONDS', { value: 30 }),
-      await reset(s, 'MAINTENANCE_DEFER_SECONDS'),
-      await s.post('/api/admin/bridge/restart', { confirm: true }),
-    ]) {
-      expect(r.status).toBe(403);
-      expect(r.json.error.code).toBe('REAUTH_REQUIRED');
-    }
+    const changed = await put(s, 'MAINTENANCE_DEFER_SECONDS', { value: 30 });
+    const restored = await reset(s, 'MAINTENANCE_DEFER_SECONDS');
+    const restart = await s.post('/api/admin/bridge/restart', { confirm: true });
+    expect([changed.status, restored.status], changed.text).toEqual([200, 200]);
+    expect([restart.status, restart.json.error.code]).toEqual([409, 'RESTART_UNAVAILABLE']); // not under systemd
     s.services.store.setReauth(s.services.sessionHash(s.sessionToken), Math.floor(Date.now() / 1000));
   });
 

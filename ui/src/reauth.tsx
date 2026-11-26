@@ -11,12 +11,16 @@ import {
 import { ApiError, api, apiConfig, formText } from './api';
 
 /**
- * OPS2, ADR 0062: the step-up for sensitive actions (keys and secrets, scope changes, settings, pack approval, the
- * guarded rails' approvals, the account). The bridge answers such a request with 403 `REAUTH_REQUIRED` unless the owner
- * stepped up on this session in the last ten minutes: the authenticator code (or a recovery code), or the password when
- * no authenticator is set up. Every request's answer of that kind opens this dialog (`apiConfig.onReauthRequired`, set
- * here), which confirms it with the bridge, and the request is sent once more; `withReauth(fn)` does the same around a
- * whole function. Cancelling rejects with `REAUTH_CANCELLED`, which `useAction` shows no toast for.
+ * OPS2, ADR 0062, narrowed by ADR 0081 (the owner, 26 November 2026: "A code at sign-in is enough"): the step-up for the
+ * credential changes only: the password, the authenticator and its recovery codes, connections (made, revoked, moved or
+ * their scope changed) and personal access tokens, and a project's or the off-site copy's keys. The bridge answers such a
+ * request with 403 `REAUTH_REQUIRED` unless the owner stepped up on this session within the window
+ * (`AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours by default, reported by `GET /security` as `reauth.windowSeconds`): the
+ * authenticator code (or a recovery code), or the password when no authenticator is set up. No other route answers it,
+ * so the dialog appears for those actions only. Every request's answer of that kind opens this dialog
+ * (`apiConfig.onReauthRequired`, set here), which confirms it with the bridge, and the request is sent once more;
+ * `withReauth(fn)` does the same around a whole function. Cancelling rejects with `REAUTH_CANCELLED`, which `useAction`
+ * shows no toast for.
  *
  * The code or password never leaves this dialog except in the one request to `/api/admin/security/reauth`; it is not
  * kept.
@@ -29,6 +33,15 @@ export const useReauth = () => useContext(ReauthContext);
 export const isReauthCancelled = (e: unknown): boolean =>
   e instanceof ApiError && e.code === 'REAUTH_CANCELLED';
 
+/** ADR 0081: the step-up's window in words ("12 hours"), from the seconds the bridge reports (`reauth.windowSeconds`). */
+export function windowInWords(seconds: number): string {
+  const n = (v: number, one: string) => `${v.toLocaleString('en-GB')} ${one}${v === 1 ? '' : 's'}`;
+  if (seconds >= 86_400 && seconds % 86_400 === 0) return n(seconds / 86_400, 'day');
+  if (seconds >= 3600 && seconds % 3600 === 0) return n(seconds / 3600, 'hour');
+  if (seconds >= 60 && seconds % 60 === 0) return n(seconds / 60, 'minute');
+  return n(seconds, 'second');
+}
+
 interface Pending {
   resolve: () => void;
   reject: (e: unknown) => void;
@@ -39,6 +52,8 @@ export function ReauthProvider({ children, totp: initialTotp }: { children: Reac
   // Whether to ask for a code: known at sign-in, and checked again each time the dialog opens (the authenticator may
   // have been set up or removed since).
   const [totp, setTotp] = useState(initialTotp);
+  // ADR 0081: how long the step-up lasts, as the bridge reports it (read each time the dialog opens).
+  const [windowSeconds, setWindowSeconds] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const form = useRef<HTMLFormElement>(null);
@@ -51,8 +66,11 @@ export function ReauthProvider({ children, totp: initialTotp }: { children: Reac
       setError(null);
       setPending({ resolve, reject });
       api
-        .get<{ totp?: { enabled?: boolean } }>('/security')
-        .then((s) => setTotp(s.totp?.enabled === true))
+        .get<{ totp?: { enabled?: boolean }; reauth?: { windowSeconds?: number } }>('/security')
+        .then((s) => {
+          setTotp(s.totp?.enabled === true);
+          if (typeof s.reauth?.windowSeconds === 'number') setWindowSeconds(s.reauth.windowSeconds);
+        })
         .catch(() => undefined);
     }).finally(() => {
       waiting.current = null;
@@ -117,8 +135,9 @@ export function ReauthProvider({ children, totp: initialTotp }: { children: Reac
             <form ref={form} onSubmit={(e) => void submit(e)} autoComplete="off">
               <div className="dialog-body">
                 <p>
-                  This is a sensitive change, so the bridge asks for{' '}
-                  {totp ? 'an authenticator code' : 'your password'} again. It lasts ten minutes.
+                  This changes a password, key, token or connection, so the bridge asks for{' '}
+                  {totp ? 'an authenticator code' : 'your password'} again.
+                  {windowSeconds !== null && ` It lasts ${windowInWords(windowSeconds)}.`}
                 </p>
                 {error && (
                   <p className="note note-bad" role="alert">

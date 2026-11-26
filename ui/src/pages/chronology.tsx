@@ -620,8 +620,8 @@ function CheckCard({
         <>
           <p>{f.message}</p>
           <p className="small-text">
-            It runs at once as one job, checked again against the table and the timeline as they are now; follow it
-            on the Jobs page.
+            It runs at once as one job, checked again against the table and the timeline as they are now;
+            follow it on the Jobs page.
           </p>
         </>
       ),
@@ -670,8 +670,8 @@ function CheckCard({
             <p className="small-text">
               The row says “{text(f.detail?.rowDate)}”; the event is at {text(f.detail?.eventDate)}. Check
               that they are the same chronology event (paired by{' '}
-              {PAIRED_BY[text(f.detail?.pairedBy)] ?? text(f.detail?.pairedBy)}) first. Confirmed, it
-              runs at once as one job.
+              {PAIRED_BY[text(f.detail?.pairedBy)] ?? text(f.detail?.pairedBy)}) first. Confirmed, it runs at
+              once as one job.
             </p>
           </>
         ),
@@ -842,10 +842,10 @@ function CheckCard({
         Compares each age’s table with its timeline and the Main counts. The check itself only reads and never
         repairs anything; “Apply fix…” on a row without an event, a row and event that disagree about the
         date, an event without a row (deleted: only the event), or a Main count that differs from its table
-        says what it does and, confirmed, runs it as one job (the table is the authority). An event in
-        a tie (rows of the table could be its own) is never deleted: pair it with one of its rows. A fix
-        refused because several events could be a row’s own shows them, each with “Use this event”, and “Make
-        a new event”. A qualified date (“c. 4A 563; exact date unresolved”) is read by its anchor and never
+        says what it does and, confirmed, runs it as one job (the table is the authority). An event in a tie
+        (rows of the table could be its own) is never deleted: pair it with one of its rows. A fix refused
+        because several events could be a row’s own shows them, each with “Use this event”, and “Make a new
+        event”. A qualified date (“c. 4A 563; exact date unresolved”) is read by its anchor and never
         rewritten. It also runs weekly (Maintenance Jobs page).
       </p>
       {last && state ? (

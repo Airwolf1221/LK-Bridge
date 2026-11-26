@@ -14,8 +14,8 @@ const DOCS = 'https://github.com/Airwolf1221/LK-Bridge/blob/main';
 
 /**
  * v3 F8 (ADR 0073): every setting the bridge reads, by group, from the settings registry. Each shows its effective
- * value, where it comes from, its range and unit and how a change applies. Edit and Reset ask for confirmation and the
- * step-up, and every change is in Recent changes with its old and new value. Bootstrap settings are shown read-only;
+ * value, where it comes from, its range and unit and how a change applies. Edit and Reset ask for confirmation (ADR 0081:
+ * no fresh code), and every change is in Recent changes with its old and new value. Bootstrap settings are shown read-only;
  * secrets only as set or not set.
  */
 export function SettingsPage() {
@@ -425,7 +425,7 @@ function EditForm({ e, onDone, onSaved }: { e: ConfigEntry; onDone: () => void; 
   );
 }
 
-/** S7: "N settings pending a restart", and the button (step-up, confirmation, then the bridge drains and exits 75). */
+/** S7: "N settings pending a restart", and the button (confirmation, then the bridge drains and exits 75). */
 function RestartCard({ cfg, onSaved }: { cfg: ConfigView; onSaved: () => void }) {
   const { run, busy } = useAction();
   const confirm = useConfirm();

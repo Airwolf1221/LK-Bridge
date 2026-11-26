@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any -- parsed JSON replies */
 /**
- * v3 F5b (ADR 0068, H5): the Automation page's API and ADR 0062's rule. "Pause all automation" is one click (a brake);
- * resuming it, resuming a paused code and "Run automation now" ask for the step-up; the Overview carries what automation
+ * v3 F5b (ADR 0068, H5): the Automation page's API. "Pause all automation" is one click (a brake); resuming it,
+ * resuming a paused code and "Run automation now" are too (ADR 0081: no fresh code); the Overview carries what automation
  * did overnight; bridge_info tells agents which codes are automated, and nothing more.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -20,15 +20,11 @@ beforeAll(async () => {
 afterAll(async () => w?.close());
 
 describe('the brake', () => {
-  it('"Pause all automation" is one click (no step-up); resuming asks for it', async () => {
+  it('"Pause all automation" and resuming are one click each (ADR 0081: no step-up)', async () => {
     owner.expire();
     const p = await owner.post('/automation/pause', { confirm: true });
     expect(p.status, JSON.stringify(p.json)).toBe(200);
     expect(p.json.paused).toBe(true);
-    const refused = await owner.post('/automation/resume', { confirm: true });
-    expect(refused.status).toBe(403);
-    expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
-    owner.stepUp();
     const r = await owner.post('/automation/resume', { confirm: true });
     expect(r.status).toBe(200);
     expect(r.json.paused).toBe(false);
@@ -40,15 +36,12 @@ describe('the brake', () => {
 });
 
 describe('Run automation now, the runs and the overnight tile', () => {
-  it('asks for the step-up; runs; its run and items are listed; the Overview counts them per code', async () => {
+  it('runs without a step-up; its run and items are listed; the Overview counts them per code', async () => {
     owner.stepUp();
     expect(
       (await owner.post('/automation/codes/blank_paragraphs', { mode: 'apply', confirm: true })).status,
     ).toBe(200);
     owner.expire();
-    const refused = await owner.post('/automation/run', { confirm: true, wait: true });
-    expect(refused.status).toBe(403);
-    owner.stepUp();
     const r = await owner.post('/automation/run', { confirm: true, wait: true });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(r.json.run.state).toBe('succeeded');
@@ -75,13 +68,9 @@ describe('Run automation now, the runs and the overnight tile', () => {
     expect(overview.json.automation.codes[0]).toMatchObject({ code: 'blank_paragraphs' });
   });
 
-  it('a paused code is resumed with the step-up', async () => {
+  it('a paused code is resumed without a step-up', async () => {
     w.stack.runtime.automation.store.pause(PROJECT, 'blank_paragraphs', 'test');
     owner.expire();
-    expect((await owner.post('/automation/codes/blank_paragraphs/resume', { confirm: true })).status).toBe(
-      403,
-    );
-    owner.stepUp();
     expect((await owner.post('/automation/codes/blank_paragraphs/resume', { confirm: true })).status).toBe(
       200,
     );

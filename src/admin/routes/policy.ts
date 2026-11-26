@@ -1,6 +1,5 @@
-import type { FastifyRequest } from 'fastify';
 import * as z from 'zod';
-import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES, type Scope } from '../../policy/index.js';
+import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES } from '../../policy/index.js';
 import { redactDeep } from '../redact.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
@@ -30,12 +29,6 @@ const GROUPS: Record<string, readonly (typeof PROPOSAL_STATES)[number][]> = {
   conflicted: ['conflicted'],
   history: ['approved', 'executing', 'executed', 'rejected', 'expired', 'failed'],
 };
-
-/**
- * The order of the scopes, for telling a raise from a lowering. ADR 0062 (the owner's rule, 19 November 2026): tightening
- * is one click, loosening asks for the step-up.
- */
-const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write: 2 };
 
 export const registerPolicy: Register = (api, ctx) => {
   const { policy } = ctx.deps.runtime;
@@ -67,17 +60,8 @@ export const registerPolicy: Register = (api, ctx) => {
   };
   const { actions } = ctx;
   const cmd = policy.commands;
-  const profileScope = (id: string): Scope | undefined =>
-    cmd.listProfiles('owner').find((p) => p.id === id)?.scope;
-  /**
-   * ADR 0062: approving a proposal of the owner's guarded kinds (a delete, more than 10 pages, an asset delete or move)
-   * needs the step-up; judged on the whole proposal (whatever is selected), every proposal of a bulk approval, by
-   * `LivePolicyGate.approvalVerdict`: CR-2026-11-R4, the rail that made it a proposal (its recorded reason) and its
-   * operations with the removals through a low-level tool (its recorded tool) and member administration's removals
-   * counted. A session that has stepped up within the window is not judged (nothing is read).
-   */
-  // v3 F12 (ADR 0081): approvals never ask for the step-up (the guarded-approval judgment went with the rails).
-  const stepUpIfGuarded = async (_req: FastifyRequest, _ids: readonly string[]): Promise<void> => {};
+  // ADR 0081 (the owner, 26 November 2026): approving a proposal never asks for a fresh code (a code at sign-in is
+  // enough); the session, Origin and CSRF checks of every change still apply. The guarded approval's judgment is gone.
 
   // ---------------------------------------------------------------------------------------------- proposals
 
@@ -121,8 +105,8 @@ export const registerPolicy: Register = (api, ctx) => {
   /**
    * v3 F5a (ADR 0067, H4): one decision over EVERY proposal the filter matches, across pages: "Reject all conflicted",
    * or a select-all of a filtered list. `expect` is the count the owner confirmed: the request is refused with
-   * `PROPOSALS_CHANGED` (409) when the set changed in the meantime. Rejecting is a brake (one confirmation, no
-   * step-up); approving asks for the step-up when any of them triggers a rail. Each is decided on its own, in order, and
+   * `PROPOSALS_CHANGED` (409) when the set changed in the meantime. Rejecting and approving each take one
+   * confirmation (ADR 0081: no fresh code). Each is decided on its own, in order, and
    * a proposal whose job is running is never touched; the results list each one.
    */
   api.post('/proposals/bulk-matching', async (req) => {
@@ -159,7 +143,6 @@ export const registerPolicy: Register = (api, ctx) => {
         `The filter now matches ${ids.length} proposal${ids.length === 1 ? '' : 's'}, not the ${b.expect} you confirmed: look again.`,
         { details: { now: ids.length } },
       );
-    if (b.action === 'approve') await stepUpIfGuarded(req, ids);
     const results =
       b.action === 'approve'
         ? await actions.bulkApprove(project.id, ids)
@@ -214,7 +197,6 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.post('/proposals/:id/approve', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    await stepUpIfGuarded(req, [id]);
     const b = parseInput(itemsBody, req.body ?? {});
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     return { proposal: redactDeep(await actions.approve(project.id, id, b.items)) };
@@ -227,7 +209,6 @@ export const registerPolicy: Register = (api, ctx) => {
    */
   api.post('/proposals/:id/approve-as-canon', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    await stepUpIfGuarded(req, [id]);
     const b = parseInput(itemsBody.extend({ confirm: z.literal(true) }), req.body);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     return { proposal: redactDeep(await actions.approveAsCanon(project.id, id, b.items)) };
@@ -268,7 +249,6 @@ export const registerPolicy: Register = (api, ctx) => {
       req.body,
     );
     const project = ctx.project(parseInput(projectQuery, req.query).project);
-    if (b.action !== 'reject') await stepUpIfGuarded(req, b.ids);
     const results =
       b.action === 'approve'
         ? await actions.bulkApprove(project.id, b.ids)
@@ -295,12 +275,13 @@ export const registerPolicy: Register = (api, ctx) => {
   }));
 
   api.post('/clients/profiles', (req) => {
+    // ADR 0081: a profile holds its connections' scope: making one asks for a fresh code (whether a scope is given or
+    // the default is taken).
+    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z.object({ label: z.string().min(1).max(64), kind: z.enum(PROFILE_KINDS), scope: scope.optional() }),
       req.body,
     );
-    // ADR 0062: a scope set is a scope change: the step-up first.
-    if (b.scope !== undefined) requireReauth(ctx.deps.services, req);
     return {
       profile: actions.createProfile({
         label: b.label,
@@ -311,77 +292,79 @@ export const registerPolicy: Register = (api, ctx) => {
   });
 
   api.put('/clients/profiles/:id/scope', (req) => {
+    // ADR 0081: a profile's scope is every one of its connections' scope: any change, a raise or a lowering, asks.
+    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
-    // R2-50, ADR 0062 (the owner's rule: tightening is one click, loosening asks): a raise needs the step-up; a lowering
-    // is one click.
-    const current = profileScope(id);
-    if (current !== undefined && SCOPE_RANK[b.scope] > SCOPE_RANK[current])
-      requireReauth(ctx.deps.services, req);
     return { profile: actions.setScope(id, b.scope, b.confirmRaise) };
   });
 
   /** v2 B2: whether the profile's connections are shown the low-level tools (hiding is cosmetic; policy is unchanged). */
   api.put('/clients/profiles/:id/low-level-tools', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a profile's settings
+    // ADR 0081: no fresh code (what the tool list shows, not what a connection may do).
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ show: z.boolean() }), req.body);
     return { profile: actions.setShowLowLevelTools(id, b.show) };
   });
 
   api.put('/clients/default-scope', (req) => {
+    // ADR 0081: the scope new connections start at: any change asks for a fresh code.
+    requireReauth(ctx.deps.services, req);
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
-    // R2-50, ADR 0062: new connections would start able to do more (a raise asks; a lowering is one click).
-    if (SCOPE_RANK[b.scope] > SCOPE_RANK[cmd.getDefaultScope('owner')]) requireReauth(ctx.deps.services, req);
     return { defaultScope: actions.setDefaultScope(b.scope, b.confirmRaise) };
   });
 
   api.put('/clients/connections/:id/profile', (req) => {
+    // ADR 0081: moving a connection to another profile changes what it may do: any move asks for a fresh code.
+    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ profileId: idSchema }), req.body);
-    // R2-50, ADR 0062: to a higher scope, or to a profile at scope write (its rails may be weaker than the connection's
-    // now), asks for the step-up; moving it down (or sideways below write) is one click.
-    const from = policy.store.lookupPrincipal(id)?.scope;
-    const to = profileScope(b.profileId);
-    if (to !== undefined && (to === 'write' || from === undefined || SCOPE_RANK[to] > SCOPE_RANK[from]))
-      requireReauth(ctx.deps.services, req);
     return { connection: redactDeep(actions.setConnectionProfile(id, b.profileId)) };
   });
 
+  // ADR 0081 (the owner listed revoking): revoking or removing a connection asks for a fresh code, as making one does.
   api.post('/clients/connections/:id/revoke', (req) => {
+    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     return { revoked: actions.revokeConnection(id) };
   });
 
   // ADR 0033: removing revoked and expired connections. An active connection is refused (409 CONNECTION_ACTIVE).
   // The fixed path is registered before `:id/remove`, so `remove-inactive` is never read as an id.
-  api.post('/clients/connections/remove-inactive', () => actions.removeInactiveConnections());
+  api.post('/clients/connections/remove-inactive', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0081: a revoke in bulk
+    return actions.removeInactiveConnections();
+  });
 
   api.post('/clients/connections/:id/remove', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0081
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     return { removed: actions.removeConnection(id) };
   });
 
   /** Revokes the stale connections of one profile (unused for `settings.staleAfterDays`). */
   api.post('/clients/connections/revoke-stale', (req) => {
+    requireReauth(ctx.deps.services, req); // ADR 0081: a revoke in bulk
     const b = parseInput(z.object({ profileId: idSchema }), req.body);
     return actions.revokeStaleConnections(b.profileId);
   });
 
   const days = z.object({ days: z.number().int().min(0).max(3650) });
+  // ADR 0081: the clean-up settings revoke nothing (they remove the records of connections already dead, or mark stale
+  // ones): no fresh code.
   api.put('/clients/settings/auto-remove-days', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(days, req.body);
     return { autoRemoveDays: actions.setAutoRemoveDays(b.days) };
   });
   api.put('/clients/settings/stale-after-days', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(days, req.body);
     return { staleAfterDays: actions.setStaleAfterDays(b.days) };
   });
 
   /** The one response that carries a token value, once. Nothing stores or logs it; only its hash is kept. */
   api.post('/clients/pats', (req, reply) => {
+    // R2-50, ADR 0062, ADR 0081: a new credential (a key), at any scope.
+    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z.object({
         name: z.string().min(1).max(100),
@@ -390,8 +373,6 @@ export const registerPolicy: Register = (api, ctx) => {
       }),
       req.body,
     );
-    // R2-50, ADR 0062: a new credential (a key), at any scope.
-    requireReauth(ctx.deps.services, req);
     const created = actions.createPat({
       name: b.name,
       profileId: b.profileId,

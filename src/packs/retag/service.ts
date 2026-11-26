@@ -12,7 +12,7 @@
  *   inside the page's lock (re-checked there), and an independent read-back. Last Major Revision is never set (tags are
  *   excluded, ADR 0051). Resume and Revert work as for any approved package (ADR 0058, ADR 0055).
  * - **Owner classification** (the Holds tab): the owner's choice of category for an "uncertain category" hold, stored
- *   and used by every later audit; re-authenticated and audited by the dashboard. Agents only suggest.
+ *   and used by every later audit; audited by the dashboard. Agents only suggest.
  * - **Reconciliation**: a named record across batches; resuming it audits what remains afresh and proposes the next
  *   batch. A page whose inputs changed in the snapshots since its verdict is stale, never current truth.
  */
@@ -1200,7 +1200,7 @@ export class RetagService {
    * add the tag, keeping the sentence's structure. `dryRun` reads the section (one read) and returns the paragraph
    * before and after; otherwise ONE job of the bridge's (one `replaceBlock` of that paragraph, If-Match the version
    * read), journalled and revertible. Once it has run, the governance check offers the pack's new version for approval.
-   * Owner only (the route asks for the step-up); audited `retag.allow_everywhere`.
+   * Owner only; audited `retag.allow_everywhere`.
    */
   async allowEverywhere(
     actor: string,

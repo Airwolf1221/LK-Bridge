@@ -33,7 +33,7 @@ function security(over: Record<string, unknown> = {}) {
     username: 'owner',
     password: { source: 'store', problem: null },
     totp: { enabled: false, source: null, problem: null, recoveryCodesLeft: 0, enrolmentPending: false },
-    reauth: { until: null, windowSeconds: 300 },
+    reauth: { until: null, windowSeconds: 43_200 },
     store: {
       available: true,
       problem: null,
@@ -66,6 +66,26 @@ function needsReauth(then: (c: Call) => unknown) {
     },
   };
 }
+
+describe('ADR 0081: the step-up’s window, as the bridge reports it', () => {
+  it('the Account page names the credential changes that ask, and the window in words (12 hours, or as set)', async () => {
+    installApi({ ...baseRoutes(), 'GET /security': security() });
+    const first = renderApp('/ui/account');
+    expect(
+      await screen.findByText(
+        /Changes to your password, authenticator, keys, tokens and connections ask for your password again, which then lasts 12 hours\. Nothing else does\./,
+      ),
+    ).toBeInTheDocument();
+    first.unmount();
+    installApi({
+      ...baseRoutes(),
+      'GET /security': security({ reauth: { until: null, windowSeconds: 3600 } }),
+    });
+    renderApp('/ui/account');
+    expect(await screen.findByText(/which then lasts 1 hour\./)).toBeInTheDocument();
+    expect(screen.queryByText(/10 minutes|ten minutes/)).toBeNull();
+  });
+});
 
 describe('the re-authentication dialog', () => {
   it('appears when the bridge asks, sends the password once, then runs the action again', async () => {

@@ -4,7 +4,7 @@
  * - each project's chronology settings: what a lookup by naming convention finds in the tree (free), "Read the
  *   chronology" (reads the calendar, the Main table, each age table and timeline: about 3 requests per age) and the
  *   owner's confirmation of what it found, including how the tables write dates and KCY values (learned from the rows),
- *   which needs the step-up (CR-2026-11-R4; a reset is one click); every change audited (`project.set_chronology`).
+ *   which needs no fresh code (ADR 0081); every change audited (`project.set_chronology`).
  *   Until confirmed, the chronology tools refuse;
  * - the chronology changes (the record each timeline tool's job writes), newest first, with "Mark resolved" for a
  *   change that stopped part-way and was fixed by hand (audited `chronology.resolve`);
@@ -14,7 +14,6 @@
  */
 import * as z from 'zod';
 import { ChronologyError, chronologySchema } from '../../chronology/index.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { limitSchema, parseInput, projectParam, type Register, projectFor } from './util.js';
 
@@ -68,9 +67,8 @@ export const registerChronology: Register = (api, ctx) => {
 
   /**
    * The owner's confirmation (`settings` as the lookup proposed them, perhaps edited) or `reset: true`. Audited.
-   * CR-2026-11-R4 (SE-16): the settings are a project's settings (the chronology tools write by them), so confirming or
-   * changing them needs the step-up (ADR 0062 decision 5); a reset makes the tools refuse until the owner confirms
-   * again, a tightening, so it stays one click (decision 6).
+   * CR-2026-11-R4 (SE-16) had them ask for the step-up as a project's settings; ADR 0081: neither confirming nor a
+   * reset (which makes the tools refuse until the owner confirms again) asks for a fresh code.
    */
   api.put('/projects/:name/chronology', (req) => {
     const p = projectByName(parseInput(nameParam, req.params).name);
@@ -86,7 +84,6 @@ export const registerChronology: Register = (api, ctx) => {
     );
     if (body.reset === true) wrap(() => chronology().update('owner', p.id, null));
     else if (body.settings) {
-      requireReauth(ctx.deps.services, req);
       wrap(() => chronology().update('owner', p.id, body.settings!));
     } else throw new AdminHttpError(400, 'INVALID_INPUT', 'Send settings to confirm, or reset: true.');
     return view(p.id, p.name);

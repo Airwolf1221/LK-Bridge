@@ -2,14 +2,14 @@
  * The owner's account (OPS2, docs/auth.md › Managing the owner account from the dashboard): the password, the
  * authenticator app and its recovery codes, the encrypted store's state, and re-authentication.
  *
- * Every change here needs a step-up within the last 10 minutes (`requireReauth`, ADR 0062), on top of the session,
- * Origin and CSRF checks every admin request passes. Only two responses ever carry a secret, each once and marked
+ * Every change here but "Sign out everywhere" needs a fresh authenticator code within the window (`requireReauth`;
+ * ADR 0081: `AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours), on top of the session, Origin and CSRF checks every admin
+ * request passes. Only two responses ever carry a secret, each once and marked
  * `shownOnce`: the authenticator secret when an enrolment starts, and recovery codes when they are made.
  */
 import * as z from 'zod';
 import { clientIp } from '../../auth/http.js';
 import { otpauthUri } from '../../auth/totp.js';
-import { REAUTH_WINDOW_SECONDS } from '../../auth/owner.js';
 import { requireReauth, sessionTokenOf } from '../guard.js';
 import { parseInput, type Register } from './util.js';
 
@@ -42,7 +42,7 @@ export const registerSecurity: Register = (api, ctx) => {
         recoveryCodesLeft: totp.state === 'off' ? 0 : credentials.recoveryCodesLeft(),
         enrolmentPending: credentials.pendingTotp(sessionHash(token)) !== undefined,
       },
-      reauth: { until: until === null ? null : until * 1000, windowSeconds: REAUTH_WINDOW_SECONDS },
+      reauth: { until: until === null ? null : until * 1000, windowSeconds: owner.stepUpWindowSeconds },
       // ADR 0062: the sessions kept on the server, and when this one ends unless it is used again (30 days on).
       sessions: { active: owner.activeSessions(), thisEndsAt: session ? session.expiresAt * 1000 : null },
       store: {

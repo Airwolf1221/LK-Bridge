@@ -45,8 +45,17 @@ export type ReauthResult =
   | { readonly ok: false; readonly reason: 'rate_limited'; readonly retryAfterSeconds: number }
   | { readonly ok: false; readonly reason: 'unavailable'; readonly message: string };
 
-/** OPS2, ADR 0062: sensitive actions need a step-up within this many seconds (10 minutes; was 5). */
-export const REAUTH_WINDOW_SECONDS = 600;
+/**
+ * ADR 0081: a step-up's window in words ("12 hours", "10 minutes"), for the messages and pages that name it. The window
+ * itself is the setting `AUTH_STEP_UP_WINDOW_SECONDS` (`OwnerAuth.stepUpWindowSeconds`).
+ */
+export function stepUpWindowInWords(seconds: number): string {
+  const n = (v: number, one: string) => `${v.toLocaleString('en-GB')} ${one}${v === 1 ? '' : 's'}`;
+  if (seconds >= 86_400 && seconds % 86_400 === 0) return n(seconds / 86_400, 'day');
+  if (seconds >= 3600 && seconds % 3600 === 0) return n(seconds / 3600, 'hour');
+  if (seconds >= 60 && seconds % 60 === 0) return n(seconds / 60, 'minute');
+  return n(seconds, 'second');
+}
 
 export interface LoginLimits {
   readonly perIp: { readonly limit: number; readonly windowMs: number };
@@ -161,7 +170,8 @@ export class OwnerAuth {
   }
 
   /**
-   * OPS2, ADR 0062: the step-up on an existing session (sensitive dashboard actions need it within the last 10 minutes).
+   * OPS2, ADR 0062, ADR 0081: the step-up on an existing session (the credential changes need it within the window,
+   * `AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours by default).
    * Counted against the SAME limits as sign-in, so it is no way around them.
    */
   async reauthenticate(a: ReauthAttempt): Promise<ReauthResult> {
@@ -228,10 +238,15 @@ export class OwnerAuth {
     return { ok: true };
   }
 
-  /** OPS2, ADR 0062: whether the session stepped up within the last 10 minutes; returns until when (Unix seconds). */
+  /** ADR 0081: how long a step-up lasts on its session, in seconds (`AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours). */
+  get stepUpWindowSeconds(): number {
+    return this.deps.config.ttl.stepUpSeconds;
+  }
+
+  /** OPS2, ADR 0081: whether the session stepped up within the window; returns until when (Unix seconds). */
   reauthUntil(session: SessionRecord): number | null {
     if (session.reauthAt === null) return null;
-    const until = session.reauthAt + REAUTH_WINDOW_SECONDS;
+    const until = session.reauthAt + this.stepUpWindowSeconds;
     const now = this.deps.now();
     return session.reauthAt <= now + 1 && now <= until ? until : null;
   }

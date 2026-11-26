@@ -4,7 +4,6 @@
  * an engine control, or the runtime settings functions, and leaves an `audit_log` row (which also emits a `policy`
  * event on the engine's stream). The commands audit themselves; engine controls and settings are audited here.
  */
-import { REAUTH_WINDOW_SECONDS } from '../auth/owner.js';
 import { randomToken, safeEqual } from '../auth/crypto.js';
 import { MIN_PASSWORD_LENGTH } from '../auth/cli/setup-owner.js';
 import { hashPassword } from '../auth/password.js';
@@ -465,7 +464,7 @@ export function createAdminActions(d: AdminDeps) {
     // ------------------------------------------------------------------------- OPS2: the owner's account
     /**
      * Re-confirms the owner on this session (OPS2). ADR 0062: the step-up, the authenticator code (or a recovery code)
-     * when it is on, else the password; it lasts 10 minutes. Audited.
+     * when it is on, else the password; it lasts `AUTH_STEP_UP_WINDOW_SECONDS` (ADR 0081: 12 hours). Audited.
      */
     async reauthenticate(sessionToken: string, input: { password?: string; totp?: string }, ip: string) {
       const r = await owner.reauthenticate({
@@ -476,7 +475,7 @@ export function createAdminActions(d: AdminDeps) {
       });
       if (r.ok) {
         audit('owner.reauth', null, undefined, { ok: true });
-        return { until: (r.at + REAUTH_WINDOW_SECONDS) * 1000 };
+        return { until: (r.at + owner.stepUpWindowSeconds) * 1000 };
       }
       audit('owner.reauth', null, undefined, { ok: false, reason: r.reason });
       if (r.reason === 'rate_limited') {

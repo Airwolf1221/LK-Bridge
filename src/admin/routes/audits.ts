@@ -8,13 +8,11 @@
  * - acknowledge (with a reason) and un-acknowledge;
  * - "Propose a fix" and "Re-check now": the only two requests that read LegendKeeper, each for one finding, each audited;
  *   a fix becomes an ordinary proposal on the Proposals page, never applied by the audit;
- * - the rules editor, the tag-definition source and the audit settings: saving needs the owner to have signed in again
- *   within the last 10 minutes (ADR 0062), as the canon rules do (ADR 0036 decision 4), and is audited.
+ * - the rules editor, the tag-definition source and the audit settings: saving is audited (ADR 0081: no fresh code).
  */
 import * as z from 'zod';
 import { AuditError, CATEGORIES, CODES, SEVERITIES, type Audits } from '../../audits/index.js';
 import { ChronologyError } from '../../chronology/index.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import {
   csv,
@@ -198,8 +196,7 @@ export const registerAudits: Register = (api, ctx) => {
   /**
    * v3 F4a (ADR 0063): "Allow this name" on a governance finding naming an external skill: the name joins the audit
    * settings' allowed names and is never reported again (its open findings go now). Audited `audits.allow_name`. Like an
-   * acknowledgement it silences a report and changes nothing else, so it asks no step-up; removing an allowed name is a
-   * settings change, which does.
+   * acknowledgement it silences a report and changes nothing else; removing an allowed name is a settings change.
    */
   api.post('/audits/findings/:id/allow-name', async (req) => {
     const { id } = parseInput(idParam, req.params);
@@ -294,11 +291,10 @@ export const registerAudits: Register = (api, ctx) => {
 
   /**
    * Saves the rules, the tag source and/or the settings (`rules: null` restores the seeded defaults; a field left out is
-   * kept). `confirm: true` required, a step-up within the last 10 minutes required (ADR 0062), audited
-   * (`audits.set_config`, with the old and new values).
+   * kept). `confirm: true` required (ADR 0081: no fresh code), audited (`audits.set_config`, with the old and new
+   * values).
    */
   api.put('/audits/config', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const body = (req.body ?? {}) as Record<string, unknown>;
     parseInput(z.object({ confirm: z.literal(true) }).loose(), body);
     const { confirm: _c, project, ...rest } = body;

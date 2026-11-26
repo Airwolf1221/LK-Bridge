@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { qs } from '../api';
 import { useProjectApi, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 
 /**
@@ -17,7 +16,7 @@ import { Link } from '../router';
  * v3 F6a.1 (ADR 0076 amendment 1) sends their ids in ONE request, at most REFTYPE_BULK_MAX at a time, and the server
  * decides them in one transaction (running it again touches only the rows still open). The table is paged (100 rows a
  * page); every filter, "Value contains" included, is applied by the server. A decision not yet applied (no fix written
- * with it) nor published can be undone. Every decision asks for the step-up and is recorded in the audit log.
+ * with it) nor published can be undone. Every decision is recorded in the audit log.
  *
  * **Publish vocabulary** previews the exact section text, then writes "Reference Type Vocabulary" under "Sidebar
  * Metadata" in Source Formatting (one job, journalled). The governance page changes, so the Packs page asks for the
@@ -297,7 +296,6 @@ export function ReferenceTypesPage() {
 function VocabularyCard({ data, onChanged }: { data: Response; onChanged: () => void }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const v = data.vocabulary;
   const publish = () =>
@@ -318,7 +316,7 @@ function VocabularyCard({ data, onChanged }: { data: Response; onChanged: () => 
       }).then((ok) => {
         if (!ok) return;
         void run(
-          () => withReauth(() => api.post('/reference-types/publish', { confirm: true })),
+          () => api.post('/reference-types/publish', { confirm: true }),
           'Published: approve the pack again on the Packs page.',
         ).then((x) => {
           if (x) onChanged();
@@ -411,7 +409,6 @@ function BulkAccept({
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   // The server's list covers the whole filter (every page of it); an older server sends none: the rows shown.
   const shown = rows.filter((r) => r.status === 'open' && r.suggestion.kind === 'suggested');
@@ -456,12 +453,10 @@ function BulkAccept({
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post('/reference-types/bulk-accept', {
-              ids,
-              confirm: true,
-            }),
-          ),
+          api.post('/reference-types/bulk-accept', {
+            ids,
+            confirm: true,
+          }),
         'Accepted.',
       ).then((x) => {
         if (x) onChanged();
@@ -489,7 +484,6 @@ function ValueRow({
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [editing, setEditing] = useState(false);
   const [pick, setPick] = useState('');
@@ -504,14 +498,12 @@ function ValueRow({
       if (!yes) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post('/reference-types/decide', {
-              value: row.value,
-              category: row.category,
-              ...body,
-              confirm: true,
-            }),
-          ),
+          api.post('/reference-types/decide', {
+            value: row.value,
+            category: row.category,
+            ...body,
+            confirm: true,
+          }),
         ok,
       ).then((x) => {
         if (x) {
@@ -522,7 +514,7 @@ function ValueRow({
     });
   const undo = () =>
     void run(
-      () => withReauth(() => api.post('/reference-types/undo', { id: row.decision!.id, confirm: true })),
+      () => api.post('/reference-types/undo', { id: row.decision!.id, confirm: true }),
       'Undone.',
     ).then((x) => {
       if (x) onChanged();
