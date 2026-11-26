@@ -624,7 +624,7 @@ async function chapterPlan(
       title: summary,
       holdLock: { resourceId: plan.node.id },
       lifecycle: marker(env.tool, [plan.node.id]),
-        proposal: {
+      proposal: {
         operations: [
           { tool: env.tool, page: { id: plan.node.id, name: plan.node.displayName }, pageParts: ['sidebar'] },
         ],

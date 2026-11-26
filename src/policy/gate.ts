@@ -169,7 +169,6 @@ export class LivePolicyGate implements PolicyGate {
         return deny(readOnlyReason(resolved.principal.profile));
     }
   }
-
 }
 
 export function createPolicyGate(o: PolicyGateOptions): LivePolicyGate {

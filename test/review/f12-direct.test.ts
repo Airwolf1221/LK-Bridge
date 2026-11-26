@@ -54,7 +54,8 @@ const onReview = (jobId: string) =>
   rt()
     .review.list(PROJECT, { state: 'all', limit: 500 })
     .some((i) => i.jobId === jobId);
-const proposalCount = () => (w.stack.db.prepare('SELECT COUNT(*) AS n FROM proposals').get() as { n: number }).n;
+const proposalCount = () =>
+  (w.stack.db.prepare('SELECT COUNT(*) AS n FROM proposals').get() as { n: number }).n;
 const noProposalSince = (n: number) => proposalCount() === n;
 
 /** The owner's Revert from the Review page, and its job (with its follow-ups) settled. */
@@ -67,8 +68,9 @@ async function revert(jobId: string) {
   expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
   // The follow-ups (LegendKeeper's restore, an upload again) run after the job: wait for their record.
   for (let i = 0; i < 400; i++) {
-    const row = w.stack.db.prepare('SELECT targets FROM job_reverts WHERE revert_job_id = ?').get(r.revertJobId) as
-      { targets: string } | undefined;
+    const row = w.stack.db
+      .prepare('SELECT targets FROM job_reverts WHERE revert_job_id = ?')
+      .get(r.revertJobId) as { targets: string } | undefined;
     const note = row ? (JSON.parse(row.targets) as { followUps?: unknown[]; followUpsDone?: unknown[] }) : {};
     if (!note.followUps || note.followUpsDone) return { preview, note };
     await new Promise((res) => setTimeout(res, 25));
@@ -125,14 +127,19 @@ describe('deletes at scope write: a copy first, then Revert brings them back (D3
     expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
     for (const id of Object.values(C)) expect(w.repo.live(id), id).toBeFalsy();
     // The copy: a change snapshot of the three pages, read just before the delete, named by the delete's journal entry.
-    const del = rt().engine.stepRecords(PROJECT, jobId)!.find((s) => s.opId === 'deleteResource')!;
+    const del = rt()
+      .engine.stepRecords(PROJECT, jobId)!
+      .find((s) => s.opId === 'deleteResource')!;
     const copy = copyOf(w.stack.db, jobId, del.stepNo)!;
     expect(copy.pages.map((p) => p.id)).toEqual([C.root, C.kidA, C.kidB]);
     expect(rt().snapshots.index.snapshot(copy.snapshotId)?.kind).toBe('change');
     expect(copy.reads).toBeGreaterThan(3);
     expect(onReview(jobId)).toBe(true);
     const { preview, note } = await revert(jobId);
-    expect(preview.targets.find((t) => t.kind === 'entity')).toMatchObject({ state: 'ready', deletion: true });
+    expect(preview.targets.find((t) => t.kind === 'entity')).toMatchObject({
+      state: 'ready',
+      deletion: true,
+    });
     expect(note.followUpsDone?.[0]).toMatchObject({ restoredBy: 'LegendKeeper', pages: 3 });
     for (const id of Object.values(C)) expect(w.repo.live(id), id).toBeTruthy();
     expect(w.repo.live(C.kidA)!.parentId).toBe(C.root);
@@ -140,7 +147,10 @@ describe('deletes at scope write: a copy first, then Revert brings them back (D3
 
   it('an asset: deleted directly with its bytes kept; Revert uploads it again in its folder under its name', async () => {
     const before = w.assets.assets.get(S.imgSea)!;
-    const r = await call('lk_api_write', { operationId: 'deleteAsset', params: { path: { assetId: S.imgSea } } });
+    const r = await call('lk_api_write', {
+      operationId: 'deleteAsset',
+      params: { path: { assetId: S.imgSea } },
+    });
     expect(r.isError, r.text).toBe(false);
     expect(r.body.status, r.text).toBe('succeeded');
     const jobId = jobOf(r);
@@ -153,7 +163,10 @@ describe('deletes at scope write: a copy first, then Revert brings them back (D3
       again,
       `a new asset, same folder and name: ${JSON.stringify(
         rt()
-          .engine.stepRecords(PROJECT, String((note.followUpsDone?.[0] as { jobId?: string } | undefined)?.jobId))
+          .engine.stepRecords(
+            PROJECT,
+            String((note.followUpsDone?.[0] as { jobId?: string } | undefined)?.jobId),
+          )
           ?.map((x) => [x.opId, x.status, x.params, x.result]),
       )}`,
     ).toHaveLength(1);

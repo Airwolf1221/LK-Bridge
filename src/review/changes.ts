@@ -208,13 +208,17 @@ export function changeView(t: Target, n: ChangeNames = {}): ChangeView {
       const show = (v: unknown): unknown => (v === undefined ? null : v);
       const fields: { field: string; before: unknown; after: unknown }[] = [];
       if (u.action === 'update' && u.left)
-        for (const k of Object.keys(u.left)) fields.push({ field: k, before: show(u.before?.[k]), after: show(u.left[k]) });
+        for (const k of Object.keys(u.left))
+          fields.push({ field: k, before: show(u.before?.[k]), after: show(u.left[k]) });
       if ((u.action === 'create' || u.action === 'restore') && u.left)
         for (const k of Object.keys(u.left))
           fields.push({
             field: k === 'parentId' ? 'parent' : k,
             before: null,
-            after: k === 'parentId' && typeof u.left[k] === 'string' ? (pageName(u.left[k]) ?? u.left[k]) : show(u.left[k]),
+            after:
+              k === 'parentId' && typeof u.left[k] === 'string'
+                ? (pageName(u.left[k]) ?? u.left[k])
+                : show(u.left[k]),
           });
       if (u.action === 'delete')
         fields.push({

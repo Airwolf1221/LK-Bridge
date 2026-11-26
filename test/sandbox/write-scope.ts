@@ -721,16 +721,20 @@ export async function runWriteScopeRehearsal(
     );
 
     // ============================================================================================ a delete (F12)
-    await check('delete', 'a delete at scope write runs directly, its restorable copy kept first', async () => {
-      const r = await direct(a, 'delete_resource', { page: made.deleteMe, confirm: true });
-      const copy = t.db
-        .prepare('SELECT snapshot_id, pages FROM delete_copies WHERE job_id = ?')
-        .get(r.jobId) as { snapshot_id: string; pages: string } | undefined;
-      if (!copy) throw new Fails(`job ${r.jobId} deleted the page with no copy recorded`);
-      const still = await attempt('getResource', { path: { resourceId: made.deleteMe } });
-      if (still.ok && !still.body?.deletedAt) throw new Fails('the page is still there');
-      return `job ${r.jobId}: deleted directly; its copy is snapshot ${copy.snapshot_id}`;
-    });
+    await check(
+      'delete',
+      'a delete at scope write runs directly, its restorable copy kept first',
+      async () => {
+        const r = await direct(a, 'delete_resource', { page: made.deleteMe, confirm: true });
+        const copy = t.db
+          .prepare('SELECT snapshot_id, pages FROM delete_copies WHERE job_id = ?')
+          .get(r.jobId) as { snapshot_id: string; pages: string } | undefined;
+        if (!copy) throw new Fails(`job ${r.jobId} deleted the page with no copy recorded`);
+        const still = await attempt('getResource', { path: { resourceId: made.deleteMe } });
+        if (still.ok && !still.body?.deletedAt) throw new Fails('the page is still there');
+        return `job ${r.jobId}: deleted directly; its copy is snapshot ${copy.snapshot_id}`;
+      },
+    );
   } finally {
     // ============================================================================================ clean-up
     await check('cleanup', 'everything the rehearsal made is removed', async () => {

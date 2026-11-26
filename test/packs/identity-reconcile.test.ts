@@ -160,7 +160,10 @@ describe('the approval boundaries and isolation', () => {
   it('at scope write 11 pages run directly (v3 F12: no bulk rail); at scope propose ONE proposal with an item each', async () => {
     const t = w.stack.newToken('identity-agent', 'write');
     const agent = await w.stack.connect(t.token);
-    const eleven0 = await w.stack.call(agent, 'arkona_identity_reconcile', { project: 'test', items: bulk(11) });
+    const eleven0 = await w.stack.call(agent, 'arkona_identity_reconcile', {
+      project: 'test',
+      items: bulk(11),
+    });
     expect(eleven0.isError, eleven0.text).toBe(false);
     expect(eleven0.body.status).toBe('finished');
     expect((eleven0.body.items as any[]).every((i) => i.status === 'done')).toBe(true);

@@ -39,7 +39,8 @@ describe('every write kind an agent can cause has a Revert path, or is refused f
       const def = ENTITIES[e.entity];
       expect(def.get ?? def.list, `${e.entity} has a read`).toBeDefined();
       requireOperation((def.get ?? def.list)!);
-      if (e.action === 'create' || e.action === 'restore') expect(def.remove, `${op}: undone by a delete`).toBeDefined();
+      if (e.action === 'create' || e.action === 'restore')
+        expect(def.remove, `${op}: undone by a delete`).toBeDefined();
       if (e.action === 'update') expect(def.update, op).toBe(op);
       if (e.action === 'delete' && e.entity !== 'resource' && e.entity !== 'document' && e.entity !== 'asset')
         expect(def.create, `${op}: undone by making it again`).toBeDefined();
@@ -51,7 +52,12 @@ describe('every write kind an agent can cause has a Revert path, or is refused f
   it('the bridge’s own steps write nothing to LegendKeeper but an upload, which a placement’s Revert covers', () => {
     // Checks, verifies, records and Last Major Revision decisions: the bridge's own database (a record goes back with the
     // target it records, a chronology change's or a lifecycle change's). The upload's PUT and check: `createImageAsset`.
-    expect([...INTERNAL_STEPS].sort()).toEqual(['bridge.expect', 'bridge.lmr', 'bridge.record', 'bridge.verify']);
+    expect([...INTERNAL_STEPS].sort()).toEqual([
+      'bridge.expect',
+      'bridge.lmr',
+      'bridge.record',
+      'bridge.verify',
+    ]);
     expect([...BATCH_UPLOAD_STEPS].sort()).toEqual(['upload_image.put', 'upload_image.verify']);
     expect(REVERT_PATHS.createImageAsset).toMatch(/placement|upload/);
   });
@@ -71,19 +77,32 @@ describe('every write kind an agent can cause has a Revert path, or is refused f
     const gate = createPolicyGate({ store, allowMemberAdmin: true, proposalState: () => undefined });
     const principal = { principalId: 'pat_agent', profile: 'agent', label: 'agent' };
     for (const op of Object.keys(AGENT_REFUSED)) {
-      const d = await gate.authorize(principal, policyOpMeta(requireOperation(op), {}), {}, {
-        origin: { kind: 'mcp', tool: 'lk_api_write', principal },
-        project: 'p',
-        jobKind: 'single_op',
+      const d = await gate.authorize(
+        principal,
+        policyOpMeta(requireOperation(op), {}),
+        {},
+        {
+          origin: { kind: 'mcp', tool: 'lk_api_write', principal },
+          project: 'p',
+          jobKind: 'single_op',
+        },
+      );
+      expect(d, op).toMatchObject({
+        decision: 'deny',
+        reason: expect.stringContaining('member administration'),
       });
-      expect(d, op).toMatchObject({ decision: 'deny', reason: expect.stringContaining('member administration') });
     }
     // An ordinary write at scope write: allowed (direct).
-    const ok = await gate.authorize(principal, policyOpMeta(requireOperation('deleteResource'), {}), {}, {
-      origin: { kind: 'mcp', tool: 'delete_resource', principal },
-      project: 'p',
-      jobKind: 'single_op',
-    });
+    const ok = await gate.authorize(
+      principal,
+      policyOpMeta(requireOperation('deleteResource'), {}),
+      {},
+      {
+        origin: { kind: 'mcp', tool: 'delete_resource', principal },
+        project: 'p',
+        jobKind: 'single_op',
+      },
+    );
     expect(ok).toEqual({ decision: 'allow' });
   });
 });

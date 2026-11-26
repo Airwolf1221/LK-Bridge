@@ -392,13 +392,7 @@ export class Restores {
         .prepare(
           'UPDATE snapshot_restores SET follow_up_proposal_id = ?, follow_up_job_id = ?, follow_up = ?, updated_at = ? WHERE id = ?',
         )
-        .run(
-          pid,
-          jid,
-          pid || jid ? 'content' : 'content: already as at the snapshot',
-          this.o.now(),
-          rec.id,
-        );
+        .run(pid, jid, pid || jid ? 'content' : 'content: already as at the snapshot', this.o.now(), rec.id);
       return pid ?? jid;
     } catch (e) {
       this.o.db

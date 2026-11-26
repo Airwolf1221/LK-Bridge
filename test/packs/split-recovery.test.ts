@@ -159,7 +159,7 @@ describe('a verification failure: Revert', () => {
     // v3 F12 (ADR 0081): deleted at once, as part of the owner's Revert (each page checked first).
     expect(rec.revert.deletionProposalId).toBeNull();
     const delJob = await settle(w, String(rec.revert.deletionJobId));
-    expect(delJob.status, JSON.stringify(delJob.lastError)).toBe("succeeded");
+    expect(delJob.status, JSON.stringify(delJob.lastError)).toBe('succeeded');
     expect(w.repo.live(index.id)).toBeTruthy();
     expect(w.repo.live(bio.id)).toBeTruthy();
     // Reverted: never resumed.
@@ -193,7 +193,11 @@ describe('a verification failure: Revert', () => {
     expect(done.job.lastError!.message).toContain('Scope');
     const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, done.jobId);
     // v3 F12 (ADR 0081): the pages it made are deleted at once, part of the owner's Revert (no second approval).
-    expect(rv).toMatchObject({ status: 'proposed', deletionProposalId: null, deletionJobId: expect.any(String) });
+    expect(rv).toMatchObject({
+      status: 'proposed',
+      deletionProposalId: null,
+      deletionJobId: expect.any(String),
+    });
     if (rv.status !== 'proposed') return;
     const d = await settle(w, rv.deletionJobId!);
     expect(d.status, JSON.stringify(d.lastError)).toBe('succeeded');

@@ -84,7 +84,11 @@ describe('every pack tool at scope write is direct, canon included', () => {
   it('at scope propose the same package is a proposal', async () => {
     const { token } = w.stack.newToken('f12-propose', 'propose');
     const client = await w.stack.connect(token);
-    const r = await w.stack.call(client, 'arkona_create_character', compactPackage({ name: 'Asagiri Kaito' }));
+    const r = await w.stack.call(
+      client,
+      'arkona_create_character',
+      compactPackage({ name: 'Asagiri Kaito' }),
+    );
     expect(r.body.status, r.text).toBe('proposal_captured');
     w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
   });

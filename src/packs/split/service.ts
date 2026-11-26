@@ -803,7 +803,7 @@ export class SplitService {
     }
     // v3 F12 (ADR 0081): a page the split made is kept while any page under it is kept (it cannot be deleted with a
     // child, and the kept page needs its parent): its index, say, when a page in it changed since. Up the chain.
-    for (let moved = true; moved; ) {
+    for (let moved = true; moved;) {
       moved = false;
       const keptIds = new Set(kept.map((k) => k.id));
       for (let i = deleted.length - 1; i >= 0; i--) {

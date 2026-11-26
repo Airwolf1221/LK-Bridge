@@ -67,7 +67,8 @@ export const REVERT_PATHS: Readonly<Record<string, string>> = {
   // Assets (`image`, entity)
   createAssetFolder: 'image (a placement’s folder stays), or entity: an empty folder deleted again',
   createImageUpload: 'nothing to revert: no change in LegendKeeper (a signed upload address)',
-  createImageAsset: 'image: a placement back on the Staging page; or entity: an upload deleted again (its bytes kept)',
+  createImageAsset:
+    'image: a placement back on the Staging page; or entity: an upload deleted again (its bytes kept)',
   updateAsset: 'image: back to its old folder, name and hidden flag',
   deleteAsset: 'entity (D3): uploaded again from the bytes kept before the delete, pages relinked',
   // Calendars
@@ -85,5 +86,6 @@ export const AGENT_REFUSED: Readonly<Record<string, string>> = {
     'member administration is never done by agents: an invitation sends an email no revert can take back',
   removeMember:
     'member administration is never done by agents: a member taken off the project cannot be put back as they were (their role, their own edits)',
-  revokeInvite: 'member administration is never done by agents: a revoked invitation cannot be sent back as it was',
+  revokeInvite:
+    'member administration is never done by agents: a revoked invitation cannot be sent back as it was',
 };

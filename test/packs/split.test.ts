@@ -593,7 +593,11 @@ describe('arkona_split_owner: phase 2 on an owner with two domains (the source r
 
   it('phase 2 (D2): once phase 1 verified, a SEPARATE archive_page job; never a delete', async () => {
     // v3 F12 (ADR 0081): the owner's approval of a split that retires its source asked for it, so it runs at once.
-    const rec = await recordOf(w, String(proposal.proposalId), (r) => r.state === 'retiring' || r.state === 'retired');
+    const rec = await recordOf(
+      w,
+      String(proposal.proposalId),
+      (r) => r.state === 'retiring' || r.state === 'retired',
+    );
     expect(rec.phase2.proposalId).toBeUndefined();
     const done = await settle(w, String(rec.phase2.jobId));
     expect(done.status, JSON.stringify(done.lastError)).toBe('succeeded');

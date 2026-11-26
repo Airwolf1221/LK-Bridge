@@ -104,10 +104,7 @@ export class RetagError extends Error {
 
 export interface RetagDeps {
   readonly db: Db;
-  readonly packs: Pick<
-    Packs,
-    'get' | 'attachment' | 'lifecycleRules' | 'governance' | 'store'
-  >;
+  readonly packs: Pick<Packs, 'get' | 'attachment' | 'lifecycleRules' | 'governance' | 'store'>;
   readonly appraisal: Pick<Appraisal, 'reader' | 'freshness'>;
   /** The template the bridge recorded for a page (the tree's), or null. */
   readonly templateOf: (projectId: string, pageId: string) => string | null;

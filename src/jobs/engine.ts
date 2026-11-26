@@ -3725,7 +3725,10 @@ export class JobEngine {
       propose = true;
     // v3 F12 (ADR 0081): an agent at scope `write` (the gate allowed it) and the owner's confirmed dashboard action run
     // directly, canon and lifecycle changes included: the guards below answer them allow or deny, never a proposal.
-    if (origin.ownerConfirmed === true && (principal.principalId !== SYSTEM_PRINCIPAL.principalId || origin.kind !== 'ui'))
+    if (
+      origin.ownerConfirmed === true &&
+      (principal.principalId !== SYSTEM_PRINCIPAL.principalId || origin.kind !== 'ui')
+    )
       throw this.policyDenied(
         new PolicyDeniedError(
           items[0]?.opId ?? 'operation',

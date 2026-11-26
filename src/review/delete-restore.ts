@@ -56,7 +56,13 @@ async function restoreOp(
     const r = await d.engine.submit({
       kind: 'batch_ops',
       project: projectId,
-      steps: [{ op, params: { path }, journalOperation: { tool: 'job.revert', write: 'restored from LegendKeeper’s bin' } }],
+      steps: [
+        {
+          op,
+          params: { path },
+          journalOperation: { tool: 'job.revert', write: 'restored from LegendKeeper’s bin' },
+        },
+      ],
       onError: 'stop',
       priority: 'P1',
       origin: ORIGIN,
@@ -97,7 +103,12 @@ export async function recreatePagesFromCopy(
     const missing: string[] = [];
     for (const p of pages) {
       const r = await d.engine
-        .internalRead(projectId, 'getResource', { path: { resourceId: p.id } }, { priority: 'P1', notFoundIsAnswer: true })
+        .internalRead(
+          projectId,
+          'getResource',
+          { path: { resourceId: p.id } },
+          { priority: 'P1', notFoundIsAnswer: true },
+        )
         .catch(() => undefined);
       if (!r || (typeof r === 'object' && typeof (r as Obj).deletedAt === 'string')) missing.push(p.name);
     }
@@ -139,7 +150,10 @@ export async function recreatePagesFromCopy(
       continue;
     }
     if (r.status !== 'submitted')
-      return { recreated, problem: `${p.name} was proposed instead of made again (${r.status}); the rest was not made` };
+      return {
+        recreated,
+        problem: `${p.name} was proposed instead of made again (${r.status}); the rest was not made`,
+      };
     const job = await settle(d.engine, projectId, r.jobId);
     if (job.status !== 'succeeded')
       return {
@@ -193,10 +207,19 @@ export interface ReuploadDeps {
       readonly snapshotId: string;
       readonly assetId: string;
       readonly updateReferences: boolean;
-      readonly known?: { readonly name?: string | null; readonly folderId?: string | null; readonly url?: string | null };
+      readonly known?: {
+        readonly name?: string | null;
+        readonly folderId?: string | null;
+        readonly url?: string | null;
+      };
     },
     origin: JobOrigin,
-  ) => Promise<{ readonly status: string; readonly jobId?: string; readonly references?: unknown; readonly notes?: unknown }>;
+  ) => Promise<{
+    readonly status: string;
+    readonly jobId?: string;
+    readonly references?: unknown;
+    readonly notes?: unknown;
+  }>;
 }
 
 /** A deleted asset uploaded again from its kept bytes (a new asset, the same folder and name; pages relinked). */
@@ -222,7 +245,8 @@ export async function reuploadAssetFromKept(
     },
     ORIGIN,
   );
-  if (r.status !== 'submitted' || !r.jobId) return { problem: `the image was ${r.status}, not uploaded again` };
+  if (r.status !== 'submitted' || !r.jobId)
+    return { problem: `the image was ${r.status}, not uploaded again` };
   const job = await settle(d.engine, projectId, r.jobId);
   return {
     jobId: job.id,

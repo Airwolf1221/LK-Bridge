@@ -78,7 +78,11 @@ export interface ImageRestoreInput {
    * v3 F12 (ADR 0081, D3): what the journal knew of the asset when it was deleted (Revert of an agent's delete): its name,
    * folder and URL, used where no snapshot's library holds it (the kept bytes alone then).
    */
-  readonly known?: { readonly name?: string | null; readonly folderId?: string | null; readonly url?: string | null };
+  readonly known?: {
+    readonly name?: string | null;
+    readonly folderId?: string | null;
+    readonly url?: string | null;
+  };
 }
 
 export interface ImageReference {
@@ -213,8 +217,7 @@ async function destinationFor(
   // read live once: when it is there, the image goes into it as it is.
   if (old.folderId !== null) {
     const live = (await d.read('getAsset', { path: { assetId: old.folderId } }).catch(() => undefined)) as
-      | Obj
-      | undefined;
+      Obj | undefined;
     if (isObj(live) && String(live.type).toUpperCase() === 'FOLDER' && typeof live.deletedAt !== 'string') {
       const name = str(live.name);
       return {
