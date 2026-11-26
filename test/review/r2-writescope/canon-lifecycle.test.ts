@@ -51,7 +51,9 @@ const safe = (r: { body: Record<string, any> }) =>
 async function direct(r: { body: Record<string, any> }) {
   const jobId = String(r.body.jobId);
   const job = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
-  const item = w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).find((i) => i.jobId === jobId);
+  const item = w.stack.runtime.review
+    .list(PROJECT, { state: 'all', limit: 500 })
+    .find((i) => i.jobId === jobId);
   return { status: job.status, onReview: item !== undefined, revertible: item?.revertible === true };
 }
 const newPagesTagged = (tag: string, before: Set<string>) =>

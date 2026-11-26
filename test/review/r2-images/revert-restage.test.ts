@@ -55,7 +55,7 @@ const deletionJobs = (world: ImagesWorld, jobId: string) =>
   world.stack.runtime.policy.store
     .listAudit({ action: 'job.revert', limit: 50 })
     .filter((x) => x.target === jobId && (x.after as { outcome?: string } | null)?.outcome === 'images')
-    .flatMap((x) => ((x.after as { images?: { deletionJobId: string | null }[] }).images ?? []))
+    .flatMap((x) => (x.after as { images?: { deletionJobId: string | null }[] }).images ?? [])
     .map((im) => im.deletionJobId)
     .filter((id): id is string => typeof id === 'string');
 
@@ -144,7 +144,10 @@ describe('F4: nothing written to the staging folder; the placed asset deleted by
     for (let i = 0; i < 200 && deletionJobs(w, jobId).length === 0; i++) await sleep(20);
     for (const id of deletionJobs(w, jobId)) await rt.engine.wait(PROJECT, id, 25_000);
     // The one write: the placed asset's deletion. Nothing moved, hidden or put into a staging folder.
-    expect(writesSince(w, before).filter((c) => !deletions(w, assetId, before).includes(c))).toEqual([]);
+    const world = w;
+    expect(writesSince(world, before).filter((c) => !deletions(world, assetId, before).includes(c))).toEqual(
+      [],
+    );
     expect(deletions(w, assetId, before)).toHaveLength(1);
     expect(w.assets.assets.has(assetId)).toBe(false);
     expect(

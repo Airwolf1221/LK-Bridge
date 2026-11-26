@@ -120,7 +120,10 @@ describe('the audits’ fixes handed over', () => {
     expect(r.body.status, r.text).toBe('written');
     const job = await engine().wait(PROJECT, String(r.body.jobId), 30_000);
     expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
-    expect({ proposals: proposalsCount() - p0, onReview: onReview(job.id) }).toEqual({ proposals: 0, onReview: true });
+    expect({ proposals: proposalsCount() - p0, onReview: onReview(job.id) }).toEqual({
+      proposals: 0,
+      onReview: true,
+    });
   });
 });
 

@@ -3,7 +3,6 @@
  * (`lk_op_<operationId>`, when MCP_EXPOSE_PER_OP_TOOLS=true) and the high-level delete tools. The deletes rail was
  * removed (v3 F12, ADR 0081): each delete now runs directly at scope `write`, a job on the owner's Review page.
  */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockRequest, MockResponse } from '../../contract/mock-lk.js';
 import { discoverWorld, type DiscoverWorld } from '../../discover/world.js';
@@ -67,7 +66,9 @@ describe('per-operation tools', () => {
     const r = await call('lk_op_deleteResource', { path: { resourceId: 'loose001' } });
     expect(r.body.status, r.text).toBe('succeeded');
     expect(await direct(r.body.jobId)).toEqual({ status: 'succeeded', onReview: true });
-    expect(sent(n).filter((x) => x.startsWith('DELETE ') && x.includes('/resources/loose001'))).toHaveLength(1);
+    expect(sent(n).filter((x) => x.startsWith('DELETE ') && x.includes('/resources/loose001'))).toHaveLength(
+      1,
+    );
     expect(w.repo.live('loose001')).toBeUndefined();
   });
 

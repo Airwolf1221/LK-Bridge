@@ -59,9 +59,9 @@ describe('restoring canon', () => {
     expect(r.body.status, r.text).not.toBe('proposal_captured');
     const jobId = String(r.body.jobId);
     expect((await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000)).status, r.text).toBe('succeeded');
-    expect(
-      { harbourBack: w.repo.live(S.harbour) !== undefined, onReview: onReview(jobId) },
-      r.text,
-    ).toEqual({ harbourBack: true, onReview: true });
+    expect({ harbourBack: w.repo.live(S.harbour) !== undefined, onReview: onReview(jobId) }, r.text).toEqual({
+      harbourBack: true,
+      onReview: true,
+    });
   });
 });

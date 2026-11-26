@@ -685,7 +685,7 @@ describe('the Snapshots page', () => {
     const form = await screen.findByRole('form', { name: `Restore to ${SNAP}` });
     await user.click(within(form).getByRole('button', { name: 'Preview' }));
     const line = await within(form).findByLabelText('Restore estimate');
-    expect(line).toHaveTextContent('Once approved: 1 write and 2 reads, about 2 s.');
+    expect(line).toHaveTextContent('When it runs: 1 write and 2 reads, about 2 s.');
     expect(line).toHaveTextContent('Figures used: a write takes at least the 500 ms spacing');
     expect(api.find('POST', '/snapshots/restore')).toHaveLength(1);
     const view = figuresText({

@@ -59,7 +59,11 @@ describe('a recreate stopped part-way, finished through Resume', () => {
     total = w.events.get(w.d.chronicle)!.length;
     expect(total).toBeGreaterThanOrEqual(3);
     const snap = (await w.stack.runtime.snapshots.full(PROJECT, 'manual')).snapshotId!;
-    const del = await w.stack.call(writer, 'delete_resource', { project: 'test', page: S.atlas, confirm: true });
+    const del = await w.stack.call(writer, 'delete_resource', {
+      project: 'test',
+      page: S.atlas,
+      confirm: true,
+    });
     expect(del.body.status, del.text).toBe('written');
     await w.stack.runtime.engine.wait(PROJECT, String(del.body.jobId), 30_000);
     w.repo.res.delete(S.atlas); // purged: the id is free again

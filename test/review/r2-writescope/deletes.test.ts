@@ -5,7 +5,7 @@
  * The deletes rail (ADR 0055 decision C) was removed with the other safety rails (v3 F12, ADR 0081): each of these now
  * runs directly, is one job on the owner's Review page, and Revert can put it back (ADR 0081: the `entity` target).
  */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- parsed JSON tool results */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockRequest, MockResponse } from '../../contract/mock-lk.js';
 import { factsWorld, P, type FactsWorld } from '../../facts/world.js';
@@ -126,7 +126,8 @@ const sent = (n: number) => writeCallsSince(w, n).map((c) => `${c.method} ${c.pa
 
 /** A direct job's outcome: settled, on the owner's Review page, and every target ready for Revert. */
 async function directThenRevertible(r: { body: Record<string, any>; text: string }) {
-  if (typeof r.body.jobId !== 'string') return { status: String(r.body.status ?? r.body.error?.code), text: r.text };
+  if (typeof r.body.jobId !== 'string')
+    return { status: String(r.body.status ?? r.body.error?.code), text: r.text };
   const jobId = r.body.jobId;
   const job = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
   const onReview = w.stack.runtime.review
@@ -237,7 +238,9 @@ describe('the two deletes together, through lk_api_batch', () => {
   it('A4: a batch emptying the board, then deleting an infobox property, runs directly as one job; Revert can put both back', async () => {
     // Reset the models.
     board.version++;
-    board.shapes = [{ id: 'shape:9', type: 'geo', parentId: 'page:1', index: 'a9', props: { geo: 'rectangle' } }];
+    board.shapes = [
+      { id: 'shape:9', type: 'geo', parentId: 'page:1', index: 'a9', props: { geo: 'rectangle' } },
+    ];
     infobox.deleted = false;
     const r = await call('lk_api_batch', {
       calls: [

@@ -145,7 +145,10 @@ describe('promoteNation', () => {
     const tarim = structuredClone(w.repo.res.get(O.tarim)!);
     const before = new Set([...w.repo.res.values()].filter((x) => x.deletedAt === null).map((x) => x.id));
     try {
-      const r = await agent('arkona_create_owner', institution({ status: 'working', name: 'Court of Shells' }));
+      const r = await agent(
+        'arkona_create_owner',
+        institution({ status: 'working', name: 'Court of Shells' }),
+      );
       expect(r.body.status, r.text).not.toBe('proposal_captured');
       const job = await engine().wait(PROJECT, String(r.body.jobId), 30_000);
       expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');

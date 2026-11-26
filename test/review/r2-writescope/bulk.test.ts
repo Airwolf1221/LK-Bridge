@@ -5,7 +5,7 @@
  * stays is the lifecycle guard's refusal (CR-10) of a copy with children in a request that also creates pages: never a
  * direct job.
  */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildModels, discoverWorld, ROOT, type DiscoverWorld } from '../../discover/world.js';
 import { PROJECT } from '../../tools/helpers.js';

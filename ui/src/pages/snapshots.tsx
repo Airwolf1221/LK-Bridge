@@ -115,7 +115,7 @@ export function figuresText(f: PlanFiguresView | null | undefined): string | nul
 function EstimateLine({ e }: { e: PlanEstimateView }) {
   return (
     <p className="muted small-text" aria-label="Restore estimate">
-      Once approved: {fmtInt(e.writes)} write{e.writes === 1 ? '' : 's'} and {fmtInt(e.reads)} read
+      When it runs: {fmtInt(e.writes)} write{e.writes === 1 ? '' : 's'} and {fmtInt(e.reads)} read
       {e.reads === 1 ? '' : 's'}
       {e.wallClockMs !== null ? `, about ${fmtDuration(e.wallClockMs)}` : ''}
       {e.fitsToday === false ? ' (more than today’s budget has left)' : ''}. {figuresText(e.figures)}

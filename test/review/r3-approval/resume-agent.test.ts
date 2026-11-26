@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { approve } from '../../packs/world.js';
-import { C, P, R, renameWorld, type RenameWorld } from '../../packs/rename-world.js';
+import { P, R, renameWorld, type RenameWorld } from '../../packs/rename-world.js';
 import type { JobOrigin } from '../../../src/jobs/types.js';
 import { PROJECT, intercept, proposeRename, settle } from './helpers.js';
 

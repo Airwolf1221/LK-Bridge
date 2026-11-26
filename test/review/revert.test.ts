@@ -342,9 +342,9 @@ describe('a deletion (v3 F12, ADR 0081: a copy kept first)', () => {
     for (let i = 0; i < 400 && !w.repo.live('bk000003'); i++) await new Promise((res) => setTimeout(res, 25));
     expect(w.repo.live('bk000003')).toBeDefined();
     const audit = rt().policy.store.listAudit({ action: 'job.revert', limit: 20 });
-    expect(audit.some((a) => a.target === jobId && (a.after as { outcome?: string })?.outcome === 'submitted')).toBe(
-      true,
-    );
+    expect(
+      audit.some((a) => a.target === jobId && (a.after as { outcome?: string })?.outcome === 'submitted'),
+    ).toBe(true);
   });
 });
 

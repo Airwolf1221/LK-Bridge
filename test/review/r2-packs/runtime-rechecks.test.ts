@@ -101,7 +101,12 @@ describe('a direct pack job held between its check and its first write', () => {
     const { jobId, call } = await heldAfterCheck(artFor(staged, 'Primary Reference - Portrait'));
     // The owner edits the pack's rules on the Packs page: a NEW version, not approved yet. The pack is no longer current.
     const p = packs().get('arkona')!;
-    const after = packs().commands.replaceRules('owner', 'arkona', structuredClone(p.rules), 'r2: a new version');
+    const after = packs().commands.replaceRules(
+      'owner',
+      'arkona',
+      structuredClone(p.rules),
+      'r2: a new version',
+    );
     expect(after.approved?.version).not.toBe(after.version);
     expect((await packs().governance('arkona')).state).toBe('rules_changed');
     engine().controls.resumeWrites('test');

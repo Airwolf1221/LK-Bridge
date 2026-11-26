@@ -45,7 +45,11 @@ describe('which jobs may be reverted', () => {
 
   it('a proposal, approved by the owner: WAS_A_PROPOSAL', async () => {
     // A connection at scope propose makes a delete a proposal; the owner approves it.
-    const r = await w.stack.call(proposer, 'delete_resource', { project: 'test', page: 'bk000005', confirm: true });
+    const r = await w.stack.call(proposer, 'delete_resource', {
+      project: 'test',
+      page: 'bk000005',
+      confirm: true,
+    });
     expect(r.body.status, r.text).toBe('proposal_captured');
     await rt().policy.commands.approve('owner', String(r.body.proposalId));
     let jobId: string | null = null;

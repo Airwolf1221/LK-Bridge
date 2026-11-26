@@ -62,13 +62,15 @@ describe('USE_ARKONA_SPLIT on every route', () => {
     const job = await settle(w, r.body.jobId);
     expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
     const taken = before - pageWords(w, S.zahra);
-    const listed = w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).some((i) => i.jobId === job.id);
+    const listed = w.stack.runtime.review
+      .list(PROJECT, { state: 'all', limit: 500 })
+      .some((i) => i.jobId === job.id);
     const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, job.id);
     if (rv.status === 'submitted') await settle(w, rv.revertJobId);
     return {
       onReview: listed,
       taken: taken > 0,
-      revert: rv.status === 'submitted' ? 'submitted' : `${rv.code}: ${JSON.stringify(rv.targets).slice(0, 300)}`,
+      revert: rv.status === 'refused' ? `${rv.code}: ${JSON.stringify(rv.targets).slice(0, 300)}` : rv.status,
       missingAfterRevert: before - pageWords(w, S.zahra),
     };
   };
