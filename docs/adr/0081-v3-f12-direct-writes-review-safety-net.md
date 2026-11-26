@@ -63,6 +63,12 @@
   (`recreate_pages`, `restore_document`, `reupload_asset`, run after the revert job succeeds and recorded in
   `job_reverts.targets.followUpsDone`). Pre-images are now kept for `updateBlock`, `updateBlockRow`,
   `updateBlockPropertyRow`, `updatePropertyRow` and `updateBoardShapes`.
+- **Deletions the specialised targets hold:** a chronology change that deleted a table row or a timeline event is put
+  back from the journal's pre-images (a row where it stood, an event made again under a new id), as a delete paired with
+  a creation always was; a block deleted through the low-level tools keeps the document's blocks as they were (one read
+  before the delete), so Revert puts the page text back block by block, where the block stood.
+- **Order:** the pages a job made are deleted again last, children first, after everything else of the job has gone
+  back (a page the job moved under a page it made is moved back first, and is not counted as a stranger under it).
 - **Card fixes:** a created page's sidebar rows collapse into one line; Revert is hidden when there is nothing to
   revert (`revertible: false`; a write on a page the same job created says which change covers it, `coveredBy`); Revert
   of a create deletes the Working pages it made that nobody has touched since.
