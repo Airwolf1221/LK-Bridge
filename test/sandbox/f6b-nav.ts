@@ -19,7 +19,8 @@
  * - **N2** the report (`arkona_index_classify`'s rows under the index), printed row by row;
  * - **N3** the owner's decisions (temporary database): the race `nav`, the person `subject` (character);
  * - **N4** the index tag rule published on the THROWAWAY governance page (the section as the report gives it), the
- *   governance check offering it, the pack approved again (temporary database);
+ *   governance check offering it, the pack approved again (temporary database); when the copied rule is already
+ *   published, nothing is written: the section on the page must read back exactly (`already published (copied)`);
  * - **N5** the audit; `index_prefix` and `index_tags` applied as the automation's Apply submits them (a direct job every
  *   guard judges: taking CANON off the person is a canonical proposal, approved as canon as the owner would);
  * - **N6** T11's order: the `out_of_order` fix (the race first), approved;
@@ -34,6 +35,7 @@ import { indexTagSectionText } from '../../src/packs/indextax/rules.js';
 import type { RawLk } from './f4b-probe.js';
 import { deleteProbe } from './f4b-probe.js';
 import { ensureSandboxGovernance } from './governance.js';
+import { indexTagSectionMatches } from './governance-blocks.js';
 import { snapshotPagesOnly } from './page-snapshot.js';
 import type { SoakRuntime } from './soak.js';
 import { sandboxRun, type SandboxRun } from './steps.js';
@@ -235,6 +237,20 @@ export async function runNavCheck(
         const rules = rt.packs.get('arkona')!.rules.indexTaxonomy!;
         const path = `/resources/${made.governance.resourceId}/docs/${made.governance.documentId}/blocks`;
         const doc = await raw.request('getDocumentBlocks', 'GET', path);
+        if (rules.status === 'published') {
+          // The owner has published the rule and approved the pack: the copy carries it, and the throwaway page was
+          // written with the section as the pack holds it. Nothing to write; the section must still read back exactly.
+          const same = indexTagSectionMatches(doc.blocks, rules);
+          if (!same.ok) throw new Error(`the published section does not read back exactly: ${same.reason}`);
+          const g = await rt.packs.governance('arkona');
+          const approved = rt.packs.approvedRules('arkona')?.indexTaxonomy;
+          if (approved?.status !== 'published')
+            throw new Error(
+              `the rule is ${approved?.status ?? 'absent'} in the approved pack (${g.indexTags?.state ?? 'not read'})`,
+            );
+          void g;
+          return 'already published (copied); read back exactly';
+        }
         const blocks = [
           ...(doc.blocks as Obj[]),
           { kind: 'heading', level: 2, content: [{ text: rules.section }] },
