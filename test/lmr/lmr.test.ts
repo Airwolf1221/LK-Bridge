@@ -112,6 +112,7 @@ describe('counting edits', () => {
     expect(rowWrites.map((x) => x.path.split('/').at(-1))).toEqual(['rhea0012', LMR_ROW]);
     // The If-Match of the date's write is the version the Scope write answered.
     expect(rowWrites[1]!.ifMatch).not.toBe(rowWrites[0]!.ifMatch);
+    console.log('DBG', JSON.stringify(since().map((x) => [x.method, x.path, x.ifMatch])));
     const rowReads = since().filter((x) => x.method === 'GET' && /\/rows$/.test(x.path));
     expect(rowReads).toHaveLength(1); // set_facts' own check in the lock; none for the date
   });

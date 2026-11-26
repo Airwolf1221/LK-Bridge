@@ -101,7 +101,9 @@ describe('engine.run inline path', () => {
     expect(typeof (r.error as VersionConflictError).jobId).toBe('string');
     expect(seen(h.mock, 'PUT', /\/blocks$/)).toHaveLength(0);
 
-    // A non-guarded versioned write (updateBlock): the stale version reaches LK, 412 comes back typed, once.
+    // A stale caller version on updateBlock. v3 F12 (ADR 0081): the pre-image Revert needs is read before the write,
+    // inside the lock, so the bridge's own compare-and-swap sees v3 and returns the typed conflict without sending the
+    // stale version to LegendKeeper.
     h.model.outsideEdit(documentId, () => {});
     const r2 = await settle(
       h,
@@ -114,7 +116,25 @@ describe('engine.run inline path', () => {
     );
     expect(r2.error).toBeInstanceOf(VersionConflictError);
     expect(r2.error).toMatchObject({ sentVersion: 'v2', currentVersion: 'v3' });
-    expect(seen(h.mock, 'PATCH', /\/blocks\/x$/)).toHaveLength(1);
+    expect(seen(h.mock, 'GET', /\/blocks\/x$/)).toHaveLength(1);
+    expect(seen(h.mock, 'PATCH', /\/blocks\/x$/)).toHaveLength(0);
+
+    // The version reaches LegendKeeper and its 412 comes back typed, once: never retried as it was.
+    h.mock.inject((c) => c.method === 'PATCH', { kind: 'status', status: 412, code: 'VERSION_MISMATCH' });
+    const r3 = await settle(
+      h,
+      e,
+      e.engine.run(
+        'updateBlock',
+        { path: { resourceId, documentId, blockId: 'x' }, ifMatch: 'v3', body: { content: [] } },
+        { project: PROJECT, origin },
+      ),
+    );
+    expect(r3.error).toBeInstanceOf(VersionConflictError);
+    expect(r3.error).toMatchObject({ sentVersion: 'v3', currentVersion: 'v3' });
+    const patches = seen(h.mock, 'PATCH', /\/blocks\/x$/);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]!.ifMatch).toBe('v3');
   });
 
   it('records failed calls in the errors table, grouped by fingerprint', async () => {

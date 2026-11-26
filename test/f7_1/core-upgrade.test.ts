@@ -271,6 +271,7 @@ describe('refusals', () => {
 
 describe('Revert', () => {
   it('reverting the package puts the Compact Character Reference back: its name, Reference Type and template', async () => {
+    console.log('TPL BEFORE', templateOf(F.tomo));
     const id = await stage('png-named.jpg');
     const r = await w.call('arkona_add_character_art', {
       character: 'Tomo Reed',
@@ -286,6 +287,9 @@ describe('Revert', () => {
     // Revert never deletes what a job made (the index and the Art page stay; ADR 0055): a partial revert, confirmed.
     const preview = await w.stack.runtime.reverts.preview(PROJECT, jobId!);
     const ready = preview.targets.filter((t) => t.state === 'ready').map((t) => t.key);
+    console.log('PREVIEW', JSON.stringify(preview.targets, null, 1).slice(0, 6000));
+    const jr = w.stack.runtime.engine.queries.getJob(PROJECT, jobId!);
+    console.log('RECSTEPS', JSON.stringify((w.stack.runtime.engine.queries as any).steps?.(PROJECT, jobId!) ?? null).slice(0,3000));
     expect(ready).toEqual(
       expect.arrayContaining([`resource:${F.tomo}`, `facts:${F.tomo}`, `move:${F.tomo}`]),
     );
@@ -301,6 +305,8 @@ describe('Revert', () => {
       rj = w.stack.runtime.engine.queries.getJob(PROJECT, rv.revertJobId);
     }
     expect(rj?.status, JSON.stringify(rj?.lastError)).toBe('succeeded');
+    console.log('RJSTEPS', JSON.stringify((rj as any).steps.map((x: any) => [x.stepNo, x.opId, x.status, JSON.stringify(x.params).slice(0,300), JSON.stringify(x.response ?? x.result ?? null).slice(0,200)]), null, 1));
+    console.log('TPL AFTER', templateOf(F.tomo));
     expect(w.repo.live(F.tomo)!.name).toBe('[BWRK] Tomo Reed - Character Reference');
     expect(rowsOf(F.tomo)['Reference Type']).toBe('Compact Character Reference');
     expect(templateOf(F.tomo)).toBe(TPL.compact);
