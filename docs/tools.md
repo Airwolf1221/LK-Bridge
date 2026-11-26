@@ -123,7 +123,7 @@ budget (arkona): writes 0/120·min …
 | `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                                                                                                                     |
 | `read_document`             | read   | true / false / true / false                                     | 1 read (a map: 2; a timeline: 2 + 1 per 100 events)                                                                                       |
 | `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read                                                                                                         |
-| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)                                                                                                   |
+| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 5 reads + 2 writes for two facts, the pre-image read Revert needs included)                                          |
 | `create_index`              | write  | false / false / false / false                                   | see [C2b](#resources-documents-and-characters-v2-c2b)                                                                                     |
 | `create_resource`           | write  | false / false / false / false                                   | see C2b                                                                                                                                   |
 | `create_bare_resource`      | write  | false / false / false / false                                   | 1 write + 1 listing + the tree’s re-read                                                                                                  |
@@ -131,11 +131,11 @@ budget (arkona): writes 0/120·min …
 | `create_character`          | write  | false / false / false / false                                   | see C2b                                                                                                                                   |
 | `update_resource`           | write  | false / **true** / false / false                                | 1 read + 1 write (+1 to re-place) + verify                                                                                                |
 | `move_resource`             | write  | false / **true** / false / false                                | 1 write + 1 listing + the tree’s re-read                                                                                                  |
-| `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + 1 write + 1 read                                                                                                   |
+| `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + the copy kept before a delete (F12) + 1 write + 1 read                                                             |
 | `restore_resource`          | write  | false / false / false / false                                   | 1 write + 1 read + the tree’s re-read                                                                                                     |
 | `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                                                                                                          |
 | `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read (a map image: 7 reads in all)                                                                                  |
-| `delete_document`           | write  | false / **true** / false / false                                | 1 write + 1 read                                                                                                                          |
+| `delete_document`           | write  | false / **true** / false / false                                | the copy kept before a delete (F12: the page and that document) + 1 write + 1 read                                                        |
 | `create_map_feature`        | write  | false / false / false / false                                   | see [D2](#maps-v2-d2): 5 reads + 1 write                                                                                                  |
 | `update_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 reads + 1 write                                                                                                                 |
 | `delete_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 + 1 read and 1 write per feature                                                                                                |
@@ -671,16 +671,20 @@ every kept item exactly as read (`id`, `rank`, `resourceId`, `documentId`), then
 
 **Cost.** Planning: 1 read (plus 1 the first time a template's order is needed). The job: 1 read to check (plus 1 per
 collection changed), 1 write per fact changed, added or removed, 1 read and 1 write per collection changed, 1 read to
-verify and 1 for the tree. Changing two facts: 4 reads and 2 writes. Two facts and one link: 6 reads and 3 writes. A
+verify and 1 for the tree; since v3 F12 each row change after the first reads its row for the journal pre-image Revert
+needs (that read also gives the next write its version). Changing two facts: 5 reads and 2 writes (4 before F12). Two
+facts and one link: 6 reads and 3 writes. A
 dry run, or a proposal: the planning read (a proposal adds 1 read per property to capture it, and runs the job when
 approved).
 
 **Versions from the ETag (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)).** LegendKeeper
 answers a row write with no version in its body but with an `ETag` header (a delete answering 204 sends one too), so
 the bridge uses that ETag as the write's new version for the next chained If-Match, and a chained row write no longer
-reads the property inside the lock. Measured: changing two facts costs 4 reads and 2 writes with it, 6 without; a
-change, a change, an addition and a removal 6 reads against 10, with the same 4 writes. A removal reads its row for the
-journal pre-image either way. With neither a body version nor an ETag the bridge re-reads (the safe fallback). The
+reads the property inside the lock. Measured since v3 F12 (test/facts/etag.test.ts): changing two facts costs 5 reads
+and 2 writes with a version in the body, an ETag or neither, since the second change's pre-image read (the one Revert
+needs) gives it its version anyway (before F12: 4 with it, 6 without); a change, a change, an addition and a removal 6
+reads against 7, with the same 4 writes (before F12: 6 against 10): the ETag now saves only the in-lock read of a
+chained addition. A removal reads its row for the journal pre-image either way. With neither a body version nor an ETag the bridge re-reads (the safe fallback). The
 project setting `useEtagVersions` (default on; Projects page) switches it off without a deploy if the sandbox's B12
 check ever fails.
 
@@ -942,24 +946,30 @@ reads, the job's checks, the canon guard's in-lock read, the verify step and the
 
 | Call                                                    | Reads | Writes |
 | ------------------------------------------------------- | ----- | ------ |
-| `create_character` core with a new index, 1 caller fact | 11    | 9      |
-| `create_character` compact, no caller facts             | 8     | 7      |
+| `create_character` core with a new index, 1 caller fact | 19    | 9      |
+| `create_character` compact, no caller facts             | 13    | 7      |
 | `create_character` that returns an existing page        | 1     | 0      |
-| `create_resource` with 2 facts and 1 link               | 10    | 6      |
-| `create_bare_resource`                                  | 2     | 1      |
+| `create_resource` with 2 facts and 1 link               | 12    | 6      |
+| `create_bare_resource`                                  | 3     | 1      |
 | `update_resource` rename (re-placed among its siblings) | 4     | 1      |
 | `move_resource`                                         | 3     | 1      |
-| `delete_resource`, one page                             | 4     | 1      |
-| `restore_resource`                                      | 3     | 1      |
-| `create_document`                                       | 2     | 1      |
-| `update_document`                                       | 4     | 1      |
-| `delete_document`                                       | 4     | 1      |
-| `set_facts`, 2 facts (unchanged from C2a)               | 4     | 2      |
+| `delete_resource`, one page                             | 6     | 1      |
+| `restore_resource`                                      | 4     | 1      |
+| `create_document`                                       | 4     | 1      |
+| `update_document`                                       | 6     | 1      |
+| `delete_document`                                       | 7     | 1      |
+| `set_facts`, 2 facts                                    | 5     | 2      |
 
-These are the v2 C2c numbers: the creates are Working by default, so an index gets no Status (fewer reads and writes)
-and a page from a template gets its status tag in one more write; the measured rename is of the only page under
-`[INDEX] Working` (no re-placing); a document delete reads the page's facts and the document for the
-delete-document canon rule.
+The creates are Working by default (v2 C2c), so an index gets no Status (fewer reads and writes) and a page from a
+template gets its status tag in one more write; the measured rename is of the only page under `[INDEX] Working` (no
+re-placing); a document delete reads the page's facts and the document for the delete-document canon rule. The numbers
+include each write's change snapshot (v2 E1a: a new page's document, a map's settings and features) and, since v3 F12
+([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)), the pre-image reads Revert needs (each property row
+update after the first: the Core +5, the Compact Reference +4, `create_resource` +1, `set_facts` +1) and the copy kept
+before a delete (`delete_resource` +2: the page and its document; `delete_document` +3: the page's settings and that
+document only). Before, the table left the change snapshot's reads out (the Core 11, the Compact Reference 8,
+`create_resource` 10, `create_bare_resource` 2, `restore_resource` 3, `create_document` 2, `update_document` 4) and
+`delete_resource`, `delete_document` and `set_facts` were 4.
 
 Where they go, for a Working Core with a new index: 2 template sidebars (planning), 2 creates; for the Core, 1 copy
 check, 1 in-lock read of the rows and 1 canon check of the sidebar, then 1 write per fact (Status included) and 1 for
@@ -967,7 +977,8 @@ its status tag; the verify step's facts read and listings (the Working index's c
 re-reads, one per page, at the end of the job. `create_many_resources` with 100 pages without templates: 1 write, 1–2
 listings to verify, and the tree's 100 re-reads. A dry run costs the template reads only (none for the other tools); a
 proposal costs the planning reads, then the job when approved (capture reads nothing for pages it creates). A cascade
-delete adds 1 read per page under it (the canon check).
+delete adds 1 read per page under it (the canon check), and the copy kept before it (v3 F12) reads each page and its
+documents, plus one listing per page with children.
 
 ## The page lifecycle (v2 C2c)
 
@@ -1153,21 +1164,26 @@ refused, not proposed.
 
 ### Costs (reads and writes, typical)
 
-Measured against the mock LegendKeeper (test/lifecycle/costs.test.ts), every read included: to capture the proposal
-(planning, the note's place, the content search), then the job the owner's acceptance runs (its checks, the canon and
+Measured against the mock LegendKeeper (test/lifecycle/costs.test.ts, at scope `propose` since v3 F12; at `write` the
+job runs at once with the same reads), every read included: to capture the proposal (planning, the note's place, the
+content search), then the job the owner's acceptance runs (its checks, the canon and
 lifecycle guards' reads, the in-lock reads before each write, the verify step and the tree's re-read). CR-2026-11 took
 4 reads off every job without dropping a check: the guards' entry reads of the sidebar now use the approval's re-read of
 the page, made a moment before, and the tree re-reads the page once when the job ends rather than after the rename and
-the move as well. **D1.1** (the ETag as the next write's version, above) takes a further 4 reads off `archive_page`
-and 3 off `unarchive_page` (and so off their Working forms), 2 off `promote_page` and none off `move_to_working`; the
-numbers below are measured with it (test/lifecycle/etag-costs.test.ts compares the three ways a version can arrive).
+the move as well. **D1.1** (the ETag as the next write's version, above) took a further 4 reads off `archive_page` and
+3 off `unarchive_page`, 2 off `promote_page` and none off `move_to_working`. **v3 F12** (ADR 0081): the fact and note
+updates now keep the journal pre-image Revert needs, which costs `archive_page` and `unarchive_page` 3 more job reads
+(4 for archiving a Working page, whose five facts are all updates: 15 → 18 or 19); that read also gives the next write
+its version, so the ETag now saves 1 read off `archive_page` from Authoritative, 2 off `promote_page` and none off the
+others. The numbers below are measured with it (test/lifecycle/etag-costs.test.ts compares the three ways a version
+can arrive).
 
 | Call                               | Capture reads | Job reads | Job writes |
 | ---------------------------------- | ------------- | --------- | ---------- |
-| `archive_page`, from Authoritative | 6             | 15        | 8          |
-| `archive_page`, from Working       | 5             | 15        | 8          |
-| `unarchive_page`, to Authoritative | 4             | 15        | 7          |
-| `unarchive_page`, to Working       | 4             | 15        | 7          |
+| `archive_page`, from Authoritative | 6             | 18        | 8          |
+| `archive_page`, from Working       | 5             | 19        | 8          |
+| `unarchive_page`, to Authoritative | 4             | 18        | 7          |
+| `unarchive_page`, to Working       | 4             | 18        | 7          |
 | `move_to_working`                  | 3             | 11        | 3          |
 | `promote_page`                     | 2             | 11        | 5          |
 
@@ -2075,16 +2091,16 @@ proposal. `arkona_create_character`'s `split` is refused with the same code.
 
 ### Costs (measured against the mock)
 
-| Call                                                                                | Requests                                                                          | Writes |
-| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------ |
-| `arkona_split_appraisal`                                                            | 0 (`live: true`: 2 a page, at most 25)                                            | 0      |
-| `arkona_split_owner`, a character monolith: plan (dry run)                          | 13 (10 the plan's own, 3 the pack's governance)                                   | 0      |
-| the same, proposed                                                                  | 26                                                                                | 0      |
-| its job (six new owners and a new index, the Core upgrade, one remapped Dependency) | 248 (estimated 175 reads)                                                         | 89     |
-| `arkona_split_owner`, an owner with two domains: proposed                           | 12                                                                                | 0      |
-| its job (one new owner, one existing owner, two remapped Dependencies)              | 84 (estimated 58 reads)                                                           | 22     |
-| phase 2                                                                             | `archive_page`'s own (about 6 reads to propose, then about 15 reads and 8 writes) | 8      |
-| a conflict on an existing owner's append (LegendKeeper answers 412)                 | one more read, and the write again                                                | 1      |
+| Call                                                                                | Requests                                                                       | Writes |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------ |
+| `arkona_split_appraisal`                                                            | 0 (`live: true`: 2 a page, at most 25)                                         | 0      |
+| `arkona_split_owner`, a character monolith: plan (dry run)                          | 13 (10 the plan's own, 3 the pack's governance)                                | 0      |
+| the same, proposed                                                                  | 26                                                                             | 0      |
+| its job (six new owners and a new index, the Core upgrade, one remapped Dependency) | 248 (estimated 175 reads)                                                      | 89     |
+| `arkona_split_owner`, an owner with two domains: proposed                           | 12                                                                             | 0      |
+| its job (one new owner, one existing owner, two remapped Dependencies)              | 84 (estimated 58 reads)                                                        | 22     |
+| phase 2                                                                             | `archive_page`'s own (about 6 reads to plan, then about 18 reads and 8 writes) | 8      |
+| a conflict on an existing owner's append (LegendKeeper answers 412)                 | one more read, and the write again                                             | 1      |
 
 ## Setting packs: retagging (v3 F3f)
 
