@@ -315,6 +315,37 @@ describe('the Nation Subindexes report', () => {
     rt().registry.forProject(PROJECT).commands.updateEntry('owner', c.id, { shortName: 'Cantha' });
   });
 
+  it('Accept all matched: only matched rows with no collision and an approved classification; ONE request; idempotent; undo per row', async () => {
+    await svc().prepare(PROJECT);
+    const eligible = svc()
+      .acceptable(PROJECT)
+      .map((r) => r.id);
+    expect(eligible).toContain(D.cGov);
+    // Unmatched (cMil), not approved as [NAV] (cSet, cInst), a collision (jMil, jMil2), unmatched (jNav): never.
+    for (const id of [D.cMil, D.cSet, D.cInst, D.jMil, D.jMil2, D.jNav]) expect(eligible).not.toContain(id);
+    const g = await http.get('/nation-subindexes');
+    expect(g.json.acceptable).toEqual({ count: eligible.length, ids: eligible });
+    const r = await http.post('/nation-subindexes/accept-all', {
+      ids: [...eligible, D.cMil, D.jMil, D.cSet],
+      confirm: true,
+    });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json.accepted).toBe(eligible.length);
+    expect(
+      Object.fromEntries((r.json.skipped as { id: string; reason: string }[]).map((x) => [x.id, x.reason])),
+    ).toEqual({
+      [D.cMil]: 'unmatched',
+      [D.jMil]: 'collision',
+      [D.cSet]: 'classification_not_approved',
+    });
+    expect((await rowOf(D.cGov)).decision).toMatchObject({ action: 'accept', via: 'accept_all' });
+    const again = await http.post('/nation-subindexes/accept-all', { ids: eligible, confirm: true });
+    expect(again.json.accepted).toBe(0);
+    // Undo works per row, as for a single accept.
+    for (const id of eligible) svc().undo('owner', PROJECT, id);
+    expect((await rowOf(D.cGov)).status).toBe('proposed');
+  });
+
   it('decisions: accept; accept of an unmatched row refused; map for every page of the name in one request', async () => {
     const a = svc().decide('owner', PROJECT, { pageId: D.cGov, action: 'accept' });
     expect(a.row.status).toBe('accepted');
@@ -485,13 +516,15 @@ describe('the three checks', () => {
   it('territory_category_missing: the categories unbound with no index; Conflicts inside Historical Events', () => {
     const f = findings('territory_category_missing');
     const z = f.filter((x) => x.pageId === D.zarvia).map((x) => x.evidence.category);
-    expect(z.sort()).toEqual(['Conflicts', 'Religions', 'Unique Magic & Technologies']);
+    // The governance's required categories only: Religions is recognised but never required.
+    expect(z.sort()).toEqual(['Conflicts', 'Unique Magic & Technologies']);
     const conflicts = f.find((x) => x.pageId === D.zarvia && x.evidence.category === 'Conflicts')!;
     expect(conflicts.fix?.args).toMatchObject({ parentId: D.zEvents, name: 'Zarvia Conflicts' });
     // Naglfar has none of them; its Conflicts waits for its Historical Events.
     const n = f.filter((x) => x.pageId === D.naglfar).map((x) => x.evidence.category);
-    expect(n).toHaveLength(8);
+    expect(n).toHaveLength(7);
     expect(n).not.toContain('Conflicts');
+    expect(n).not.toContain('Religions');
     expect(f.some((x) => x.pageId === D.oldArk)).toBe(false);
   });
 
@@ -511,14 +544,14 @@ describe('the three checks', () => {
     expect(reg().binding(z.id, 'Conflicts')).toMatchObject({ nodeId: made.id, origin: 'job' });
     // The automation's Apply: a job, the binding recorded likewise.
     const g = findings('territory_category_missing').find(
-      (x) => x.pageId === D.zarvia && x.evidence.category === 'Religions',
+      (x) => x.pageId === D.zarvia && x.evidence.category === 'Unique Magic & Technologies',
     )!;
     const a = await rt().audits.proposeFix('automation', PROJECT, g.id, { direct: true });
     expect(a.status).toBe('job_submitted');
     if (a.status !== 'job_submitted') return;
     const job = await rt().engine.wait(PROJECT, a.jobId, 20_000);
     expect(job?.status, JSON.stringify(job?.lastError)).toBe('succeeded');
-    expect(reg().binding(z.id, 'Religions')?.nodeId).toBeDefined();
+    expect(reg().binding(z.id, 'Unique Magic & Technologies')?.nodeId).toBeDefined();
   });
 
   it('category_home_mismatch: a Culture source in Polities, with a move proposal to the nearest allowed home', async () => {

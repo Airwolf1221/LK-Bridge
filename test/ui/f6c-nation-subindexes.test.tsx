@@ -110,6 +110,7 @@ const response = {
     },
   },
   bulkMax: 500,
+  acceptable: { count: 1, ids: ['gov'] },
   now: Date.now(),
 };
 
@@ -218,5 +219,36 @@ describe('the Nation Subindexes page', () => {
     renderApp('/ui/nation-subindexes');
     await user.click(within(await rowEl('set')).getByRole('button', { name: 'Undo' }));
     await waitFor(() => expect(api.find('POST', '/nation-subindexes/undo')).toHaveLength(1));
+  });
+
+  it('Accept all matched shows the count before confirming, then sends those ids in ONE request', async () => {
+    const gate = needsReauth(() => ({
+      accepted: 1,
+      skipped: [],
+      remaining: 0,
+      max: 500,
+      decisions: [],
+      rows: [],
+    }));
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /nation-subindexes': response,
+      'POST /nation-subindexes/accept-all': gate.route,
+      'POST /security/reauth': gate.reauth,
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/nation-subindexes');
+    await user.click(await screen.findByRole('button', { name: 'Accept all matched (1)' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Accept 1 matched row(s)?' });
+    expect(dialog).toHaveTextContent('collisions');
+    expect(api.find('POST', '/nation-subindexes/accept-all')).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Accept 1' }));
+    await passwordDialog(user);
+    await waitFor(() =>
+      expect(api.find('POST', '/nation-subindexes/accept-all').at(-1)!.body).toEqual({
+        ids: ['gov'],
+        confirm: true,
+      }),
+    );
   });
 });

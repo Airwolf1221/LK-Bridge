@@ -309,6 +309,7 @@ const ROUTES: Record<string, Route> = {
     body: { pageId: 'idx00001', role: 'Institutions', confirm: true },
   },
   'POST /api/admin/nation-subindexes/undo': { kind: 'asks', body: { pageId: 'idx00001', confirm: true } },
+  'POST /api/admin/nation-subindexes/accept-all': { kind: 'asks', body: { confirm: true } },
   'POST /api/admin/registry/structural/:kind/seed': { kind: 'asks', body: { confirm: true } },
   'POST /api/admin/registry/structural/:kind/add-missing': { kind: 'asks', body: { confirm: true } },
   'POST /api/admin/audits/findings/:id/keep-home': { kind: 'asks', body: { reason: 'here', confirm: true } },

@@ -1528,6 +1528,19 @@ const rules: PackRules = packRulesSchema.parse({
     nationRoleVariants: NATION_ROLE_VARIANTS.map((v) => ({ ...v })),
     // The territory categories are `structural.continentCategories` (the one source); Conflicts sits in Historical Events.
     categoryParents: { Conflicts: 'Historical Events' },
+    // The categories the governance requires of every territory (Source Formatting's "Approved Hierarchy and
+    // Standardised Navigation"), in its order; read only by territory_category_missing. Religions is recognised (above)
+    // but not required: no live territory has a "<Territory> Religions" index.
+    requiredTerritoryCategories: [
+      'Cultures',
+      'Historical Events',
+      'Conflicts',
+      'Institutions',
+      'Polities',
+      'Regions',
+      'Settlements & Locations',
+      'Unique Magic & Technologies',
+    ],
     lostRealmshipParents: ['Lost Realmships'],
   },
 });

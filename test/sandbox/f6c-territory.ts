@@ -15,7 +15,8 @@
  * - **T0** a throwaway index `[INDEX] lk-bridge f6c check <time>`, its governance page, the pack approved (temporary
  *   database);
  * - **T1** inside it `[NAV] Arkona’s Continents` (the pack's continents parent) and a territory `[INDEX] lk-bridge f6c
- *   territory <time>` with its categories except Unique Magic & Technologies, its Historical Events without Conflicts;
+ *   territory <time>` with the governance's required categories except Unique Magic & Technologies (and no Religions,
+ *   which is recognised but never required), its Historical Events without Conflicts;
  *   in its Polities a nation `[INDEX] lk-bridge f6c nation <time>` with three children: `[NAV] Government &
  *   Institutions`, `[NAV] Military & Naval Affairs` and a subject index; swept and snapshotted (only these pages);
  * - **T2** the classification approved for the territory, the nation and the first child (temporary database); the
@@ -163,7 +164,7 @@ export async function runTerritoryCheck(
 
     const ok1 = await check(
       'T1',
-      'a territory with every category but Unique Magic & Technologies (Historical Events without Conflicts), a nation with three children',
+      'a territory with every REQUIRED category but Unique Magic & Technologies (Historical Events without Conflicts), a nation with three children',
       async () => {
         const mk = async (key: string, n: string, parentId: string, tags: string[]) => {
           page[key] = String(
@@ -180,7 +181,6 @@ export async function runTerritoryCheck(
           'Institutions',
           'Regions',
           'Settlements & Locations',
-          'Religions',
         ])
           await mk(`cat:${c}`, `[NAV] ${territoryName} ${c}`, t, ['Navigation']);
         const n = await mk('nation', `[INDEX] ${nationName}`, page['cat:Polities']!, ['Polity']);

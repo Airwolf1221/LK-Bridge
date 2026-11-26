@@ -980,6 +980,14 @@ export const indexTaxonomyRulesSchema = z
     categoryParents: z.record(text(100), text(100)).optional(),
     /** v3 F6c: the Realmship parents whose Realmships are not territories (Lost Realmships). */
     lostRealmshipParents: z.array(indexName).max(10).optional(),
+    /**
+     * v3 F6c follow-up (ADR 0080): the territory categories the governance REQUIRES (Source Formatting's "Approved
+     * Hierarchy and Standardised Navigation"), in its order, Conflicts after the Historical Events it sits in. Read ONLY by
+     * `territory_category_missing`; `structural.continentCategories` stays the list of RECOGNISED categories (the seed
+     * binds every one it finds, Religions included, and F6b's classifier knows them all). Absent (an older version): the
+     * recognised list.
+     */
+    requiredTerritoryCategories: z.array(text(100)).min(1).max(40).optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
@@ -992,6 +1000,15 @@ export const indexTaxonomyRulesSchema = z
         ctx.addIssue({
           code: 'custom',
           message: `the variant “${v.variant}” maps to no nation role (${v.role})`,
+        });
+  })
+  .superRefine((r, ctx) => {
+    const known = new Set(r.structural.continentCategories.map((x) => x.toLowerCase()));
+    for (const c of r.requiredTerritoryCategories ?? [])
+      if (!known.has(c.toLowerCase()))
+        ctx.addIssue({
+          code: 'custom',
+          message: `the required territory category “${c}” is not among the recognised ones (structural.continentCategories)`,
         });
   });
 export type IndexTaxonomyRules = z.infer<typeof indexTaxonomyRulesSchema>;

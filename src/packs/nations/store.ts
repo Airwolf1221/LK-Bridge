@@ -7,7 +7,7 @@ import type { Db } from '../../db/open.js';
 import { prepared } from '../../db/statements.js';
 
 export type SubindexAction = 'accept' | 'map' | 'specialist' | 'not_subindex';
-export type SubindexVia = 'accept' | 'map' | 'map_all' | 'specialist' | 'not_subindex';
+export type SubindexVia = 'accept' | 'accept_all' | 'map' | 'map_all' | 'specialist' | 'not_subindex';
 
 export interface SubindexDecision {
   readonly id: string;

@@ -6,6 +6,9 @@
  *   specialist subindex, or not a subindex;
  * - `POST /nation-subindexes/map-all` (the step-up; audited `nationsubindex.map_all`): the mapping for every nation's
  *   child of that exact name, ONE transaction, at most NATION_SUBINDEX_BULK_MAX rows;
+ * - `POST /nation-subindexes/accept-all` (the step-up; audited `nationsubindex.accept_all`): every undecided row matched
+ *   by a role name or an approved variant, with no collision and an approved classification (the GET counts them first);
+ *   one request, batched with yields, one rebuild at the end, at most NATION_SUBINDEX_BULK_MAX;
  * - `POST /nation-subindexes/undo` (the step-up; audited `nationsubindex.undo`): until the rename is applied;
  * - `GET /registry/structural`: the five structural types' state; `GET /registry/structural/:kind`: one type's entries
  *   and role bindings; `POST /registry/structural/:kind/seed` and `/add-missing` (the step-up; audited);
@@ -73,21 +76,27 @@ export const registerNationSubindexes: Register = (api, ctx) => {
     return wrap(async () => {
       const s = svc();
       await s.prepare(p.id);
+      const scope = {
+        ...(q.nation !== undefined ? { nationId: q.nation } : {}),
+        ...(q.role !== undefined ? { role: q.role } : {}),
+        ...(q.name !== undefined ? { nameContains: q.name } : {}),
+        ...(q.collision !== undefined ? { collision: q.collision === 'true' } : {}),
+      };
       const report = s.report(
         p.id,
         {
           ...(q.status !== undefined ? { status: Array.isArray(q.status) ? q.status : [q.status] } : {}),
-          ...(q.nation !== undefined ? { nationId: q.nation } : {}),
-          ...(q.role !== undefined ? { role: q.role } : {}),
-          ...(q.name !== undefined ? { nameContains: q.name } : {}),
-          ...(q.collision !== undefined ? { collision: q.collision === 'true' } : {}),
+          ...scope,
         },
         { offset: q.offset, limit: q.limit },
       );
+      // "Accept all matched": what it would take in this filter (its status aside), counted before you confirm.
+      const acceptable = s.acceptable(p.id, scope).map((r) => r.id);
       return {
         project: p,
         report,
         ...(q.page ? { focus: s.row(p.id, q.page) } : {}),
+        acceptable: { count: acceptable.length, ids: acceptable },
         bulkMax: s.bulkMax(),
         now: ctx.now(),
       };
@@ -150,6 +159,47 @@ export const registerNationSubindexes: Register = (api, ctx) => {
         skipped: r.skipped,
         max: r.max,
         decisions: r.decisions,
+        rows: r.rows,
+      };
+    });
+  });
+
+  /**
+   * "Accept all matched" (the step-up; audited `nationsubindex.accept_all`): the ids the GET counted (or every acceptable
+   * row of the filter), ONE request, batched with yields, at most NATION_SUBINDEX_BULK_MAX; idempotent.
+   */
+  api.post('/nation-subindexes/accept-all', async (req) => {
+    requireReauth(ctx.deps.services, req);
+    const b = parseInput(
+      z
+        .object({
+          project: projectParam,
+          // The service bounds them by NATION_SUBINDEX_BULK_MAX; this is only the request's own limit.
+          ids: z.array(z.string().min(1).max(64)).max(5000).optional(),
+          nation: z.string().min(1).max(64).optional(),
+          name: z.string().min(1).max(200).optional(),
+          reason: z.string().max(1000).optional(),
+          confirm: z.literal(true),
+        })
+        .strict(),
+      req.body,
+    );
+    const p = projectFor(ctx, req, b.project);
+    return wrap(async () => {
+      const s = svc();
+      await s.prepare(p.id);
+      const r = await s.acceptAllMatched('owner', p.id, {
+        ...(b.ids ? { ids: b.ids } : {}),
+        ...(b.nation ? { nationId: b.nation } : {}),
+        ...(b.name ? { nameContains: b.name } : {}),
+        ...(b.reason !== undefined ? { reason: b.reason } : {}),
+      });
+      return {
+        accepted: r.accepted.length,
+        skipped: r.skipped,
+        remaining: r.remaining,
+        max: r.max,
+        decisions: r.accepted,
         rows: r.rows,
       };
     });

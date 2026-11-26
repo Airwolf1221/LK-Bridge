@@ -14,6 +14,9 @@ import { Link } from '../router';
  * Per row: **Accept** (the role and name as proposed), **Map to a role** (an unmatched child; “for every page with this
  * name” maps every nation’s child of that exact name in one request), **Keep as a specialist subindex** (its name
  * stays, no role, exempt from the checks), **Not a subindex** (left alone), and **Undo** until the rename is applied.
+ * **Accept all matched (n)** accepts every undecided row matched by a role name or an approved variant, with no collision
+ * and an approved [NAV] classification (never an unmatched, colliding or unapproved row), in ONE request; the count is
+ * shown before you confirm, at most NATION_SUBINDEX_BULK_MAX at a time, and each row can be undone on its own.
  * Every decision asks for the step-up and is recorded in the audit log. Nothing is renamed here: accepted and mapped rows
  * become `nation_subindex_nonstandard` findings in the Audits, which the Automation page can run (default Off).
  *
@@ -85,6 +88,7 @@ interface Response {
     counts: Record<Status, number> & { collision: number };
   };
   bulkMax: number;
+  acceptable: { count: number; ids: string[] };
 }
 
 /** Rows a page of the table shows (fetched a page at a time). */
@@ -194,6 +198,7 @@ export function NationSubindexesPage() {
             Collisions only
           </label>
         </div>
+        <AcceptAll acceptable={r.data.acceptable} bulkMax={r.data.bulkMax} onChanged={r.reload} />
         {d.rows.length === 0 ? (
           <Empty>No child of a nation matches.</Empty>
         ) : (
@@ -385,5 +390,53 @@ function SubindexRow({
         )}
       </td>
     </tr>
+  );
+}
+
+function AcceptAll({
+  acceptable,
+  bulkMax,
+  onChanged,
+}: {
+  acceptable: { count: number; ids: string[] };
+  bulkMax: number;
+  onChanged: () => void;
+}) {
+  const api = useProjectApi();
+  const confirm = useConfirm();
+  const withReauth = useReauth();
+  const { run, busy } = useAction();
+  if (acceptable.count === 0) return null;
+  const ids = acceptable.ids.slice(0, bulkMax);
+  const partial = acceptable.count > ids.length;
+  const go = () =>
+    void confirm({
+      title: partial
+        ? `Accept the first ${ids.length} of ${acceptable.count} matched rows?`
+        : `Accept ${acceptable.count} matched row(s)?`,
+      message: (
+        <p className="small-text">
+          Each takes the role its name matched (a role name or an approved variant) and the name{' '}
+          <code>&lt;Nation&gt; &lt;Role&gt;</code>. Unmatched rows, collisions and rows whose classification
+          is not approved are left for you.{' '}
+          {partial && `At most ${bulkMax} at once; accept again for the rest. `}Each can be undone on its own.
+        </p>
+      ),
+      confirmLabel: `Accept ${ids.length}`,
+    }).then((ok) => {
+      if (!ok) return;
+      void run(
+        () => withReauth(() => api.post('/nation-subindexes/accept-all', { ids, confirm: true })),
+        'Accepted.',
+      ).then((x) => {
+        if (x) onChanged();
+      });
+    });
+  return (
+    <p data-accept-all>
+      <Button disabled={busy} onClick={go}>
+        Accept all matched ({acceptable.count})
+      </Button>
+    </p>
   );
 }

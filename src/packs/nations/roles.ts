@@ -149,6 +149,13 @@ export const territoryCategoriesOf = (rules: IndexTaxonomyRules): readonly strin
   rules.structural.continentCategories;
 
 /**
+ * The REQUIRED territory categories (`requiredTerritoryCategories`, the governance's list), in order: only
+ * `territory_category_missing` reads these. A version without the list requires every recognised category.
+ */
+export const requiredTerritoryCategoriesOf = (rules: IndexTaxonomyRules): readonly string[] =>
+  rules.requiredTerritoryCategories ?? rules.structural.continentCategories;
+
+/**
  * The nation role a home rule's nation-level category names (`Institutions` → Institutions, `Government &
  * Administration` → itself, a variant to its role), or null when it names none (`Laws`, `History`).
  */

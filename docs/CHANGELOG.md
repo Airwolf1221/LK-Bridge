@@ -32,6 +32,11 @@ mock; nothing live was touched.
   "Nation-Centred Territorial Navigation" is pinned already; the reviewer's paragraph is in the ADR). The guide gains
   "Territories, nations and their subindexes"; "How to decide" is unchanged.
 - Sandbox check `f6c-territory` (opt-in), and its mock run in the ordinary suite.
+- **Before deploy (amendment 1)**: `territory_category_missing` reads only the governance's required categories (new pack
+  data `requiredTerritoryCategories`: the seven and Conflicts; Religions is recognised and bound where it exists, never
+  required), so it no longer proposes 17 empty Religions indexes. Nation Subindexes gains **Accept all matched**:
+  undecided rows matched by a role name or an approved variant, with no collision and an approved classification; the
+  count shown before confirming; one request, batched with yields, one rebuild at the end, bounded, undo per row.
 
 ## Unreleased: v3 F9 amendment 1, the daily tier's own floors
 

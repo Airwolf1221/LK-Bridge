@@ -6,8 +6,9 @@
  *   page whose name differs from the unified name `<Nation> <Role>` (the short name first). Undecided rows are not
  *   reported: they wait on the report page. Two subindexes of one nation with one role (a collision) are never renamed.
  *   The fix renames the display name only: the prefix ([NAV]), the id and every link stay.
- * - `territory_category_missing` (warning): a Territory entry with one of the pack's categories unbound and no index of
- *   the expected name `<Territory> <Category>` (Conflicts inside the bound Historical Events). The fix makes the empty
+ * - `territory_category_missing` (warning): a Territory entry with one of the governance's REQUIRED categories (the
+ *   pack's `requiredTerritoryCategories`; Religions is recognised but never required) unbound and no index of the
+ *   expected name `<Territory> <Category>` (Conflicts inside the bound Historical Events). The fix makes the empty
  *   [NAV] index through create_index's role form, as a proposal, and binds the role when the job succeeds. Lost
  *   Realmships and Divine Realms are never Territory entries, so never checked.
  * - `category_home_mismatch` (info, judgement): a source whose primary category tag is not allowed in its current home
@@ -26,7 +27,13 @@ import {
   suggestHomes,
   type HomeTree,
 } from '../../packs/engine/homes.js';
-import { categoryParentOf, roleKey, territoryCategoriesOf, unifiedName } from '../../packs/nations/roles.js';
+import {
+  categoryParentOf,
+  requiredTerritoryCategoriesOf,
+  roleKey,
+  territoryCategoriesOf,
+  unifiedName,
+} from '../../packs/nations/roles.js';
 import { homeStateHash } from '../../packs/nations/store.js';
 import type { NationAuditInput } from '../../packs/nations/service.js';
 import { categoryFromTags, vocabularyOf } from '../../packs/retag/engine.js';
@@ -162,13 +169,16 @@ function subindexNames(ctx: AuditContext, input: NationAuditInput): FindingDraft
 function territoryCategories(ctx: AuditContext, input: NationAuditInput): FindingDraft[] {
   const out: FindingDraft[] = [];
   const lost = new Set((input.tax.lostRealmshipParents ?? []).map(nameKey));
+  // The governance's REQUIRED categories only (Religions is recognised, never required); a nested one's parent is looked
+  // up among the recognised categories.
+  const required = requiredTerritoryCategoriesOf(input.tax);
   const cats = territoryCategoriesOf(input.tax);
   for (const t of input.territories) {
     const node = ctx.model.pages.get(t.nodeId);
     if (!node || node.kind !== 'index' || !inTerritoryScope(ctx, node.id)) continue;
     const parent = node.parentId ? ctx.model.pages.get(node.parentId) : undefined;
     if (parent && lost.has(nameKey(parent.displayName))) continue;
-    for (const c of cats) {
+    for (const c of required) {
       if (t.bindings.has(c)) continue;
       const parentCat = categoryParentOf(input.tax, c);
       const parentCatName = parentCat

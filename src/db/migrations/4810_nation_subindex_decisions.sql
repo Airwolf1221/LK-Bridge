@@ -1,7 +1,8 @@
 -- v3 F6c (ADR 0080; design T5, the owner's rulings of 26 November 2026): the owner's decisions on the Nation Subindexes
 -- report. One per nation child index (its LegendKeeper id):
 --
--- - `accept`: the role and the unified name as the report proposed (`<Nation> <Role>`);
+-- - `accept`: the role and the unified name as the report proposed (`<Nation> <Role>`; `via` `accept_all` when "Accept
+--   all matched" took it with the other matched rows);
 -- - `map`: the owner's role for a child no rule matched (`via` `map_all` when "for every page with this name" applied it);
 -- - `specialist`: a specialist subindex, its name kept, no role, exempt from the checks;
 -- - `not_subindex`: not a nation subindex; left alone.
@@ -18,7 +19,7 @@ CREATE TABLE nation_subindex_decisions (
   action        TEXT NOT NULL CHECK (action IN ('accept', 'map', 'specialist', 'not_subindex')),
   role          TEXT,                           -- accept and map only
   proposed_name TEXT,                           -- the unified display name when decided (accept and map)
-  via           TEXT NOT NULL CHECK (via IN ('accept', 'map', 'map_all', 'specialist', 'not_subindex')),
+  via           TEXT NOT NULL CHECK (via IN ('accept', 'accept_all', 'map', 'map_all', 'specialist', 'not_subindex')),
   reason        TEXT NOT NULL DEFAULT '',
   by            TEXT NOT NULL,
   at            INTEGER NOT NULL,

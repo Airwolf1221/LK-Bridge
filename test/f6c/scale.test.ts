@@ -1,7 +1,10 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any -- parsed JSON replies */
 /**
- * v3 F6c (ADR 0080) at Arkona's scale (about 1,500 pages, 12 nations with 60 children), against the mock LegendKeeper:
+ * v3 F6c (ADR 0080) at Arkona's scale (about 1,500 pages, 15 nations with 75 children, 60 of them matched), against the
+ * mock LegendKeeper:
  *
+ * - **"Accept all matched"** at 60 rows: ONE request, batched with yields, one rebuild at the end; under 500 ms, the loop
+ *   never held for 100 ms, the heap and RSS back near where they started after ten reloads (F6a.1's lesson);
  * - **the 10% rule**: an audit run with the three territory and nation checks on takes at most 10% more than the same run
  *   with them switched off (the median of seven interleaved runs each, so one slow or fast run of the machine does not decide it);
  * - **the report**: the Nation Subindexes page driven as the dashboard drives it (load, a filter, ten reloads), each GET
@@ -13,13 +16,13 @@ import { PROJECT, retagWorld, type RetagWorld } from '../packs/retag-world.js';
 import { ownerHttp, type OwnerHttp } from '../automation/helpers.js';
 import { measure, type Sample } from '../f6a1/world.js';
 
-const NATIONS = 12;
+const NATIONS = 15;
 const CHILDREN = [
   'Government & Institutions',
   'Institutions',
   'Military & Naval Affairs',
   'Cultures',
-  'History',
+  'Settlements & Locations',
 ];
 const PAGES = 1500;
 const CATEGORIES = [
@@ -113,8 +116,6 @@ beforeAll(async () => {
   rt().nationTaxonomy.seed('owner', PROJECT, 'territory', 'seed');
   rt().nationTaxonomy.seed('owner', PROJECT, 'nation', 'seed');
   await rt().nationTaxonomy.prepare(PROJECT);
-  for (const r of rt().nationTaxonomy.report(PROJECT, { status: ['proposed'] }, { limit: 500 }).rows)
-    rt().nationTaxonomy.decide('owner', PROJECT, { pageId: r.id, action: 'accept' });
   http = ownerHttp(w);
   http.stepUp();
 }, 900_000);
@@ -127,6 +128,31 @@ const auditMs = async (): Promise<number> => {
 };
 
 describe('territories and nations at Arkona’s scale', () => {
+  it('Accept all matched at 60 rows: one request, under 500 ms, the loop never held for 100 ms, memory flat', async () => {
+    const load = await measure('load', () => http.get('/nation-subindexes?limit=100'));
+    expect(load.status).toBe(200);
+    const ids: string[] = load.json.acceptable.ids;
+    const ours = ids.filter((id) => id.startsWith('f6sk'));
+    expect(ours).toHaveLength(NATIONS * 4);
+    const accept = await measure('accept all', () =>
+      http.post('/nation-subindexes/accept-all', { ids, confirm: true }),
+    );
+    expect(accept.status, JSON.stringify(accept.json).slice(0, 300)).toBe(200);
+    expect(accept.json.accepted).toBe(ids.length);
+    expect(accept.ms, `accept all took ${accept.ms} ms`).toBeLessThan(500);
+    expect(accept.lagMaxMs, `accept all held the loop ${accept.lagMaxMs} ms`).toBeLessThan(100);
+    const after: Sample[] = [];
+    for (let i = 0; i < 10; i++)
+      after.push(await measure(`reload ${i}`, () => http.get('/nation-subindexes?limit=100')));
+    const last = after.at(-1)!;
+    expect(last.heapMb - load.heapMb, `heap ${load.heapMb} → ${last.heapMb} MB`).toBeLessThan(64);
+    expect(last.rssMb - load.rssMb, `RSS ${load.rssMb} → ${last.rssMb} MB`).toBeLessThan(128);
+    for (const x of after) expect(x.ms, `${x.step} took ${x.ms} ms`).toBeLessThan(500);
+    // Idempotent: nothing left to accept.
+    const again = await http.get('/nation-subindexes?limit=1');
+    expect(again.json.acceptable.ids.filter((id: string) => id.startsWith('f6sk'))).toEqual([]);
+  }, 300_000);
+
   it('the three checks add at most 10% to an audit run', async () => {
     const off: number[] = [];
     const on: number[] = [];
@@ -174,6 +200,6 @@ describe('territories and nations at Arkona’s scale', () => {
       expect(x.ms, `${x.step} took ${x.ms} ms`).toBeLessThan(500);
       expect(x.lagMaxMs, `${x.step} held the loop ${x.lagMaxMs} ms`).toBeLessThan(100);
     }
-    expect(ourRows(samples[1]!.json)).toBe(NATIONS * 2); // Military & Naval Affairs, History
+    expect(ourRows(samples[1]!.json)).toBe(NATIONS); // Military & Naval Affairs
   }, 300_000);
 });

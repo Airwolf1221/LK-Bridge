@@ -321,7 +321,10 @@ marked. Two children of one nation with one role are a **collision**: neither is
 
 Filters: status, nation, name, collisions only. Per row: **Accept**, **Map to a role** (with "for every page with this
 name": every nation's child of that exact name not decided yet, one request, at most `NATION_SUBINDEX_BULK_MAX` (500)),
-**Keep as a specialist subindex**, **Not a subindex**, and **Undo** until the rename is applied. Every decision asks for
+**Keep as a specialist subindex**, **Not a subindex**, and **Undo** until the rename is applied. **Accept all matched
+(n)** accepts every undecided row matched by a role name or an approved variant, with no collision and an approved [NAV]
+classification (never an unmatched, colliding or unapproved row), in one request; the count is on the button and in the
+confirmation before anything is sent, at most `NATION_SUBINDEX_BULK_MAX` at a time, and each row can be undone on its own. Every decision asks for
 the step-up and is recorded in the audit log. Nothing is renamed here: accepted and mapped rows become
 `nation_subindex_nonstandard` findings in the Audits, which Automation can run (default Off).
 

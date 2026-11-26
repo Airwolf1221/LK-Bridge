@@ -123,11 +123,11 @@ None looks under Working, Archive, the Legacy Canon Archive, the Design Referenc
 per project on the Projects page (`checkNationSubindexNames`, `checkTerritoryCategories`, `checkCategoryHomes`; default
 on, in the settings registry through the project settings).
 
-| Code                          | Severity        | Reports                                                                                                                                                           | Fix                                                                                                                                                                                                                        |
-| ----------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nation_subindex_nonstandard` | warning         | an ACCEPTED or MAPPED row whose name differs from `<Nation> <Role>` (undecided rows wait on the page; a collision is never renamed)                               | `nation_subindex_name`: ONE `updateResource` of the display name, the prefix, id and links kept; FIX_STALE when the decision (its id or role) or the page's name changed; its journal entry carries the decision's id      |
-| `territory_category_missing`  | warning         | a Territory entry with a category unbound and no index of the expected name (Conflicts inside the bound Historical Events)                                        | `territory_category`: create_index's role form (`roleFor { territory, category }`, the "[NAV] AI Navigation" template, T11's order and tags) as a proposal; the role bound by a `bridge.record` step once the job succeeds |
-| `category_home_mismatch`      | info, judgement | a source whose primary category tag's owner type does not allow its home, resolved by role (C5); pages under a character root are not owner pages and are skipped | `category_home`: ONE `moveResource` to the nearest allowed home (`suggestHomes`), in its place there; always a proposal, never automation                                                                                  |
+| Code                          | Severity        | Reports                                                                                                                                                                          | Fix                                                                                                                                                                                                                        |
+| ----------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nation_subindex_nonstandard` | warning         | an ACCEPTED or MAPPED row whose name differs from `<Nation> <Role>` (undecided rows wait on the page; a collision is never renamed)                                              | `nation_subindex_name`: ONE `updateResource` of the display name, the prefix, id and links kept; FIX_STALE when the decision (its id or role) or the page's name changed; its journal entry carries the decision's id      |
+| `territory_category_missing`  | warning         | a Territory entry with a REQUIRED category (`requiredTerritoryCategories`, amendment 1) unbound and no index of the expected name (Conflicts inside the bound Historical Events) | `territory_category`: create_index's role form (`roleFor { territory, category }`, the "[NAV] AI Navigation" template, T11's order and tags) as a proposal; the role bound by a `bridge.record` step once the job succeeds |
+| `category_home_mismatch`      | info, judgement | a source whose primary category tag's owner type does not allow its home, resolved by role (C5); pages under a character root are not owner pages and are skipped                | `category_home`: ONE `moveResource` to the nearest allowed home (`suggestHomes`), in its place there; always a proposal, never automation                                                                                  |
 
 - **Automation** (F5b): `nation_subindex_nonstandard` and `territory_category_missing` are proposal-first codes with
   Apply allowed, **default Off** (the owner switches them to Propose for a first batch). `category_home_mismatch` is in
@@ -162,7 +162,8 @@ nation's or territory's index (Conflicts: the bound Historical Events, else `CAT
 
 ## C6: governance and the seed
 
-Seed `arkona-2026-11-27-f6c`: `nationRoles`, `nationRoleVariants`, `categoryParents` ({ Conflicts: Historical Events }),
+Seed `arkona-2026-11-27-f6c`: `nationRoles`, `nationRoleVariants`, `requiredTerritoryCategories` (amendment 1),
+`categoryParents` ({ Conflicts: Historical Events }),
 `lostRealmshipParents` (Lost Realmships), the derived nation subindex list, and the ruling `nation-subindex-roles`
 (26 November 2026), ending "Not yet recorded in Source Formatting's Nation-Centred Territorial Navigation: the owner's
 reviewer writes it after deploy." The three codes are registered in the automation catalogue.
@@ -198,7 +199,8 @@ subject indexes"). "How to decide" is unchanged (no row added, nothing trimmed; 
 
 `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- f6c-territory` (test/sandbox/f6c-territory.ts,
 T0 to T5; run in the ordinary suite against the mock by test/sandbox-mock/f6c-territory.test.ts): a throwaway
-territory with every category but Unique Magic & Technologies (and its Historical Events without Conflicts: the brief's "six of seven", with Religions, which the pack's list also names) and a nation in its Polities with
+territory with six of its seven REQUIRED categories (all but Unique Magic & Technologies; its Historical Events without
+Conflicts; no Religions, which is recognised but never required, amendment 1) and a nation in its Polities with
 "Government & Institutions", "Military & Naval Affairs" and a subject index; the classification and the seed in the
 TEMPORARY database; the decisions; the audit, with the two renames and the two category creations applied as the
 automation's Apply submits them; everything read back live; clean-up.
@@ -216,7 +218,6 @@ automation's Apply submits them; everything read back live; clean-up.
   seeded, but does not record the binding itself; "Add missing" on Repository Mappings binds it (as it does any new
   matching child). F6b's classifier still finds nations by position (an index in a `<Territory> Polities`), not by
   Nation entry; the two agree on every seeded nation.
-- **Deferred**: no bulk "Accept all" on Nation Subindexes (the brief names none; about 60 rows on Arkona).
 
 ## Consequences
 
@@ -225,3 +226,35 @@ automation's Apply submits them; everything read back live; clean-up.
 - Deploy order: deploy; approve the seed; seed the five types on Repository Mappings (Territory first, then Nation);
   work through Nation Subindexes; switch the two codes to Propose for a first batch; the reviewer writes the governance
   paragraph above; re-approve.
+
+## Amendment 1 (26 November 2026, before deploy): the required categories; "Accept all matched"
+
+- Status: **Proposed**, the owner's follow-up before deploy. Built and tested against the mock only.
+- **The required territory categories are the governance's, not the recognised list.** Source Formatting's "Approved
+  Hierarchy and Standardised Navigation" requires exactly: Cultures; Historical Events, with Conflicts inside it;
+  Institutions; Polities; Regions; Settlements & Locations; Unique Magic & Technologies. No live territory has a
+  `<Territory> Religions` index, so reading the recognised list would have proposed 17 empty Religions indexes. New pack
+  data `indexTaxonomy.requiredTerritoryCategories` (those seven plus Conflicts, in that order; each must be one of the
+  recognised categories, checked by the schema) is read ONLY by `territory_category_missing`.
+  `structural.continentCategories` stays the RECOGNISED list: seeding binds Religions wherever a `<Territory> Religions`
+  exists, F6b's classifier still knows it, and `create_index`'s role form still makes it on request. A pack version
+  without the new list requires every recognised category (the earlier behaviour). This replaces the earlier **chosen**
+  note that Religions counts as a territory category for the check.
+- **The seed's name stays `arkona-2026-11-27-f6c`**: the f6c seed has not been merged or deployed anywhere, so no stored
+  pack can hold the earlier f6c rules (a new name is needed only once a seed may be stored). The seed upgrade carries the
+  new list as it carries the rest of `indexTaxonomy` (the owner's structural lists kept).
+- **"Accept all matched"** on Nation Subindexes (`POST /nation-subindexes/accept-all`, the step-up; audited
+  `nationsubindex.accept_all`): every UNDECIDED row matched by a role name or an approved variant, with no collision and
+  an approved `[NAV]` classification; never an unmatched, colliding or unapproved row. The GET counts them for the
+  page's filter (`acceptable: { count, ids }`), shown on the button and in the confirmation before anything is sent. ONE
+  request by those ids (each checked again; a refused id is returned with its reason: `unmatched`, `collision`,
+  `classification_not_approved`, `already_decided`); at most `NATION_SUBINDEX_BULK_MAX` (the rest counted as
+  `remaining`); the rows read ONCE at the start, decided in batches of 25 (each one transaction, every row checked again
+  against the decisions store), a yield to the event loop between batches, and the rows rebuilt ONCE at the end (F6a.1's
+  lesson: no per-row rebuild). Idempotent. Each decision is an ordinary accept (`via` `accept_all`; migration 4810's
+  check allows it, unreleased so edited in place), so Undo works per row.
+- **Tests**: a territory with all seven and Conflicts and no Religions has no finding (and a version without the list
+  still requires Religions); the world's Accept all (eligibility, skipped reasons, idempotence, per-row undo); the page's
+  button and confirmation; at Arkona's scale, 60 matched rows in one request under 500 ms, the loop never held for
+  100 ms, the heap and RSS flat over ten reloads after it. The sandbox's territory now omits a REQUIRED category (Unique
+  Magic & Technologies) and has no Religions index.

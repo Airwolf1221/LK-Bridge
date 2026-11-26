@@ -1148,6 +1148,119 @@ export class NationTaxonomyService {
     };
   }
 
+  /**
+   * The rows "Accept all matched" takes: undecided, matched by a role name or an approved variant (never an owner's
+   * mapping, which is a decision already), with no collision and an approved [NAV] classification. Never an unmatched,
+   * colliding or unapproved row. Within the page's filter (its status aside).
+   */
+  acceptable(projectId: string, filter: Omit<SubindexFilter, 'status'> = {}): SubindexRow[] {
+    const base = this.baseNow(projectId);
+    return NationTaxonomyService.filtered(this.rows(projectId, base), {
+      ...filter,
+      status: ['proposed'],
+    }).filter(
+      (r) =>
+        r.decision === null &&
+        r.match !== null &&
+        (r.match.via === 'role' || r.match.via === 'variant') &&
+        r.collision.length === 0 &&
+        r.classification === 'nav',
+    );
+  }
+
+  /** Rows decided per transaction by "Accept all matched", with a yield to the event loop between batches. */
+  static readonly ACCEPT_BATCH = 25;
+
+  /**
+   * "Accept all matched" (the step-up; audited `nationsubindex.accept_all`): ONE request, by ids (the page sends the rows
+   * its GET counted) or every acceptable row of the filter; at most NATION_SUBINDEX_BULK_MAX (the rest counted as
+   * `remaining`). The rows are read ONCE at the start (F6a.1's lesson: no per-row rebuild); each batch is one transaction,
+   * every row in it checked again against the decisions store (one decided meanwhile is skipped); a yield between
+   * batches; the rows rebuilt ONCE at the end. Idempotent. Each decision is an ordinary accept (`via` `accept_all`), so
+   * Undo works per row as for a single accept.
+   */
+  async acceptAllMatched(
+    actor: string,
+    projectId: string,
+    o: Omit<SubindexFilter, 'status'> & { readonly ids?: readonly string[]; readonly reason?: string } = {},
+  ): Promise<{
+    readonly accepted: readonly SubindexDecision[];
+    readonly rows: readonly SubindexRow[];
+    readonly skipped: readonly { readonly id: string; readonly reason: string }[];
+    readonly remaining: number;
+    readonly max: number;
+  }> {
+    if (actor !== 'owner')
+      throw new NationTaxonomyError('NOT_OWNER', 'Only the owner decides a nation’s subindexes.');
+    const max = this.bulkMax();
+    const base = this.baseNow(projectId);
+    const eligible = this.acceptable(projectId, o);
+    const byId = new Map(eligible.map((r) => [r.id, r]));
+    const skipped: { id: string; reason: string }[] = [];
+    let take: SubindexRow[];
+    if (o.ids) {
+      const all = new Map(this.rows(projectId, base).map((r) => [r.id, r]));
+      take = [];
+      for (const id of [...new Set(o.ids)]) {
+        const r = byId.get(id);
+        if (r) take.push(r);
+        else {
+          const x = all.get(id);
+          skipped.push({
+            id,
+            reason: !x
+              ? 'not_a_candidate'
+              : x.decision
+                ? 'already_decided'
+                : !x.match
+                  ? 'unmatched'
+                  : x.collision.length > 0
+                    ? 'collision'
+                    : x.classification !== 'nav'
+                      ? 'classification_not_approved'
+                      : 'not_acceptable',
+          });
+        }
+      }
+    } else take = eligible;
+    const now = take.slice(0, max);
+    const nations = new Map(base.nations.map((n) => [n.id, n]));
+    const accepted: SubindexDecision[] = [];
+    for (let i = 0; i < now.length; i += NationTaxonomyService.ACCEPT_BATCH) {
+      if (i > 0) await new Promise<void>((resolve) => setImmediate(resolve));
+      const batch = now.slice(i, i + NationTaxonomyService.ACCEPT_BATCH).filter((r) => {
+        if (this.decisions.decision(projectId, r.id) === null) return true;
+        skipped.push({ id: r.id, reason: 'already_decided' });
+        return false;
+      });
+      accepted.push(
+        ...this.decisions.putMany(
+          projectId,
+          actor,
+          batch.map((r) => ({
+            pageId: r.id,
+            nationId: r.nation.id,
+            pageName: r.name,
+            action: 'accept' as const,
+            role: r.match!.role,
+            proposedName: unifiedName(nations.get(r.nation.id)!, r.match!.role),
+            via: 'accept_all' as const,
+            reason: o.reason ?? '',
+          })),
+        ),
+      );
+    }
+    if (accepted.length > 0)
+      this.d.audit(actor, 'nationsubindex.accept_all', projectId, null, {
+        accepted: accepted.length,
+        pages: accepted.map((x) => x.pageId),
+      });
+    const ids = new Set(accepted.map((x) => x.pageId));
+    // ONE rebuild of the rows, at the end (from the cached base).
+    const rows = this.rows(projectId, this.baseNow(projectId)).filter((r) => ids.has(r.id));
+    return { accepted, rows, skipped, remaining: take.length - now.length, max };
+  }
+
   /** Undoes a decision whose rename has not been applied. Audited `nationsubindex.undo`. */
   undo(actor: string, projectId: string, pageId: string): SubindexDecision {
     if (actor !== 'owner') throw new NationTaxonomyError('NOT_OWNER', 'Only the owner undoes a decision.');
