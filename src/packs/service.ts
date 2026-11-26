@@ -34,8 +34,6 @@ import { parseSection, sameVocabulary, type VocabularyLists } from './reftypes/v
 import {
   PackError,
   packRulesSchema,
-  packToolMode,
-  type PackToolMode,
   type GovernanceSource,
   type Pack,
   type PackApproval,
@@ -244,22 +242,9 @@ export interface PackView extends Pack {
     readonly served: boolean;
   })[];
   readonly tools: readonly string[];
-  /**
-   * v3 F3.4 (ADR 0055 decision D): each write tool's switch, as the Packs page shows it: `propose` (every package is a
-   * proposal whatever the agent's scope) or `scope` (it follows the agent's scope), and whether that is the tool's own
-   * switch or `alwaysPropose` (the default for a tool not named).
-   */
-  readonly toolModes: readonly {
-    readonly tool: string;
-    readonly mode: PackToolMode;
-    readonly source: 'switch' | 'default';
-  }[];
 }
 
 const ACTOR_OWNER = 'owner';
-
-/** v3 F3.4: pack tools that never write (their switch would mean nothing), by the name after the prefix. */
-const READ_ONLY_PACK_TOOLS: ReadonlySet<string> = new Set(['character_brief', 'get_art']);
 
 export interface Packs {
   readonly store: PackStore;
@@ -280,19 +265,6 @@ export interface Packs {
    * no AU ruling: ADR 0035 exactly). Read by the lifecycle tools, the lifecycle guard and the audit. Never throws.
    */
   lifecycleRules(projectId: string): LifecycleTagRules;
-  /**
-   * v3 F3.4 (ADR 0055 decision D): a write tool's switch in the version of the pack the owner APPROVED (a newer version
-   * waiting for approval does not apply yet); `propose` while none is approved or the pack is not known (fails closed).
-   * For the tools that do not refuse a pack waiting for approval (`arkona_appraisal_fix`); the package tools use the
-   * current rules, which they run only once approved.
-   */
-  toolMode(packId: string, tool: string): PackToolMode;
-  /**
-   * CR-2026-11-R2 (R2-29, R2-35): the stricter of the approved version's switch and the current version's (one waiting
-   * for approval): `propose` when either says so. A switch the owner tightened applies at once; one loosened waits for
-   * the approval. `propose` while none is approved or the pack is not known (fails closed).
-   */
-  strictToolMode(packId: string, tool: string): PackToolMode;
   /** The full tool names of a pack (`arkona_create_character`). */
   toolsOf(pack: Pack): string[];
   /** Whether a pack tool is listed: its pack is attached to at least one project served now. */
@@ -385,12 +357,6 @@ export interface Packs {
         readonly reason: string;
       },
     ): Pack;
-    /**
-     * v3 F3.4 (ADR 0055 decision D): the owner sets write tools' switches (`propose`: always a proposal; `scope`: the
-     * agent's scope). A new version, waiting for approval as usual (until then every package is refused, as for any
-     * new version). Audited as `pack.set_tool_modes` with the switches before and after. Unchanged: the pack as it is.
-     */
-    setToolModes(actor: string, packId: string, modes: Readonly<Record<string, PackToolMode>>): Pack;
   };
 }
 
@@ -611,22 +577,7 @@ export function createPacks(d: PacksDeps): Packs {
         served: active.has(a.projectId),
       })),
       tools: toolsOf(pack),
-      toolModes: toolModesOf(pack),
     };
-  };
-
-  /** v3 F3.4: the write tools' switches (the pack's own write tools, then any other tool a switch names). */
-  const toolModesOf = (pack: Pack): PackView['toolModes'] => {
-    const named = pack.rules.settings.tools ?? {};
-    const names = [
-      ...toolsOf(pack).filter((t) => !READ_ONLY_PACK_TOOLS.has(t.slice(pack.prefix.length))),
-      ...Object.keys(named),
-    ];
-    return [...new Set(names)].map((tool) => ({
-      tool,
-      mode: packToolMode(pack.rules, tool),
-      source: named[tool] !== undefined ? ('switch' as const) : ('default' as const),
-    }));
   };
 
   const readSource = async (
@@ -982,20 +933,6 @@ export function createPacks(d: PacksDeps): Packs {
 
   const tokenMap = z_tokenMap;
 
-  /** v3 F3.4 (ADR 0055 decision D): a write tool's switch in the APPROVED version (see `Packs.toolMode`). */
-  const approvedToolMode = (packId: string, tool: string): PackToolMode => {
-    try {
-      const pack = store.get(packId);
-      if (!pack?.approved) return 'propose';
-      const rules =
-        pack.approved.version === pack.version ? pack.rules : store.rulesAt(pack.id, pack.approved.version);
-      return rules ? packToolMode(rules, tool) : 'propose';
-    } catch (e) {
-      d.log?.warn({ err: e, packId, tool }, 'a pack tool switch could not be read; the tool proposes');
-      return 'propose';
-    }
-  };
-
   // CR-2026-11-R4 (LD-01, LD-07): what the tool lists read of a pack, kept per pack until its row changes: every MCP
   // request works out its list afresh and asked for the pack (a full parse of its rules) once per pack tool, 18 times a
   // request on Arkona. A stored version never changes; the row's version, approval and last change say when to read
@@ -1121,16 +1058,6 @@ export function createPacks(d: PacksDeps): Packs {
         .map((a) => store.get(a.packId))
         .filter((p): p is Pack => p !== null),
     attachment: (packId, projectId) => store.attachment(packId, projectId),
-    toolMode: approvedToolMode,
-    strictToolMode: (packId, tool) => {
-      if (approvedToolMode(packId, tool) === 'propose') return 'propose';
-      try {
-        const pack = store.get(packId);
-        return pack ? packToolMode(pack.rules, tool) : 'propose';
-      } catch {
-        return 'propose';
-      }
-    },
     lifecycleRules: (projectId) => {
       try {
         const name = projectName(projectId).toLowerCase();
@@ -1358,41 +1285,6 @@ export function createPacks(d: PacksDeps): Packs {
             culture,
             ...(pack.rules.retag ? { excludedRoutineTags: routine } : {}),
           },
-        );
-        changed();
-        return after;
-      },
-      setToolModes(actor, packId, modes) {
-        if (actor !== ACTOR_OWNER) throw new PackError('NOT_OWNER', 'Only the owner edits a pack.');
-        const pack = requirePack(packId);
-        const known = new Set(toolModesOf(pack).map((t) => t.tool));
-        const before = pack.rules.settings.tools ?? {};
-        const next: Record<string, PackToolMode> = { ...before };
-        for (const [tool, mode] of Object.entries(modes)) {
-          if (!known.has(tool))
-            throw new PackError(
-              'UNKNOWN_TOOL',
-              `${pack.name} has no write tool “${tool}”. Its write tools: ${[...known].join(', ')}.`,
-            );
-          if (mode !== 'propose' && mode !== 'scope')
-            throw new PackError(
-              'INVALID_INPUT',
-              `${tool}: “propose” (always a proposal) or “scope” (the agent's scope).`,
-            );
-          next[tool] = mode;
-        }
-        if (stableJson(next) === stableJson(before)) return pack;
-        const rules = packRulesSchema.parse({
-          ...pack.rules,
-          settings: { ...pack.rules.settings, tools: next },
-        });
-        const after = store.newVersion(pack.id, rules, 'tool switches changed on the Packs page');
-        d.audit(
-          actor,
-          'pack.set_tool_modes',
-          pack.id,
-          { version: pack.version, tools: before },
-          { version: after.version, tools: next },
         );
         changed();
         return after;

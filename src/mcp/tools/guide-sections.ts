@@ -320,15 +320,15 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'Know what happened to a proposal or job',
     ],
     'Canon and approval': ['canon', 'approval'],
-    // v3 F3.4 (ADR 0055): what scope write makes at once and what it still proposes.
+    // v3 F3.4 (ADR 0055); v3 F12 (ADR 0081): what scope write makes at once (everything), and recoverable deletes.
     'At write scope': [
       'write scope',
       'scope write',
-      'safety rails',
-      'rails',
+      'scope propose',
       'proposedBecause',
       'proposed because',
-      'bulk change',
+      'delete copy',
+      'DELETE_COPY_FAILED',
       'review',
       'revert',
     ],

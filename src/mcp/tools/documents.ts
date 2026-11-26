@@ -534,7 +534,7 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete a document of a page',
     access: 'write',
     description:
-      'Deletes one document (a map, timeline or board, or one of several page documents) of a page; LegendKeeper keeps it. `confirm: true` is required. A page’s last or only page document is refused (that is its content: write_page, or delete_resource). Deleting a map, timeline or board of an Authoritative page is a canon rule (the owner can switch it off): always a proposal the owner accepts as canon. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write.',
+      'Deletes one document (a map, timeline or board, or one of several page documents) of a page; LegendKeeper keeps it. `confirm: true` is required. A page’s last or only page document is refused (that is its content: write_page, or delete_resource). Deleting a map, timeline or board of an Authoritative page is canon: direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose. The bridge keeps a copy of the page first, so Revert can restore it. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: z.string().min(1).max(500).describe('The document (name or id).'),
@@ -603,7 +603,7 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
               status: 'dry_run',
               message:
                 canon.length > 0
-                  ? 'Dry run: nothing was deleted. As the tree last read it, the page is protected canon, so the delete would become a proposal only the owner can accept as canon.'
+                  ? 'Dry run: nothing was deleted. As the tree last read it, the page is protected canon: at scope write the delete runs directly (a copy kept first; on the owner’s Review page, with Revert; make it only when the owner asked for it), at scope propose it becomes a proposal only the owner can accept as canon.'
                   : 'Dry run: nothing was deleted.',
             },
             pd,

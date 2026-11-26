@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
-  approveAndWait,
+  pickDone,
   coreOf,
   findingOf,
   heading,
@@ -121,12 +121,12 @@ afterAll(async () => {
   await w?.close();
 });
 
-/** The owner picks the register's value (so the Core's field is the one edited), and approves. */
+/** The owner picks the register's value (so the Core's field is the one edited) (v3 F12: it runs at once). */
 async function pickRegister(p: Person, code = 'consistency_birth') {
   const f = findingOf(w, p.name, code);
   const { r } = await pickPage(w, f, `${p.key}reg1`);
   expect(r.status, JSON.stringify(r.json)).toBe(200);
-  const done = await approveAndWait(w, String(r.json.proposalId));
+  const done = await pickDone(w, r.json);
   expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
   return { f, r, done };
 }
@@ -189,7 +189,7 @@ describe('a sidebar field: its date replaced inside the field, the rest kept (AD
     expect(values.map((v) => v.value)).toEqual(['Human', 'Elf; raised among Humans (see Upbringing)']);
     const { r } = await pickPage(w, f, coreOf(URSA));
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    const done = await approveAndWait(w, String(r.json.proposalId));
+    const done = await pickDone(w, r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     // SAFE (ADR 0064 amendment 1 E: the qualifier after the principal value is no part of the conflict): kept.
     expect(rowText(w, 'ursabio1', 'Race / Species')).toBe('Human; raised among Humans (see Upbringing)');

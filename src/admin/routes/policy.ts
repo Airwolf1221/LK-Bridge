@@ -2,7 +2,7 @@ import type { FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES, type Scope } from '../../policy/index.js';
 import { redactDeep } from '../redact.js';
-import { hasStepUp, requireReauth } from '../guard.js';
+import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
@@ -76,28 +76,8 @@ export const registerPolicy: Register = (api, ctx) => {
    * operations with the removals through a low-level tool (its recorded tool) and member administration's removals
    * counted. A session that has stepped up within the window is not judged (nothing is read).
    */
-  const stepUpIfGuarded = async (req: FastifyRequest, ids: readonly string[]) => {
-    if (hasStepUp(ctx.deps.services, req)) return;
-    for (const id of ids) {
-      const d = policy.proposals.detail(id);
-      if (!d) continue;
-      const items = d.ops.map((o) => ({
-        opId: o.op,
-        kind: o.opKind,
-        params: o.params ?? {},
-        options: o.options ?? {},
-      }));
-      const tool = policy.proposals.originOf(id)?.tool;
-      const verdict = await policy.gate.approvalVerdict(d.projectId, items, {
-        ...(tool !== undefined ? { tool } : {}),
-        proposedBecause: d.proposedBecause,
-      });
-      if (verdict !== null) {
-        requireReauth(ctx.deps.services, req);
-        return;
-      }
-    }
-  };
+  // v3 F12 (ADR 0081): approvals never ask for the step-up (the guarded-approval judgment went with the rails).
+  const stepUpIfGuarded = async (_req: FastifyRequest, _ids: readonly string[]): Promise<void> => {};
 
   // ---------------------------------------------------------------------------------------------- proposals
 
@@ -347,34 +327,6 @@ export const registerPolicy: Register = (api, ctx) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ show: z.boolean() }), req.body);
     return { profile: actions.setShowLowLevelTools(id, b.show) };
-  });
-
-  /**
-   * v3 F3.4 (ADR 0055): a profile's safety rails at scope `write` (the kinds of change that still become proposals).
-   * A partial change keeps the other switches. Re-authentication first (a rail switched off lets more go straight
-   * through), then the owner's confirmation; audited `profile.set_rails`.
-   */
-  api.put('/clients/profiles/:id/rails', (req) => {
-    requireReauth(ctx.deps.services, req);
-    const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    const b = parseInput(
-      z
-        .object({
-          rails: z
-            .object({
-              deletes: z.boolean().optional(),
-              bulk: z.boolean().optional(),
-              bulkPages: z.number().int().min(1).max(1000).optional(),
-              renamesMoves: z.boolean().optional(),
-              assets: z.boolean().optional(),
-            })
-            .strict(),
-          confirm: z.literal(true),
-        })
-        .strict(),
-      req.body,
-    );
-    return { profile: actions.setRails(id, b.rails) };
   });
 
   api.put('/clients/default-scope', (req) => {

@@ -1,7 +1,6 @@
 /** Shared types of the policy layer (docs/policy.md). */
 import type { Principal } from '../jobs/types.js';
 import type { ProjectScope } from '../projects/types.js';
-import type { WriteRails } from './rails.js';
 
 export const SCOPES = ['read', 'propose', 'write'] as const;
 /** `read`: reads only. `propose`: writes become proposals. `write`: writes execute (within every guard). */
@@ -25,11 +24,6 @@ export interface Profile {
   readonly scope: Scope;
   /** v2 B2: whether the connections on this profile are shown the low-level tools in tools/list (default false). */
   readonly showLowLevelTools: boolean;
-  /**
-   * v3 F3.4 (ADR 0055): the kinds of change that still become a proposal at scope `write` (deletes, bulk changes,
-   * renames and moves, asset deletes and moves). Read live; they only ever add proposals.
-   */
-  readonly rails: WriteRails;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -44,8 +38,6 @@ export interface ResolvedPrincipal {
   readonly scope: Scope;
   /** v2 B2: the profile's `showLowLevelTools`, read live. */
   readonly showLowLevelTools: boolean;
-  /** v3 F3.4 (ADR 0055): the profile's safety rails at scope `write`, read live. */
-  readonly rails: WriteRails;
   /** False when the grant or PAT is revoked or expired. */
   readonly active: boolean;
 }

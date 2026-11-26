@@ -94,7 +94,7 @@ describe('the ETag as the version of the next chained write', () => {
     console.log(`set_facts, version in the ETag: ${reads()} reads, ${writes().length} writes`);
   });
 
-  it('with the ETag a chained change or addition saves its in-lock read (2 reads); with neither a body version nor an ETag the bridge re-reads, correctly', async () => {
+  it('with the ETag a chained addition saves its in-lock read; with neither a body version nor an ETag the bridge re-reads, correctly', async () => {
     sb().rowVersions = 'etag';
     const withEtag = await run();
     expect(withEtag.body.status, withEtag.text).toBe('written');
@@ -113,14 +113,14 @@ describe('the ETag as the version of the next chained write', () => {
       `DELETE v${v + 3}`,
     ]);
     const noneReads = reads();
-    // Four row writes: the first chains from the check. Without an ETag the change and the addition after it each read
-    // the property inside the lock (listPropertyRows and listProperties: 2 reads each); the DELETE reads for its
-    // journal pre-image either way.
-    expect(noneReads - etagReads).toBe(4);
+    // Four row writes: the first chains from the check. v3 F12 (ADR 0081, op-meta): a row change reads the row for its
+    // journal pre-image either way, and that read gives the next write its version too, so only the addition after it
+    // reads inside the lock without an ETag; the DELETE reads for its journal pre-image either way.
+    expect(noneReads - etagReads).toBe(1);
     console.log(`set_facts, four row writes: ${etagReads} reads with the ETag, ${noneReads} without`);
   });
 
-  it('a typical set_facts (two facts changed): 4 reads and 2 writes with a version in the body or an ETag, 6 reads without either', async () => {
+  it('a typical set_facts (two facts changed): 5 reads and 2 writes, with a version in the body, an ETag or neither', async () => {
     const two = () =>
       w.stack.call(client, 'set_facts', {
         page: P.mehrana,
@@ -135,10 +135,11 @@ describe('the ETag as the version of the next chained write', () => {
       counts[mode] = [reads(), writes().length];
     }
     // The template's keys were cached by earlier runs; each count is plan, check, verify and the tree's re-read, plus
-    // the in-lock read the second write needs when nothing chains to it.
-    expect(counts.body).toEqual([4, 2]);
-    expect(counts.etag).toEqual([4, 2]);
-    expect(counts.none).toEqual([6, 2]);
+    // (v3 F12, op-meta) the second change's read for its journal pre-image, which also gives it its version, so a
+    // missing version costs nothing more here.
+    expect(counts.body).toEqual([5, 2]);
+    expect(counts.etag).toEqual([5, 2]);
+    expect(counts.none).toEqual([5, 2]);
   });
 
   it('a delete’s 204 ETag chains one removal to the next; a removal reads for its pre-image either way', async () => {
@@ -196,7 +197,8 @@ describe('the ETag as the version of the next chained write', () => {
       `POST v${v + 2}`,
       `DELETE v${v + 3}`,
     ]);
-    expect(reads() - onReads).toBe(4);
+    // As without an ETag above: only the addition reads again (v3 F12, op-meta).
+    expect(reads() - onReads).toBe(1);
   });
 
   it('the setting defaults to on and is editable as a project setting', () => {

@@ -156,6 +156,8 @@ export interface StepExecDeps {
   readonly etagVersions?: (projectId: string) => boolean;
   /** v2 D3 (ADR 0041): keeps an asset's bytes before any `deleteAsset` (see `AssetDeleteKeeper`). */
   readonly assetDeleteKeeper?: () => AssetDeleteKeeper | undefined;
+  /** v3 F12 (ADR 0081, D3): keeps a restorable copy before a page or document delete (see `DeleteCopier`). */
+  readonly deleteCopier?: () => DeleteCopier | undefined;
   /** v2 E1a (ADR 0042): told about every read a job makes for its own checks (the snapshot service's read tap). */
   readonly onRead?: (info: ReadInfo) => void;
 }
@@ -173,6 +175,22 @@ export type AssetDeleteKeeper = (ctx: {
   /** The asset as `getAsset` gave it. */
   readonly asset: Record<string, unknown>;
   /** A governed read in the job's name (listAssets for a folder's children). */
+  readonly read: (opId: string, params: OpParams) => Promise<unknown>;
+}) => Promise<Record<string, unknown>>;
+
+/**
+ * v3 F12 (ADR 0081, D3): called before a `deleteResource` or `deleteDocument` is journalled and sent, on EVERY route.
+ * It keeps a restorable copy of what the delete takes (the page, every page under it for a cascade, read live) and
+ * returns what the journal's pre-image records about it (`{ copy: { snapshotId, pages, reads } }`), or `{}` when the job
+ * needs none (the bridge's own work). It throws (a `JobsError`, `DELETE_COPY_FAILED`) to refuse the delete: nothing is
+ * sent then, and the job stops there.
+ */
+export type DeleteCopier = (ctx: {
+  readonly job: JobView;
+  readonly step: StepView;
+  readonly opId: 'deleteResource' | 'deleteDocument';
+  readonly params: OpParams;
+  /** A governed read in the job's name. */
   readonly read: (opId: string, params: OpParams) => Promise<unknown>;
 }) => Promise<Record<string, unknown>>;
 
@@ -2287,6 +2305,19 @@ export class StepExecutor {
         // Chunk 8 (required change A): EVERY write gets a journal entry before it is sent (outcome `pending`, settled
         // below), so agents can see each other's edits. Only destructive writes (`meta.journal`) keep a pre-image or ids.
         let journalId: number | undefined;
+        // v3 F12 (ADR 0081, D3): a restorable copy before a page or document delete (refused when none can be taken).
+        let copy: Record<string, unknown> = {};
+        if (!journalled && (op.operationId === 'deleteResource' || op.operationId === 'deleteDocument')) {
+          const copier = this.d.deleteCopier?.();
+          if (copier)
+            copy = await copier({
+              job,
+              step,
+              opId: op.operationId,
+              params,
+              read: async (opId, p) => (await this.readOp(job, step, opId, p)).body,
+            });
+        }
         if (!journalled) {
           const created = meta.verify === 'client-id' ? step.clientIds : [];
           journalId = this.d.journal.record({
@@ -2316,23 +2347,23 @@ export class StepExecutor {
                 }
               : {}),
             ...(created.length > 1 ? { targets: created } : {}),
-            ...(meta.journal === 'pre-image' && current
-              ? {
-                  preImage:
-                    step.options.journalPreImageWith !== undefined &&
-                    current.entity !== null &&
-                    typeof current.entity === 'object'
-                      ? {
-                          ...(current.entity as Record<string, unknown>),
-                          with: step.options.journalPreImageWith,
-                        }
-                      : (current.entity ?? current.body),
-                }
-              : step.options.journalPreImage !== undefined
-                ? { preImage: step.options.journalPreImage }
-                : step.options.readBefore === true && current?.exists
-                  ? { preImage: current.entity ?? current.body }
-                  : {}),
+            ...withCopy(
+              meta.journal === 'pre-image' && current
+                ? step.options.journalPreImageWith !== undefined &&
+                  current.entity !== null &&
+                  typeof current.entity === 'object'
+                  ? {
+                      ...(current.entity as Record<string, unknown>),
+                      with: step.options.journalPreImageWith,
+                    }
+                  : (current.entity ?? current.body)
+                : step.options.journalPreImage !== undefined
+                  ? step.options.journalPreImage
+                  : step.options.readBefore === true && current?.exists
+                    ? (current.entity ?? current.body)
+                    : undefined,
+              copy,
+            ),
           });
         }
 
@@ -3269,4 +3300,17 @@ function runsText(content: unknown): string | null {
         : '',
     )
     .join('');
+}
+
+/**
+ * v3 F12 (ADR 0081, D3): a journal entry's pre-image with the restorable copy a delete kept merged in (`copy`), whatever
+ * the pre-image came from (the engine's read, the tool's own, or none).
+ */
+function withCopy(pre: unknown, copy: Record<string, unknown>): { preImage?: unknown } {
+  const hasCopy = Object.keys(copy).length > 0;
+  if (pre === undefined) return hasCopy ? { preImage: copy } : {};
+  if (!hasCopy) return { preImage: pre };
+  return pre !== null && typeof pre === 'object' && !Array.isArray(pre)
+    ? { preImage: { ...(pre as Record<string, unknown>), ...copy } }
+    : { preImage: { value: pre, ...copy } };
 }

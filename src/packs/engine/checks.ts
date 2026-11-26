@@ -176,16 +176,6 @@ async function governanceCheck(
     refusal: { code: 'PACK_GOVERNANCE_CHANGED', message, details: more },
   });
   if (!pack) return refusal('The pack this package was planned with no longer exists. Nothing was written.');
-  // CR-2026-11-R2 (R2-29): a job that runs directly (at the agent's scope, not approved by the owner) stops when the
-  // tool's switch now says "always propose", in the approved version or in one waiting for approval (the stricter). The
-  // check runs again whenever the job starts again before its first write (a hold, a budget wait, a restart).
-  if (input.tool && d.packs.store.jobApproval(ctx.projectId, ctx.jobId) === 'direct') {
-    if (d.packs.strictToolMode(pack.id, input.tool) === 'propose')
-      return refusal(
-        `${input.tool} is now switched to “always propose” on the Packs page (pack version ${pack.version}${pack.approved?.version === pack.version ? '' : ', waiting for approval'}), so this package can no longer run directly. Nothing was written: call the tool again; it will be a proposal for the owner.`,
-        { tool: input.tool, switch: 'propose' },
-      );
-  }
   if (!pack.approved || pack.approved.version !== input.version || pack.version !== input.version) {
     return refusal(
       `The ${pack.name} pack changed since this package was planned (planned on version ${input.version ?? '?'}, now version ${pack.version}${pack.approved ? `, approved version ${pack.approved.version}` : ', not approved'}). Nothing was written: plan the package again once the owner has approved the pack.`,

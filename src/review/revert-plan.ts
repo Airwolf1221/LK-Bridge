@@ -36,6 +36,7 @@ import { compareStoredBlocks } from '../jobs/verify-blocks.js';
 import { BLOCKWISE_CHECK, blocksHash, planBlockwise, withoutVersions } from '../pages/blockwise.js';
 import { blockwiseJob, validateBlockOp } from '../pages/blockwise-job.js';
 import { DEFAULT_STAGING_FOLDER } from '../images/service.js';
+import type { EntityFollowUp } from './entity-undo.js';
 import type {
   BlockTarget,
   FactsTarget,
@@ -102,6 +103,12 @@ export interface TargetPlan {
     /** The asset's file URL, as the plan's read gave it (the copy is downloaded from it). */
     readonly url: unknown;
   };
+  /**
+   * v3 F12 (ADR 0081, D3): the bridge-side part of reverting a deletion LegendKeeper can no longer undo itself, once the
+   * revert job has succeeded: a page (and the pages under it) made again from the copy kept before the delete, or an
+   * asset uploaded again from its kept bytes.
+   */
+  readonly followUp?: EntityFollowUp;
 }
 
 /** The reads a plan makes (system principal, P1; a 404 is `exists: false`). */

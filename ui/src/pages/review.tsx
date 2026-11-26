@@ -4,6 +4,10 @@
  * proposal would have shown and the pages it touched, each expandable to its diff. Mark reviewed (one, or all of the
  * filtered set, confirmed), or Revert (decision B: the shared `RevertButton`, also on the Jobs page). Approved proposals
  * are never listed: the owner saw them before they happened.
+ *
+ * v3 F12 (ADR 0081, D2): every direct write is here, canon and lifecycle changes and deletes included. The items are
+ * grouped by workstream, then by connection (Claude or ChatGPT), each group with its own "Mark reviewed"; Revert shows
+ * only on an item something of which can be put back; a page the job made lists each sidebar row on its own line.
  */
 import { useState } from 'react';
 import { api, qs } from '../api';
@@ -88,7 +92,7 @@ export function RevertButton({
       return;
     }
     // v3 F3e (ADR 0059): a split's phase 1 that stopped before anything left its source: only the pages it made, which
-    // go to ONE deletion proposal (nothing is deleted until you approve it).
+    // are deleted (v3 F12, ADR 0081: at once, part of this confirmed Revert, each only while it is as the split made it).
     const made = p.split?.pagesMade ?? 0;
     if (p.ready === 0 && made > 0 && p.notReverted === 0) {
       const yes = await confirm({
@@ -96,11 +100,11 @@ export function RevertButton({
         message: (
           <p>
             Nothing had left the source, so there is nothing to put back. The {made} page
-            {made === 1 ? '' : 's'} it made {made === 1 ? 'goes' : 'go'} to ONE deletion proposal for you to
-            approve (each only while it is exactly as the split made it).
+            {made === 1 ? '' : 's'} it made {made === 1 ? 'is' : 'are'} deleted (each only while it is exactly as
+            the split made it; a copy is kept first).
           </p>
         ),
-        confirmLabel: 'Propose deleting them',
+        confirmLabel: 'Delete them',
         danger: true,
       });
       if (!yes) return;
@@ -150,8 +154,8 @@ export function RevertButton({
           {made > 0 && (
             <p data-testid="revert-split-pages">
               A split: once the revert has run, the {made} page{made === 1 ? '' : 's'} it made{' '}
-              {made === 1 ? 'goes' : 'go'} to ONE deletion proposal for you to approve (each only while it is
-              exactly as the split made it).
+              {made === 1 ? 'is' : 'are'} deleted (each only while it is exactly as the split made it; a copy is
+              kept first).
             </p>
           )}
           <ul className="revert-targets">
@@ -268,6 +272,7 @@ function ChangeBody({ c }: { c: ReviewChange }) {
           ))}
         </dl>
       )}
+      {c.coveredBy && <p className="muted small-text">{c.coveredBy}.</p>}
       {c.notRevertible && (
         <p className="note small-text">
           Revert does not put this back: {c.notRevertible.reason}
@@ -374,9 +379,10 @@ function ItemRow({ item, onChanged }: { item: ReviewItem; onChanged: () => void 
             Mark reviewed
           </Button>
         )}
-        {(!item.revert || item.revert.state === 'failed' || item.revert.state === 'cancelled') && (
-          <RevertButton jobId={item.jobId} project={selected} onDone={onChanged} />
-        )}
+        {item.revertible !== false &&
+          (!item.revert || item.revert.state === 'failed' || item.revert.state === 'cancelled') && (
+            <RevertButton jobId={item.jobId} project={selected} onDone={onChanged} />
+          )}
       </div>
       {open && <ItemDetail jobId={item.jobId} />}
     </li>
@@ -461,8 +467,9 @@ export function ReviewPage() {
           )}
         </div>
         <p className="muted small-text">
-          Proposals you approved are not listed (you saw them before they happened); nor are canon and
-          lifecycle changes, which are always proposals.
+          Every direct write is here, canon and lifecycle changes and deletes included (a copy is kept before
+          every delete, so Revert can bring it back). Proposals you approved are not listed: you saw them
+          before they happened.
         </p>
       </section>
       <ErrorNote error={r.error} onRetry={r.reload} />
@@ -475,12 +482,76 @@ export function ReviewPage() {
             : 'No direct writes here.'}
         </Empty>
       ) : (
-        <ul className="review-list" role="list">
-          {data.items.map((item) => (
-            <ItemRow key={item.jobId} item={item} onChanged={r.reload} />
-          ))}
-        </ul>
+        groupsOf(data.items).map((g) => (
+          <ReviewGroup key={g.key} group={g} onChanged={r.reload} />
+        ))
       )}
     </>
+  );
+}
+
+/** v3 F12 (ADR 0081, D2): the items by workstream, then by connection (Claude, ChatGPT), in the list's order. */
+interface Group {
+  readonly key: string;
+  readonly workstream: string | null;
+  readonly connection: string;
+  readonly items: ReviewItem[];
+}
+
+function groupsOf(items: readonly ReviewItem[]): Group[] {
+  const out = new Map<string, Group>();
+  for (const it of items) {
+    const ws = it.workstream ?? null;
+    const conn = it.connection ?? it.agent.name;
+    const key = `${ws ?? ''}\u0000${conn}`;
+    const g = out.get(key) ?? { key, workstream: ws, connection: conn, items: [] };
+    g.items.push(it);
+    out.set(key, g);
+  }
+  return [...out.values()];
+}
+
+function ReviewGroup({ group, onChanged }: { group: Group; onChanged: () => void }) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const { selected, withProject } = useProject();
+  const open = group.items.filter((i) => !i.reviewed).map((i) => i.jobId);
+  const label = `${group.workstream ?? 'No workstream'} · ${group.connection}`;
+  const markGroup = async () => {
+    const ok = await confirm({
+      title: `Mark ${open.length} item${open.length === 1 ? '' : 's'} reviewed?`,
+      message: (
+        <p>
+          Every unreviewed item of {group.workstream ? `the workstream “${group.workstream}”` : 'no workstream'}{' '}
+          by {group.connection} is marked reviewed. Nothing in LegendKeeper changes.
+        </p>
+      ),
+      confirmLabel: 'Mark reviewed',
+    });
+    if (!ok) return;
+    await run(() => api.post(withProject('/review/mark', selected), { ids: open }), 'Marked reviewed.');
+    onChanged();
+  };
+  return (
+    <section className="review-group" aria-label={label}>
+      <div className="row row-between">
+        <h2 className="h3">
+          {group.workstream ?? <span className="muted">No workstream</span>} <Badge>{group.connection}</Badge>{' '}
+          <span className="muted small-text">
+            {group.items.length} item{group.items.length === 1 ? '' : 's'}
+          </span>
+        </h2>
+        {open.length > 0 && (
+          <Button className="small" busy={busy} onClick={() => void markGroup()}>
+            Mark reviewed ({open.length})
+          </Button>
+        )}
+      </div>
+      <ul className="review-list" role="list">
+        {group.items.map((item) => (
+          <ItemRow key={item.jobId} item={item} onChanged={onChanged} />
+        ))}
+      </ul>
+    </section>
   );
 }

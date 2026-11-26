@@ -124,7 +124,10 @@ describe('updates from change snapshots', () => {
   it('a page the bridge edits is found by its new text, and no longer by its old, with no full snapshot', async () => {
     const st0 = w.stack.runtime.appraisal.index.state(PROJECT)!;
     expect(ids(await search('"toll courts"'))).toContain(P.clean);
-    const r = await w.call('write_page', {
+    // v3 F12: this world's agent is at scope propose; the edit is a write-scope connection's, run directly.
+    const t = w.stack.newToken('fulltext-writer', 'write');
+    const writer = await w.stack.connect(t.token);
+    const r = await w.stack.call(writer, 'write_page', {
       page: P.clean,
       mode: 'replace_section',
       section: 'Overview',

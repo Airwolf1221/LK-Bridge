@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- tool results and the mock's state are JSON */
 /**
  * CR-2026-11-R4 (ADR 0065 amendment 2): the fixes of the narrative review, beyond the reviewer's own tests
- * (test/review/r4-narrative/). Moving a page into or out of Narratives is a proposal at every scope (canonical when a
- * page of it carries a lifecycle signal), judged again inside the lock; what still holds when canon sits in a story the
+ * (test/review/r4-narrative/). Moving a page into or out of Narratives is a proposal at scope propose (canonical when
+ * a page of it carries a lifecycle signal), judged again inside the lock (v3 F12, ADR 0081: at scope write it is the
+ * agent's direct write, on the owner's Review page with Revert); what still holds when canon sits in a story the
  * OWNER put it in (in the app, the route an agent no longer has): the writing tools leave the story alone, the audit
  * reports the page and its tags fix only adds; the narrative indexes' names; the lifecycle tools' destinations; a
  * narrative chapter restored where it was. Against the mock LegendKeeper only.
@@ -16,6 +17,8 @@ import { withoutNarratives } from '../../src/narrative/authority.js';
 
 let w: NarrativeWorld;
 let agent: (name: string, args: Record<string, unknown>) => Promise<Record<string, any>>;
+/** v3 F12 (ADR 0081): an agent at scope propose, where the Narratives guard's proposals are made. */
+let proposer: (name: string, args: Record<string, unknown>) => Promise<Record<string, any>>;
 const STORY = 'Lantern Road';
 const ids = {
   story: '',
@@ -78,6 +81,8 @@ beforeAll(async () => {
   const { token } = w.stack.newToken('r4-guard-agent', 'write');
   const client = await w.stack.connect(token);
   agent = async (name, args) => (await w.stack.call(client, name, args)).body;
+  const proposing = await w.stack.connect(w.stack.newToken('r4-guard-proposer', 'propose').token);
+  proposer = async (name, args) => (await w.stack.call(proposing, name, args)).body;
   expect((await w.tool('arkona_story_create', { continuity: 'Main CANON', title: STORY })).status).toBe(
     'written',
   );
@@ -146,7 +151,7 @@ afterAll(async () => {
 describe('moving into and out of Narratives (F1)', () => {
   it('R4G-01: a narrative chapter moved out to canon is an ORDINARY proposal (no lifecycle signal) that an ordinary approval runs', async () => {
     const ch = named(ids.story, 'Chapter 1 - First Light')!;
-    const b = await agent('move_resource', { page: ch.id, to: O.salahadPolities });
+    const b = await proposer('move_resource', { page: ch.id, to: O.salahadPolities });
     expect(b.status, JSON.stringify(b).slice(0, 400)).toBe('proposal_captured');
     expect(proposal(b.proposalId)?.requiresCanonicalApproval).toBe(false);
     expect(String(proposal(b.proposalId)?.proposedBecause)).toMatch(/into or out of Narratives/);
@@ -160,7 +165,7 @@ describe('moving into and out of Narratives (F1)', () => {
   });
 
   it('R4G-02: a canon page moved into a story is a CANONICAL proposal naming what loses its lifecycle; only "accept as canon" runs it', async () => {
-    const b = await agent('move_resource', { page: ids.moveIn, to: ids.story });
+    const b = await proposer('move_resource', { page: ids.moveIn, to: ids.story });
     expect(b.status, JSON.stringify(b).slice(0, 400)).toBe('proposal_captured');
     const p = proposal(b.proposalId)!;
     expect(p.requiresCanonicalApproval).toBe(true);
@@ -175,18 +180,23 @@ describe('moving into and out of Narratives (F1)', () => {
     expect(parentOf(ids.moveIn)).toBe(O.salahadPolities);
   });
 
-  it('R4G-03: inside the lock: a direct move whose destination the owner moved into Narratives in the app (the tree has not seen it) is refused', async () => {
+  it('R4G-03: inside the lock: an ordinarily approved move whose destination the owner moved into Narratives in the app (the tree has not seen it) is refused', async () => {
+    // v3 F12: at scope write a move into Narratives is direct, so the in-lock judgement is met by an ordinary proposal
+    // (scope propose): planned as a plain move (the tree has the shelf under Salahad), approved ordinarily.
+    const b = await proposer('move_resource', { page: ids.shelfPage, to: ids.shelf });
+    expect(b.status, JSON.stringify(b).slice(0, 400)).toBe('proposal_captured');
+    expect(proposal(b.proposalId)?.requiresCanonicalApproval).toBe(false);
     // The owner files the plain shelf under Main CANON in the app; the tree still has it under Salahad.
     w.repo.outside.move(ids.shelf, N.main);
-    const b = await agent('move_resource', { page: ids.shelfPage, to: ids.shelf });
-    expect(b.status, JSON.stringify(b).slice(0, 400)).not.toBe('written');
+    await w.stack.runtime.policy.commands.approve('owner', b.proposalId);
+    expect(await settled(b.proposalId)).not.toBe('executed');
     expect(parentOf(ids.shelfPage)).toBe(O.salahadPolities);
     w.repo.outside.move(ids.shelf, O.salahad);
   });
 
   it('R4G-04: a page created under a story through the low-level tools (no narrative tool declares it) is an ordinary proposal', async () => {
     const before = kids(ids.story).length;
-    const b = await agent('lk_api_write', {
+    const b = await proposer('lk_api_write', {
       operationId: 'createResource',
       params: { body: { name: 'Loose Lantern Notes', parentId: ids.story } },
     });

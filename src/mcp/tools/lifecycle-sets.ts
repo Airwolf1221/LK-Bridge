@@ -1018,7 +1018,7 @@ async function planSet(
               steps: labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l)),
               requiresCanonicalApproval: true,
               message:
-                'Dry run: nothing was written and nothing was proposed. Run without dryRun to propose it: one proposal for the whole set, which always needs the owner’s canonical approval.',
+                'Dry run: nothing was written and nothing was proposed. Run without dryRun to make it: one job for the whole set at scope write (on the owner’s Review page, with Revert), one canonical proposal at scope propose.',
             },
             pd,
           ),

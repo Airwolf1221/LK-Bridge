@@ -505,7 +505,8 @@ export class Audits {
 
   /**
    * "Propose a fix" for one finding: re-reads its target live (P1), then creates an ordinary proposal through the
-   * machinery of an existing tool, with every guard. Nothing is applied; the owner approves it. Audited.
+   * machinery of an existing tool, with every guard. Nothing is applied; the owner approves it. Audited. v3 F12 (ADR
+   * 0081): the owner's own "Apply fix" (`origin.ownerConfirmed`, confirmed in its dialog) runs it at once as one job.
    */
   async proposeFix(
     actor: string,
@@ -602,11 +603,15 @@ export class Audits {
                         ...(opts.eventId !== undefined ? { eventId: opts.eventId } : {}),
                         ...(opts.createNew === true ? { createNew: true } : {}),
                       },
+        // v3 F12 (ADR 0081): the owner's confirmed "Apply fix" runs at once.
+        opts.origin?.ownerConfirmed === true ? { ownerConfirmed: true } : undefined,
       );
       r =
         c.status === 'proposal_captured'
           ? { status: 'proposal_captured', proposalId: c.proposalId, summary: c.summary, fix: kind }
-          : c;
+          : c.status === 'job_submitted'
+            ? { status: 'job_submitted', jobId: c.jobId, summary: c.summary, fix: kind }
+            : c;
     } else {
       r = await proposeFixVia(
         {
@@ -642,6 +647,7 @@ export class Audits {
       fix: f.fix.kind,
       result: r.status,
       ...(r.status === 'proposal_captured' ? { proposalId: r.proposalId } : {}),
+      ...(r.status === 'job_submitted' ? { jobId: r.jobId } : {}),
     });
     return r;
   }

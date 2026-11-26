@@ -176,9 +176,9 @@ export const registerChronology: Register = (api, ctx) => {
   });
 
   /**
-   * "Propose a fix" for one finding of the check: `sync_timeline_event` for that table row, or (v2 E5 hotfix,
-   * `kind: 'count'`) the age's Main count set to its table's row count, captured as ONE proposal (the owner approves it
-   * as normal on the Proposals page). Reads about 3 requests to plan (the count fix: the calendar, the Main document,
+   * "Apply fix" for one finding of the check: `sync_timeline_event` for that table row, or (v2 E5 hotfix,
+   * `kind: 'count'`) the age's Main count set to its table's row count. v3 F12 (ADR 0081): the owner confirms it in its
+   * dialog and it runs at once as one job (no proposal to approve next). Reads about 3 requests to plan (the count fix: the calendar, the Main document,
    * the age table and one page of events per 100); writes nothing. Audited `chronology.propose_fix`.
    */
   api.post('/chronology/propose-fix', async (req) => {
@@ -245,6 +245,8 @@ export const registerChronology: Register = (api, ctx) => {
                       ...(b.eventId !== undefined ? { eventId: b.eventId } : {}),
                       ...(b.createNew === true ? { createNew: true } : {}),
                     },
+        // v3 F12 (ADR 0081): confirmed in its dialog (`confirm: true`), the owner's fix runs at once as one job.
+        { ownerConfirmed: true },
       );
     } catch (e) {
       if (e instanceof ChronologyError) throw chronologyHttpError(e);

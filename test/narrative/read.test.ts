@@ -5,8 +5,8 @@
  * contradictions, the plan's constraints and gate, the previous chapter's closing state, every part labelled);
  * `arkona_chapter_check` (not yet born, deceased, outside the attested span; present but absent and the reverse; a birth
  * in the prose against canon; a new-lore candidate and none for a sentence's first word; an Archived-only name; an AU
- * chapter); `arkona_promote_from_chapter` (a page, a fact and a text as proposals at write scope, items, the chapter
- * cited in the note only, a namesake carried). Memory: repeated saves and checks return the heap to its baseline.
+ * chapter); `arkona_promote_from_chapter` (a page, a fact and a text as proposals at propose scope, items, the chapter
+ * cited in the note only, a namesake carried; v3 F12, ADR 0081: at write scope the agent's direct writes, on Review). Memory: repeated saves and checks return the heap to its baseline.
  */
 import v8 from 'node:v8';
 import vm from 'node:vm';
@@ -214,8 +214,13 @@ describe('arkona_chapter_check (E6.2)', () => {
 });
 
 describe('arkona_promote_from_chapter (E7)', () => {
-  it('a page, a fact and a text become proposals at write scope; facts and texts are ONE proposal of items; the chapter is cited in the note only', async () => {
-    const b = await w.tool('arkona_promote_from_chapter', {
+  /** v3 F12 (ADR 0081): the proposals are made at scope propose (at scope write the same call writes directly). */
+  const proposeTool = async (name: string, args: Record<string, unknown>) =>
+    (await w.stack.call(await w.stack.connect(w.stack.newToken('read-proposer', 'propose').token), name, args))
+      .body as Record<string, any>;
+
+  it('a page, a fact and a text become proposals at propose scope; facts and texts are ONE proposal of items; the chapter is cited in the note only', async () => {
+    const b = await proposeTool('arkona_promote_from_chapter', {
       chapter: 'Chapter 2 - The Tower',
       candidates: [
         {
@@ -258,8 +263,8 @@ describe('arkona_promote_from_chapter (E7)', () => {
     expect(JSON.stringify(w.sidebars.pages.get(K.harun))).not.toMatch(/A harbour builder/);
   });
 
-  it('a new character is a canon proposal with its namesake warning carried', async () => {
-    const b = await w.tool('arkona_promote_from_chapter', {
+  it('a new character is a canon proposal (at propose scope) with its namesake warning carried', async () => {
+    const b = await proposeTool('arkona_promote_from_chapter', {
       chapter: 'Chapter 2 - The Tower',
       candidates: [
         {
@@ -294,6 +299,25 @@ describe('arkona_promote_from_chapter (E7)', () => {
     expect(w.stack.runtime.policy.proposals.get(c.proposalId)!.summary).toMatch(
       /namesake: Tsubame Hoshizora[\s\S]*introduced in Chapter 2/,
     );
+  });
+
+  it('at write scope (v3 F12) a page is written directly, on the owner’s Review page; never a Dependency or a Related Source', async () => {
+    const b = await w.tool('arkona_promote_from_chapter', {
+      chapter: 'Chapter 2 - The Tower',
+      candidates: [
+        {
+          candidate: 'Glimmerwood Quay',
+          as: 'page',
+          page: { name: 'Glimmerwood Quay', template: 'AI General Source', parent: 'Appraisal Desk' },
+        },
+      ],
+    });
+    const page = b.proposals[0];
+    expect(page.status, JSON.stringify(page)).toBe('written');
+    expect(
+      w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).some((i) => i.jobId === page.jobId),
+    ).toBe(true);
+    expect(JSON.stringify(b)).not.toMatch(/Dependencies|Related Sources/);
   });
 });
 

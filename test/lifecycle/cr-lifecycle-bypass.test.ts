@@ -396,13 +396,26 @@ describe('F10 (canon, decision 5): an Authoritative page created through the low
     });
     expect(tagged.isError, tagged.text).toBe(true);
     expect(tagged.text).toMatch(/status tag CANON would be added — use promote_page/);
+    // v3 F12 (ADR 0081): at scope propose it is that canonical proposal; at scope write a new Authoritative page is
+    // direct (a job on the Review page).
+    const proposer = await w.stack.connect(w.stack.newToken('f10-propose', 'propose').token);
+    const p = await w.stack.call(proposer, 'lk_api_write', {
+      project: 'test',
+      operationId: 'createResource',
+      params: { body: { name: '[BSRC] Instant Canon', parentId: LOCS } },
+    });
+    expect({ status: p.body.status, canonical: p.body.requiresCanonicalApproval ?? false }, p.text).toEqual({
+      status: 'proposal_captured',
+      canonical: true,
+    });
+    w.stack.runtime.policy.commands.reject('owner', String(p.body.proposalId), 'not now');
     const r = await call('lk_api_write', {
       operationId: 'createResource',
       params: { body: { name: '[BSRC] Instant Canon', parentId: LOCS } },
     });
     expect({ status: r.body.status, canonical: r.body.requiresCanonicalApproval ?? false }, r.text).toEqual({
-      status: 'proposal_captured',
-      canonical: true,
+      status: 'succeeded',
+      canonical: false,
     });
   });
 });

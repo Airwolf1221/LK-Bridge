@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument -- tool results and the mock's state are JSON */
 /**
  * CR-2026-11-R4, pass 1 (the narrative property): `create_resource`'s narrative mode and the five writing tools as an
- * agent at scope `write` (default rails) would try to turn them on canon: a parent outside Narratives or a look-alike
+ * agent at scope `write` would try to turn them on canon: a parent outside Narratives or a look-alike
  * Narratives, a Status or a status tag smuggled in, a look-alike [BSRC] prefix, a canon index or page given as the story,
  * a canon page inside a story (a plan, a renumbered chapter), a chapter moved out of Narratives in the app (a stale tree,
  * and after the plan), and story titles that name an index the bridge depends on. Each test asserts the SAFE behaviour
@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { LIFECYCLE } from '../../resources/world.js';
 import { O } from '../../packs/f4a-world.js';
 import { K, N, narrativeWorld, PROJECT, type NarrativeWorld } from '../../narrative/world.js';
-import { agentOf, approveOrdinary, canonSidebar } from './helpers.js';
+import { agentOf, approveOrdinary, canonSidebar, onReview } from './helpers.js';
 
 let w: NarrativeWorld;
 let agent: (name: string, args: Record<string, unknown>) => Promise<Record<string, any>>;
@@ -208,15 +208,15 @@ describe('create_resource’s narrative mode', () => {
     }
   });
 
-  it('NA-20: a look-alike [BSRC] prefix (fullwidth ［BSRC］) on a narrative create is never a direct canon-looking page', async () => {
+  it('NA-20: a look-alike [BSRC] prefix (fullwidth ［BSRC］) on a narrative create: canon-looking, so (v3 F12) direct and on Review', async () => {
     const b = await agent('create_resource', {
       name: '［BSRC］ Smuggled Notes',
       template: 'AI Narrative Chapter Plan',
       parent: ids.map,
     });
-    if (b.status === 'proposal_captured')
-      expect(w.stack.runtime.policy.proposals.get(b.proposalId)?.requiresCanonicalApproval).toBe(true);
-    else expect(b.status, JSON.stringify(b).slice(0, 400)).not.toBe('written');
+    // As any canon an agent makes at scope write: never silent, it is on the owner's Review page with Revert.
+    expect(b.status, JSON.stringify(b).slice(0, 400)).toBe('written');
+    expect(onReview(w, String(b.jobId)), 'on the Review page, with Revert').toBe(true);
   });
 });
 

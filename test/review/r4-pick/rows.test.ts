@@ -5,7 +5,8 @@
  * to `Consistency.propose` (what `pick` calls with the edits it works out from the snapshot's facts) on the chronology
  * world (a confirmed Universal Chronology on the mock LegendKeeper). The attempts: the row changed in the app between
  * the run and the pick (the edit's `from` is the run's value), the row's other cells changed between the pick and its
- * approval (a bold mark, a mention: the same words), its date changed then, the cells it must keep, and Revert.
+ * job's run (v3 F12: the pick runs at once; a write hold stands in for the wait; a bold mark, a mention: the same words),
+ * its date changed then, the cells it must keep, and Revert.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_KCY_STYLE, formatKcy } from '../../../src/calendar/index.js';
@@ -71,17 +72,23 @@ async function propose(rowId: string, from: string, to: string) {
   });
 }
 
-async function approveAndWait(proposalId: string) {
+/** v3 F12 (ADR 0081): the owner's pick runs its edits at once as one job (no proposal); waits for it. */
+async function ranAndWait(r: { proposalId: string; jobId?: string }) {
   const rt = w.stack.runtime;
-  await rt.policy.commands.approve('owner', proposalId);
+  expect(r.jobId, 'a confirmed pick runs as a job').toEqual(expect.any(String));
+  expect(r.proposalId).toBe('');
   for (let i = 0; i < 1000; i++) {
-    const p = rt.policy.proposals.get(proposalId)!;
-    if (p.state === 'conflicted') return { p, job: undefined };
-    const job = p.jobId ? rt.engine.queries.getJob(PROJECT, p.jobId) : undefined;
-    if (job && ['succeeded', 'failed', 'cancelled'].includes(job.status)) return { p, job };
-    await new Promise((r) => setTimeout(r, 20));
+    const job = rt.engine.queries.getJob(PROJECT, r.jobId!);
+    if (job && ['succeeded', 'failed', 'cancelled'].includes(job.status)) return { job };
+    await new Promise((res) => setTimeout(res, 20));
   }
-  throw new Error('the proposal did not finish');
+  throw new Error('the job did not finish');
+}
+
+/** v3 F12: holds every write, so a test can change the row between the pick and its job's run (as before approval). */
+function holdWrites(): () => void {
+  w.stack.runtime.engine.controls.pauseWrites('test');
+  return () => void w.stack.runtime.engine.controls.resumeWrites('test');
 }
 
 describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
@@ -92,7 +99,7 @@ describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
     if (r.items.length > 0) {
       // What the owner is shown: the run's value as "before".
       const shown = r.items[0]!.diff?.changes?.[0];
-      const done = await approveAndWait(r.proposalId);
+      const done = await ranAndWait(r);
       expect(['succeeded', 'failed', undefined]).toContain(done.job?.status);
       void shown;
     }
@@ -101,12 +108,14 @@ describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
     expect(eventOf('efour000').start).toBe(CAL.parser.parse('Azah 19th, 4A 1').start);
   });
 
-  it('PK-37 a bold mark added to the row’s Historical Event between the pick and approval is kept', async () => {
+  it('PK-37 a bold mark added to the row’s Historical Event between the pick and its job’s run is kept', async () => {
+    const release = holdWrites();
     const r = await propose('rfour006', 'Kumikas 3rd, 4A 881', 'Kumikas 4th, 4A 881');
     expect(r.notPlanned).toEqual([]);
     // Another writer marks part of the event bold (the same words).
     outsideCell('rfour006', 0, [{ text: 'Ashgate falls to the ' }, { text: 'Isar host', bold: true }]);
-    const done = await approveAndWait(r.proposalId);
+    release();
+    const done = await ranAndWait(r);
     // SAFE: either the job stops (the row is not as planned) or the mark is kept.
     if (done.job?.status === 'succeeded')
       expect(cellRuns('rfour006', 1)).toEqual([{ text: 'Kumikas 4th, 4A 881' }]);
@@ -116,14 +125,16 @@ describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
     ]);
   });
 
-  it('PK-38 a mention added to the row’s Historical Event between the pick and approval is kept', async () => {
+  it('PK-38 a mention added to the row’s Historical Event between the pick and its job’s run is kept', async () => {
+    const release = holdWrites();
     const r = await propose('rfour005', 'Jehet 11th - 18th, 4A 424', 'Jehet 12th - 18th, 4A 424');
     expect(r.notPlanned, JSON.stringify(r.notPlanned)).toEqual([]);
     outsideCell('rfour005', 0, [
       { text: 'The ' },
       { mention: { resourceId: C.plans, text: 'Week of Lanterns' } },
     ]);
-    const done = await approveAndWait(r.proposalId);
+    release();
+    const done = await ranAndWait(r);
     if (done.job?.status === 'succeeded')
       expect(cellRuns('rfour005', 1)).toEqual([{ text: 'Jehet 12th - 18th, 4A 424' }]);
     expect(cellRuns('rfour005', 0)).toEqual([
@@ -132,11 +143,13 @@ describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
     ]);
   });
 
-  it('PK-39 the row re-dated in the app between the pick and approval: the job stops, the newer date is kept', async () => {
+  it('PK-39 the row re-dated in the app between the pick and its job’s run: the job stops, the newer date is kept', async () => {
+    const release = holdWrites();
     const r = await propose('rfour002', 'Unknown, 4A 101', '4A 102');
     expect(r.notPlanned, JSON.stringify(r.notPlanned)).toEqual([]);
     outsideRedate('rfour002', 'efour002', '4A 103');
-    const done = await approveAndWait(r.proposalId);
+    release();
+    const done = await ranAndWait(r);
     expect(done.job?.status).not.toBe('succeeded');
     expect(cellRuns('rfour002', 1)).toEqual([{ text: '4A 103' }]);
     expect(eventOf('efour002').start).toBe(CAL.parser.parse('4A 103').start);
@@ -153,7 +166,7 @@ describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
     const before = cellRuns('rfour007', 0);
     const r = await propose('rfour007', '4A 881', '4A 882');
     expect(r.notPlanned, JSON.stringify(r.notPlanned)).toEqual([]);
-    const done = await approveAndWait(r.proposalId);
+    const done = await ranAndWait(r);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     pickJob = done.job!.id;
     expect(cellRuns('rfour007', 0)).toEqual(before);
@@ -163,16 +176,13 @@ describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
   it('PK-41 Revert of the pick’s chronology job puts the row (Date, KCY) and its event back together', async () => {
     expect(pickJob).toBeDefined();
     const rt = w.stack.runtime;
-    // As `pick` records it (Revert recognises a pick's job by its recorded proposal).
-    const proposal = rt.policy.proposals
-      .list({ project: PROJECT, limit: 50 })
-      .find((p) => p.jobId === pickJob)!;
+    // As `pick` records it (v3 F12: Revert recognises a pick's job by its recorded job).
     w.stack.db
       .prepare(
         `INSERT INTO consistency_picks (id, project_id, finding_id, audit_finding_id, value, side, picked_by, picked_at,
-           proposal_id, items) VALUES (?, ?, ?, NULL, ?, NULL, 'owner', ?, ?, '[]')`,
+           proposal_id, job_id, items) VALUES (?, ?, ?, NULL, ?, NULL, 'owner', ?, NULL, ?, '[]')`,
       )
-      .run('cpk_r4rows00000001', PROJECT, 'cf_00000000000000000000', '4A 882', Date.now(), proposal.id);
+      .run('cpk_r4rows00000001', PROJECT, 'cf_00000000000000000000', '4A 882', Date.now(), pickJob);
     const eventBefore = eventOf('efour007');
     const res = (await rt.reverts.revert('owner', PROJECT, pickJob, {})) as Obj;
     expect(res.status, JSON.stringify(res)).toBe('submitted');

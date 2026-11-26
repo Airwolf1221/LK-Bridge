@@ -42,13 +42,13 @@ describe('a Working character', () => {
     // Moved out first (an ordinary move within the Working area), the Core is promoted with its index.
     const out = await call('move_resource', { page: art.body.pages[0].id, to: LIFECYCLE.working });
     expect(out.body.status, out.text).toBe('written');
-    const r = await call('promote_page', { page: page.id, destination: 'Foxians' });
-    expect(r.body, r.text).toMatchObject({
-      status: 'proposal_captured',
+    // v3 F12 (ADR 0081): at scope write the promotion is direct.
+    const done = await call('promote_page', { page: page.id, destination: 'Foxians' });
+    expect(done.body, done.text).toMatchObject({
+      status: 'written',
+      verified: true,
       characterIndex: { id: idx.id, movesWith: true },
     });
-    const done = await accept(w, r);
-    expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
     expect(w.repo.live(idx.id)).toMatchObject({ parentId: 'foxian01' });
     expect(w.repo.live(page.id)).toMatchObject({ name: '[BSRC] Ren Kai - Character Core', parentId: idx.id });
     expect(w.repo.live(art.body.pages[0].id)).toMatchObject({

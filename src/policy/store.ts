@@ -9,7 +9,6 @@ import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { JobEventEmitter, JobEngineEvents } from '../jobs/events.js';
 import { PolicyError } from './errors.js';
-import { railsFrom, type WriteRails } from './rails.js';
 import {
   isProfileKind,
   isScope,
@@ -53,7 +52,6 @@ function toProfile(r: Row): Profile {
     kind: r.kind as ProfileKind,
     scope: r.scope as Scope,
     showLowLevelTools: Number(r.show_low_level_tools ?? 0) === 1,
-    rails: railsFrom(r.write_rails),
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
   };
@@ -249,20 +247,6 @@ export class PolicyStore {
     return { before, after: this.getProfile(id)! };
   }
 
-  /**
-   * v3 F3.4 (ADR 0055): a profile's safety rails at scope `write` (applies at the next request; the gate's cache is
-   * cleared). Low-level: the owner command audits.
-   */
-  updateRails(id: string, rails: WriteRails): { before: Profile; after: Profile } {
-    const before = this.getProfile(id);
-    if (!before) throw new PolicyError('PROFILE_NOT_FOUND', `No profile ${id}`);
-    this.db
-      .prepare('UPDATE agent_profiles SET write_rails = ?, updated_at = ? WHERE id = ?')
-      .run(JSON.stringify(rails), this.now(), id);
-    this.bump();
-    return { before, after: this.getProfile(id)! };
-  }
-
   // ------------------------------------------------------------------------------------------ settings
 
   /** The scope a new profile gets unless one is chosen (default `read`). */
@@ -328,8 +312,7 @@ export class PolicyStore {
       const r = this.db
         .prepare(
           `SELECT f.family_id, f.client_id, f.revoked_at, f.expires_at, c.client_name,
-                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope, p.show_low_level_tools AS profile_low,
-                  p.write_rails AS profile_rails
+                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope, p.show_low_level_tools AS profile_low
            FROM auth_token_families f
            LEFT JOIN auth_clients c ON c.client_id = f.client_id
            LEFT JOIN agent_profiles p ON p.id = f.profile_id
@@ -348,7 +331,6 @@ export class PolicyStore {
         profileId: r.profile_id as string,
         scope: r.profile_scope as Scope,
         showLowLevelTools: Number(r.profile_low ?? 0) === 1,
-        rails: railsFrom(r.profile_rails),
         active: r.revoked_at === null && Number(r.expires_at) > nowSec,
       };
     }
@@ -356,8 +338,7 @@ export class PolicyStore {
       const r = this.db
         .prepare(
           `SELECT t.id, t.name, t.revoked_at, t.expires_at,
-                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope, p.show_low_level_tools AS profile_low,
-                  p.write_rails AS profile_rails
+                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope, p.show_low_level_tools AS profile_low
            FROM auth_pats t LEFT JOIN agent_profiles p ON p.id = t.profile_id WHERE t.id = ?`,
         )
         .get(principalId) as Row | undefined;
@@ -371,7 +352,6 @@ export class PolicyStore {
         profileId: r.profile_id as string,
         scope: r.profile_scope as Scope,
         showLowLevelTools: Number(r.profile_low ?? 0) === 1,
-        rails: railsFrom(r.profile_rails),
         active: r.revoked_at === null && (r.expires_at === null || Number(r.expires_at) > nowSec),
       };
     }

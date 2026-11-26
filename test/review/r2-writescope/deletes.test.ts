@@ -1,9 +1,9 @@
 /**
- * CR-2026-11 round 2 (write scope), the deletes rail (ADR 0055 decision C: "Deletes | pages, documents, timeline events
- * and lanes, map features, assets, calendars, sidebar properties, board shapes", on by default).
+ * CR-2026-11 round 2 (write scope): deletes by an agent at scope `write` (sidebar properties, board shapes, a board
+ * emptied, an infobox property, a calendar replaced, content removed through the low-level tools).
  *
- * Every test asserts the SAFE behaviour: an agent at scope `write` with the DEFAULT rails that deletes one of those
- * things (or loses it in a way that amounts to a delete) gets ONE proposal, and nothing is sent to LegendKeeper.
+ * The deletes rail (ADR 0055 decision C) was removed with the other safety rails (v3 F12, ADR 0081): each of these now
+ * runs directly, is one job on the owner's Review page, and Revert can put it back (ADR 0081: the `entity` target).
  */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON tool results */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -30,8 +30,8 @@ const board = {
     { id: 'shape:3', type: 'arrow', parentId: 'page:1', index: 'a3', props: { text: 'sisters' } },
   ] as unknown[],
   bindings: [
-    { id: 'b1', fromId: 'shape:3', toId: 'shape:1', props: { terminal: 'start' } },
-    { id: 'b2', fromId: 'shape:3', toId: 'shape:2', props: { terminal: 'end' } },
+    { id: 'b1', type: 'arrow', fromId: 'shape:3', toId: 'shape:1', props: { terminal: 'start' } },
+    { id: 'b2', type: 'arrow', fromId: 'shape:3', toId: 'shape:2', props: { terminal: 'end' } },
   ] as unknown[],
 };
 const boardView = () => ({
@@ -81,6 +81,20 @@ beforeAll(async () => {
     }
     return undefined;
   });
+  // The board's shape routes (deleteBoardShapes, createBoardShapes) on the same board.
+  w.overrides.set(new RegExp(`/resources/board001/docs/${w.docs.board}/board/shapes(/delete)?$`), (req) => {
+    if (req.method !== 'POST') return undefined;
+    if (/\/shapes\/delete/.test(req.path)) {
+      const ids = new Set((req.body as { ids: string[] }).ids);
+      board.shapes = board.shapes.filter((x) => !ids.has((x as { id: string }).id));
+      board.version++;
+      return { status: 200, body: { deleted: [...ids], version: `bv${board.version}` } };
+    }
+    const made = (req.body as { shapes: unknown[] }).shapes;
+    board.shapes = [...board.shapes, ...made];
+    board.version++;
+    return { status: 201, body: { shapes: made, version: `bv${board.version}` } };
+  });
   const ibxPath = new RegExp(
     `/resources/miyabi01/docs/${w.docs.miyabiMain}/blocks/infobox1/properties/ibxprop1$`,
   );
@@ -110,20 +124,37 @@ afterAll(async () => w?.close());
 const call = (tool: string, args: Record<string, unknown>) => w.stack.call(a.client, tool, args);
 const sent = (n: number) => writeCallsSince(w, n).map((c) => `${c.method} ${c.path}`);
 
-describe('controls: deletes the rail names are proposed', () => {
-  it('A0: deleteProperty (a sidebar link collection) through lk_api_write is a proposal', async () => {
+/** A direct job's outcome: settled, on the owner's Review page, and every target ready for Revert. */
+async function directThenRevertible(r: { body: Record<string, any>; text: string }) {
+  if (typeof r.body.jobId !== 'string') return { status: String(r.body.status ?? r.body.error?.code), text: r.text };
+  const jobId = r.body.jobId;
+  const job = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
+  const onReview = w.stack.runtime.review
+    .list(PROJECT, { state: 'all', limit: 500 })
+    .some((i) => i.jobId === jobId);
+  const preview = await w.stack.runtime.reverts.preview(PROJECT, jobId);
+  return {
+    status: job.status,
+    onReview,
+    revertible: preview.eligible.ok && preview.notReverted === 0 && preview.ready > 0,
+    targets: preview.targets.map((t) => `${t.kind}:${t.state}: ${t.detail}`),
+  };
+}
+const DIRECT = { status: 'succeeded', onReview: true, revertible: true };
+
+describe('deletes of what LegendKeeper keeps beside pages', () => {
+  it('A0: deleteProperty (a sidebar link collection) through lk_api_write runs directly; Revert can put it back', async () => {
     const n = w.stack.mock.calls.length;
     const r = await call('lk_api_write', {
       operationId: 'deleteProperty',
       params: { path: { resourceId: P.miyabi, propertyId: 'relmiya1' } },
     });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.proposedBecause).toMatch(/sidebar property/);
-    expect(sent(n)).toEqual([]);
+    const out = await directThenRevertible(r);
+    expect(out, `${r.text}\n${JSON.stringify(out)}`).toMatchObject(DIRECT);
+    expect(sent(n)).toContain(`DELETE /resources/${P.miyabi}/properties/relmiya1`);
   });
 
-  it('A0b: deleteBoardShapes (all three shapes) through lk_api_write is a proposal', async () => {
-    const n = w.stack.mock.calls.length;
+  it('A0b: deleteBoardShapes (all three shapes) through lk_api_write runs directly; Revert can put them back', async () => {
     const r = await call('lk_api_write', {
       operationId: 'deleteBoardShapes',
       params: {
@@ -131,14 +162,13 @@ describe('controls: deletes the rail names are proposed', () => {
         body: { ids: ['shape:1', 'shape:2', 'shape:3'] },
       },
     });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.proposedBecause).toMatch(/board shapes/);
-    expect(sent(n)).toEqual([]);
+    const out = await directThenRevertible(r);
+    expect(out, `${r.text}\n${JSON.stringify(out)}`).toMatchObject(DIRECT);
   });
 });
 
-describe('deletes the rail does not see', () => {
-  it('A1: replaceBoardContent with no shapes (deletes every shape and binding) is a proposal', async () => {
+describe('deletes that are replacements', () => {
+  it('A1: replaceBoardContent with no shapes (deletes every shape and binding) runs directly; Revert can put it back', async () => {
     const n = w.stack.mock.calls.length;
     const r = await call('lk_api_write', {
       operationId: 'replaceBoardContent',
@@ -148,13 +178,14 @@ describe('deletes the rail does not see', () => {
         body: { shapes: [], bindings: [] },
       },
     });
+    const out = await directThenRevertible(r);
     expect(
-      { status: r.body.status, shapesLeft: board.shapes.length, bindingsLeft: board.bindings.length },
-      `${r.text}\nsent: ${JSON.stringify(sent(n))}`,
-    ).toEqual({ status: 'proposal_captured', shapesLeft: 3, bindingsLeft: 2 });
+      { ...out, shapesLeft: board.shapes.length, bindingsLeft: board.bindings.length },
+      `${r.text}\nsent: ${JSON.stringify(sent(n))}\n${JSON.stringify(out)}`,
+    ).toMatchObject({ ...DIRECT, shapesLeft: 0, bindingsLeft: 0 });
   });
 
-  it('A2: deleteBlockProperty (an infobox property and its rows) is a proposal', async () => {
+  it('A2: deleteBlockProperty (an infobox property and its rows) runs directly; Revert can put it back', async () => {
     const n = w.stack.mock.calls.length;
     const r = await call('lk_api_write', {
       operationId: 'deleteBlockProperty',
@@ -167,13 +198,14 @@ describe('deletes the rail does not see', () => {
         },
       },
     });
+    const out = await directThenRevertible(r);
     expect(
-      { status: r.body.status, deleted: infobox.deleted },
-      `${r.text}\nsent: ${JSON.stringify(sent(n))}`,
-    ).toEqual({ status: 'proposal_captured', deleted: false });
+      { ...out, deleted: infobox.deleted },
+      `${r.text}\nsent: ${JSON.stringify(sent(n))}\n${JSON.stringify(out)}`,
+    ).toMatchObject({ ...DIRECT, deleted: true });
   });
 
-  it('A3: updateCalendar replacing the project calendar with a one-month stub is a proposal', async () => {
+  it('A3: updateCalendar replacing the project calendar with a one-month stub runs directly; Revert can put it back', async () => {
     const n = w.stack.mock.calls.length;
     const r = await call('lk_api_write', {
       operationId: 'updateCalendar',
@@ -193,19 +225,20 @@ describe('deletes the rail does not see', () => {
         },
       },
     });
+    const out = await directThenRevertible(r);
     expect(
-      { status: r.body.status, months: calendar.months },
-      `${r.text}\nsent: ${JSON.stringify(sent(n))}`,
-    ).toEqual({ status: 'proposal_captured', months: 5 });
+      { ...out, months: calendar.months },
+      `${r.text}\nsent: ${JSON.stringify(sent(n))}\n${JSON.stringify(out)}`,
+    ).toMatchObject({ ...DIRECT, months: 1 });
   });
 });
 
 describe('the two deletes together, through lk_api_batch', () => {
-  it('A4: a batch emptying the board, then deleting an infobox property, is a proposal', async () => {
+  it('A4: a batch emptying the board, then deleting an infobox property, runs directly as one job; Revert can put both back', async () => {
     // Reset the models.
     board.version++;
+    board.shapes = [{ id: 'shape:9', type: 'geo', parentId: 'page:1', index: 'a9', props: { geo: 'rectangle' } }];
     infobox.deleted = false;
-    const n = w.stack.mock.calls.length;
     const r = await call('lk_api_batch', {
       calls: [
         {
@@ -228,46 +261,30 @@ describe('the two deletes together, through lk_api_batch', () => {
         },
       ],
     });
-    if (typeof r.body.jobId === 'string') await w.stack.runtime.engine.wait(PROJECT, r.body.jobId, 20_000);
-    expect({ status: r.body.status, sent: sent(n) }, r.text).toEqual({
-      status: 'proposal_captured',
-      sent: [],
-    });
+    const out = await directThenRevertible(r);
+    expect(
+      { ...out, shapesLeft: board.shapes.length, deleted: infobox.deleted },
+      `${r.text}\n${JSON.stringify(out)}`,
+    ).toMatchObject({ ...DIRECT, shapesLeft: 0, deleted: true });
   });
 });
 
 /**
- * Found as design gaps (R2-52: ADR 0055 C1 kept blocks and fact rows out of the deletes rail as edits; B3 lists raw
- * sidebar-row and block writes as not revertible). ADR 0057 decision 4: content removed through the low-level tools goes
- * through the deletes rail, so with the default rails it is a proposal (Revert support stays open).
+ * Found as design gaps (R2-52: ADR 0055 C1 kept blocks and fact rows out of the deletes rail as edits; B3 listed raw
+ * sidebar-row and block writes as not revertible). ADR 0057 decision 4 made them proposals through the deletes rail;
+ * v3 F12 (ADR 0081) removed the rail and gave every such write a Revert path: direct, on Review, revertible.
  */
-describe('content removed through the low-level tools (ADR 0057 decision 4)', () => {
-  const directThenRevertible = async (r: { body: Record<string, any>; text: string }) => {
-    if (r.body.status === 'proposal_captured') return { proposed: true, revertible: null };
-    const jobId = String(r.body.jobId);
-    await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
-    const preview = await w.stack.runtime.reverts.preview(PROJECT, jobId);
-    return {
-      proposed: false,
-      revertible: preview.eligible.ok && preview.notReverted === 0 && preview.ready > 0,
-      preview: preview.targets.map((t) => ({ state: t.state, what: (t as { what?: string }).what })),
-    };
-  };
-
-  // ADR 0057 decision 4 (R2-52): a removal through a low-level tool is a delete for the rail (Revert support is open).
-  it('A5: updateProperty emptying a link collection (Dependencies, two items) is proposed or revertible', async () => {
+describe('content removed through the low-level tools (ADR 0057 decision 4, ADR 0081)', () => {
+  it('A5: updateProperty emptying a link collection (Dependencies, two items) runs directly and is revertible', async () => {
     const r = await call('lk_api_write', {
       operationId: 'updateProperty',
       params: { path: { resourceId: P.miyabi, propertyId: 'depmiya1' }, body: { items: [] } },
     });
     const out = await directThenRevertible(r);
-    // ADR 0057 decision 4: proposed (the deletes rail), not merely revertible.
-    expect(out.proposed, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
-    expect(r.body.proposedBecause, r.text).toMatch(/delete/);
+    expect(out, `${r.text}\n${JSON.stringify(out)}`).toMatchObject(DIRECT);
   });
 
-  // ADR 0057 decision 4 (R2-52): as A5, a block delete.
-  it('A6: deleteBlock of the Fourth Age table (the whole 20-row table block) is proposed or revertible', async () => {
+  it('A6: deleteBlock of the Fourth Age table (the whole 20-row table block) runs directly and is revertible', async () => {
     const ver = await w.stack.call(a.client, 'lk_api_read', {
       operationId: 'getDocumentBlocks',
       params: { path: { resourceId: 'age40001', documentId: w.docs.ageMain } },
@@ -280,8 +297,6 @@ describe('content removed through the low-level tools (ADR 0057 decision 4)', ()
       },
     });
     const out = await directThenRevertible(r);
-    // ADR 0057 decision 4: proposed (the deletes rail), not merely revertible.
-    expect(out.proposed, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
-    expect(r.body.proposedBecause, r.text).toMatch(/delete/);
+    expect(out, `${r.text}\n${JSON.stringify(out)}`).toMatchObject(DIRECT);
   });
 });

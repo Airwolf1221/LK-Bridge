@@ -152,6 +152,7 @@ export const LIVE_TOOL_SETTINGS: Readonly<Record<string, readonly [Section, stri
   SNAPSHOT_KEEP_FULL_DAYS: ['snapshots', 'keepFullDays'],
   SNAPSHOT_KEEP_WEEKLY: ['snapshots', 'keepWeekly'],
   SNAPSHOT_KEEP_DAYS: ['snapshots', 'keepDays'],
+  DELETE_COPY_RETENTION_DAYS: ['snapshots', 'deleteCopyDays'],
   SNAPSHOT_SOFT_DELETE_DAYS: ['snapshots', 'softDeleteDays'],
   MCP_RESULT_MAX_CHARS: [null, 'resultMaxChars'],
   // v3 F6a.1 (ADR 0076 amendment 1): read on each use by the Reference Type service and the watchdog.

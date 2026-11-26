@@ -4,8 +4,9 @@
  * `test/review/r4-narrative/`. Nothing here talks to a live system: every world is the REAL stack on the mock
  * LegendKeeper (`test/narrative/world.ts`, `test/packs/f4a-world.ts`).
  *
- * - `agentOf(w)`: an agent connection at scope `write` with the DEFAULT rails (a profile made with `newToken`, as a new
- *   profile is on the bridge), which is what an attacking agent at scope `write` has;
+ * - `agentOf(w)`: an agent connection at scope `write` (a profile made with `newToken`, as a new profile is on the
+ *   bridge), which is what an attacking agent at scope `write` has (v3 F12: its writes are direct, each on the owner's
+ *   Review page with Revert: `onReview`, `revertJob`);
  * - `approveOrdinary(w, id)`: the owner's ordinary "Approve" (never "Approve and accept as canon"), waited for;
  * - `moveWorld()`: F4a's world (the Arkona pack approved with its narrative rules) with the per-operation tools on
  *   (`MCP_EXPOSE_PER_OP_TOOLS`), a Narratives layout, and canon pages to move.
@@ -27,7 +28,7 @@ interface StackLike {
   };
 }
 
-/** An agent at scope `write` with the default rails. */
+/** An agent at scope `write`. */
 export async function agentOf(
   w: StackLike,
   label = 'r4-narrative-agent',
@@ -41,6 +42,23 @@ export async function agentOf(
 export async function settle(w: StackLike, b: Obj): Promise<void> {
   if (typeof b.jobId === 'string' && b.status !== 'written')
     await w.stack.runtime.engine.wait(PROJECT, b.jobId, 30_000).catch(() => undefined);
+}
+
+/** v3 F12 (ADR 0081): whether a direct job is on the owner's Review page, with Revert offered. */
+export function onReview(w: StackLike, jobId: string): boolean {
+  const items = w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 1000 }) as Obj[];
+  const item = items.find((i) => i.jobId === jobId);
+  return item !== undefined && item.revertible !== false;
+}
+
+/** v3 F12: the owner's Revert of a job from the Review page, waited for; answers the revert job's status. */
+export async function revertJob(w: StackLike, jobId: string): Promise<string> {
+  const r = await w.stack.runtime.reverts.revert('owner', PROJECT, jobId);
+  if (r.status !== 'submitted') return `not submitted: ${JSON.stringify(r).slice(0, 400)}`;
+  let j = await w.stack.runtime.engine.wait(PROJECT, r.revertJobId, 30_000);
+  for (let i = 0; i < 10 && !['succeeded', 'failed', 'cancelled'].includes(j.status); i++)
+    j = await w.stack.runtime.engine.wait(PROJECT, r.revertJobId, 30_000);
+  return String(j.status);
 }
 
 /** The owner's ORDINARY approval (never as canon), waited for until the proposal and its job end. */
@@ -95,7 +113,7 @@ export const M = {
 } as const;
 
 export interface MoveWorld extends F4aWorld {
-  /** An agent at scope `write`, default rails. */
+  /** An agent at scope `write`. */
   agent(name: string, args: Record<string, unknown>): Promise<Obj>;
 }
 

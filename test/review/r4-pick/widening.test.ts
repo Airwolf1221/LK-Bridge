@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
-  approveAndWait,
+  pickDone,
   coreOf,
   findingOf,
   heading,
@@ -220,12 +220,12 @@ afterAll(async () => {
   await w?.close();
 });
 
-/** Picks the identity page's (the Core's) value of a person's birth finding, approves it, and returns the job. */
+/** Picks the identity page's (the Core's) value of a person's birth finding (v3 F12: it runs at once), and returns its job. */
 async function pickCore(p: Person) {
   const f = findingOf(w, p.name, 'consistency_birth');
   const { r } = await pickPage(w, f, coreOf(p));
   expect(r.status, JSON.stringify(r.json)).toBe(200);
-  const done = await approveAndWait(w, String(r.json.proposalId));
+  const done = await pickDone(w, r.json);
   return { f, r, done };
 }
 
@@ -291,10 +291,10 @@ describe('the sentence’s date, and nothing else (ADR 0064 D6.2)', () => {
     expect(values.map((v) => v.excerpt)).toContain('Gita Lorne was born on Camue 2nd, 4A 100.');
     const runs = runsOf(w, 'gitareg1', 'gitap1');
     const r = await pick(w, f, { side: values[0]!.key });
-    // SAFE: the found date is not in one run, so nothing is planned (409) or, if a proposal is made and approved, the
+    // SAFE: the found date is not in one run, so nothing is planned (409) or, if the pick runs, the
     // charter's date is not the one edited.
     if (r.status === 200) {
-      const done = await approveAndWait(w, String(r.json.proposalId));
+      const done = await pickDone(w, r.json);
       expect(done.job?.status).toBe('succeeded');
     } else expect(r.json.error?.code).toBe('NOTHING_TO_PROPOSE');
     expect(runsOf(w, 'gitareg1', 'gitap1')[0]).toEqual(runs[0]);
@@ -335,7 +335,7 @@ describe('the sentence’s date, and nothing else (ADR 0064 D6.2)', () => {
     // item of its own that the owner can leave out while the plain restatement is fixed.
     const items = r.json.items as any[];
     const quoteSeparable = items.length > 1 || items.some((i) => i.selected === false);
-    const done = await approveAndWait(w, String(r.json.proposalId));
+    const done = await pickDone(w, r.json);
     expect(done.job?.status).toBe('succeeded');
     expect(textOf(w, 'kaelreg1', 'kaelp2')).toBe('Kael Oduya was born in 4A 100, by the town’s own count.');
     expect(
@@ -373,7 +373,7 @@ describe('the sentence’s date, and nothing else (ADR 0064 D6.2)', () => {
     const r = await pick(w, f, { side: picked!.key });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(r.json.untouched).toEqual([expect.objectContaining({ value: '4A 100', why: 'the side picked' })]);
-    const done = await approveAndWait(w, String(r.json.proposalId));
+    const done = await pickDone(w, r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     // SAFE: the picked sentence is as it was; the other sentence reads the picked value.
     expect(textOf(w, 'norareg1', 'norap1')).toBe(
@@ -437,20 +437,20 @@ describe('depth: what else the first occurrence reaches, and the block guards', 
     expect(runsOf(w, 'menareg1', 'menap1')).toEqual(runs);
   });
 
-  it('PK-72 nothing is written before approval, and a rejected pick writes nothing', async () => {
+  it('PK-72 the confirmed pick runs at once as one job (v3 F12, no proposal): it writes the found sentence only', async () => {
     const f = findingOf(w, NEVA.name, 'consistency_birth');
     const writes = () =>
       w.stack.mock.calls.filter((c) => c.method !== 'GET' && c.path.includes('nevareg1')).length;
+    const before = proposalCount(w);
     const { r } = await pickPage(w, f, coreOf(NEVA));
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    const id = String(r.json.proposalId);
-    expect(w.stack.runtime.policy.proposals.get(id)!.state).toBe('pending');
-    expect(writes()).toBe(0);
-    w.stack.runtime.policy.commands.reject('owner', id, 'not now');
-    await new Promise((res) => setTimeout(res, 200));
-    expect(w.stack.runtime.policy.proposals.get(id)!.state).toBe('rejected');
-    expect(writes()).toBe(0);
-    expect(textOf(w, 'nevareg1', 'nevap1')).toBe('Neva Stroud was born in 4A 103.');
+    const done = await pickDone(w, r.json);
+    expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
+    // The owner's confirmed pick is the decision: nothing waits for an approval.
+    expect(proposalCount(w)).toBe(before);
+    expect(done.job.origin).toMatchObject({ kind: 'ui', ownerConfirmed: true });
+    expect(writes()).toBe(1);
+    expect(textOf(w, 'nevareg1', 'nevap1')).toBe('Neva Stroud was born in 4A 100.');
   });
 
   it('PK-73 after a pick’s job reports success, the next audit and the owner’s second pick leave every other date as it was', async () => {

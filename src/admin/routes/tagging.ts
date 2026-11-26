@@ -19,7 +19,6 @@
 import * as z from 'zod';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { RetagError, type RetagService } from '../../packs/retag/service.js';
-import { DEFAULT_WRITE_RAILS } from '../../policy/rails.js';
 import { verdictView } from '../../mcp/tools/retag.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
@@ -54,11 +53,16 @@ const STATUS: Readonly<Record<string, number>> = {
   ALREADY_LISTED: 409,
 };
 
+/**
+ * The owner's tagging actions (each confirmed in its dialog, `confirm: true`). v3 F12 (ADR 0081): a retag batch the
+ * owner asks for runs at once as one job (no proposal to approve next).
+ */
 const ORIGIN = (tool: string): JobOrigin => ({
   kind: 'ui',
   client: 'owner',
   tool,
   principal: SYSTEM_PRINCIPAL,
+  ownerConfirmed: true,
 });
 
 const scopeBody = {
@@ -343,7 +347,7 @@ export const registerTagging: Register = (api, ctx) => {
     );
     const p = projectFor(ctx, req, b.project);
     // ADR 0062: the owner's own change of more than 10 pages at once (the bulk rail's size) needs the step-up.
-    if (b.pageIds.length > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
+    if (b.pageIds.length > 10) requireReauth(ctx.deps.services, req);
     return wrap(async () => {
       const r = retag();
       const plan = r.planApply({ projectId: p.id, runId: b.runId, pageIds: b.pageIds });
@@ -371,7 +375,7 @@ export const registerTagging: Register = (api, ctx) => {
       const r = retag();
       const chunks = r.correctionBatches(p.id, b.runId);
       const pages = chunks.reduce((n, c) => n + c.length, 0);
-      if (pages > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
+      if (pages > 10) requireReauth(ctx.deps.services, req);
       const batches: { batchId: string; proposalId: string | null; jobId: string | null; pages: number }[] =
         [];
       for (const ids of chunks) {

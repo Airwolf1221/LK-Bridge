@@ -502,7 +502,8 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
     expect(w.repo.live(S.zahra)!.parentId).toBe(C.qishen);
     expect(linksOf(w, P.nadiraBio)).toContain(S.zahra);
     expect(linksOf(w, P.nadiraBio)).not.toContain(pages.rel!.id);
-    // The pages it made (and the index) go to ONE deletion proposal, children first.
+    // The pages it made (and the index) are deleted, children first: v3 F12 (ADR 0081), at once, part of the owner's
+    // Revert (each checked first), no second approval.
     const rec = await recordOf(w, jobId, (r) => r.state === 'reverted');
     expect(rec.revert.kept).toEqual([]);
     const index = named(w, '[INDEX] Zahra al-Rashid')!;
@@ -510,13 +511,9 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
       [...Object.values(pages).map((p) => p.id), index.id].sort(),
     );
     expect(rec.revert.deleted.at(-1).id).toBe(index.id);
-    const del = w.stack.runtime.policy.proposals.get(rec.revert.deletionProposalId)!;
-    expect(del.state).toBe('pending');
-    expect(del.requiresCanonicalApproval).toBe(true);
-    // Nothing is deleted until the owner approves it.
-    for (const p of Object.values(pages)) expect(w.repo.live(p.id), p.name).toBeTruthy();
-    const d = await approveSplit(w, del.id);
-    expect(d.job.status, JSON.stringify(d.job.lastError)).toBe('succeeded');
+    expect(rec.revert.deletionProposalId).toBeNull();
+    const d = await settle(w, String(rec.revert.deletionJobId));
+    expect(d.status, JSON.stringify(d.lastError)).toBe('succeeded');
     for (const p of Object.values(pages)) expect(w.repo.live(p.id), p.name).toBeFalsy();
     expect(w.repo.live(index.id)).toBeFalsy();
     // Reverted once: never again, and never resumed.
@@ -594,19 +591,14 @@ describe('arkona_split_owner: phase 2 on an owner with two domains (the source r
     }
   });
 
-  it('phase 2 (D2): once phase 1 verified, a SEPARATE canonical archive_page proposal; never a delete', async () => {
-    const rec = await recordOf(w, String(proposal.proposalId), (r) => r.state === 'retiring');
-    const p2 = w.stack.runtime.policy.proposals.get(rec.phase2.proposalId)!;
-    expect(p2.state).toBe('pending');
-    expect(p2.requiresCanonicalApproval).toBe(true);
-    expect(p2.id).not.toBe(proposal.proposalId);
-    const detail = JSON.stringify(w.stack.runtime.policy.proposals.detail(p2.id));
-    expect(detail).toContain('archive_page');
-    expect(detail).not.toContain('deleteResource');
-    // Not archived until the owner approves it.
-    expect(w.repo.live(S.statutes)!.name).toBe('[BSRC] Ostrand Statutes and Rites - General Source');
-    const done = await approveSplit(w, p2.id);
-    expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
+  it('phase 2 (D2): once phase 1 verified, a SEPARATE archive_page job; never a delete', async () => {
+    // v3 F12 (ADR 0081): the owner's approval of a split that retires its source asked for it, so it runs at once.
+    const rec = await recordOf(w, String(proposal.proposalId), (r) => r.state === 'retiring' || r.state === 'retired');
+    expect(rec.phase2.proposalId).toBeUndefined();
+    const done = await settle(w, String(rec.phase2.jobId));
+    expect(done.status, JSON.stringify(done.lastError)).toBe('succeeded');
+    expect(done.origin.tool).toBe('archive_page');
+    expect(done.steps.map((x) => x.opId)).not.toContain('deleteResource');
     const after = w.repo.live(S.statutes)!;
     expect(after.name).toMatch(/^\[BARC\] Ostrand Statutes and Rites/);
     expect(after.deletedAt ?? null).toBeNull();

@@ -16,7 +16,15 @@ import { AuditError, CATEGORIES, CODES, SEVERITIES, type Audits } from '../../au
 import { ChronologyError } from '../../chronology/index.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { csv, limitSchema, parseInput, projectParam, type Register, projectFor } from './util.js';
+import {
+  csv,
+  limitSchema,
+  ownerConfirmedOrigin,
+  parseInput,
+  projectParam,
+  type Register,
+  projectFor,
+} from './util.js';
 
 const STATUS: Readonly<Record<string, number>> = {
   NOT_FOUND: 404,
@@ -200,7 +208,10 @@ export const registerAudits: Register = (api, ctx) => {
     return wrap(() => audits().allowName('owner', p.id, id));
   });
 
-  /** "Propose a fix": re-reads the target live, then one ordinary proposal for the owner to approve. */
+  /**
+   * "Apply fix": re-reads the target live, then (v3 F12, ADR 0081) runs it at once as one job, the owner having confirmed
+   * it in its dialog (`confirm: true`); no proposal to approve next.
+   */
   api.post('/audits/findings/:id/propose-fix', async (req) => {
     const { id } = parseInput(idParam, req.params);
     const b = parseInput(
@@ -221,6 +232,7 @@ export const registerAudits: Register = (api, ctx) => {
       throw new AdminHttpError(400, 'INVALID_INPUT', 'createNew and eventId cannot be given together.');
     return wrap(() =>
       audits().proposeFix('owner', p.id, id, {
+        origin: ownerConfirmedOrigin('audits.apply_fix'),
         ...(b.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
         ...(b.eventId !== undefined ? { eventId: b.eventId } : {}),
         ...(b.createNew === true ? { createNew: true } : {}),

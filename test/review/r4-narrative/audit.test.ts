@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SidebarModel } from '../../resources/world.js';
 import { O } from '../../packs/f4a-world.js';
 import { K, N, narrativeWorld, PROJECT, type NarrativeWorld } from '../../narrative/world.js';
-import { agentOf, approveOrdinary, canonSidebar } from './helpers.js';
+import { agentOf, approveOrdinary, canonSidebar, onReview, revertJob } from './helpers.js';
 
 vi.setConfig({ testTimeout: 120_000 });
 
@@ -260,17 +260,19 @@ describe('never authority (E2.4)', () => {
     expect.soft(JSON.stringify(brief), 'arkona_brief (never a source)').not.toMatch(/Salt Tide/);
   });
 
-  it('NA-36: a chapter moved out of Narratives into canon (move_resource) is not a direct write, and never canon evidence', async () => {
+  it('NA-36: a chapter moved out of Narratives into canon (move_resource): direct (v3 F12), on Review; reverted, never canon evidence', async () => {
     const ch = named(ids.story, 'Chapter 1 - Salt Tide')!;
     const b = await agent('move_resource', { page: ch.id, to: K.leilaIdx });
-    expect.soft(b.status, JSON.stringify(b).slice(0, 300)).not.toBe('written');
-    if (b.status !== 'written') return;
+    expect(b.status, JSON.stringify(b).slice(0, 300)).toBe('written');
+    expect(onReview(w, String(b.jobId)), 'on the Review page, with Revert').toBe(true);
+    expect(await revertJob(w, String(b.jobId))).toBe('succeeded');
+    expect(w.repo.live(ch.id)?.parentId).toBe(ids.story);
     await w.snapshot();
     const run = await agent('arkona_consistency', { subject: 'Leila Darvish', detail: 'full' });
-    expect.soft(JSON.stringify(run), 'arkona_consistency after the move').not.toMatch(/Salt Tide/);
+    expect.soft(JSON.stringify(run), 'arkona_consistency after the Revert').not.toMatch(/Salt Tide/);
     const asOf = await agent('arkona_as_of', { characters: ['Leila Darvish'], date: '4A 700' });
     expect
-      .soft(JSON.stringify(asOf), 'arkona_as_of after the move')
+      .soft(JSON.stringify(asOf), 'arkona_as_of after the Revert')
       .not.toMatch(/Salt Tide|4A 700, the harbourmaster/);
   });
 

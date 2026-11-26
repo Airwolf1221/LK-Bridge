@@ -52,9 +52,7 @@ afterAll(async () => w?.close());
 describe('what the Review page says about a direct low-level batch', () => {
   it('E1: the summary is the bridge’s description of the operations, not the title the agent chose', async () => {
     const spoof = 'write_page append on “Ashgate”: fixed a typo';
-    // Set-up corrected (CR-2026-11-R2 A1 fixed): replaceBoardContent is now under the deletes rail, so the owner switches
-    // that rail off for this profile to get the direct low-level batch this test is about.
-    w.stack.runtime.policy.commands.setRails('owner', a.profileId, { deletes: false });
+    // v3 F12 (ADR 0081): with the safety rails removed, the low-level batch runs directly at scope write.
     const r = await w.stack.call(a.client, 'lk_api_batch', {
       title: spoof,
       calls: [
@@ -64,7 +62,6 @@ describe('what the Review page says about a direct low-level batch', () => {
         },
       ],
     });
-    // (A1 shows this runs directly; here only what the owner reads about it matters.)
     expect(typeof r.body.jobId, r.text).toBe('string');
     await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 20_000);
     const item = w.stack.runtime.review.list(PROJECT).find((i) => i.jobId === r.body.jobId);

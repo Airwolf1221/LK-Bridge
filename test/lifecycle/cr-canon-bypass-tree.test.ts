@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * Adversarial review (tree-shaped attacks): deleting or copying canon by changing the tree in the same request, which
- * the canon guard judges from the tree as it was at entry. Each test asserts the SAFE behaviour.
+ * the canon guard judges from the tree as it was at entry. Each test asserts the SAFE behaviour. v3 F12 (ADR 0081): at
+ * scope `write` deleting canon is direct (with a recoverable copy), so the deletes here are made at scope `propose`, where
+ * a canon change must still become a CANONICAL proposal (one an ordinary Approve cannot run).
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -36,6 +38,7 @@ const proposedOrRefused = (body: Record<string, unknown>, text: string) => {
 
 let w: LifecycleWorld;
 let writer: Client;
+let proposer: Client;
 const live = (id: string) => w.repo.live(id) !== undefined;
 const statusOf = (id: string) =>
   w.sidebars.pages.has(id) ? w.sidebars.rows(id).find((r) => r.key === 'Status')?.text : undefined;
@@ -92,6 +95,7 @@ beforeAll(async () => {
     return r;
   });
   writer = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('cr-tree-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 
@@ -100,7 +104,7 @@ describe('F4: an Authoritative page moved under a plain page and deleted with it
   // (deleteInLock) re-reads only the page named in the path, never the subtree.
   it('deletes the Authoritative page without canonical approval', async () => {
     expect(statusOf(C.canon1)).toBe('Authoritative');
-    const r = await w.stack.call(writer, 'lk_api_batch', {
+    const r = await w.stack.call(proposer, 'lk_api_batch', {
       project: 'test',
       calls: [
         {
@@ -123,13 +127,14 @@ describe('F4: an Authoritative page moved under a plain page and deleted with it
   it('the same race from outside: the subtree changed after the tree was last read (only the page is re-read in the lock)', async () => {
     // The page is moved under the box in the app (the tree has not seen it yet); then the agent deletes the box.
     w.repo.outside.move(C.canon3, C.box2);
-    const r = await w.stack.call(writer, 'lk_api_write', {
+    const r = await w.stack.call(proposer, 'lk_api_write', {
       project: 'test',
       operationId: 'deleteResource',
       params: { path: { resourceId: C.box2 }, query: { cascade: true } },
       confirm: 'cascade',
     });
     expect(live(C.canon3), r.text).toBe(true);
+    expect(r.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
   });
 });
 
@@ -139,7 +144,7 @@ describe('F1c: the template-id seed also blinds a cascade (no ifMatch needed)', 
   // fails (404), onError "continue" runs the delete, and deleteInLock re-reads only the box.
   it('deletes an Authoritative child the tree knows about', async () => {
     expect(statusOf(C.canon4)).toBe('Authoritative');
-    const r = await w.stack.call(writer, 'lk_api_batch', {
+    const r = await w.stack.call(proposer, 'lk_api_batch', {
       project: 'test',
       onError: 'continue',
       calls: [

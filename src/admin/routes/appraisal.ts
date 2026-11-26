@@ -208,7 +208,10 @@ export const registerAppraisal: Register = (api, ctx) => {
     return { report };
   });
 
-  /** "Propose a fix": one live re-read, then ONE ordinary proposal for the owner. Audited. */
+  /**
+   * "Apply fix": one live re-read, then (v3 F12, ADR 0081) one job at once, the owner having confirmed it in its dialog
+   * (`confirm: true`). Audited.
+   */
   api.post('/appraisal/findings/:id/propose-fix', async (req) => {
     const { id } = parseInput(z.object({ id: z.string().regex(/^af_[0-9a-f]{20}$/) }), req.params);
     const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
@@ -219,8 +222,15 @@ export const registerAppraisal: Register = (api, ctx) => {
         projectId: p.id,
         findingId: id,
         actor: 'owner',
-        origin: { kind: 'ui', client: 'owner', tool: 'appraisal.propose_fix', principal: SYSTEM_PRINCIPAL },
+        origin: {
+          kind: 'ui',
+          client: 'owner',
+          tool: 'appraisal.apply_fix',
+          principal: SYSTEM_PRINCIPAL,
+          ownerConfirmed: true,
+        },
         read: (op, params) => engine.internalRead(p.id, op, params, { priority: 'P1' }),
+        forceProposal: false,
       }),
     );
   });

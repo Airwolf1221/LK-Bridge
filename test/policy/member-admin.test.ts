@@ -1,8 +1,8 @@
 /**
- * Member and invite operations at every scope (chunk 6, item 10). With LK_ALLOW_MEMBER_ADMIN=false the three
- * administrative operations are refused with the engine's own `MEMBER_ADMIN_DISABLED` at propose and write scope,
- * never captured as a proposal that could only fail on approval; at read scope the connection's read-only denial
- * comes first. The two reads (listMembers, listInvites) follow the scope table like any read.
+ * Member and invite operations at every scope (chunk 6, item 10). v3 F12 (ADR 0081, the owner's ruling 8): the three
+ * administrative operations are refused for agents by the policy gate at every scope, with LK_ALLOW_MEMBER_ADMIN on or
+ * off ("member administration is never done by agents"), never captured as a proposal and never sent; the owner does
+ * it in the LegendKeeper app. The two reads (listMembers, listInvites) follow the scope table like any read.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { OpParams } from '../../src/jobs/index.js';
@@ -28,6 +28,8 @@ const READ_OPS: readonly [string, OpParams][] = [
 const SCOPES: readonly Scope[] = ['read', 'propose', 'write'];
 
 const code = (e: unknown) => (e as { code?: string } | undefined)?.code;
+const message = (e: unknown) => (e as { message?: string } | undefined)?.message ?? '';
+const NEVER_BY_AGENTS = /member administration is never done by agents/;
 
 async function setup(allowMemberAdmin: boolean, scope: Scope) {
   rig = await policyRig({ allowMemberAdmin });
@@ -48,8 +50,9 @@ describe('member administration is disabled (LK_ALLOW_MEMBER_ADMIN=false)', () =
         );
         for (const out of [single, batch]) {
           expect(out.value, `${scope} ${op}`).toBeUndefined();
-          // Read scope: the connection is read-only. Otherwise the engine's specific refusal, not a proposal.
-          expect(code(out.error)).toBe(scope === 'read' ? 'POLICY_DENIED' : 'MEMBER_ADMIN_DISABLED');
+          // Read scope: the connection is read-only. Otherwise the gate's refusal for agents, not a proposal.
+          expect(code(out.error)).toBe('POLICY_DENIED');
+          if (scope !== 'read') expect(message(out.error)).toMatch(NEVER_BY_AGENTS);
         }
         expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
         expect(r.h.mock.calls.filter((c) => c.method !== 'GET')).toEqual([]);
@@ -73,7 +76,8 @@ describe('member administration is disabled (LK_ALLOW_MEMBER_ADMIN=false)', () =
         origin,
       }),
     );
-    expect(code(out.error)).toBe('MEMBER_ADMIN_DISABLED');
+    expect(code(out.error)).toBe('POLICY_DENIED');
+    expect(message(out.error)).toMatch(NEVER_BY_AGENTS);
     expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
   });
 
@@ -89,34 +93,17 @@ describe('member administration is disabled (LK_ALLOW_MEMBER_ADMIN=false)', () =
   }
 });
 
-/** CR-2026-11-R4 (ADR 0066 part B, question 10, the owner's decision): the removals are deletes for the entry rails too. */
-const REMOVALS = new Set(['removeMember', 'revokeInvite']);
-
 describe('member administration is enabled (LK_ALLOW_MEMBER_ADMIN=true)', () => {
   for (const [op, params] of ADMIN_OPS) {
-    const atWrite = REMOVALS.has(op) ? 'proposed at write (the deletes rail)' : 'executed at write';
-    it(`${op}: denied at read, proposed at propose, ${atWrite}`, async () => {
+    it(`${op}: still refused for agents at every scope, never proposed or sent`, async () => {
       for (const scope of SCOPES) {
         const { r, origin } = await setup(true, scope);
         const out = await settle(r.h, r.e, r.e.engine.run(op, params, { project: PROJECT, origin }));
-        if (scope === 'read') {
-          expect(code(out.error)).toBe('POLICY_DENIED');
-        } else if (scope === 'propose') {
-          expect(out.error).toBeUndefined();
-          expect((out.value as { status: string }).status).toBe('proposal_captured');
-          expect(r.h.mock.calls.filter((c) => c.method !== 'GET')).toEqual([]);
-        } else if (REMOVALS.has(op)) {
-          // Someone taken off the LegendKeeper project, or an invitation withdrawn: not revertible from the journal, so
-          // the deletes rail (on by default) makes it a proposal, as at approval (R4-44).
-          expect(out.error).toBeUndefined();
-          expect((out.value as { status: string }).status).toBe('proposal_captured');
-          const [p] = r.policy.commands.listProposals('owner', { project: PROJECT });
-          expect(p?.proposedBecause ?? '').toMatch(/^proposed because: delete \(1 (project member|invite)\)/);
-          expect(r.h.mock.calls.filter((c) => c.method !== 'GET')).toEqual([]);
-        } else {
-          expect(out.error).toBeUndefined();
-          expect(['succeeded', 'queued']).toContain((out.value as { status: string }).status);
-        }
+        expect(out.value, `${scope} ${op}`).toBeUndefined();
+        expect(code(out.error), `${scope} ${op}`).toBe('POLICY_DENIED');
+        if (scope !== 'read') expect(message(out.error)).toMatch(NEVER_BY_AGENTS);
+        expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
+        expect(r.h.mock.calls.filter((c) => c.method !== 'GET')).toEqual([]);
         await rig?.close();
         rig = undefined;
       }

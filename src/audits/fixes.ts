@@ -61,6 +61,17 @@ const ORIGIN: JobOrigin = {
   principal: SYSTEM_PRINCIPAL,
 };
 
+/**
+ * v3 F12 (ADR 0081): the fix runs at once as one job, not as a proposal: the owner confirmed it on the dashboard ("Apply
+ * fix"), or an agent asked for it (an `arkona_appraisal_fix` handing it over), whose scope the policy gate then decides
+ * (direct at `write`, a proposal at `propose`). The automation's own requests keep their `direct` (Apply) or proposal.
+ */
+function ownerConfirmed(d: { readonly origin?: JobOrigin }): boolean {
+  if (d.origin?.ownerConfirmed === true) return true;
+  const who = d.origin?.principal?.principalId;
+  return who !== undefined && who !== SYSTEM_PRINCIPAL.principalId && who !== 'automation';
+}
+
 export interface FixDeps {
   readonly engine: {
     internalRead(projectId: string, op: string, params: Obj, o: { priority: 'P1' }): Promise<unknown>;
@@ -188,7 +199,8 @@ export async function propose(
     ...(spec.holdLock ? { holdLock: spec.holdLock } : {}),
     ...(spec.holdDocuments ? { holdDocuments: spec.holdDocuments } : {}),
     internal: true,
-    forceProposal: true,
+    // v3 F12 (ADR 0081): the owner's confirmed "Apply fix" runs at once as one job; anything else is a proposal.
+    ...(ownerConfirmed(d) ? {} : { forceProposal: true }),
     ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
     proposal: {
       operation: spec.operation,
@@ -199,6 +211,8 @@ export async function propose(
       ...(spec.prefetched ? { prefetched: spec.prefetched } : {}),
     },
   });
+  if (ownerConfirmed(d) && typeof r.jobId === 'string')
+    return { status: 'job_submitted', jobId: r.jobId, summary: spec.title, fix: spec.fix };
   if (typeof r.proposalId !== 'string')
     throw new AuditError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
   return {
@@ -2052,8 +2066,11 @@ async function submitIndexFix(
     title: spec.title.slice(0, 300),
     holdLock: { resourceId: spec.pageId },
     internal: true,
-    // A canonical change (CANON taken off an index) is always the owner's canonical proposal, even under Apply.
-    ...(d.direct === true && spec.lifecycle?.canonical !== true ? {} : { forceProposal: true }),
+    // A canonical change (CANON taken off an index) is always the owner's canonical proposal under the automation's
+    // Apply; v3 F12 (ADR 0081): the owner's own confirmed "Apply fix" runs it at once.
+    ...(ownerConfirmed(d) || (d.direct === true && spec.lifecycle?.canonical !== true)
+      ? {}
+      : { forceProposal: true }),
     lastMajorRevision: 'skip',
     ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
     proposal: {
@@ -2077,7 +2094,7 @@ async function submitIndexFix(
       summary: typeof r.summary === 'string' ? r.summary : spec.title,
       fix: spec.fix,
     };
-  if (d.direct === true && typeof r.jobId === 'string')
+  if ((d.direct === true || ownerConfirmed(d)) && typeof r.jobId === 'string')
     return { status: 'job_submitted', jobId: r.jobId, summary: spec.title, fix: spec.fix };
   throw new AuditError('NOT_PROPOSED', 'The fix was neither proposed nor submitted; nothing was done.');
 }

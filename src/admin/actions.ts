@@ -818,8 +818,6 @@ export function createAdminActions(d: AdminDeps) {
     },
     setShowLowLevelTools: (profileId: string, show: boolean): Profile =>
       cmd.setShowLowLevelTools(OWNER, profileId, show),
-    /** v3 F3.4 (ADR 0055): a profile's safety rails (the route re-authenticates first). */
-    setRails: (profileId: string, change: unknown): Profile => cmd.setRails(OWNER, profileId, change),
     setDefaultScope(scope: Scope, confirmRaise: boolean): Scope {
       const current = cmd.getDefaultScope(OWNER);
       if (SCOPE_RANK[scope] > SCOPE_RANK[current] && !confirmRaise) {

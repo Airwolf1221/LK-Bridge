@@ -82,10 +82,13 @@ export async function retagWorld(
     /** v3 F6a.1: the bridge's requests to the mock (to hold one), and its log (to read what it said). */
     readonly lkTransport?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     readonly logStream?: Writable;
+    /** v3 F12 (ADR 0081): `seed` runs the world's agent at scope `write` (default: `propose`, see packWorld). */
+    readonly toolModes?: 'propose' | 'seed';
   } = {},
 ): Promise<RetagWorld> {
   const w = await appraisalWorld({
     retag: true,
+    ...(o.toolModes ? { toolModes: o.toolModes } : {}),
     ...(o.bulk !== undefined ? { bulk: o.bulk } : {}),
     ...(o.env ? { env: o.env } : {}),
     ...(o.limits ? { limits: o.limits } : {}),

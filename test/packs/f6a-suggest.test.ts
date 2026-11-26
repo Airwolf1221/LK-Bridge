@@ -24,7 +24,7 @@ const s = (value: string, category: string | null, v: VocabularyLists = V) => su
 
 describe('the draft vocabulary in the seed', () => {
   it('is a draft, pinned on Source Formatting, with role words', () => {
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-27-f6c'); // v3 F6c (ADR 0080)
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-26-f12'); // v3 F12 (ADR 0081): -f12 supersedes -f6c
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-23-f7b');
     expect(RT.status).toBe('draft');
     expect(RT.source).toBe('source-formatting');

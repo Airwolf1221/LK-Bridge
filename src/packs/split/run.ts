@@ -187,7 +187,7 @@ export async function runSplit(
         // No job-level locks: the job makes pages (as a package does); each write takes its own page's lock and
         // re-checks inside it (the source edits are exact or the job stops; an append is rebased on a conflict).
         lifecycle: plan.marker,
-        forceProposal: true,
+        // v3 F12 (ADR 0081): the agent's scope decides (direct at `write`, on the Review page; a proposal at `propose`).
         // ADR 0058 (Resume): a split that stops part-way resumes from where it stopped, its first check again first.
         // CR-2026-11-R3 (R3-22): and its destinations check (what left a destination while the job was stopped is never
         // then taken out of the source).

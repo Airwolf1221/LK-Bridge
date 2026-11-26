@@ -224,3 +224,10 @@ restore of any asset LegendKeeper serves from `assets2`. Decided, narrowly:
 
 No migration. Tests: `test/images/redirect.test.ts`, and `test/snapshots/e5-2.test.ts` (a snapshot whose map image
 redirects comes out complete). The same day's other finding (old label sizes on map features) is ADR 0046 decision 11.
+
+## Notes: an agent's asset delete is direct (26 November 2026, v3 F12)
+
+[ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md) D3: at scope `write` an agent's `deleteAsset` runs directly;
+the bytes are kept before it (the image store's kept references, as for the owner's deletes), and Review's Revert
+uploads them again as a new asset in the same folder under the same name, relinking the pages that have not changed
+since. Staging at scope `propose` is unchanged.

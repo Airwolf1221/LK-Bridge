@@ -330,7 +330,7 @@ export async function finishCreate(
       ...(canon.length > 0 ? { requiresCanonicalApproval: true, protectedChanges: canon } : {}),
       message:
         canon.length > 0
-          ? 'Dry run: nothing was written. This touches protected canon, so it would become a proposal only the owner can accept as canon.'
+          ? 'Dry run: nothing was written. This touches protected canon: at scope write it runs directly (on the owner’s Review page, with Revert; make it only when the owner asked for it), at scope propose it becomes a proposal only the owner can accept as canon.'
           : 'Dry run: nothing was written and nothing was proposed.',
     };
     return { kind: 'answer', result: finish(pd, mctx, tool, body, preview) };
@@ -807,7 +807,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a page from a template',
     access: 'write',
     description:
-      'Creates a page from a template (`template` is required: a name or id, see list_templates), in its alphabetical place. `status` "working" (default): a [BWRK] page under [INDEX] Working (leave `parent` out) or, to build a Working character one page at a time, under that character’s own [INDEX] (`parent` = the index create_character made); any other parent is refused (WORKING_PARENT). "authoritative": a [BSRC] page under `parent`: canon, so always a proposal the owner accepts as canon. Optional `facts` and `links` (as in set_facts) are written in the same job. Characters are create_character, indexes create_index; a page with no template is rare (create_bare_resource, which the owner lists with “Show low-level and rarely used tools”). A page of the same name under the same parent is refused. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 6 writes with a few facts.',
+      'Creates a page from a template (`template` is required: a name or id, see list_templates), in its alphabetical place. `status` "working" (default): a [BWRK] page under [INDEX] Working (leave `parent` out) or, to build a Working character one page at a time, under that character’s own [INDEX] (`parent` = the index create_character made); any other parent is refused (WORKING_PARENT). "authoritative": a [BSRC] page under `parent`: canon, direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose. Optional `facts` and `links` (as in set_facts) are written in the same job. Characters are create_character, indexes create_index; a page with no template is rare (create_bare_resource, which the owner lists with “Show low-level and rarely used tools”). A page of the same name under the same parent is refused. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 6 writes with a few facts.',
     inputSchema: z.object({
       name: z
         .string()
@@ -1092,7 +1092,7 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
     // v2 E3b (ADR 0045, P5): hidden by default; a page with no template is rare and create_resource covers every templated page.
     lowLevel: true,
     description:
-      'Rarely needed (listed only with “Show low-level and rarely used tools”): creates a page with no template (no sidebar), in its alphabetical place. The name carries its prefix: "[INDEX] …" (an index under `parent`), "[BWRK] …" (Working, the default: under [INDEX] Working or a Working set’s index) or "[BSRC] …" (Authoritative: canon, always a proposal). [BARC] is never created (use archive_page). Prefer create_resource, which gives the page its sidebar. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: 2 reads and 1 write.',
+      'Rarely needed (listed only with “Show low-level and rarely used tools”): creates a page with no template (no sidebar), in its alphabetical place. The name carries its prefix: "[INDEX] …" (an index under `parent`), "[BWRK] …" (Working, the default: under [INDEX] Working or a Working set’s index) or "[BSRC] …" (Authoritative: canon, direct at scope write, on the owner’s Review page). [BARC] is never created (use archive_page). Prefer create_resource, which gives the page its sidebar. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: 2 reads and 1 write.',
     inputSchema: z.object({
       name: z
         .string()
@@ -1838,7 +1838,7 @@ function moveResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Move a page',
     access: 'write',
     description:
-      'Moves a page (and everything under it) under a new parent [INDEX], in its alphabetical place. Within a lifecycle area it is an ordinary move with no canonical approval: a [BWRK] page between [INDEX] Working and an index inside a Working set (to build a character’s set before promote_page), and likewise [BARC] pages in the Archived area. A move into, out of or between [INDEX] Working and [INDEX] Archived is refused (POLICY_DENIED, naming archive_page, unarchive_page, move_to_working or promote_page). A move into or out of Narratives is always a proposal, whatever your scope (canonical when a page of it is canon, Working or Archived): never retry it. A move under itself or out of the repository is refused. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
+      'Moves a page (and everything under it) under a new parent [INDEX], in its alphabetical place. Within a lifecycle area it is an ordinary move with no canonical approval: a [BWRK] page between [INDEX] Working and an index inside a Working set (to build a character’s set before promote_page), and likewise [BARC] pages in the Archived area. A move into, out of or between [INDEX] Working and [INDEX] Archived is refused (POLICY_DENIED, naming archive_page, unarchive_page, move_to_working or promote_page). A move into or out of Narratives is direct at scope write (on the owner’s Review page, with Revert: only when the owner asked for it) and a proposal at scope propose (canonical when a page of it is canon, Working or Archived): never retry a proposal. A move under itself or out of the repository is refused. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page to move (name or id).'),
       to: pageRef.describe('The new parent index (name or id).'),
@@ -1991,7 +1991,7 @@ function deleteResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete a page',
     access: 'write',
     description:
-      'Deletes a page (LegendKeeper keeps it: restore_resource brings it back). `confirm: true` is required; a page with pages under it also needs `cascade: true` (the result lists every page removed). To retire a page, archive_page is usually what is wanted. Deleting an Authoritative page (with cascade, any page of the subtree) is protected canon: always a proposal the owner accepts as canon, listing the pages; never retry it. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write, plus 1 read per page under it.',
+      'Deletes a page (LegendKeeper keeps it: restore_resource brings it back). `confirm: true` is required; a page with pages under it also needs `cascade: true` (the result lists every page removed). To retire a page, archive_page is usually what is wanted. Deleting an Authoritative page (with cascade, any page of the subtree) is protected canon: direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose. Before any delete the bridge keeps a restorable copy (the page and every page under it), so Revert on the Review page brings them back; a copy that cannot be taken refuses the delete (DELETE_COPY_FAILED). At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write, plus 1 read per page under it.',
     inputSchema: z.object({
       page: pageRef.describe('The page to delete (name or id).'),
       confirm: z.literal(true).describe('Required: true.'),
@@ -2050,7 +2050,7 @@ function deleteResourceTool(deps: ToolDeps): McpToolProvider {
               ...(canon.length > 0 ? { requiresCanonicalApproval: true, protectedChanges: canon } : {}),
               message:
                 (canon.length > 0
-                  ? 'Dry run: nothing was deleted. As the tree last read them, these pages are protected canon, so the delete would become a proposal only the owner can accept as canon. '
+                  ? 'Dry run: nothing was deleted. As the tree last read them, these pages are protected canon: at scope write the delete runs directly (a copy kept first; on the owner’s Review page, with Revert; make it only when the owner asked for it), at scope propose it becomes a proposal only the owner can accept as canon. '
                   : 'Dry run: nothing was deleted. ') + 'The real check reads every page again.',
             },
             pd,

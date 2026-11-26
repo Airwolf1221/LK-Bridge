@@ -1874,7 +1874,7 @@ export class Consistency {
         ...(left.length ? { leftAsTheyAre: left } : {}),
       },
     });
-    if (r.items.length === 0 || r.proposalId === '')
+    if (r.items.length === 0 || (r.proposalId === '' && !r.jobId))
       throw new ConsistencyError(
         'NOTHING_TO_PROPOSE',
         'No page could be planned: every value that disagrees has changed since the check, is history now, or cannot be written this way (each is listed with why). Nothing was proposed.',
@@ -1884,7 +1884,7 @@ export class Consistency {
     this.d.db
       .prepare(
         `INSERT INTO consistency_picks (id, project_id, finding_id, audit_finding_id, value, side, picked_by, picked_at,
-           proposal_id, items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           proposal_id, job_id, items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1895,7 +1895,8 @@ export class Consistency {
         o.side ?? null,
         o.actor,
         this.d.now(),
-        r.proposalId,
+        r.proposalId === '' ? null : r.proposalId,
+        r.jobId ?? null,
         JSON.stringify(r.items.map((i) => i.id)),
       );
     this.d.audit?.(o.actor, 'consistency.pick', o.projectId, null, {
@@ -1903,13 +1904,15 @@ export class Consistency {
       finding: o.findingId,
       value: picked,
       side: sideView?.page.name ?? null,
-      proposal: r.proposalId,
+      ...(r.proposalId ? { proposal: r.proposalId } : {}),
+      ...(r.jobId ? { jobId: r.jobId } : {}),
       pages,
     });
     return {
       pick: id,
       value: picked,
-      proposalId: r.proposalId,
+      ...(r.proposalId ? { proposalId: r.proposalId } : {}),
+      ...(r.jobId ? { jobId: r.jobId } : {}),
       summary: r.summary,
       items: r.items,
       untouched,
@@ -1919,8 +1922,12 @@ export class Consistency {
     };
   }
 
-  /** Whether a job ran an owner's pick (approved): Revert applies to it, as to an approved retag batch. */
+  /** Whether a job ran an owner's pick (approved, or v3 F12 run at once): Revert applies to it, as to a retag batch. */
   isPickJob(projectId: string, jobId: string): boolean {
+    const direct = this.d.db
+      .prepare('SELECT 1 FROM consistency_picks WHERE project_id = ? AND job_id = ? LIMIT 1')
+      .get(projectId, jobId);
+    if (direct) return true;
     if (!this.d.jobOfProposal) return false;
     const rows = this.d.db
       .prepare('SELECT proposal_id FROM consistency_picks WHERE project_id = ? AND proposal_id IS NOT NULL')
@@ -1941,6 +1948,7 @@ export class Consistency {
       value: r.value,
       pickedAt: iso(Number(r.picked_at)),
       proposalId: r.proposal_id,
+      jobId: r.job_id ?? null,
     }));
   }
 

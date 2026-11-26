@@ -2,8 +2,8 @@
 /**
  * v3 F3.4 (ADR 0055): the admin API of write scope. Revert needs the owner's re-authentication and is audited
  * (`job.revert`), a refusal included; the Review queue lists an agent's direct write (never the bridge's own work), its
- * counts and detail, and marking reviewed is audited; the safety rails and the pack tools' switches need the owner's
- * re-authentication and are audited.
+ * counts and detail, and marking reviewed is audited. (The safety rails and the pack tools' switches, and their routes,
+ * were removed in v3 F12, ADR 0081: their tests went with them.)
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PatService } from '../../src/auth/pats.js';
@@ -66,8 +66,8 @@ describe('the Review API', () => {
     const one = await s.get(`/api/admin/review/${jobId}`);
     expect(one.status).toBe(200);
     expect(one.json.item).toMatchObject({ jobId, tool: 'lk_api_write' });
-    // A page the job created is listed as not revertible (Revert never deletes what a job made).
-    expect(JSON.stringify(one.json.item.pageChanges)).toContain('Revert does not delete what a job made');
+    // v3 F12 (ADR 0081): a page the job created is revertible (Revert deletes it again while untouched).
+    expect(one.json.item.revertible, JSON.stringify(one.json.item)).toBe(true);
     const mark = await s.post('/api/admin/review/mark', { ids: [jobId] });
     expect(mark.status, JSON.stringify(mark.json)).toBe(200);
     expect(mark.json.marked).toEqual([jobId]);
@@ -106,13 +106,18 @@ describe('Revert through the API', () => {
     expect(refused.status).toBe(403);
     expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
     reauth();
-    // The preview reads; the job only created a page, which Revert does not undo.
+    // The preview reads. The job only created a page, which Revert deletes again while untouched (v3 F12, ADR 0081);
+    // this stack's mock answers every read with a stub page (another name, a page under it), so it reads as changed
+    // since, and is kept.
     const preview = await s.get(`/api/admin/jobs/${jobId}/revert`);
     expect(preview.status, JSON.stringify(preview.json)).toBe(200);
-    expect(preview.json.preview.targets[0]).toMatchObject({ state: 'not_revertible' });
+    expect(preview.json.preview.targets[0], JSON.stringify(preview.json.preview.targets)).toMatchObject({
+      kind: 'entity',
+      state: 'changed',
+    });
     const before = s.audit('job.revert').length;
     const r = await s.post(`/api/admin/jobs/${jobId}/revert`, { confirm: true });
-    expect(r.status).toBe(409);
+    expect(r.status, JSON.stringify(r.json)).toBe(409);
     expect(r.json.error.code).toBe('NOTHING_TO_REVERT');
     expect(r.json.error.targets).toHaveLength(1);
     const audit = s.audit('job.revert');
@@ -128,61 +133,5 @@ describe('Revert through the API', () => {
     const r = await s.post('/api/admin/jobs/job_unknown/revert', { confirm: true });
     expect(r.status).toBe(404);
     expect(s.audit('job.revert')[0]!.target).toBe('job_unknown');
-  });
-});
-
-describe('the safety rails and the pack tools’ switches', () => {
-  it('a profile’s rails need re-authentication and are audited with before and after', async () => {
-    expire();
-    const path = `/api/admin/clients/profiles/${profileId}/rails`;
-    const refused = await s.put(path, { rails: { renamesMoves: true }, confirm: true });
-    expect(refused.status).toBe(403);
-    reauth();
-    const ok = await s.put(path, { rails: { renamesMoves: true, bulkPages: 25 }, confirm: true });
-    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
-    expect(ok.json.profile.rails).toEqual({
-      deletes: true,
-      bulk: true,
-      bulkPages: 25,
-      renamesMoves: true,
-      assets: true,
-    });
-    const a = s.audit('profile.set_rails')[0]!;
-    expect(a.target).toBe(profileId);
-    expect(a.after).toMatchObject({ rails: { renamesMoves: true, bulkPages: 25 } });
-    const bad = await s.put(path, { rails: { bulkPages: 0 }, confirm: true });
-    expect(bad.status).toBe(400);
-    // The clients list carries them, for the page.
-    const clients = await s.get('/api/admin/clients');
-    expect(clients.json.profiles.find((p: { id: string }) => p.id === profileId).rails.bulkPages).toBe(25);
-  });
-
-  it('a pack tool’s switch needs re-authentication and makes a new version, audited', async () => {
-    expire();
-    const refused = await s.put('/api/admin/packs/arkona/tools', {
-      tools: { arkona_add_character_art: 'propose' },
-      confirm: true,
-    });
-    expect(refused.status).toBe(403);
-    reauth();
-    const before = (await s.get('/api/admin/packs')).json.packs[0].version as number;
-    const ok = await s.put('/api/admin/packs/arkona/tools', {
-      tools: { arkona_add_character_art: 'propose' },
-      confirm: true,
-    });
-    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
-    expect(ok.json.pack.version).toBe(before + 1);
-    expect(ok.json.pack.toolModes).toContainEqual({
-      tool: 'arkona_add_character_art',
-      mode: 'propose',
-      source: 'switch',
-    });
-    expect(s.audit('pack.set_tool_modes')).toHaveLength(1);
-    const unknown = await s.put('/api/admin/packs/arkona/tools', {
-      tools: { arkona_nope: 'scope' },
-      confirm: true,
-    });
-    expect(unknown.status).toBe(400);
-    expect(unknown.json.error.code).toBe('UNKNOWN_TOOL');
   });
 });

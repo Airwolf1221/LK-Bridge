@@ -53,7 +53,7 @@ export const BRIDGE_INSTRUCTIONS =
   'The four rules that matter most:\n' +
   '1. Use the high-level tools (search, get_resource, read_document, write_page, set_facts, create_*); the lk_api_* tools are only the fallback for a job none of them does.\n' +
   '2. Read before you write, and pass the version you read (baseVersion, baseFactsVersion). Never retry a write that returned proposal_captured, queued or waiting_budget: follow it with bridge_proposal_status or bridge_job_status.\n' +
-  '3. New pages are Working. Canon and lifecycle changes (promote_page, archive_page, deleting Authoritative pages) are always proposals only the owner can accept: tell the person, never route around it.\n' +
+  '3. Write directly at your connection’s scope. Canon and lifecycle changes (promote_page, archive_page, CANON, deleting pages) are direct too, and every change is on the owner’s Review page with Revert: make them only when the owner has asked for them in this conversation, and say what you changed.\n' +
   '4. Budgets are finite: never loop on an error, and check bridge_estimate before bulk work.\n' +
   'Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page.';
 
@@ -110,7 +110,7 @@ function createTools(
     ...timelineTools(deps),
     // v2 D2 (ADR 0040): the map-feature tools.
     ...mapFeatureTools(deps),
-    // v2 E1a (ADR 0042): snapshots and restores (always proposals).
+    // v2 E1a (ADR 0042): snapshots and restores (v3 F12: direct at scope write).
     ...snapshotTools(deps),
     // v2 E2 (ADR 0044): the audits' findings (read-only).
     ...auditTools(deps),

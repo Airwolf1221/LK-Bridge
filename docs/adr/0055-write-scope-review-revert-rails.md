@@ -243,3 +243,12 @@ rejected). A dry run against the mock passes every step and leaves nothing behin
   meanwhile the image is also back on the Staging page (rejecting the proposal keeps both).
 - F3c's test worlds switch `arkona_appraisal_fix` to "always propose" by default (as `arkona_add_character_art`), so
   its earlier tests keep testing the proposal path; the "follow the scope" path has tests of its own.
+
+## Amendment: F12 (26 November 2026)
+
+[ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md) withdraws decision C (the safety rails: removed with their
+stored settings, the Clients page's card and their tests) and decision D (the pack's per-tool "always propose":
+removed; a pack tool follows its connection's scope). Decisions A and B are extended: every write kind an agent can
+cause has a Revert path or is refused for agents (a test keeps it so), Revert gains a generic `entity` target with
+follow-ups, deletes are copied first and restored by Revert, and the Review page groups by workstream and connection.
+Canon and lifecycle changes at scope `write` are direct.

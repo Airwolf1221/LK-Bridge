@@ -55,6 +55,7 @@ export { matchesIntent, type CompareMode } from './compare.js';
 export {
   lockKeyFor,
   type AssetDeleteKeeper,
+  type DeleteCopier,
   type WriteVerification,
   type VerifiedWriteValue,
 } from './step-exec.js';

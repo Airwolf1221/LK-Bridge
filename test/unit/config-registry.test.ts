@@ -194,6 +194,8 @@ describe('the registry agrees with the schemas', () => {
       SNAPSHOT_KEEP_FULL_DAYS: [30, 1, 3650],
       SNAPSHOT_KEEP_WEEKLY: [8, 0, 520],
       SNAPSHOT_KEEP_DAYS: [30, 1, 3650],
+      // v3 F12 (ADR 0081): added after F8.
+      DELETE_COPY_RETENTION_DAYS: [90, 1, 3650],
       SNAPSHOT_SOFT_DELETE_DAYS: [30, 1, 3650],
       JOURNAL_RETENTION_DAYS: [30, 1, 3650],
       JOURNAL_MAX_BYTES: [2147483648, 1048576, null],

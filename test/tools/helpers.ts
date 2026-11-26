@@ -57,13 +57,6 @@ export interface StackOptions {
   readonly opTiers?: ConstructorParameters<typeof MockLk>[0]['opTiers'];
   /** Scope of the default token's profile (`tools-test`). Default `write`, so every tool is exercised. */
   readonly scope?: Scope;
-  /**
-   * v3 F3.4 (ADR 0055 decision C): the safety rails of the default token's profile (`tools-test`). `off` (the default)
-   * is write scope as it was before the rails, so the earlier tests keep testing the direct writes they were written
-   * for; `default` keeps the defaults (deletes, bulk changes over 10 pages, asset deletes and moves always proposed).
-   * Every profile made with `newToken` keeps the defaults, as a new profile does on the bridge.
-   */
-  readonly rails?: 'off' | 'default';
   /** v3 F2: every log line, at trace level (to assert what is never logged). Default: silent. */
   readonly logStream?: Writable;
   /** CR-2026-11-R3 (fix A): wraps the bridge's requests to the mock LegendKeeper (delay one, say). Default: fetch. */
@@ -193,16 +186,6 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     return { token: created.token, patId: created.pat.id, profileId: profile.id };
   };
   const token = newToken('tools-test', o.scope ?? 'write').token;
-  if (o.rails !== 'default') {
-    const p = policy.store.getProfileByLabel('tools-test')!;
-    policy.store.updateRails(p.id, {
-      deletes: false,
-      bulk: false,
-      bulkPages: 10,
-      renamesMoves: false,
-      assets: false,
-    });
-  }
   const clients: Client[] = [];
   const stack: Stack = {
     mock,

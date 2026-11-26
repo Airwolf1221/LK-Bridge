@@ -84,7 +84,8 @@ describe('set_facts on Rheashira: no false conflict', () => {
       `GET /resources/${PAGE}/properties/${RHEASHIRA.property}/rows`, // the check in the lock (rank order)
       `PATCH /resources/${PAGE}/properties/${RHEASHIRA.property}/rows/rhea0012`,
       `GET /resources/${PAGE}`, // verify (stored order)
-      // v3 F2 (ADR 0049): Last Major Revision, chained on the Scope write's version (no read of its own)
+      // v3 F2 (ADR 0049): Last Major Revision; v3 F12 (ADR 0081, op-meta): its row read for the journal pre-image
+      `GET /resources/${PAGE}/properties/${RHEASHIRA.property}/rows`,
       `PATCH /resources/${PAGE}/properties/${RHEASHIRA.property}/rows/rhea0013`,
       `GET /resources/${PAGE}`, // the tree's re-read
     ]);
@@ -242,11 +243,12 @@ describe('low-level writes and proposals on Rheashira', () => {
 });
 
 describe('the canonical guard on Rheashira', () => {
-  it('changing Status to Authoritative still needs canonical approval, by set_facts and by lk_api_write', async () => {
-    const r = await call(writer, { facts: { Status: 'Authoritative' } });
+  it('changing Status to Authoritative still needs canonical approval at scope propose, by set_facts and by lk_api_write', async () => {
+    // v3 F12 (ADR 0081): at scope write it would be direct.
+    const r = await call(proposer, { facts: { Status: 'Authoritative' } });
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     expect(r.body.reason).toMatch(/Status would be set to Authoritative/);
-    const low = await w.stack.call(writer, 'lk_api_write', {
+    const low = await w.stack.call(proposer, 'lk_api_write', {
       operationId: 'updatePropertyRow',
       params: { path: rowPath('Status'), body: { content: [{ text: 'Authoritative' }] } },
     });

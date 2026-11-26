@@ -96,8 +96,18 @@ export interface NarrativeWorld extends F4bWorld {
   tool(name: string, args: Record<string, unknown>): Promise<Record<string, any>>; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
-export async function narrativeWorld(o: { readonly main?: boolean } = {}): Promise<NarrativeWorld> {
+export async function narrativeWorld(
+  o: {
+    readonly main?: boolean;
+    /**
+     * v3 F12 (ADR 0081): the agent's scope. The narrative tests were written for an agent at scope `write` (the narrative
+     * tools' writes direct), so `seed` (write) is this world's default; `propose` runs it at scope propose.
+     */
+    readonly toolModes?: 'propose' | 'seed';
+  } = {},
+): Promise<NarrativeWorld> {
   const w = await f4bWorld({
+    toolModes: o.toolModes ?? 'seed',
     seed: (world) => {
       const r = world.repo;
       r.seed({ id: N.narratives, name: '[INDEX] Narratives', parentId: ROOT });

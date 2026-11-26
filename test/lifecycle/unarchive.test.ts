@@ -13,6 +13,8 @@ import { accept, L, LIFECYCLE, lifecycleWorld, textOf, type LifecycleWorld } fro
 
 let w: LifecycleWorld;
 let client: Client;
+/** v3 F12 (ADR 0081): at scope write unarchive_page is direct; at scope propose it is a canonical proposal. */
+let proposer: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
 const today = isoDate(Date.now());
@@ -26,14 +28,15 @@ const rowId = (page: string, key: string) =>
 beforeAll(async () => {
   w = await lifecycleWorld();
   client = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('unarchive-propose', 'propose').token);
   await archive('Old Harbour');
   await archive('Sky Ferry');
 });
 afterAll(async () => w.close());
 
 describe('unarchive_page from the record', () => {
-  it('a formerly Authoritative page: back under its parent as [BSRC], values restored, CANON, the note removed', async () => {
-    const r = await call('unarchive_page', { page: 'Old Harbour' });
+  it('a formerly Authoritative page (at scope propose, accepted as canon): back under its parent as [BSRC], values restored, CANON, the note removed', async () => {
+    const r = await w.stack.call(proposer, 'unarchive_page', { project: 'test', page: 'Old Harbour' });
     expect(r.body, r.text).toMatchObject({
       status: 'proposal_captured',
       requiresCanonicalApproval: true,
@@ -75,16 +78,19 @@ describe('unarchive_page from the record', () => {
     const sb = w.sidebars.pages.get(L.ferry)!;
     sb.props[0]!.rows!.find((r) => r.key === 'Scope')!.content = [{ text: 'A cloud ferry, retired' }];
     void rowId;
-    const r = await call('unarchive_page', { page: 'Sky Ferry' });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', newName: '[BWRK] Sky Ferry' });
-    expect(r.body.newParent.id).toBe(LIFECYCLE.working);
-    expect(r.body.note).toBeUndefined();
-    expect(r.body.flags.join(' ')).toMatch(/edited after archiving, so it is KEPT/);
-    expect(r.body.flags.join(' ')).toMatch(
+    // Direct at scope write: the result carries the plan and its flags.
+    const done = await call('unarchive_page', { page: 'Sky Ferry' });
+    expect(done.body, done.text).toMatchObject({
+      status: 'written',
+      verified: true,
+      newName: '[BWRK] Sky Ferry',
+    });
+    expect(done.body.newParent.id).toBe(LIFECYCLE.working);
+    expect(done.body.note).toBeUndefined();
+    expect(done.body.flags.join(' ')).toMatch(/edited after archiving, so it is KEPT/);
+    expect(done.body.flags.join(' ')).toMatch(
       /Scope was edited after archiving \(it is “A cloud ferry, retired”\)/,
     );
-    const done = await accept(w, r);
-    expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
     const p = w.repo.live(L.ferry)!;
     expect(p).toMatchObject({ name: '[BWRK] Sky Ferry', parentId: LIFECYCLE.working });
     expect(p.tags).toEqual(['Working']);
@@ -173,12 +179,11 @@ describe('unarchive_page without a usable record', () => {
       restore: { continuityType: 'CANON', scope: 'A lighthouse', temporalScope: 'Fourth Age' },
     });
     expect(full.body, full.text).toMatchObject({
-      status: 'proposal_captured',
+      status: 'written',
+      verified: true,
       newName: '[BSRC] Old Lighthouse',
     });
     expect(full.body.flags.join(' ')).toMatch(/archived by hand/);
-    const done = await accept(w, full);
-    expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
     expect(facts(w, 'handarc1')).toEqual(
       expect.arrayContaining(['Status=Authoritative', 'Scope=A lighthouse', `Last Major Revision=${today}`]),
     );

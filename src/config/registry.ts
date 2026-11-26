@@ -739,6 +739,16 @@ const SPECS: readonly Spec[] = [
     applies: 'now',
   },
   {
+    key: 'DELETE_COPY_RETENTION_DAYS',
+    schema: 'tools',
+    group: 'snapshots',
+    label: 'Copies kept before deletes for',
+    description:
+      'Days the restorable copy the bridge keeps before an agent deletes something (the pages it reads first, kept as a change snapshot) is kept, so Revert on the Review page can bring it back.',
+    unit: UNITS.days,
+    applies: 'now',
+  },
+  {
     key: 'SNAPSHOT_SOFT_DELETE_DAYS',
     schema: 'tools',
     group: 'snapshots',

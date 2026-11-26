@@ -7,7 +7,7 @@
  * | --------- | ----- | ------------------------------------------------------------------------- |
  * | `read`    | allow | deny: the connection is read-only; the owner can change this              |
  * | `propose` | allow | propose (the proposal service captures it; nothing is sent to LegendKeeper) |
- * | `write`   | allow | allow (the engine's guards still apply)                                    |
+ * | `write`   | allow | allow: direct, canon and lifecycle changes included (v3 F12, ADR 0081; the guards' refusals still apply) |
  *
  * Member and invite administration (registry `risk: admin`) stays refused for every agent unless
  * LK_ALLOW_MEMBER_ADMIN=true: by the engine's guard (`MEMBER_ADMIN_DISABLED`) and, for proposals, at capture.
@@ -16,27 +16,10 @@
  * Approved proposals: see approval.ts. A valid token for the proposal containing the operation wins over the
  * proposer's (possibly since lowered) scope; `approvedBy` or a token that is not valid is refused outright.
  */
-import type { JobKind, OpParams, Principal } from '../jobs/types.js';
-import type {
-  PolicyContext,
-  PolicyDecision,
-  PolicyGate,
-  PolicyOpMeta,
-  RailDecision,
-  RailRequestItem,
-} from '../jobs/policy.js';
+import type { OpParams, Principal } from '../jobs/types.js';
+import type { PolicyContext, PolicyDecision, PolicyGate, PolicyOpMeta } from '../jobs/policy.js';
 import { isLiveApprovalToken } from './approval.js';
-import type { TextRemoval } from './text-removal.js';
-import {
-  DEFAULT_WRITE_RAILS,
-  isLowLevelTool,
-  listsSent,
-  railsVerdict,
-  reasonNamesGuardedRail,
-  type RailItem,
-  type RailVerdict,
-  type WriteRails,
-} from './rails.js';
+import { AGENT_REFUSED } from '../review/write-kinds.js';
 import type { PolicyStore } from './store.js';
 import type { ResolvedPrincipal, Scope } from './types.js';
 
@@ -54,53 +37,6 @@ export interface PolicyGateOptions {
 export const SYSTEM_PRINCIPAL_ID = 'system';
 /** v3 F5b (ADR 0068): the automation engine's principal (`AUTOMATION_PRINCIPAL` in src/jobs/types.ts). */
 export const AUTOMATION_PRINCIPAL_ID = 'automation';
-
-/** v3 F3.4 (ADR 0055): what the rails need from the repository tree (set once the tree exists). */
-export interface RailLookups {
-  /** How many pages lie under a page (its descendants), or null when the tree does not know. */
-  readonly descendants?: (projectId: string, resourceId: string) => number | null;
-  readonly pageName?: (projectId: string, resourceId: string) => string | null;
-  /**
-   * CR-2026-11-R2 (R2-04): how many pages lie under a page as LegendKeeper holds them now (the tree may not have seen pages
-   * added in the app since its last sweep), listed until more than `limit` are found; null when they cannot be listed.
-   */
-  readonly liveDescendants?: (projectId: string, resourceId: string, limit: number) => Promise<number | null>;
-  /**
-   * ADR 0057 decision 9: how many pages a restore of a page may bring back with it (the restore set the canon guard reads,
-   * not counting the page itself); null when the set is not known.
-   */
-  readonly restored?: (projectId: string, resourceId: string) => Promise<number | null>;
-  /**
-   * ADR 0057 decision 4: whether a whole-list write (`LIST_WRITES`) drops an entry LegendKeeper holds now, read live;
-   * null when it cannot be told.
-   */
-  readonly drops?: (projectId: string, item: RailRequestItem) => Promise<boolean | null>;
-  /**
-   * ADR 0061 part B decision 1 (R3-53): the pack pages a low-level request takes the split guard's words or more of text
-   * off, read live (src/policy/text-removal.ts).
-   */
-  readonly textRemoved?: (
-    projectId: string,
-    items: readonly RailRequestItem[],
-  ) => Promise<readonly TextRemoval[]>;
-}
-
-/** The pages whose descendants a request's rails count: a cascade delete's page, a copy's source (with its children). */
-function countedRoots(items: readonly RailRequestItem[]): string[] {
-  const roots = new Set<string>();
-  for (const it of items) {
-    if (it.kind === 'read') continue;
-    const body = (it.params.body ?? {}) as { templateId?: unknown; includeChildren?: unknown };
-    const rid = it.params.path?.resourceId;
-    const cascade = it.params.query?.cascade === true || it.params.query?.cascade === 'true';
-    if (it.opId === 'deleteResource' && cascade && rid) roots.add(rid);
-    if (body.includeChildren !== true) continue;
-    if (it.opId === 'saveResourceAsTemplate' && rid) roots.add(rid);
-    if (it.opId === 'createResourceFromTemplate' && typeof body.templateId === 'string')
-      roots.add(body.templateId);
-  }
-  return [...roots];
-}
 
 /** The message an agent sees when its connection is read-only. */
 export function readOnlyReason(profile: string): string {
@@ -127,7 +63,6 @@ export class LivePolicyGate implements PolicyGate {
   >();
   private readonly cacheMs: number;
   private readonly now: () => number;
-  private railLookups: RailLookups = {};
 
   constructor(private readonly o: PolicyGateOptions) {
     this.cacheMs = Math.min(Math.max(o.cacheMs ?? 1000, 0), 1000);
@@ -193,8 +128,8 @@ export class LivePolicyGate implements PolicyGate {
     }
 
     // 2a. v3 F5b (ADR 0068): the automation engine's own principal, for the codes the owner switched on. Only the
-    // engine acts as it (origin `maintenance`, tool `automation.*`); the canon and lifecycle guards and the rails still
-    // judge every request (the rails at their defaults, `rails` below).
+    // engine acts as it (origin `maintenance`, tool `automation.*`); the canon and lifecycle guards still judge every
+    // request (v3 F12, ADR 0081: the safety rails are gone).
     if (principal.principalId === AUTOMATION_PRINCIPAL_ID) {
       // Its reads carry the origin's kind through the bridge's own machinery (a proposal's capture reads as
       // `proposal_capture`); its writes name the engine's tool.
@@ -211,6 +146,9 @@ export class LivePolicyGate implements PolicyGate {
     if (!resolved) return deny('the connection is not known to the bridge');
     if (!resolved.active) return deny('the connection has been revoked or has expired');
     if (op.kind === 'read') return { decision: 'allow' };
+    // v3 F12 (ADR 0081, D2): a write no Revert can undo is never an agent's, whatever the scope or LK_ALLOW_MEMBER_ADMIN.
+    const refused = AGENT_REFUSED[op.operationId];
+    if (refused) return deny(`${op.operationId}: ${refused}. The owner does it in the LegendKeeper app.`);
     // Member and invite administration is refused by the engine's own guard (MEMBER_ADMIN_DISABLED) at every scope,
     // after this gate, and by the dry-run of the guards at proposal capture; that typed refusal is clearer for agents.
     switch (resolved.scope) {
@@ -232,152 +170,6 @@ export class LivePolicyGate implements PolicyGate {
     }
   }
 
-  /**
-   * ADR 0062: whether approving a proposal is one of the owner's guarded kinds (a delete, more than 10 pages, an asset
-   * delete or move): the dashboard then asks for the step-up. CR-2026-11-R4 (SE-05 to SE-07, SE-12): either of two
-   * judgments asks.
-   *
-   * 1. The rail that made it a proposal, as recorded (`proposedBecause`): the deletes, bulk or assets rail, or a reason
-   *    that cannot be read (`reasonNamesGuardedRail`).
-   * 2. Its operations, by the rails' own rules at the owner's defaults (ADR 0055), whatever made it a proposal (a rail,
-   *    a scope, the owner's own request): the removals through a low-level tool (the proposal's recorded `tool`) and the
-   *    text they take off a pack page count as the deletes rail counts them at entry (read live; a read that fails
-   *    counts), a member or an invite taken away counts as a delete, and a restore counts as more than 10 pages (its set
-   *    is not read here). A judgment that cannot be made asks (fails closed).
-   */
-  async approvalVerdict(
-    projectId: string,
-    items: readonly RailItem[],
-    o: { readonly tool?: string; readonly proposedBecause?: string | null } = {},
-  ): Promise<RailVerdict | null> {
-    if (reasonNamesGuardedRail(o.proposedBecause)) return { hits: [], reason: o.proposedBecause! };
-    try {
-      return await this.judge(DEFAULT_WRITE_RAILS, items, {
-        project: projectId,
-        ...(o.tool !== undefined ? { tool: o.tool } : {}),
-        readRestores: false,
-        memberRemovals: true,
-      });
-    } catch (e) {
-      return {
-        hits: [],
-        reason: `proposed because: the safety rails could not be judged (${e instanceof Error ? e.message : String(e)})`,
-      };
-    }
-  }
-
-  /** v3 F3.4: the tree's answers the rails use (a cascade's pages, page names for the reason); merged with earlier ones. */
-  setRailLookups(l: RailLookups): void {
-    this.railLookups = { ...this.railLookups, ...l };
-  }
-
-  /**
-   * v3 F3.4 (ADR 0055): the safety rails of the principal's profile, read live (the same cache as the scope), for a
-   * request that would run directly. Only an agent at scope `write` has rails; anyone else gets null (the gate itself
-   * decides for them).
-   */
-  async rails(
-    principal: Principal,
-    items: readonly RailRequestItem[],
-    ctx: {
-      readonly project: string;
-      readonly jobKind: JobKind;
-      readonly stagedPlacement?: boolean;
-      /** The tool the request came through (`origin.tool`). */
-      readonly tool?: string;
-    },
-  ): Promise<RailDecision | null> {
-    if (principal.principalId === SYSTEM_PRINCIPAL_ID) return null;
-    // v3 F5b (ADR 0068): the automation engine meets the rails at the owner's defaults (never bypassed).
-    if (principal.principalId === AUTOMATION_PRINCIPAL_ID)
-      return this.judge(DEFAULT_WRITE_RAILS, items, {
-        project: ctx.project,
-        ...(ctx.tool !== undefined ? { tool: ctx.tool } : {}),
-        readRestores: true,
-        memberRemovals: true,
-      });
-    const r = this.resolve(principal.principalId);
-    if (!r?.active || r.scope !== 'write') return null;
-    return this.judge(r.rails, items, {
-      project: ctx.project,
-      ...(ctx.tool !== undefined ? { tool: ctx.tool } : {}),
-      ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
-      readRestores: true,
-      // CR-2026-11-R4 (ADR 0066 part B, question 10, the owner's decision): a member or an invite taken away is a delete
-      // at entry too (it reaches the rails only with LK_ALLOW_MEMBER_ADMIN on; it is refused before them otherwise).
-      memberRemovals: true,
-    });
-  }
-
-  /**
-   * The rails `rails` a request meets, with what they need read first (shared by the entry rails and the approval's
-   * judgment, CR-2026-11-R4). `readRestores` false: a restore's set is not read (it counts as more than any N).
-   */
-  private async judge(
-    rails: WriteRails,
-    items: readonly RailRequestItem[],
-    ctx: {
-      readonly project: string;
-      readonly tool?: string;
-      readonly stagedPlacement?: boolean;
-      readonly readRestores: boolean;
-      readonly memberRemovals?: boolean;
-    },
-  ): Promise<RailVerdict | null> {
-    const l = this.railLookups;
-    const writes = (it: RailRequestItem) =>
-      it.kind !== 'read' && !it.opId.startsWith('bridge.') && !it.opId.startsWith('upload_image.');
-    // ADR 0057 decision 9: a restore counts every page its restore set says may come back (read before the verdict; an
-    // unknown set, or none to read, fails closed).
-    const restored = new Map<string, number | null>();
-    if (rails.bulk && ctx.readRestores)
-      for (const it of items) {
-        const rid = it.params.path?.resourceId;
-        if (it.opId !== 'restoreResource' || !writes(it) || !rid || restored.has(rid)) continue;
-        restored.set(rid, l.restored ? await l.restored(ctx.project, rid).catch(() => null) : null);
-      }
-    // ADR 0057 decision 4: a whole-list write through a low-level tool is a removal when it drops an entry held now.
-    const lowLevel = isLowLevelTool(ctx.tool);
-    const drops = new Map<number, boolean | null>();
-    if (rails.deletes && lowLevel)
-      for (const [i, it] of items.entries()) {
-        if (!writes(it) || listsSent(it.opId, it.params.body).length === 0) continue;
-        drops.set(i, l.drops ? await l.drops(ctx.project, it).catch(() => null) : null);
-      }
-    // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool is a removal too (an error
-    // reading it refuses the request: no direct write).
-    const textRemoved =
-      rails.deletes && lowLevel && l.textRemoved
-        ? await l.textRemoved(ctx.project, items.filter(writes))
-        : [];
-    const base = {
-      ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
-      ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
-      ...(ctx.memberRemovals === true ? { memberRemovals: true } : {}),
-      restored: (id: string) => restored.get(id) ?? null,
-      lowLevel,
-      drops: (i: number) => drops.get(i) ?? null,
-      textRemoved: () => textRemoved,
-    };
-    const fromTree = (id: string) => l.descendants?.(ctx.project, id) ?? null;
-    const verdict = railsVerdict(rails, items, { ...base, descendants: fromTree });
-    // CR-2026-11-R2 (R2-04): a request the tree's counts would let run directly although it deletes a cascade or copies a
-    // page with its children is counted again on the pages LegendKeeper holds now (the larger count wins; a listing
-    // that cannot be made fails closed). Only then: a request already proposed costs no reads.
-    if (verdict !== null || !rails.bulk || !l.liveDescendants) return verdict;
-    const roots = countedRoots(items);
-    if (roots.length === 0) return null;
-    const live = new Map<string, number | null>();
-    for (const id of roots) live.set(id, await l.liveDescendants(ctx.project, id, rails.bulkPages));
-    return railsVerdict(rails, items, {
-      ...base,
-      descendants: (id: string) => {
-        const now = live.get(id);
-        if (now === undefined) return fromTree(id);
-        return now === null ? null : Math.max(fromTree(id) ?? 0, now);
-      },
-    });
-  }
 }
 
 export function createPolicyGate(o: PolicyGateOptions): LivePolicyGate {

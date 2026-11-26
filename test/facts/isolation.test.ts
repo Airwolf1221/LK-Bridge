@@ -149,20 +149,22 @@ describe('set_facts with two projects', () => {
     });
     expect(put.status, JSON.stringify(put.json)).toBe(200);
     expect(put.json).toMatchObject({ defaults: false, agentDefaultStatus: 'Draft' });
-    // Alpha: Status is no longer protected, Scope is. Beta keeps the defaults.
-    const a1 = await t.call(writer, 'set_facts', {
+    // Alpha: Status is no longer protected, Scope is. Beta keeps the defaults. v3 F12 (ADR 0081): the rules decide what
+    // is a CANONICAL proposal at scope propose (at scope write both changes would be direct).
+    const a1 = await t.call(proposer, 'set_facts', {
       project: 'alpha',
       page: 'Shared Page',
       facts: { Status: 'Authoritative' },
     });
-    expect(a1.body, a1.text).toMatchObject({ status: 'written' });
-    const a2 = await t.call(writer, 'set_facts', {
+    expect(a1.body, a1.text).toMatchObject({ status: 'proposal_captured' });
+    expect(a1.body.requiresCanonicalApproval).toBeFalsy();
+    const a2 = await t.call(proposer, 'set_facts', {
       project: 'alpha',
       page: 'Shared Page',
       facts: { Scope: 'Changed' },
     });
     expect(a2.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    const b1 = await t.call(writer, 'set_facts', {
+    const b1 = await t.call(proposer, 'set_facts', {
       project: 'beta',
       page: 'Shared Page',
       facts: { Status: 'Outline' },

@@ -14,7 +14,8 @@ vi.setConfig({ testTimeout: 300_000, hookTimeout: 300_000 });
 describe('write_page on a pack page: a split is never made by hand', () => {
   let w: SplitWorld;
   beforeAll(async () => {
-    w = await splitWorld();
+    // v3 F12 (ADR 0081): at scope write (the refusals refuse there; a plain edit runs directly).
+    w = await splitWorld({ toolModes: 'seed' });
   });
   afterAll(() => w?.close());
 

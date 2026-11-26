@@ -54,7 +54,9 @@ const CANON_ROWS: [string, string][] = [
 export type IdentityWorld = RetagWorld;
 
 export async function identityWorld(): Promise<IdentityWorld> {
+  // v3 F12 (ADR 0081): the world's agent at scope `write`, where the identity tool is direct.
   const w = await retagWorld({
+    toolModes: 'seed',
     seed: (world) => {
       const r = world.repo;
       const page = (

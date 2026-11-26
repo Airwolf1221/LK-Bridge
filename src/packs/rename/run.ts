@@ -200,7 +200,8 @@ export async function runRename(
         // itself and re-checks inside it (a conflict is rebased, or its item skipped), so ordinary writes to those pages
         // never wait for the whole rename.
         lifecycle: marker,
-        forceProposal: true,
+        // v3 F12 (ADR 0081): a canon rename the agent at scope `write` makes directly (on the Review page, with Revert); a
+        // canonical proposal at scope `propose` (the marker).
         // ADR 0058 (E3): a rename that stops part-way resumes from where it stopped: its check (the subject, every page,
         // block and asset as planned, or already renamed by this rename) first.
         resumable: { kind: 'rename', recheck: [1] },

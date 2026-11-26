@@ -16,18 +16,15 @@
  *   from `failed` to `executing` and follows the job again. Every resume is audited (`job.resume`).
  * - **An agent** resumes only its own direct jobs, at its own scope (`bridge_job_resume`): a job the owner approved is
  *   the owner's to resume, as it is the owner's to cancel. CR-2026-11-R3 (ADR 0061 part B, the owner's decisions): never
- *   a job the owner (or the bridge) cancelled (R3-54, `CANCELLED_BY_OWNER`); and its profile's safety rails are judged
- *   again on the steps left (R3-55): when one now covers a step, the rest is proposed for the owner instead of run (one
- *   proposal, `continued_as`), and the job is not resumed again while that proposal stands.
+ *   a job the owner (or the bridge) cancelled (R3-54, `CANCELLED_BY_OWNER`). v3 F12 (ADR 0081): the safety rails that were
+ *   judged again on the steps left (R3-55) are gone; a job whose rest an earlier rail proposed (`continued_as`) is still
+ *   not resumed while that proposal stands.
  * - **Revert** (ADR 0055) stays the alternative for a direct job: once reverted (or while a revert runs) a job is never
  *   resumed, and a job resumed is reverted, like any other, once it has finished.
  */
 import type { Db } from '../db/open.js';
 import type { JobEngine } from '../jobs/engine.js';
 import { RESUMABLE_OPTION } from '../jobs/engine.js';
-import { isInternalStep } from '../jobs/internal-steps.js';
-import type { RailDecision, RailRequestItem } from '../jobs/policy.js';
-import { getOperation } from '../lk/registry.js';
 import {
   TERMINAL_JOB_STATUSES,
   type JobOrigin,
@@ -101,6 +98,13 @@ export type ResumeResult =
       readonly proposalId: string;
       readonly summary: string | null;
     }
+  /** v3 F12 (ADR 0081): a recreate finished as a new job at once (the owner's Finish, or an agent at scope `write`). */
+  | {
+      readonly status: 'submitted';
+      readonly jobId: string;
+      readonly newJobId: string;
+      readonly summary: string;
+    }
   | { readonly status: 'nothing_to_do'; readonly jobId: string; readonly summary: string };
 
 /** Who resumes: the owner (the dashboard), or an agent (its principal, at its own scope). */
@@ -135,16 +139,6 @@ export interface ResumeDeps {
     /** R3-55: a proposal's state (the one holding a job's rest), or null when there is none. */
     stateOf?(proposalId: string): string | null;
   };
-  /**
-   * CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4): the safety rails of an agent's profile, read live, judged on
-   * `items` as the engine judges a request at entry (`LivePolicyGate.rails`); null when none applies.
-   */
-  readonly rails?: (
-    projectId: string,
-    principalId: string,
-    items: readonly RailRequestItem[],
-    tool: string | undefined,
-  ) => Promise<RailDecision | null>;
   /** F2's finish of a recreate (ADR 0049 decision 6): the same restore proposed again, only what is missing. */
   readonly finishRecreate?: (
     projectId: string,
@@ -153,6 +147,7 @@ export interface ResumeDeps {
     by: string,
   ) => Promise<
     | { readonly status: 'nothing_to_do'; readonly summary: string }
+    | { readonly status: 'submitted'; readonly newJobId: string; readonly summary: string }
     | { readonly status: 'proposal_captured'; readonly proposalId: string; readonly summary: string | null }
   >;
   /** Whether a job has been reverted (or a revert of it is running): it is never resumed then. */
@@ -447,17 +442,12 @@ export class ResumeService {
         restoreId: r.ref,
         outcome: out.status,
         ...(out.status === 'proposal_captured' ? { proposalId: out.proposalId } : {}),
+        ...(out.status === 'submitted' ? { newJobId: out.newJobId } : {}),
       });
-      return out.status === 'nothing_to_do'
-        ? { status: 'nothing_to_do', jobId, summary: out.summary }
-        : { status: 'proposal_captured', jobId, proposalId: out.proposalId, summary: out.summary };
-    }
-    // CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4, the owner's (b)): the rails were judged when the request arrived
-    // (ADR 0055 C3); an agent's Resume judges them again on the steps left, live. A step one now covers makes the rest a
-    // proposal for the owner: nothing runs directly.
-    if (actor.kind === 'agent' && this.d.rails) {
-      const proposed = await this.proposeRestIfRailed(projectId, jobId, actor.principalId, by, auditAfter);
-      if (proposed) return proposed;
+      if (out.status === 'nothing_to_do') return { status: 'nothing_to_do', jobId, summary: out.summary };
+      if (out.status === 'submitted')
+        return { status: 'submitted', jobId, newJobId: out.newJobId, summary: out.summary };
+      return { status: 'proposal_captured', jobId, proposalId: out.proposalId, summary: out.summary };
     }
     // CR-2026-11-R3 (ADR 0061 part B decision 6, the owner's (b)): the writes that read back a difference are read back
     // again first; one that now reads back as planned counts as verified ("put right since", in the job's result).
@@ -479,81 +469,6 @@ export class ResumeService {
       ...(proposal ? { proposalId: proposal.id, proposalReopened: reopened } : {}),
     });
     return { status: 'resumed', jobId, from: done.from, rechecked: done.rechecked, job: done.job };
-  }
-
-  /**
-   * R3-55: judges the agent's rails on what a resume would run (`engine.restOf`); when one applies, proposes that rest as
-   * one proposal (the same steps and holds, the job's own origin, the rail's reason as `proposedBecause`), records it on
-   * the stop (`continued_as`) and returns the result; else null (the job resumes in place).
-   */
-  private async proposeRestIfRailed(
-    projectId: string,
-    jobId: string,
-    principalId: string,
-    by: string,
-    auditAfter: Record<string, unknown>,
-  ): Promise<ResumeResult | null> {
-    const job = this.d.engine.queries.getJob(projectId, jobId);
-    if (!job) return null;
-    const rest = this.d.engine.restOf(projectId, jobId);
-    if (rest.length === 0) return null;
-    const items: RailRequestItem[] = rest.map(({ op, params, ...options }) => ({
-      opId: op,
-      kind: isInternalStep(op) ? 'internal' : (getOperation(op)?.kind ?? 'write'),
-      params: params ?? {},
-      options,
-    }));
-    let verdict: RailDecision | null;
-    try {
-      verdict = await this.d.rails!(projectId, principalId, items, job.origin.tool);
-    } catch (e) {
-      // A rail that cannot be judged fails closed, as at entry: the rest is proposed.
-      verdict = {
-        reason: `proposed because: the safety rails could not be judged (${e instanceof Error ? e.message : String(e)})`,
-        hits: [],
-      };
-    }
-    if (!verdict) return null;
-    const o = this.d.engine.jobOptions(projectId, jobId) as Record<string, unknown>;
-    const stop = this.stopOf(projectId, jobId);
-    const summary =
-      `The rest of job ${jobId} (${job.title}), from step ${stop?.stoppedStep ?? '?'}: ${verdict.reason.replace(/^proposed because: /, 'a safety rail now covers it: ')}`.slice(
-        0,
-        500,
-      );
-    const r = await this.d.engine.submit({
-      kind: 'batch_ops',
-      project: projectId,
-      steps: rest,
-      onError: job.onError,
-      priority: job.priority,
-      title: `The rest of ${job.title}`.slice(0, 300),
-      origin: job.origin,
-      ...(rest.some((s) => isInternalStep(s.op)) ? { internal: true } : {}),
-      forceProposal: true,
-      proposedBecause: verdict,
-      ...(o.holdLock ? { holdLock: o.holdLock } : {}),
-      ...(o.holdMore ? { holdMore: o.holdMore } : {}),
-      ...(Array.isArray(o.holdDocuments) && o.holdDocuments.length > 0
-        ? { holdDocuments: o.holdDocuments }
-        : {}),
-      ...(Array.isArray(o.holdAssets) && o.holdAssets.length > 0 ? { holdAssets: o.holdAssets } : {}),
-      ...(o.lifecycle ? { lifecycle: o.lifecycle } : {}),
-      ...(o[RESUMABLE_OPTION] ? { resumable: o[RESUMABLE_OPTION] } : {}),
-      proposal: { summary },
-    } as never);
-    if (!('proposalId' in r)) return null;
-    this.d.db
-      .prepare('UPDATE job_stops SET continued_as = ? WHERE project_id = ? AND job_id = ?')
-      .run(r.proposalId, projectId, jobId);
-    this.counted(projectId, jobId, by);
-    this.d.audit(by, 'job.resume', jobId, undefined, {
-      ...auditAfter,
-      outcome: 'proposal_captured',
-      proposalId: r.proposalId,
-      proposedBecause: verdict.reason,
-    });
-    return { status: 'proposal_captured', jobId, proposalId: r.proposalId, summary };
   }
 
   private counted(projectId: string, jobId: string, by: string): void {

@@ -15,7 +15,10 @@
  * | `move`       | a page moved (moveResource's pre-image: its parent and rank)                       | yes          |
  * | `chronology` | a chronology change (its record: rows, events and counts, kept in step)           | yes          |
  * | `image`      | an image placed (a new asset in its folder, or a staged asset moved and unhidden)  | yes (moved)  |
- * | `none`       | everything else: deletions, pages and other things created, other updates         | no, and why  |
+ * | `entity`     | v3 F12 (ADR 0081): every other write: an update (back to its pre-image), a        | yes          |
+ * |              | creation (deleted again while untouched), a deletion (restored, made again from    |              |
+ * |              | its pre-image, or from the copy kept before it: D3)                                |              |
+ * | `none`       | what is left: a write with no record to revert it from, and why                   | no, and why  |
  */
 import { EXPECT_STEP, LMR_STEP, VERIFY_STEP, isBridgeStep } from '../jobs/internal-steps.js';
 import type { JournalEntry } from '../jobs/journal.js';
@@ -26,6 +29,7 @@ import type { ChronologyRecord, TargetWrite } from '../chronology/store.js';
 import { remadeEventBody } from '../chronology/event-body.js';
 import { rowKey } from '../chronology/plan.js';
 import { mintClientId } from '../jobs/ids.js';
+import { ENTITIES, ENTITY_OPS, type EntityUndo } from './entity-undo.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -246,8 +250,19 @@ export interface ImageTarget extends Common {
   readonly stagingNames: readonly string[];
 }
 
+/** v3 F12 (ADR 0081): every other write kind, reverted by the generic undo (src/review/entity-undo.ts). */
+export interface EntityTarget extends Common {
+  readonly kind: 'entity';
+  readonly undo: EntityUndo;
+}
+
 export interface NotRevertible extends Common {
   readonly kind: 'none';
+  /**
+   * v3 F12 (ADR 0081): what reverts this with something else: a write on a page the job made goes with that page's
+   * deletion (`entity:<pageId>`), so it is nothing to do of its own.
+   */
+  readonly coveredBy?: string;
   /** Why Revert does not put it back, in words. */
   readonly reason: string;
   readonly deletion?: true;
@@ -267,6 +282,7 @@ export type Target =
   | MoveTarget
   | ChronologyUnitTarget
   | ImageTarget
+  | EntityTarget
   | NotRevertible;
 
 // ------------------------------------------------------------------------------------------------ classification
@@ -278,17 +294,6 @@ const TEXT_DOC_OPS = new Set([
   'updateBlock',
   'deleteBlock',
   'moveBlock',
-]);
-const BLOCK_ROW_OPS = new Set([
-  'createBlockRow',
-  'updateBlockRow',
-  'deleteBlockRow',
-  'createBlockProperty',
-  'updateBlockProperty',
-  'deleteBlockProperty',
-  'createBlockPropertyRow',
-  'updateBlockPropertyRow',
-  'deleteBlockPropertyRow',
 ]);
 const ROW_OPS = new Set(['createPropertyRow', 'updatePropertyRow', 'deletePropertyRow']);
 const PAGE_CREATES = new Set(['createResource', 'createResourceFromTemplate', 'saveResourceAsTemplate']);
@@ -319,22 +324,6 @@ const DELETIONS: Readonly<Record<string, { what: string; instead?: string }>> = 
   deleteBoardShapes: { what: 'board shapes deleted' },
 };
 
-const CREATIONS: Readonly<Record<string, string>> = {
-  createResource: 'a page created',
-  createResourceFromTemplate: 'a page created',
-  createManyResources: 'pages created',
-  saveResourceAsTemplate: 'a template saved',
-  createDocument: 'a document created',
-  createLane: 'a timeline lane created',
-  createEvent: 'a timeline event created',
-  createFeature: 'a map feature created',
-  createProperty: 'a sidebar property created',
-  createBoardShapes: 'board shapes created',
-  createCalendar: 'a calendar created',
-  createAssetFolder: 'an asset folder created',
-  restoreResource: 'a deleted page restored',
-  restoreDocument: 'a deleted document restored',
-};
 
 /** Whether a step changed something (succeeded and not skipped), or may have (its outcome is unknown). */
 function wrote(s: StepRecord): 'yes' | 'maybe' | 'no' {
@@ -867,12 +856,14 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
   }
   for (const s of writes) if (s.opId === 'createImageUpload') handled.add(s.stepNo); // no change in LegendKeeper
 
-  // 7. Everything else the job wrote: not reverted, and why.
+  // 7. v3 F12 (ADR 0081, D2 and D3): every other write, by the generic undo (an update back to its pre-image, a creation
+  // deleted again while untouched, a deletion restored or made again); a write on a page the job made goes with it.
+  const pageTargets: EntityTarget[] = [];
+  const madePages = [...created];
   for (const s of writes) {
     if (handled.has(s.stepNo)) continue;
     const rid = s.params.path?.resourceId ?? null;
     const journal = entriesOf(s.stepNo).map((e) => e.id);
-    const del = DELETIONS[s.opId];
     const common = {
       key: `none:${s.stepNo}`,
       kind: 'none' as const,
@@ -881,38 +872,88 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       ...(wrote(s) === 'maybe' ? { uncertain: true } : {}),
       journal,
     };
+    // A page the job made (one or many): deleted again while untouched, children first.
+    if (PAGE_CREATES.has(s.opId) || s.opId === 'createManyResources') {
+      const items =
+        s.opId === 'createManyResources'
+          ? (Array.isArray(bodyOf(s.params).resources) ? (bodyOf(s.params).resources as unknown[]) : []).filter(isObj)
+          : [bodyOf(s.params)];
+      const results =
+        s.opId === 'createManyResources' && isObj(s.result) && Array.isArray(s.result.resources)
+          ? (s.result.resources as unknown[]).filter(isObj)
+          : isObj(s.result)
+            ? [s.result]
+            : [];
+      for (const [i, it] of items.entries()) {
+        const id = str(it.id) ?? str(results[i]?.id);
+        if (!id) continue;
+        pageTargets.push(createdPageTarget(rec, writes, s, id, it, results[i] ?? null, madePages, page));
+      }
+      handled.add(s.stepNo);
+      continue;
+    }
+    // Anything else on a page the job made is part of making it: it goes with the page's deletion.
+    if (rid && created.has(rid) && s.opId !== 'deleteResource') {
+      targets.push({
+        ...common,
+        what: `part of a page the job made (${s.opId})`,
+        reason: 'it goes with the page the job made, which Revert deletes again while untouched',
+        coveredBy: `entity:resource:${rid}`,
+        creation: true,
+      });
+      continue;
+    }
+    const ent = ENTITY_OPS[s.opId];
+    if (ent) {
+      const undo = entityUndoOf(s, ent, preOf(s.stepNo), entriesOf(s.stepNo)[0]?.targetId ?? null);
+      if (undo) {
+        targets.push({
+          key: `entity:${s.opId}:${s.stepNo}`,
+          kind: 'entity',
+          page: page(rid),
+          what: `${ENTITIES[undo.entity].label} ${ent.action === 'update' ? 'changed' : ent.action === 'create' ? 'made' : ent.action === 'restore' ? 'restored' : 'deleted'}`,
+          steps: [s.stepNo],
+          ...(wrote(s) === 'maybe' ? { uncertain: true } : {}),
+          undo,
+        });
+        continue;
+      }
+    }
+    const del = DELETIONS[s.opId];
     if (del) {
       targets.push({
         ...common,
         what: del.what,
-        reason: `${del.what}: a deletion is never reverted${del.instead ? `; use ${del.instead}` : ''}`,
+        reason: `${del.what}, with no record of what it was (a delete from before F12): use ${del.instead ?? 'the journal’s pre-images (bridge_journal_lookup)'}`,
         deletion: true,
         ...(del.instead ? { instead: del.instead } : {}),
       });
       continue;
     }
-    const made = CREATIONS[s.opId];
-    if (made || (rid && created.has(rid))) {
-      targets.push({
-        ...common,
-        what: made ?? 'a page the job created',
-        reason: `${made ?? 'part of a page the job created'}: Revert does not delete what a job made (delete it yourself if it should go)`,
-        creation: true,
-      });
+    const why =
+      s.opId === 'createImageUpload' || s.opId === 'assignBlockIds'
+        ? null
+        : TEXT_DOC_OPS.has(s.opId)
+          ? 'a page text write whose page before the job is not recorded'
+          : `${s.opId}: the journal holds no record of it to revert from`;
+    if (why === null) {
+      targets.push({ ...common, what: s.opId, reason: 'no change to put back', coveredBy: 'nothing' });
       continue;
     }
-    const why =
-      s.opId === 'deleteBlock' || s.opId === 'moveBlock'
-        ? 'a block deleted or moved through the low-level tools (the journal keeps the block; put it back by hand)'
-        : ROW_OPS.has(s.opId)
-          ? 'a sidebar row written through the low-level tools (only set_facts records the sidebar as it was)'
-          : BLOCK_ROW_OPS.has(s.opId)
-            ? 'a row of a block written through the low-level tools'
-            : TEXT_DOC_OPS.has(s.opId)
-              ? 'a page text write whose page before the job is not recorded'
-              : `${s.opId}: not one of the kinds Revert puts back (page text, sidebar facts and links, chronology rows and events, names, tags, aliases, moves, image placements)`;
     targets.push({ ...common, what: s.opId, reason: why });
   }
+  // Children before their parents (a page made under another the job made is deleted first).
+  const depth = (t: EntityTarget): number => {
+    let n = 0;
+    let cur = t.undo.left && typeof t.undo.left.parentId === 'string' ? t.undo.left.parentId : null;
+    while (cur && created.has(cur) && n < 50) {
+      n++;
+      const up = pageTargets.find((x) => x.undo.path.resourceId === cur);
+      cur = up?.undo.left && typeof up.undo.left.parentId === 'string' ? up.undo.left.parentId : null;
+    }
+    return n;
+  };
+  targets.push(...[...pageTargets].sort((a, b) => depth(b) - depth(a)));
 
   const later = d.laterWrites?.() ?? [];
   const marked =
@@ -922,7 +963,148 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
           const by = laterWriteOf(t, later);
           return by ? { ...t, laterWrite: by } : t;
         });
-  return marked.sort((a, b) => (a.steps[0] ?? 0) - (b.steps[0] ?? 0));
+  // Page deletions of what the job made keep their children-first order (stable sort, by their creating step otherwise).
+  return marked.sort((a, b) =>
+    a.kind === 'entity' && b.kind === 'entity' && a.undo.entity === 'resource' && b.undo.entity === 'resource'
+      ? 0
+      : (a.steps[0] ?? 0) - (b.steps[0] ?? 0),
+  );
+}
+
+/** v3 F12: the pages a job made: what it left them as (name, parent, tags) and the documents it wrote (their versions). */
+function createdPageTarget(
+  rec: JobRecord,
+  writes: readonly StepRecord[],
+  s: StepRecord,
+  id: string,
+  body: Obj,
+  result: Obj | null,
+  madePages: readonly string[],
+  page: (id: string | undefined | null) => PageRef | null,
+): EntityTarget {
+  let left: Obj = {
+    ...(typeof body.name === 'string' ? { name: body.name } : result?.name !== undefined ? { name: result.name } : {}),
+    parentId: str(body.parentId) ?? str(result?.parentId) ?? null,
+    ...(Array.isArray(body.tags) ? { tags: body.tags } : Array.isArray(result?.tags) ? { tags: result.tags } : {}),
+  };
+  const documents = new Map<string, string>();
+  const sidebar = new Map<string, string>();
+  for (const w of writes) {
+    if (w.stepNo <= s.stepNo || w.params.path?.resourceId !== id) continue;
+    if (w.opId === 'createPropertyRow' || w.opId === 'updatePropertyRow') {
+      const b = bodyOf(w.params);
+      const content = Array.isArray(b.content) ? runsText(b.content as unknown[]) : str(b.text);
+      if (typeof b.key === 'string') sidebar.set(b.key, content ?? '');
+    }
+    if (w.opId === 'updateResource') left = { ...left, ...pickResource(bodyOf(w.params)) };
+    if (w.opId === 'moveResource' && bodyOf(w.params).parentId !== undefined)
+      left = { ...left, parentId: str(bodyOf(w.params).parentId) ?? null };
+    const docId = w.params.path?.documentId;
+    const v = isObj(w.result) ? str(w.result.version) : undefined;
+    if (docId && v) documents.set(docId, v);
+  }
+  void rec;
+  return {
+    key: `entity:resource:${id}`,
+    kind: 'entity',
+    page: page(id),
+    what: `a page the job made${typeof left.name === 'string' ? ` (${left.name})` : ''}`,
+    steps: [s.stepNo],
+    ...(wrote(s) === 'maybe' ? { uncertain: true } : {}),
+    undo: {
+      entity: 'resource',
+      action: 'create',
+      op: s.opId,
+      path: { resourceId: id },
+      left,
+      before: null,
+      documents: [...documents].map(([docId, version]) => ({ id: docId, version })),
+      madeWith: madePages.filter((x) => x !== id),
+      ...(sidebar.size > 0 ? { sidebar: [...sidebar].map(([key, value]) => ({ key, value })) } : {}),
+    },
+  };
+}
+
+const pickResource = (b: Obj): Obj => {
+  const out: Obj = {};
+  for (const k of ['name', 'tags']) if (b[k] !== undefined) out[k] = b[k];
+  return out;
+};
+
+/** v3 F12: the generic undo of one write, from its step and its journal entry; null when there is nothing to work from. */
+function entityUndoOf(
+  s: StepRecord,
+  ent: { readonly entity: EntityUndo['entity']; readonly action: EntityUndo['action'] },
+  pre: unknown,
+  journalTarget: string | null,
+): EntityUndo | null {
+  const def = ENTITIES[ent.entity];
+  const path: Record<string, string> = { ...(s.params.path ?? {}) };
+  const body = bodyOf(s.params);
+  const res = isObj(s.result) ? s.result : null;
+  const shapesSent = Array.isArray(body.shapes) ? body.shapes.filter(isObj) : [];
+  if (ent.action === 'create' && def.idParam && !path[def.idParam]) {
+    const id = str(res?.id) ?? str(body.id) ?? journalTarget ?? undefined;
+    if (!id) return null;
+    path[def.idParam] = id;
+  }
+  if (ent.entity === 'boardShapes') {
+    const ids =
+      ent.action === 'delete'
+        ? Array.isArray(body.ids)
+          ? body.ids.filter((x): x is string => typeof x === 'string')
+          : []
+        : shapesSent.map((x) => str(x.id)).filter((x): x is string => !!x);
+    const board = isObj(pre) && Array.isArray(pre.shapes) ? pre.shapes.filter(isObj) : [];
+    const byId = (list: readonly Obj[]) =>
+      Object.fromEntries(list.filter((x) => ids.includes(String(x.id))).map((x) => [String(x.id), x]));
+    return {
+      entity: 'boardShapes',
+      action: ent.action,
+      op: s.opId,
+      path,
+      shapeIds: ids,
+      left: ent.action === 'delete' ? null : byId(shapesSent),
+      before: ent.action === 'create' ? null : byId(board),
+    };
+  }
+  if (ent.entity === 'board')
+    return {
+      entity: 'board',
+      action: 'update',
+      op: s.opId,
+      path,
+      left: { shapes: shapesSent },
+      before: isObj(pre) ? pre : null,
+    };
+  const preObj = isObj(pre) ? pre : null;
+  const copy = preObj && isObj(preObj.copy) && typeof preObj.copy.snapshotId === 'string'
+    ? { snapshotId: preObj.copy.snapshotId, pages: Number(preObj.copy.pages ?? 1) }
+    : null;
+  if (ent.action === 'update') {
+    // The fields the job wrote, as LegendKeeper answered them (else as sent), and their values before.
+    const keys = Object.keys(body);
+    const left: Obj = {};
+    const before: Obj = {};
+    for (const k of keys) {
+      left[k] = res && res[k] !== undefined ? res[k] : body[k];
+      before[k] = preObj ? (preObj[k] ?? null) : undefined;
+    }
+    return {
+      entity: ent.entity,
+      action: 'update',
+      op: s.opId,
+      path,
+      left,
+      before: preObj ? before : null,
+    };
+  }
+  if (ent.action === 'create' || ent.action === 'restore') {
+    const left: Obj = {};
+    for (const k of Object.keys(body)) if (k !== 'id') left[k] = res && res[k] !== undefined ? res[k] : body[k];
+    return { entity: ent.entity, action: ent.action, op: s.opId, path, left, before: null };
+  }
+  return { entity: ent.entity, action: 'delete', op: s.opId, path, left: null, before: preObj, copy };
 }
 
 /** CR-2026-11-R2 (R2-27): the rows after the row writes that were applied (in order), from the rows before. */

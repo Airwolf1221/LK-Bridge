@@ -32,7 +32,7 @@ import type {
  *   the chronology tools refuse. Every change is audited.
  * - Chronology check: its last run and findings, and "Run the check now". It reads only and never repairs. v2 E6 (ADR
  *   0048): each age's dates as read (plain, qualified by their anchor, unreadable, table-only) and how each row and event
- *   were paired; "Propose a fix" for an event without a row (deleted, only the event); a fix that changes an event's
+ *   were paired; "Apply fix" (v3 F12: confirmed, then one job) for an event without a row (deleted, only the event); a fix that changes an event's
  *   shape asks first; "Table-only" for a row the owner never wants on the timeline.
  * - Table-only rows (v2 E6): the marks, which hold while the row's text is unchanged; "Clear the mark".
  * - Changes: the record each timeline tool's job writes, newest first, with "Mark resolved" for a change that stopped
@@ -609,8 +609,28 @@ function CheckCard({
   const [proposed, setProposed] = useState<Record<string, string>>({});
   // v3 F2.1: a refused fix's candidates, by finding: each with "Use this event" (or "Pair with this row").
   const [ties, setTies] = useState<Record<string, TieCandidate[]>>({});
+  /**
+   * v3 F12 (ADR 0081): every fix is one confirmed action: the dialog says what it does, then it runs at once as one job
+   * (no proposal to approve next). A fix that changes an event's shape says so in its own dialog instead.
+   */
+  const confirmApply = (f: ChronologyFinding) =>
+    confirm({
+      title: f.kind === 'event_without_row' ? 'Delete this event?' : 'Apply this fix?',
+      message: (
+        <>
+          <p>{f.message}</p>
+          <p className="small-text">
+            It runs at once as one job, checked again against the table and the timeline as they are now; follow it
+            on the Jobs page.
+          </p>
+        </>
+      ),
+      confirmLabel: f.kind === 'event_without_row' ? 'Delete the event' : 'Apply fix',
+    });
   const propose = async (f: ChronologyFinding, key: string, choice?: TieChoice) => {
     if (choice) return proposeChoice(f, key, choice);
+    const shapeAsked = typeof f.detail?.shapeChange === 'string' && !REPAIR_KIND[f.kind];
+    if (!shapeAsked && !(await confirmApply(f))) return;
     const rowId = typeof f.detail?.rowId === 'string' ? f.detail.rowId : null;
     const count = f.kind === 'count_mismatch';
     // v2 E6 (ADR 0048): an event without a row: the proposal deletes only the event.
@@ -650,11 +670,12 @@ function CheckCard({
             <p className="small-text">
               The row says “{text(f.detail?.rowDate)}”; the event is at {text(f.detail?.eventDate)}. Check
               that they are the same chronology event (paired by{' '}
-              {PAIRED_BY[text(f.detail?.pairedBy)] ?? text(f.detail?.pairedBy)}) before you propose it.
+              {PAIRED_BY[text(f.detail?.pairedBy)] ?? text(f.detail?.pairedBy)}) first. Confirmed, it
+              runs at once as one job.
             </p>
           </>
         ),
-        confirmLabel: 'Propose the change',
+        confirmLabel: 'Apply the change',
       });
       if (!yes) return;
     }
@@ -698,7 +719,9 @@ function CheckCard({
       [key]:
         res.status === 'proposal_captured'
           ? `Proposal ${res.proposalId} is waiting on the Proposals page.`
-          : res.message,
+          : res.status === 'job_submitted'
+            ? `Applying: job ${res.jobId} (on the Jobs page).`
+            : res.message,
     }));
   };
 
@@ -709,6 +732,22 @@ function CheckCard({
   const proposeChoice = async (f: ChronologyFinding, key: string, choice: TieChoice) => {
     const rowId = 'rowId' in choice && choice.rowId ? choice.rowId : text(f.detail?.rowId);
     if (!rowId) return;
+    // v3 F12 (ADR 0081): confirmed first; then it runs at once as one job.
+    const yes = await confirm({
+      title: 'Apply this choice?',
+      message: (
+        <p>
+          {'createNew' in choice
+            ? 'A new timeline event is made for this row.'
+            : 'rowId' in choice && choice.rowId
+              ? 'The event is paired with the row you chose, and brought into line with it.'
+              : 'The row is paired with the event you chose, and the event brought into line with it.'}{' '}
+          It runs at once as one job; follow it on the Jobs page.
+        </p>
+      ),
+      confirmLabel: 'Apply',
+    });
+    if (!yes) return;
     const body = {
       confirm: true,
       project,
@@ -734,10 +773,10 @@ function CheckCard({
           message: (
             <p>
               The timeline event would change: <strong>{shape || 'its shape'}</strong>. Check that the row and
-              the event are the same chronology event before you propose it.
+              the event are the same chronology event first. Confirmed, it runs at once as one job.
             </p>
           ),
-          confirmLabel: 'Propose the change',
+          confirmLabel: 'Apply the change',
         });
         if (!yes) return;
         res = await run(() => withTie(key, () => send(true)));
@@ -801,9 +840,9 @@ function CheckCard({
       <h2 id="chronology-check-h">Chronology check</h2>
       <p className="muted small-text">
         Compares each age’s table with its timeline and the Main counts. The check itself only reads and never
-        repairs anything; “Propose a fix” on a row without an event, a row and event that disagree about the
+        repairs anything; “Apply fix…” on a row without an event, a row and event that disagree about the
         date, an event without a row (deleted: only the event), or a Main count that differs from its table
-        makes ONE proposal (the table is the authority) for you to approve on the Proposals page. An event in
+        says what it does and, confirmed, runs it as one job (the table is the authority). An event in
         a tie (rows of the table could be its own) is never deleted: pair it with one of its rows. A fix
         refused because several events could be a row’s own shows them, each with “Use this event”, and “Make
         a new event”. A qualified date (“c. 4A 563; exact date unresolved”) is read by its anchor and never
@@ -930,7 +969,7 @@ function CheckCard({
                             disabled={busy || !project}
                             onClick={() => void propose(f, key)}
                           >
-                            {f.kind === 'event_without_row' ? 'Propose deleting the event' : 'Propose a fix'}
+                            {f.kind === 'event_without_row' ? 'Delete the event…' : 'Apply fix…'}
                           </Button>
                         )}
                         {tableOnly && (

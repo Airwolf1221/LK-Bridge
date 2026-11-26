@@ -159,8 +159,8 @@ describe('H1 and H3: the seven pages, and a page only out of order', () => {
   });
 });
 
-describe('H4: Apply all corrections, then approve all the batches together', () => {
-  it('makes the usual bounded batches (each page an item), and approving them together applies every page', async () => {
+describe('H4: Apply all corrections', () => {
+  it('makes the usual bounded batches (each page an item); v3 F12: each runs at once as one job, every page applied', async () => {
     // Four pages put back out of order by an outside edit; a batch size of 3 for the test.
     const ids = [ID(0), ID(1), ID(2), ID(3)];
     for (const id of ids) {
@@ -173,29 +173,23 @@ describe('H4: Apply all corrections, then approve all the batches together', () 
     const chunks = rt().retag.correctionBatches(PROJECT, runId);
     expect(chunks.map((c) => c.length)).toEqual([3, 1]);
     expect(chunks.flat().sort()).toEqual([...ids].sort());
-    const proposals: string[] = [];
+    const jobs: string[] = [];
     for (const c of chunks) {
       const plan = rt().retag.planApply({ projectId: PROJECT, runId, pageIds: c });
       expect(plan.items).toHaveLength(c.length);
+      // The owner's confirmed "Apply all corrections" (ADR 0081): no proposal to approve next.
       const sub = await rt().retag.submitApply(plan, {
         projectId: PROJECT,
-        origin: { kind: 'ui', client: 'owner', tool: 'tagging.apply_all' },
+        origin: { kind: 'ui', client: 'owner', tool: 'tagging.apply_all', ownerConfirmed: true },
         actor: 'owner',
       });
-      expect(sub.proposalId).toBeTruthy();
-      expect(rt().retag.isBatchProposal(PROJECT, sub.proposalId!)).toBe(true);
-      proposals.push(sub.proposalId!);
+      expect(sub.proposalId).toBeNull();
+      expect(sub.jobId).toBeTruthy();
+      jobs.push(sub.jobId!);
     }
-    // Pages in an open batch are not batched again.
-    expect(rt().retag.correctionBatches(PROJECT, runId)).toEqual([]);
-    const results = await rt().policy.commands.bulkApprove('owner', proposals);
-    expect(results.every((r) => r.ok)).toBe(true);
-    for (const id of proposals) {
-      for (let i = 0; i < 200; i++) {
-        if (rt().policy.proposals.get(id)!.state === 'executed') break;
-        await new Promise((r) => setTimeout(r, 25));
-      }
-      expect(rt().policy.proposals.get(id)!.state).toBe('executed');
+    for (const id of jobs) {
+      const job = await rt().engine.wait(PROJECT, id, 20_000);
+      expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
     }
     SEVEN.slice(0, 4).forEach((s, i) => expect(w.repo.res.get(ID(i))!.tags, s.name).toEqual(s.proposed));
   });

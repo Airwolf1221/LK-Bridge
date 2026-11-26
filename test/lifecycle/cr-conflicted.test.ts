@@ -16,7 +16,8 @@ beforeAll(async () => {
 afterAll(async () => w.close());
 
 it('archive_page approved, then the page changes before the job takes the lock: conflicted, nothing written', async () => {
-  const c = await w.stack.connect();
+  // v3 F12 (ADR 0081): at scope write archive_page is direct; the proposal is made at scope propose.
+  const c = await w.stack.connect(w.stack.newToken('cr-conflicted-propose', 'propose').token);
   const r = await w.stack.call(c, 'archive_page', { project: 'test', page: 'Old Harbour' });
   expect(r.body.status).toBe('proposal_captured');
   const id = String(r.body.proposalId);

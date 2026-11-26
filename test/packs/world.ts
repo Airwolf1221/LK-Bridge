@@ -115,15 +115,17 @@ export async function packWorld(
     /** v3 F3b: false leaves out Mehrana I and II's shared alias (the evaluation scenarios' world has one Mehrana). */
     readonly mehranaAlias?: boolean;
     /**
-     * v3 F3.4 (ADR 0055 decision D): `propose` (the default) switches every write tool to "always propose", as every
-     * package and every appraisal fix was before F3.4, so the earlier tests keep testing the proposal path; `seed` keeps
-     * the seed's switches (adding art and an appraisal fix follow the agent's scope).
+     * v3 F12 (ADR 0081): the pack's "always propose" switches are gone, so the agent's scope decides. `propose` (the
+     * default) runs the world's agent at scope `propose`, so every package and every fix is a proposal, as the earlier
+     * tests were written for (they test the proposal path); `seed` runs it at scope `write`, where everything is direct
+     * (the name is kept from F3.4, when it meant the seed's switches).
      */
     readonly toolModes?: 'propose' | 'seed';
   } = {},
 ): Promise<PackWorld> {
   // As the chronology tests do, this world's per-minute limits are raised: its files make many calls in a minute.
   const w = (await imagesWorld({
+    scope: o.toolModes === 'seed' ? 'write' : 'propose',
     ...o,
     env: { LK_TIER_LIMITS: JSON.stringify({ 'key-min': 5000, 'write-min': 2000 }), ...(o.env ?? {}) },
     limits: { 'key-min': 5000, 'write-min': 2000, ...(o.limits ?? {}) },
@@ -468,11 +470,6 @@ export async function packWorld(
   };
   const packs = w.stack.runtime.packs;
   packs.ensureSeeded();
-  if (o.toolModes !== 'seed')
-    packs.commands.setToolModes('owner', 'arkona', {
-      arkona_add_character_art: 'propose',
-      arkona_appraisal_fix: 'propose',
-    });
   packs.store.setGovernance('arkona', [
     {
       key: 'character-architecture',

@@ -118,14 +118,13 @@ describe('archive_page: a fault at each write, then a resume', () => {
       expect(job.status).toBe('failed');
       const writesBefore = w.seen.filter((l) => !l.startsWith('GET')).length;
       // The second call resumes the same record, re-planning from the page as it is now.
-      const again = await call('archive_page', { page: id });
-      expect(again.body, again.text).toMatchObject({
-        status: 'proposal_captured',
-        requiresCanonicalApproval: true,
+      // v3 F12 (ADR 0081): at scope write the resume is direct, as the first call was.
+      const done = await call('archive_page', { page: id });
+      expect(done.body, done.text).toMatchObject({
+        status: 'written',
+        verified: true,
         resumes: { recordId: rec.id },
       });
-      const done = await accept(w, again);
-      expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
       const after = w.stack.runtime.lifecycle.store.record(PROJECT, rec.id)!;
       expect(after.state).toBe('complete');
       expect(after.jobs).toHaveLength(2);

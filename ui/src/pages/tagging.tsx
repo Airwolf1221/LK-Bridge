@@ -7,11 +7,12 @@ import { Link } from '../router';
 /**
  * Tagging (v3 F3f, ADR 0060), in the Repository group: the Controlled Native Tagging Standard's workflows for the Arkona
  * pack. **Audit**: a free, read-only policy audit (the snapshots) of a page, a branch or everything, each page with its
- * current and proposed arrays, a rationale per slot and its disposition; deterministic corrections can be proposed as
- * ONE batch (a proposal, approved on the Proposals page). **Holds**: what needs the owner, with agents' suggestions; an
+ * current and proposed arrays, a rationale per slot and its disposition; deterministic corrections can be applied as
+ * ONE batch (v3 F12, ADR 0081: confirmed in a dialog, then one job at once). **Holds**: what needs the owner, with agents' suggestions; an
  * uncertain category is resolved by choosing the category (and specialist) from the closed list (re-authenticated,
  * audited). **Batches**: each batch's proposal and what became of each page. **Reconciliation**: a named record across
- * batches; Resume audits what remains afresh and proposes the next batch. Nothing here writes to LegendKeeper.
+ * batches; Resume audits what remains afresh and applies the next batch. Nothing here writes to LegendKeeper until
+ * the owner confirms a batch.
  */
 
 type Disposition = 'compliant' | 'correction' | 'hold' | 'exception';
@@ -137,7 +138,7 @@ export function TaggingPage() {
       </PageHeader>
       <p className="muted">
         The Controlled Native Tagging Standard, for the Arkona pack: audit first (free, from the snapshots),
-        holds go to you, and every apply is a proposal you approve on the Proposals page.
+        holds go to you, and every apply is a batch you confirm, which then runs at once as one job.
       </p>
       {d.unavailable ? (
         <div className="note note-warn" role="status">
@@ -239,15 +240,14 @@ function AuditTab({ overview, onChanged }: { overview: Overview; onChanged: () =
     );
   const propose = () =>
     void confirm({
-      title: `Propose ${picked.size} correction${picked.size === 1 ? '' : 's'} as one batch?`,
+      title: `Apply ${picked.size} correction${picked.size === 1 ? '' : 's'} as one batch?`,
       message: (
         <p>
-          ONE proposal, each page an item. Nothing is written until you approve it on the Proposals page; its
-          job compares the policy, reads each page fresh (a page changed since the audit is skipped as
-          conflicted) and reads it back.
+          ONE job, at once: it compares the policy, reads each page fresh (a page changed since the audit is
+          skipped as conflicted) and reads it back. Follow it on the Jobs page; Revert undoes it.
         </p>
       ),
-      confirmLabel: 'Propose the batch',
+      confirmLabel: 'Apply the batch',
     }).then((ok) => {
       if (!ok || !runId) return;
       void run(
@@ -257,7 +257,7 @@ function AuditTab({ overview, onChanged }: { overview: Overview; onChanged: () =
             pageIds: [...picked],
             confirm: true,
           }),
-        'Batch proposed: approve it on the Proposals page.',
+        'Batch applying: follow it on the Jobs page.',
       ).then((x) => {
         if (x) {
           setPicked(new Set());
@@ -369,7 +369,7 @@ function AuditTab({ overview, onChanged }: { overview: Overview; onChanged: () =
             </table>
           </div>
           <Button variant="primary" busy={busy} disabled={picked.size === 0} onClick={propose}>
-            Propose the picked corrections ({picked.size})
+            Apply the picked corrections ({picked.size})…
           </Button>
         </>
       )}
@@ -407,14 +407,14 @@ function ApplyAll({
   );
   const applyAll = () =>
     void confirm({
-      title: `Propose all ${corrections} correction${corrections === 1 ? '' : 's'} of this run?`,
+      title: `Apply all ${corrections} correction${corrections === 1 ? '' : 's'} of this run?`,
       message: (
         <p>
-          They are proposed in the usual bounded batches (each page an item); pages already in an open batch
-          are left out. Nothing is written until the batches are approved.
+          They run in the usual bounded batches, each one job at once (each page checked fresh and read back);
+          pages already in an open batch are left out. Follow them on the Jobs page.
         </p>
       ),
-      confirmLabel: 'Make the batches',
+      confirmLabel: 'Apply the batches',
     }).then((ok) => {
       if (!ok) return;
       void run(
@@ -471,7 +471,7 @@ function ApplyAll({
         <>
           <p className="small-text">
             {made.length === 0
-              ? 'No correction is left to propose (each is in an open batch already).'
+              ? 'No correction is left to apply (each is in an open batch already).'
               : `${made.length} batch${made.length === 1 ? '' : 'es'} made: ${made.map((b) => b.pages).join(', ')} pages.`}
           </p>
           {ids.length > 0 && !approved && (
@@ -966,7 +966,7 @@ function ReconciliationTab({ overview, onChanged }: { overview: Overview; onChan
       message: (
         <p>
           What remains is audited afresh (free, from the snapshots), then its next batch of deterministic
-          corrections is proposed: ONE proposal for you to approve on the Proposals page.
+          corrections runs at once as one job.
         </p>
       ),
       confirmLabel: 'Resume',

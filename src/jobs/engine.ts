@@ -56,7 +56,7 @@ import {
   type MapChecker,
   type RegisteredChecker,
 } from './internal-steps.js';
-import type { WriteGuard } from './write-guard.js';
+import { directWrite, type WriteGuard } from './write-guard.js';
 import type { LmrPlan, LmrPlanInput, LmrPlanner } from './lmr-hook.js';
 import {
   ALLOW_ALL_GATE,
@@ -70,7 +70,7 @@ import {
   type ProposalExtras,
   type ProposalSink,
   type ProposedOp,
-  type RailDecision,
+  type ProposalReason,
 } from './policy.js';
 import { createJobQueries, JobsRepo, type ErrorInput, type NewStep } from './repo.js';
 import {
@@ -82,6 +82,7 @@ import {
   type WriteVerification,
   type RecordHandler,
   type AssetDeleteKeeper,
+  type DeleteCopier,
 } from './step-exec.js';
 import type { StepPlanner, StepPlanners } from './planners.js';
 import type { Rebaser } from './rebase.js';
@@ -283,6 +284,7 @@ export class JobEngine {
   /** v3 F2: the Last Major Revision planner (src/lmr/), asked about every caller's write request. */
   private lmrPlanner: LmrPlanner | undefined;
   private assetDeleteKeeper: AssetDeleteKeeper | undefined;
+  private deleteCopier: DeleteCopier | undefined;
   private continueGuard: ((projectId: string, jobId: string) => string | null) | undefined;
   /** v2 C2c: the lifecycle record's handler (`bridge.record` steps). */
   /** v2 C2c: the `bridge.record` handlers by store (`lifecycle`; v2 D1 `chronology`). */
@@ -358,6 +360,7 @@ export class JobEngine {
       filler: (name) => this.fillers.get(name),
       ...(o.etagVersions ? { etagVersions: o.etagVersions } : {}),
       assetDeleteKeeper: () => this.assetDeleteKeeper,
+      deleteCopier: () => this.deleteCopier,
       onRead: (info) => this.notifyRead(info),
     });
     this.etagVersions = o.etagVersions;
@@ -706,6 +709,14 @@ export class JobEngine {
     this.continueGuard = guard;
     return () => {
       if (this.continueGuard === guard) this.continueGuard = undefined;
+    };
+  }
+
+  /** v3 F12 (ADR 0081, D3): the restorable copy kept before a page or document delete (see `DeleteCopier`). */
+  setDeleteCopier(copier: DeleteCopier): () => void {
+    this.deleteCopier = copier;
+    return () => {
+      if (this.deleteCopier === copier) this.deleteCopier = undefined;
     };
   }
 
@@ -1212,7 +1223,6 @@ export class JobEngine {
       req.forceProposal === true,
       {
         ...(req.stagedPlacement === true ? { stagedPlacement: true } : {}),
-        ...(req.forceProposal === true && req.proposedBecause ? { forcedBecause: req.proposedBecause } : {}),
       },
     );
     if (proposal) return proposal;
@@ -3675,8 +3685,6 @@ export class JobEngine {
     extra: {
       readonly staging?: boolean;
       readonly stagedPlacement?: boolean;
-      /** R3-55: a forced proposal's reason, from a rail the bridge judged itself (an agent's Resume). */
-      readonly forcedBecause?: RailDecision;
     } = {},
   ): Promise<ProposalCaptured | null> {
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
@@ -3710,16 +3718,31 @@ export class JobEngine {
       }
       if (decision.decision === 'propose') propose = true;
     }
-    // v2 D1.1 (ADR 0039): bridge code asked for a proposal whatever the gate said (the dashboard's "Propose a fix").
-    // v3 F2.1 (ADR 0048): so is a change the bridge only records (a chronology link the caller chose: no LegendKeeper
-    // write, but it changes what the check reports).
+    // v2 D1.1 (ADR 0039): bridge code asked for a proposal whatever the gate said (the automation engine's codes at
+    // Propose). v3 F2.1 (ADR 0048): so is a change the bridge only records (a chronology link the caller chose: no
+    // LegendKeeper write, but it changes what the check reports).
     if (forceProposal && items.some((it) => it.meta.kind !== 'read' || it.opId === RECORD_STEP))
       propose = true;
+    // v3 F12 (ADR 0081): an agent at scope `write` (the gate allowed it) and the owner's confirmed dashboard action run
+    // directly, canon and lifecycle changes included: the guards below answer them allow or deny, never a proposal.
+    if (origin.ownerConfirmed === true && (principal.principalId !== SYSTEM_PRINCIPAL.principalId || origin.kind !== 'ui'))
+      throw this.policyDenied(
+        new PolicyDeniedError(
+          items[0]?.opId ?? 'operation',
+          'ownerConfirmed can only be set by the dashboard, for the owner',
+          principal.principalId,
+        ),
+        principal,
+        project,
+      );
+    const direct =
+      !(jobKind === 'upload_image' && extra.staging === true) &&
+      directWrite({ principal, origin, gate: propose ? 'propose' : 'allow' });
     // v2 C2a (ADR 0032): the write guard sees the whole request, once the gate has let every operation through.
     let canonical: ProposalMeta['canonical'];
     // CR-2026-11-R4 (ADR 0065 amendment 2): an ordinary proposal the guard asked for (a page moved into or out of
-    // Narratives), shown with its reason as the rails' proposals are.
-    let guardRail: RailDecision | null = null;
+    // Narratives, at scope `propose` or by the automation engine), shown with its reason.
+    let guardReason: ProposalReason | null = null;
     if (this.writeGuard && items.some((it) => it.meta.kind !== 'read')) {
       let verdict: Awaited<ReturnType<WriteGuard['entry']>>;
       try {
@@ -3731,6 +3754,7 @@ export class JobEngine {
           items: items.map((it) => ({ op: it.opId, params: it.params, options: it.options })),
           ...(meta.extras?.prefetched ? { prefetched: meta.extras.prefetched } : {}),
           gate: propose ? 'propose' : 'allow',
+          ...(direct ? { direct: true } : {}),
           ...(lifecycle ? { lifecycle } : {}),
           ...(meta.onError ? { onError: meta.onError } : {}),
         });
@@ -3741,6 +3765,13 @@ export class JobEngine {
           reason: `the write guard failed: ${e instanceof Error ? e.message : String(e)}`,
         };
       }
+      // v3 F12: a direct request never becomes a proposal; a guard that asks for one is a bridge fault (fail closed).
+      if (direct && verdict.decision !== 'allow' && verdict.decision !== 'deny')
+        verdict = {
+          decision: 'deny',
+          opId: items[0]?.opId ?? 'operation',
+          reason: `a write guard asked for a proposal of a direct write (${verdict.reason}); this is a bridge fault, nothing was written`,
+        };
       if (verdict.decision === 'deny') {
         throw this.policyDenied(
           new PolicyDeniedError(
@@ -3759,44 +3790,13 @@ export class JobEngine {
       }
       if (verdict.decision === 'propose') {
         propose = true;
-        guardRail = {
+        guardReason = {
           reason: `proposed because: ${verdict.reason}`,
           hits: [{ rail: 'narrative', text: verdict.reason }],
         };
       }
     }
-    // v3 F3.4 (ADR 0055): a request that would run directly at scope `write` meets the agent profile's safety rails
-    // (deletes, bulk changes, renames and moves, asset deletes and moves). A rail only ever ADDS a proposal: it is not
-    // asked about a request already proposed, approved work or the bridge's own; a rail that cannot be judged fails
-    // closed (a proposal).
-    let rail: RailDecision | null = propose && extra.forcedBecause ? extra.forcedBecause : guardRail;
-    if (
-      !propose &&
-      this.policyGate.rails &&
-      origin.approval === undefined &&
-      principal.principalId !== SYSTEM_PRINCIPAL.principalId &&
-      (jobKind === 'single_op' || jobKind === 'batch_ops') &&
-      items.some((it) => it.meta.kind !== 'read')
-    ) {
-      try {
-        rail = await this.policyGate.rails(
-          principal,
-          items.map((it) => ({ opId: it.opId, kind: it.meta.kind, params: it.params, options: it.options })),
-          {
-            project,
-            jobKind,
-            ...(extra.stagedPlacement === true ? { stagedPlacement: true } : {}),
-            ...(origin.tool !== undefined ? { tool: origin.tool } : {}),
-          },
-        );
-      } catch (e) {
-        rail = {
-          reason: `proposed because: the safety rails could not be judged (${e instanceof Error ? e.message : String(e)})`,
-          hits: [],
-        };
-      }
-      if (rail) propose = true;
-    }
+    const rail: ProposalReason | null = guardReason;
     if (!propose) return null;
     const ops: ProposedOp[] = items.map(({ opId, params, options }) => ({
       op: opId,

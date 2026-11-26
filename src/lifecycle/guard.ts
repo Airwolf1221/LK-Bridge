@@ -26,7 +26,7 @@
 import { isCanonicalApproval } from '../policy/approval.js';
 import { PolicyDeniedError, type JobEngine, LkOperationError } from '../jobs/index.js';
 import { SYSTEM_PRINCIPAL, type LifecycleMarker, type OpParams } from '../jobs/types.js';
-import { ownerForcedProposal } from '../jobs/write-guard.js';
+import { canonAccepted, ownerForcedProposal } from '../jobs/write-guard.js';
 import type {
   WriteGuard,
   WriteGuardEntry,
@@ -753,6 +753,10 @@ export class LifecycleGuard implements WriteGuard {
         reason: refusal(refused),
       };
     }
+    // v3 F12 (ADR 0081): an agent at scope `write`, or the owner's confirmed dashboard action, makes canon and lifecycle
+    // changes directly (the four lifecycle tools' included; each on the owner's Review page with Revert): allow. The
+    // refusals above (a change no tool declares, a prefix that disagrees with Status, a tag in the wrong slot) stand.
+    if (input.direct === true) return { decision: 'allow' };
     const canon = undeclared.filter((ch) => ch.what === 'canon');
     // CR-2026-11-R4 (F1): a page entering or leaving Narratives is always the owner's decision; when a page of it
     // carries a lifecycle signal it loses (or regains) its lifecycle, so the owner's canonical approval.
@@ -1730,13 +1734,13 @@ export class LifecycleGuard implements WriteGuard {
     const body = (input.params.body ?? {}) as Obj;
     const refuse = (ch: LifecycleChange) => {
       if (declares(marker, ch)) return;
-      // CR-2026-11 (CR-16): a page made [BSRC] passes only in work the owner approved as canon.
-      if (ch.what === 'canon' && input.job.origin.canonicalApprovedBy !== undefined) return;
+      // CR-2026-11 (CR-16): a page made [BSRC] passes only in work the owner approved as canon, or (v3 F12) a direct job.
+      if (ch.what === 'canon' && canonAccepted(input.job)) return;
       // CR-2026-11-R4 (F1): a page into or out of Narratives passes only in work the owner approved (as canon when a
       // page of it loses, or regains, a lifecycle).
       if (ch.what === 'narrative') {
         const loses = ch.narrative?.loses.length ?? 0;
-        if (input.job.origin.canonicalApprovedBy !== undefined) return;
+        if (canonAccepted(input.job)) return;
         if (loses === 0 && input.job.approvedBy !== null) return;
         throw new PolicyDeniedError(
           input.opId,

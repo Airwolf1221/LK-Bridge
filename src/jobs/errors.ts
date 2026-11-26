@@ -32,6 +32,8 @@ export type JobsErrorCode =
   | 'ASSET_BYTES_NOT_KEPT'
   /** v3 F7c (ADR 0075): a step bound to an archive entry whose staged image does not exist yet. */
   | 'ARCHIVE_ENTRY_NOT_STAGED'
+  /** v3 F12 (ADR 0081, D3): a page or document delete refused because its restorable copy could not be taken. */
+  | 'DELETE_COPY_FAILED'
   | 'BRIDGE_ERROR';
 
 export interface JobRef {

@@ -17,18 +17,17 @@ import { PROJECT } from '../tools/helpers.js';
 import { SidebarModel } from '../resources/world.js';
 import { fact, seedSet } from './sets.js';
 import { approveTagRules } from '../packs/tag-rules.js';
-import { accept, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
+import { LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
 
 let w: LifecycleWorld;
 let client: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
 const tags = (id: string) => [...w.repo.res.get(id)!.tags];
+/** v3 F12 (ADR 0081): at scope write a lifecycle tool is direct: written, as a job on the Review page. */
 const done = async (tool: string, args: Record<string, unknown>) => {
   const r = await call(tool, args);
-  expect(r.body.status, r.text).toBe('proposal_captured');
-  const d = await accept(w, r);
-  expect(d.body, d.text).toMatchObject({ status: 'written', verified: true });
+  expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
   return r;
 };
 

@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isoDate } from '../../src/lifecycle/index.js';
 import { PROJECT } from '../tools/helpers.js';
 import { childNames, facts, T } from '../resources/world.js';
-import { accept, L, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
+import { L, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
 
 let w: LifecycleWorld;
 let client: Client;
@@ -27,16 +27,15 @@ afterAll(async () => w.close());
 describe('move_to_working, then promote_page back', () => {
   it('move_to_working: under [INDEX] Working as [BWRK], Status Working, CANON → Working, nothing else', async () => {
     const before = facts(w, L.harbour);
-    const r = await call('move_to_working', { page: 'Old Harbour' });
-    expect(r.body, r.text).toMatchObject({
-      status: 'proposal_captured',
-      requiresCanonicalApproval: true,
+    // v3 F12 (ADR 0081): at scope write the lifecycle tools are direct.
+    const done = await call('move_to_working', { page: 'Old Harbour' });
+    expect(done.body, done.text).toMatchObject({
+      status: 'written',
+      verified: true,
       newName: '[BWRK] Old Harbour',
       newParent: { id: LIFECYCLE.working },
     });
-    expect(r.body.relatedPages).toBeDefined();
-    const done = await accept(w, r);
-    expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(done.body.relatedPages).toBeDefined();
     expect(w.repo.live(L.harbour)).toMatchObject({ name: '[BWRK] Old Harbour', parentId: LIFECYCLE.working });
     expect(w.repo.live(L.harbour)!.tags).toEqual(['port', 'Working']);
     // Only Status changed.
@@ -64,9 +63,7 @@ describe('move_to_working, then promote_page back', () => {
   });
 
   it('promote_page: back as [BSRC], Status Authoritative, Last Major Revision today, Continuity Type CANON kept, Working → CANON', async () => {
-    const r = await call('promote_page', { page: 'Old Harbour', destination: 'locs0001' });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    const done = await accept(w, r);
+    const done = await call('promote_page', { page: 'Old Harbour', destination: 'locs0001' });
     expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
     expect(w.repo.live(L.harbour)).toMatchObject({ name: '[BSRC] Old Harbour', parentId: 'locs0001' });
     expect(w.repo.live(L.harbour)!.tags).toEqual(['port', 'CANON']);
@@ -99,7 +96,7 @@ describe('promote_page: the Continuity Type rules', () => {
     };
     const ct = (id: string) => facts(w, id).find((f) => f.startsWith('Continuity Type='));
     for (const [k, id] of Object.entries(ids)) {
-      const done = await accept(w, await call('promote_page', { page: id, destination: 'Kumikas' }));
+      const done = await call('promote_page', { page: id, destination: 'Kumikas' });
       expect(done.body, `${k}: ${done.text}`).toMatchObject({ status: 'written', verified: true });
     }
     expect(ct(ids.canon)).toBe('Continuity Type=CANON');

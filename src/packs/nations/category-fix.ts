@@ -50,7 +50,12 @@ export function bridgeTerritoryCategoryCreator(deps: ToolDeps): TerritoryCategor
       get(t, k) {
         if (k === 'submit')
           return (req: Obj) =>
-            o.engine.submit({ ...req, origin, ...(o.direct === true ? {} : { forceProposal: true }) });
+            o.engine.submit({
+              ...req,
+              origin,
+              // v3 F12 (ADR 0081): the owner's confirmed "Apply fix" (its origin) runs at once, as the automation's Apply does.
+              ...(o.direct === true || origin.ownerConfirmed === true ? {} : { forceProposal: true }),
+            });
         const v = Reflect.get(t, k) as unknown;
         if (k === 'run') return (...a: Parameters<typeof t.run>) => t.run(a[0], a[1], { ...a[2], origin });
         return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;

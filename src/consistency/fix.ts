@@ -119,6 +119,8 @@ export interface PickProposal {
    * and every edit is in `notPlanned` (the pick answers `NOTHING_TO_PROPOSE` with them).
    */
   readonly proposalId: string;
+  /** v3 F12 (ADR 0081): the job the edits run as (the owner's confirmed pick runs at once); absent for a proposal. */
+  readonly jobId?: string;
   readonly summary: string | null;
   readonly items: readonly PlanItem[];
   /** Edits not planned, each with why (changed since the snapshot, a split date, a refusal of the row tools). */
@@ -156,7 +158,14 @@ const SILENT_LOG = {
   child: () => SILENT_LOG,
 } as unknown as McpToolContext['log'];
 
-const ORIGIN: JobOrigin = { kind: 'ui', client: 'owner', tool: PICK_TOOL, principal: SYSTEM_PRINCIPAL };
+/** v3 F12 (ADR 0081): the owner's pick, confirmed in its dialog, runs its edits at once as one job. */
+const ORIGIN: JobOrigin = {
+  kind: 'ui',
+  client: 'owner',
+  tool: PICK_TOOL,
+  principal: SYSTEM_PRINCIPAL,
+  ownerConfirmed: true,
+};
 
 const tidy = (s: string) => s.replace(/\s+/g, ' ').trim();
 const clip = (s: string, n = 200) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -839,7 +848,6 @@ async function proposeEdits(
     origin: ORIGIN,
     title: o.title.slice(0, 300),
     internal: true,
-    forceProposal: true,
     holdLock: { resourceId: pages[0]! },
     ...(pages.length > 1 ? { holdMore: { resources: pages.slice(1) } } : {}),
     ...(docs.length > 0 ? { holdDocuments: docs } : {}),
@@ -873,11 +881,13 @@ async function proposeEdits(
       }),
     },
   });
-  if (!('proposalId' in r) || typeof r.proposalId !== 'string')
-    throw new PickError('NOT_PROPOSED', 'The pick was not captured as a proposal; nothing was done.');
+  const jobId = 'jobId' in r && typeof r.jobId === 'string' ? r.jobId : undefined;
+  if ((!('proposalId' in r) || typeof r.proposalId !== 'string') && !jobId)
+    throw new PickError('NOT_PROPOSED', 'The pick was neither run nor proposed; nothing was done.');
   return {
-    proposalId: r.proposalId,
-    summary: typeof r.summary === 'string' ? r.summary : null,
+    proposalId: 'proposalId' in r && typeof r.proposalId === 'string' ? r.proposalId : '',
+    ...(jobId ? { jobId } : {}),
+    summary: 'summary' in r && typeof r.summary === 'string' ? r.summary : jobId ? o.title : null,
     items,
     notPlanned,
     reads,

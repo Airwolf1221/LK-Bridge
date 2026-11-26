@@ -98,6 +98,8 @@ export const TOOLS_ENV_SCHEMA = z.object({
   SNAPSHOT_KEEP_WEEKLY: intFrom(8, 0, 520),
   /** Days change snapshots are kept. */
   SNAPSHOT_KEEP_DAYS: intFrom(30, 1, 3650),
+  // v3 F12 (ADR 0081): the copy kept before an agent's delete (a change snapshot of the pages) is kept this many days.
+  DELETE_COPY_RETENTION_DAYS: intFrom(90, 1, 3650),
   /**
    * How long LegendKeeper is taken to keep a deleted page restorable (its soft delete): a restore of a page deleted more
    * recently than this undeletes it; an older one is recreated from the snapshot. LegendKeeper does not publish it.
@@ -213,6 +215,11 @@ export interface SnapshotStoreSettings {
   /** SNAPSHOT_KEEP_DAYS: change snapshots are kept this many days. */
   readonly keepDays: number;
   readonly softDeleteDays: number;
+  /**
+   * v3 F12 (ADR 0081), DELETE_COPY_RETENTION_DAYS: the copy kept before an agent's delete (the change snapshot of the
+   * pages, with its record) is kept this many days, however short the change snapshots' own retention.
+   */
+  readonly deleteCopyDays: number;
 }
 
 export const GIB = 1024 ** 3;
@@ -224,6 +231,7 @@ export const DEFAULT_SNAPSHOT_SETTINGS: SnapshotStoreSettings = {
   keepWeekly: 8,
   keepDays: 30,
   softDeleteDays: 30,
+  deleteCopyDays: 90,
 };
 
 export interface ImageSettings {
@@ -337,6 +345,7 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       keepWeekly: e.SNAPSHOT_KEEP_WEEKLY,
       keepDays: e.SNAPSHOT_KEEP_DAYS,
       softDeleteDays: e.SNAPSHOT_SOFT_DELETE_DAYS,
+      deleteCopyDays: e.DELETE_COPY_RETENTION_DAYS,
     },
     artCache: { dir: e.ART_CACHE_DIR ?? null, maxBytes: e.ART_CACHE_MAX_MB * 1024 * 1024 },
     reftypeBulkMax: e.REFTYPE_BULK_MAX,

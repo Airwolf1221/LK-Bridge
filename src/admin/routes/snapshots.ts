@@ -28,7 +28,6 @@
  */
 import * as z from 'zod';
 import { ResumeError } from '../../resume/service.js';
-import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { diffText } from '../../snapshots/diff.js';
 import { documentsOf, historyOf, pieceNow, pieceThen } from '../../snapshots/history.js';
 
@@ -41,7 +40,15 @@ import type { Restores } from '../../snapshots/restores.js';
 import type { SnapshotService } from '../../snapshots/service.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
-import { closedSignal, limitSchema, parseInput, projectParam, stopIfClosed, type Register } from './util.js';
+import {
+  closedSignal,
+  limitSchema,
+  ownerConfirmedOrigin,
+  parseInput,
+  projectParam,
+  stopIfClosed,
+  type Register,
+} from './util.js';
 
 const PAGE_ID = z.string().regex(/^[a-z][0-9a-z]{5,31}$/, 'a LegendKeeper resource id');
 const SNAPSHOT_ID = z.string().regex(/^\d{8}T\d{6}Z-(full|change|daily)-[0-9a-f]{1,32}$/, 'a snapshot id');
@@ -54,8 +61,6 @@ const pieceQuery = z.object({
   ref: z.string().min(1).max(64).optional(),
 });
 const SNAPSHOT_JOBS = ['snapshot-full', 'snapshot-prune', 'snapshot-verify'];
-
-const ORIGIN = (tool: string): JobOrigin => ({ kind: 'ui', tool, principal: SYSTEM_PRINCIPAL });
 
 interface Services {
   readonly svc: SnapshotService;
@@ -304,10 +309,10 @@ export const registerSnapshots: Register = (api, ctx) => {
     return { run: svc.index.run(id) };
   });
 
-  /** "Propose a restore": always a proposal, approved as normal on the Proposals page. `dryRun`: the plan only. */
   /**
-   * v3 F2 (ADR 0049 decision 6): "Finish" a recreate that stopped part-way: the same request proposed again, planning
-   * only what the page it made still lacks. Audited `snapshots.finish_recreate`.
+   * v3 F2 (ADR 0049 decision 6): "Finish" a recreate that stopped part-way: the same request again, planning only what
+   * the page it made still lacks. v3 F12 (ADR 0081): the owner confirms it and it runs at once as one job (no proposal).
+   * Audited `snapshots.finish_recreate`.
    */
   api.post('/snapshots/restores/:id/finish', async (req) => {
     const q = parseInput(projectQuery, req.query);
@@ -324,16 +329,29 @@ export const registerSnapshots: Register = (api, ctx) => {
           project.id,
           jobId,
           { kind: 'owner' },
-          ORIGIN('snapshots.finish_recreate'),
+          ownerConfirmedOrigin('snapshots.finish_recreate'),
         );
         if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', summary: r.summary };
         if (r.status === 'proposal_captured') {
           audit('snapshots.finish_recreate', r.proposalId, { project: project.id, restoreId: id, jobId });
           return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary };
         }
+        if (r.status === 'submitted') {
+          audit('snapshots.finish_recreate', r.newJobId, { project: project.id, restoreId: id, jobId });
+          return { status: 'submitted', jobId: r.newJobId, summary: r.summary };
+        }
       }
-      const r = await restores.finish(project.id, id, ORIGIN('snapshots.finish_recreate'), 'owner');
+      const r = await restores.finish(
+        project.id,
+        id,
+        ownerConfirmedOrigin('snapshots.finish_recreate'),
+        'owner',
+      );
       if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', summary: r.plan.summary };
+      if (r.status === 'submitted') {
+        audit('snapshots.finish_recreate', r.jobId, { project: project.id, restoreId: id, jobId: r.jobId });
+        return { status: 'submitted', jobId: r.jobId, summary: r.summary };
+      }
       audit('snapshots.finish_recreate', r.proposalId, { project: project.id, restoreId: id });
       return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary };
     } catch (e) {
@@ -356,9 +374,12 @@ export const registerSnapshots: Register = (api, ctx) => {
           ids: z.enum(['original', 'new']).optional(),
           parent: PAGE_ID.optional(),
           dryRun: z.boolean().optional(),
+          // v3 F12 (ADR 0081): the owner's confirmation in the dialog; the restore then runs at once.
+          confirm: z.literal(true).optional(),
         })
         .strict()
-        .refine((v) => v.scope !== 'document' || v.document !== undefined, 'scope "document" needs document'),
+        .refine((v) => v.scope !== 'document' || v.document !== undefined, 'scope "document" needs document')
+        .refine((v) => v.dryRun === true || v.confirm === true, 'a restore needs confirm: true (or dryRun)'),
       req.body,
     );
     const project = ctx.project(q.project);
@@ -399,8 +420,19 @@ export const registerSnapshots: Register = (api, ctx) => {
       };
       if (plan.empty) return { status: 'nothing_to_do', plan: view };
       if (b.dryRun) return { status: 'dry_run', plan: view };
-      const r = await restores.propose(input, ORIGIN('snapshots.restore'), 'owner', plan);
+      const r = await restores.propose(input, ownerConfirmedOrigin('snapshots.restore'), 'owner', plan);
       if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', plan: view };
+      if (r.status === 'submitted') {
+        audit('snapshots.restore', r.jobId, {
+          project: project.id,
+          page: b.page,
+          snapshot: b.snapshot,
+          scope: b.scope,
+          restoreId: r.restoreId,
+          jobId: r.jobId,
+        });
+        return { status: 'submitted', jobId: r.jobId, restoreId: r.restoreId, plan: view };
+      }
       audit('snapshots.restore', r.proposalId, {
         project: project.id,
         page: b.page,
@@ -421,8 +453,9 @@ export const registerSnapshots: Register = (api, ctx) => {
   });
 
   /**
-   * A deleted image back as a NEW asset (new URL): staged (hidden) first, then one proposal places it; with
-   * `updateReferences` (the owner's tick) the same proposal updates the pages that showed the old URL.
+   * A deleted image back as a NEW asset (new URL), from the bridge's server copy; with `updateReferences` (the owner's
+   * tick) the same job updates the pages that showed the old URL. v3 F12 (ADR 0081): confirmed by the owner, it runs at
+   * once as one job (no proposal).
    */
   api.post('/snapshots/restore-image', async (req) => {
     const q = parseInput(projectQuery, req.query);
@@ -433,8 +466,10 @@ export const registerSnapshots: Register = (api, ctx) => {
           asset: ASSET_ID,
           updateReferences: z.boolean().default(false),
           dryRun: z.boolean().optional(),
+          confirm: z.literal(true).optional(),
         })
-        .strict(),
+        .strict()
+        .refine((v) => v.dryRun === true || v.confirm === true, 'an image restore needs confirm: true (or dryRun)'),
       req.body,
     );
     const project = ctx.project(q.project);
@@ -457,11 +492,11 @@ export const registerSnapshots: Register = (api, ctx) => {
           assetId: b.asset,
           updateReferences: b.updateReferences,
         },
-        ORIGIN('snapshots.restore_image'),
+        ownerConfirmedOrigin('snapshots.restore_image'),
         { ...(b.dryRun ? { dryRun: true } : {}) },
       );
-      if (r.status === 'proposal_captured')
-        audit('snapshots.restore', r.proposalId, {
+      if (r.status !== 'dry_run')
+        audit('snapshots.restore', r.jobId ?? r.proposalId ?? b.asset, {
           project: project.id,
           asset: b.asset,
           snapshot: b.snapshot,
@@ -571,11 +606,17 @@ export const registerSnapshots: Register = (api, ctx) => {
 /** v3 F3d (ADR 0058): the job a restore's proposal ran as, when it has one. */
 function restoreJob(
   policy: { readonly proposals: { get(id: string): { readonly jobId: string | null } | undefined } },
-  restores: { record(projectId: string, id: string): { readonly proposalId: string | null } | null },
+  restores: {
+    record(
+      projectId: string,
+      id: string,
+    ): { readonly proposalId: string | null; readonly jobId: string | null } | null;
+  },
   projectId: string,
   restoreId: string,
 ): string | null {
   const rec = restores.record(projectId, restoreId);
+  if (rec?.jobId) return rec.jobId; // v3 F12: a restore that ran at once
   if (!rec?.proposalId) return null;
   return policy.proposals.get(rec.proposalId)?.jobId ?? null;
 }

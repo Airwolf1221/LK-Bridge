@@ -2,8 +2,10 @@
 /**
  * The protected canonical facts (v2 C2a, ADR 0032; PLAN-v2 10.3 as refined): the shared function, then every write path
  * through the REAL server and the official MCP client (set_facts, lk_api_write, lk_api_batch, the per-operation tools)
- * at scope `write` and `propose`; the approval (ordinary Approve refused, "Approve and accept as canon"), the re-check at
- * execution that refuses a forged expansion, and the backstop inside the lock.
+ * at scope `propose`; the approval (ordinary Approve refused, "Approve and accept as canon"), the re-check at
+ * execution that refuses a forged expansion, and the backstop inside the lock. v3 F12 (ADR 0081): at scope `write` a
+ * protected change is direct (a job on the Review page), so the canonical proposals here are made at scope `propose`;
+ * the last group shows the direct path.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -95,8 +97,11 @@ describe('assessFactChange: the shared function', () => {
 });
 
 describe('through set_facts', () => {
-  it('Status to Authoritative becomes a canonical proposal at scope write, with the reason; nothing is written', async () => {
-    const r = await w.stack.call(writer, 'set_facts', { page: P.miyabi, facts: { Status: 'Authoritative' } });
+  it('Status to Authoritative becomes a canonical proposal at scope propose, with the reason; nothing is written', async () => {
+    const r = await w.stack.call(proposer, 'set_facts', {
+      page: P.miyabi,
+      facts: { Status: 'Authoritative' },
+    });
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     expect(r.body.reason).toMatch(/Status would be set to Authoritative/);
     expect(writesSince()).toHaveLength(0);
@@ -104,12 +109,7 @@ describe('through set_facts', () => {
     expect(p).toMatchObject({ requiresCanonicalApproval: true, state: 'pending' });
     expect(p.pages).toEqual(['Asagiri Miyabi: sidebar, 1 fact changed']);
   });
-  it('the same at scope propose; a read connection is refused as before', async () => {
-    const r = await w.stack.call(proposer, 'set_facts', {
-      page: P.miyabi,
-      facts: { Status: 'Authoritative' },
-    });
-    expect(r.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
+  it('a read connection is refused as before', async () => {
     const no = await w.stack.call(reader, 'set_facts', {
       page: P.miyabi,
       facts: { Status: 'Authoritative' },
@@ -118,13 +118,13 @@ describe('through set_facts', () => {
     expect(no.text).toMatch(/read-only/);
   });
   it('Status from Authoritative, and a Continuity change, are canonical too', async () => {
-    const from = await w.stack.call(writer, 'set_facts', { page: P.inae, facts: { Status: 'Outline' } });
+    const from = await w.stack.call(proposer, 'set_facts', { page: P.inae, facts: { Status: 'Outline' } });
     expect(from.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     expect(from.body.reason).toMatch(/Status would change from Authoritative/);
-    const cont = await w.stack.call(writer, 'set_facts', { page: P.miyabi, facts: { Continuity: 'AU-1' } });
+    const cont = await w.stack.call(proposer, 'set_facts', { page: P.miyabi, facts: { Continuity: 'AU-1' } });
     expect(cont.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     expect(cont.body.reason).toMatch(/Continuity would change from “Main” to “AU-1”/);
-    const gone = await w.stack.call(writer, 'set_facts', {
+    const gone = await w.stack.call(proposer, 'set_facts', {
       page: P.miyabi,
       facts: { 'Continuity Type': null },
     });
@@ -153,20 +153,18 @@ describe('through set_facts', () => {
 });
 
 describe('through the low-level tools', () => {
-  it('lk_api_write: a row write to Authoritative becomes a canonical proposal at write and propose scope', async () => {
-    for (const c of [writer, proposer]) {
-      const r = await w.stack.call(c, 'lk_api_write', {
-        operationId: 'updatePropertyRow',
-        params: { path: rowPath(P.miyabi, 'Status'), body: { content: [{ text: 'Authoritative' }] } },
-      });
-      expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-      expect(r.body.reason).toMatch(/Status would be set to Authoritative/);
-    }
+  it('lk_api_write: a row write to Authoritative becomes a canonical proposal at scope propose', async () => {
+    const r = await w.stack.call(proposer, 'lk_api_write', {
+      operationId: 'updatePropertyRow',
+      params: { path: rowPath(P.miyabi, 'Status'), body: { content: [{ text: 'Authoritative' }] } },
+    });
+    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
+    expect(r.body.reason).toMatch(/Status would be set to Authoritative/);
     expect(writesSince()).toHaveLength(0);
     expect(kvText(w.sidebars.rows(P.miyabi))).toContain('Status=Outline');
   });
   it('lk_api_batch: a protected change made in two harmless-looking steps is judged as the sequence it is', async () => {
-    const r = await w.stack.call(writer, 'lk_api_batch', {
+    const r = await w.stack.call(proposer, 'lk_api_batch', {
       calls: [
         {
           operationId: 'updatePropertyRow',
@@ -183,7 +181,7 @@ describe('through the low-level tools', () => {
     expect(writesSince()).toHaveLength(0);
   });
   it('the per-operation tools: deleting the Authoritative row, and a new property that carries it', async () => {
-    const del = await w.stack.call(writer, 'lk_op_deletePropertyRow', { path: rowPath(P.inae, 'Status') });
+    const del = await w.stack.call(proposer, 'lk_op_deletePropertyRow', { path: rowPath(P.inae, 'Status') });
     expect(del.body, del.text).toMatchObject({
       status: 'proposal_captured',
       requiresCanonicalApproval: true,
@@ -196,14 +194,14 @@ describe('through the low-level tools', () => {
       status: 'proposal_captured',
       requiresCanonicalApproval: true,
     });
-    const delProp = await w.stack.call(writer, 'lk_op_deleteProperty', {
+    const delProp = await w.stack.call(proposer, 'lk_op_deleteProperty', {
       path: { resourceId: P.inae, propertyId: 'kvinae01' },
     });
     expect(delProp.body, delProp.text).toMatchObject({
       status: 'proposal_captured',
       requiresCanonicalApproval: true,
     });
-    const continuity = await w.stack.call(writer, 'lk_op_updateProperty', {
+    const continuity = await w.stack.call(proposer, 'lk_op_updateProperty', {
       path: { resourceId: P.miyabi, propertyId: 'kvmiya01' },
       body: { rows: [{ key: 'Continuity', text: 'AU-9' }] },
     });
@@ -233,13 +231,20 @@ describe('through the low-level tools', () => {
     const store = new ProjectStore(w.stack.db, () => Date.now());
     store.setSetting(PROJECT, 'canonicalRules', [{ id: 'scope', key: 'Scope', kind: 'change' }]);
     try {
-      const scope = await w.stack.call(writer, 'set_facts', { page: P.ashgate, facts: { Scope: 'A city' } });
+      const scope = await w.stack.call(proposer, 'set_facts', {
+        page: P.ashgate,
+        facts: { Scope: 'A city' },
+      });
       expect(scope.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-      const status = await w.stack.call(writer, 'set_facts', {
+      // Status is no rule here: at scope propose an ordinary proposal.
+      const status = await w.stack.call(proposer, 'set_facts', {
         page: P.ashgate,
         facts: { Status: 'Authoritative' },
       });
-      expect(status.body, status.text).toMatchObject({ status: 'written' });
+      expect(status.body, status.text).toMatchObject({ status: 'proposal_captured' });
+      expect(status.body.requiresCanonicalApproval).toBeFalsy();
+      for (const x of [scope, status])
+        w.stack.runtime.policy.commands.reject('owner', String(x.body.proposalId), 'test');
     } finally {
       store.setSetting(PROJECT, 'canonicalRules', null);
     }
@@ -248,7 +253,10 @@ describe('through the low-level tools', () => {
 
 describe('approval', () => {
   it('ordinary Approve is refused; "Approve and accept as canon" runs it and records canonicalApprovedBy', async () => {
-    const r = await w.stack.call(writer, 'set_facts', { page: P.miyabi, facts: { Status: 'Authoritative' } });
+    const r = await w.stack.call(proposer, 'set_facts', {
+      page: P.miyabi,
+      facts: { Status: 'Authoritative' },
+    });
     const id = r.body.proposalId as string;
     await expect(w.stack.runtime.policy.commands.approve('owner', id)).rejects.toMatchObject({
       code: 'CANONICAL_APPROVAL_REQUIRED',
@@ -306,17 +314,17 @@ describe('approval', () => {
     expect(writesSince()).toHaveLength(0);
     expect(kvText(w.sidebars.rows(P.inae))).toContain('Status=Authoritative');
   });
-  it('inside the lock the guard checks again on what is there now (the page changed while the write was queued)', async () => {
-    const engine = w.stack.runtime.engine;
-    engine.controls.pauseWrites('test');
-    let jobId: string;
-    try {
-      const r = await w.stack.call(writer, 'lk_api_batch', {
-        calls: [{ operationId: 'deletePropertyRow', params: { path: rowPath(P.inae, 'Scope') } }],
-      });
-      jobId = r.body.jobId as string;
-      expect(jobId, r.text).toBeTruthy();
-      // Meanwhile, in the app: the Scope row becomes the Status row, Authoritative.
+  it('at execution the guard checks again on what is there now (the page changed after the proposal)', async () => {
+    // v3 F12 (ADR 0081): at scope write a protected change is direct, so the backstop matters for approved work: an
+    // ordinary proposal (deleting the Scope row), approved, whose page changes after the approval's re-read.
+    const r = await w.stack.call(proposer, 'lk_api_batch', {
+      calls: [{ operationId: 'deletePropertyRow', params: { path: rowPath(P.inae, 'Scope') } }],
+    });
+    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured' });
+    expect(r.body.requiresCanonicalApproval).toBeFalsy();
+    const id = String(r.body.proposalId);
+    // Meanwhile, in the app: the Scope row becomes the Status row, Authoritative.
+    w.sidebars.after(new RegExp(`^GET /resources/${P.inae}/properties`), 0, () =>
       w.sidebars.outside(P.inae, (s) => {
         const rows = s.props[0]!.rows!;
         const status = rows.findIndex((x) => x.key === 'Status');
@@ -324,13 +332,26 @@ describe('approval', () => {
         rows.splice(status, 1);
         scope.key = 'Status';
         scope.content = [{ text: 'Authoritative' }];
-      });
-    } finally {
-      engine.controls.resumeWrites('test');
-    }
-    const job = await engine.wait(PROJECT, jobId, 10_000);
-    expect(job.status).toBe('failed');
-    expect(job.lastError).toMatchObject({ code: 'CANONICAL_APPROVAL_REQUIRED' });
+      }),
+    );
+    await w.stack.runtime.policy.commands.approve('owner', id);
+    const p = await settle(id, ['executed', 'failed', 'conflicted']);
+    // The guard judged the page as it is now: the row deleted would be the Authoritative Status. Refused, no job.
+    expect(p.state, JSON.stringify(p)).toBe('failed');
+    expect(p.jobId).toBeNull();
+    expect(p.error).toMatchObject({ code: 'POLICY_DENIED' });
+    expect(JSON.stringify(p.error)).toMatch(/Status would change from Authoritative.*not approved as canon/);
     expect(writesSince().filter((x) => x.method === 'DELETE')).toHaveLength(0);
+  });
+});
+
+describe('at scope write (v3 F12, ADR 0081)', () => {
+  it('a protected change is direct: written as a job on the Review page, no proposal', async () => {
+    const r = await w.stack.call(writer, 'set_facts', { page: P.inae, facts: { Status: 'Outline' } });
+    expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
+    expect(r.body.jobId).toEqual(expect.any(String));
+    expect(r.body).not.toHaveProperty('requiresCanonicalApproval');
+    expect(r.body).not.toHaveProperty('proposalId');
+    expect(kvText(w.sidebars.rows(P.inae))).toContain('Status=Outline');
   });
 });

@@ -425,12 +425,18 @@ describe('archiving and moving to Working a set: Working pages of the same subje
     expect(res(s.root).parentId).toBe(LIFECYCLE.archived);
   });
 
-  it('the proposal carries the same listing and flag, so the owner sees them before approving', async () => {
+  it('the proposal (at scope propose) carries the same listing and flag, so the owner sees them before approving', async () => {
     const s = await seedSet(w, 'working');
     await seedFlat(s.name, 'Character Art');
     await seedFlat(s.name, 'Relationship');
     const before = writes().length;
-    const proposal = await call('archive_page', { page: s.root, subtree: true });
+    // v3 F12 (ADR 0081): at scope write the change is direct; the proposal is made at scope propose.
+    const proposer = await w.stack.connect(w.stack.newToken('working-sets-propose', 'propose').token);
+    const proposal = await w.stack.call(proposer, 'archive_page', {
+      project: 'test',
+      page: s.root,
+      subtree: true,
+    });
     expect(proposal.body, proposal.text).toMatchObject({ status: 'proposal_captured' });
     expect(names(proposal.body)).toEqual([
       `[BWRK] ${s.name} - Character Art`,
@@ -464,7 +470,7 @@ describe('archiving and moving to Working a set: Working pages of the same subje
     expect(refused.body.error?.message).toMatch(/use promote_page|moved out of \[INDEX\] Working|lifecycle/);
   });
 
-  it('move_to_working with subtree lists them, with the words for that change, in the dry run and the proposal', async () => {
+  it('move_to_working with subtree lists them, with the words for that change, in the dry run and the result', async () => {
     const s = await seedSet(w, 'authoritative');
     const draft = await seedFlat(s.name, 'Working Notes');
     const dry = await call('move_to_working', { page: s.root, subtree: true, dryRun: true });
@@ -477,9 +483,10 @@ describe('archiving and moving to Working a set: Working pages of the same subje
     expect(dry.body.outsiders.suggestion).toMatch(/Once the set is Working, move each in with move_resource/);
     expect(dry.body.flags.join(' ')).toContain(`apart from the Working set under “[INDEX] ${s.name}”`);
     expect(dry.body.flags.join(' ')).toContain('Once the set is Working, bring them in with move_resource');
-    const proposal = await call('move_to_working', { page: s.root, subtree: true });
-    expect(proposal.body, proposal.text).toMatchObject({ status: 'proposal_captured' });
-    expect(proposal.body.outsiders.pages.map((p: { id: string }) => p.id)).toEqual([draft]);
+    // Direct at scope write (v3 F12): the result lists them too.
+    const done = await call('move_to_working', { page: s.root, subtree: true });
+    expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(done.body.outsiders.pages.map((p: { id: string }) => p.id)).toEqual([draft]);
   });
 
   it('after move_to_working the outsider can be brought into the set, as the advice says', async () => {
@@ -511,7 +518,7 @@ describe('archiving and moving to Working a set: Working pages of the same subje
 });
 
 describe('the owner’s live scenario (12 November), against the mock', () => {
-  it('a Working character, two specialist pages added one at a time, the whole set promoted in one approval', async () => {
+  it('a Working character, two specialist pages added one at a time, the whole set promoted in one job', async () => {
     const created = await call('create_character', {
       kind: 'core',
       name: 'Working Test Character 1112',
@@ -558,14 +565,10 @@ describe('the owner’s live scenario (12 November), against the mock', () => {
       set: { pages: 4, from: 'working', to: 'authoritative' },
     });
     expect(dry.body.outsiders).toBeUndefined();
-    // ONE approval for the whole set.
-    const proposal = await call('promote_page', { page: idx.id, subtree: true, destination: 'moonelf1' });
-    expect(proposal.body, proposal.text).toMatchObject({
-      status: 'proposal_captured',
-      requiresCanonicalApproval: true,
-    });
-    const done = await accept(w, proposal);
+    // ONE job for the whole set (v3 F12, ADR 0081: direct at scope write, listed on the Review page).
+    const done = await call('promote_page', { page: idx.id, subtree: true, destination: 'moonelf1' });
     expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(done.body).not.toHaveProperty('requiresCanonicalApproval');
     // All four land under the race index as [BSRC].
     expect(res(idx.id)).toMatchObject({ parentId: 'moonelf1', name: '[INDEX] Working Test Character 1112' });
     expect(childNames(w, idx.id)).toEqual([

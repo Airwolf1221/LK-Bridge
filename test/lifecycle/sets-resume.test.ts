@@ -154,16 +154,14 @@ describe.each(['archive', 'unarchive', 'move_to_working', 'promote'] as const)(
           subtree: true,
         });
         expect(other.body.error?.code, `k=${k}: ${other.text}`).toBe('LIFECYCLE_INCOMPLETE');
-        // The same tool resumes it.
-        const again = await call(tool, args(action, s));
-        expect(again.body, `k=${k}: ${again.text}`).toMatchObject({
-          status: 'proposal_captured',
-          requiresCanonicalApproval: true,
+        // The same tool resumes it (v3 F12, ADR 0081: directly at scope write).
+        const before = writes();
+        const done = await call(tool, args(action, s));
+        expect(done.body, `k=${k}: ${done.text}`).toMatchObject({
+          status: 'written',
+          verified: true,
           resumes: { setId: set.id },
         });
-        const before = writes();
-        const done = await accept(w, again);
-        expect(done.body, `k=${k}: ${done.text}`).toMatchObject({ status: 'written', verified: true });
         // Only what was left: nothing replayed.
         expect(writes() - before, `k=${k}`).toBe(total - k);
         const after = w.stack.runtime.lifecycle.store.set(PROJECT, set.id)!;

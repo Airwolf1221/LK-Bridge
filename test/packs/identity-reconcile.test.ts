@@ -157,21 +157,22 @@ describe('the approval boundaries and isolation', () => {
       facts: { 'Naming Culture': culture },
     }));
 
-  it('at scope write with the default rails: 10 pages run directly, 11 become ONE proposal with an item each', async () => {
+  it('at scope write 11 pages run directly (v3 F12: no bulk rail); at scope propose ONE proposal with an item each', async () => {
     const t = w.stack.newToken('identity-agent', 'write');
     const agent = await w.stack.connect(t.token);
-    const ten = await w.stack.call(agent, 'arkona_identity_reconcile', { project: 'test', items: bulk(10) });
-    expect(ten.isError, ten.text).toBe(false);
-    expect(ten.body.status).toBe('finished');
-    expect((ten.body.items as any[]).every((i) => i.status === 'done')).toBe(true);
-    const eleven = await w.stack.call(agent, 'arkona_identity_reconcile', {
+    const eleven0 = await w.stack.call(agent, 'arkona_identity_reconcile', { project: 'test', items: bulk(11) });
+    expect(eleven0.isError, eleven0.text).toBe(false);
+    expect(eleven0.body.status).toBe('finished');
+    expect((eleven0.body.items as any[]).every((i) => i.status === 'done')).toBe(true);
+    const p0 = w.stack.newToken('identity-bulk-proposer', 'propose');
+    const proposer = await w.stack.connect(p0.token);
+    const eleven = await w.stack.call(proposer, 'arkona_identity_reconcile', {
       project: 'test',
       items: bulk(11, 0, 'Khayali'),
       workstream: 'bulk rail',
     });
     expect(eleven.isError, eleven.text).toBe(false);
     expect(eleven.body.status).toBe('proposal_captured');
-    expect(eleven.body.proposedBecause).toMatch(/bulk change \(11 pages > 10\)/);
     const p = w.stack.runtime.policy.proposals.get(eleven.body.proposalId)!;
     expect(p.items?.total).toBe(11);
     expect(p.workstream).toBe('bulk rail');
@@ -187,7 +188,7 @@ describe('the approval boundaries and isolation', () => {
     expect(
       BULK.slice(0, 11).filter((id) => pageNow(w, id).rows['Naming Culture'] === 'Khayali'),
     ).toHaveLength(3);
-    const report = await w.stack.call(agent, 'arkona_identity_reconcile', {
+    const report = await w.stack.call(proposer, 'arkona_identity_reconcile', {
       project: 'test',
       report: eleven.body.reconcileId,
     });

@@ -20,7 +20,6 @@ import { narrativeBlindAppraisal } from './narrative/authority.js';
 import { narrativeCompare } from './narrative/names.js';
 import { governanceAuditHook } from './packs/governance-audit.js';
 import { knownNamesOf } from './mcp/tools/known-names.js';
-import { textRemovalReader } from './policy/text-removal.js';
 import { registerPackEngine } from './packs/engine/checks.js';
 import { OutfitStore } from './art/store.js';
 import { PACK_CHECKS } from './packs/engine/job.js';
@@ -29,7 +28,6 @@ import { NationTaxonomyService } from './packs/nations/service.js';
 import { ROLE_RECORD_STORE } from './packs/nations/records.js';
 import { bridgeTerritoryCategoryCreator } from './packs/nations/category-fix.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
-import { listDropsReader } from './policy/list-drops.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
 import { BlockwiseUndo } from './pages/undo.js';
 import { pino } from 'pino';
@@ -97,6 +95,9 @@ import { Audits, SPLIT_CHECK, SPLIT_VERIFY, splitChecker, splitVerifier } from '
 import { Appraisal } from './appraisal/index.js';
 import { Consistency } from './consistency/service.js';
 import { bridgePicker } from './consistency/fix.js';
+import { createDeleteCopier } from './snapshots/delete-copy.js';
+import { imageRestoreDeps, restoreImage } from './snapshots/image-restore.js';
+import { recreatePagesFromCopy, restoreDocumentOrSay, reuploadAssetFromKept } from './review/delete-restore.js';
 import { BlockIdSweep } from './blockids/index.js';
 import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
@@ -118,7 +119,6 @@ import {
   WRITE_PAGE_PLANNER,
 } from './pages/index.js';
 import { CanonicalGuard } from './facts/index.js';
-import { listSubtree } from './facts/canonical.js';
 import { combineGuards } from './jobs/write-guard.js';
 import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
@@ -619,33 +619,6 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }
   };
   policy.proposals.setPageNames(pageName);
-  // v3 F3.4 (ADR 0055): the safety rails count a cascade's pages and name pages from the repository tree.
-  policy.gate.setRailLookups({
-    pageName,
-    descendants: (projectId, resourceId) => {
-      try {
-        const status = tree.queries.status(projectId).status;
-        if (status !== 'ready' && status !== 'stale') return null;
-        if (!tree.queries.node(projectId, resourceId).data) return null;
-        return Math.max(
-          0,
-          tree.queries.subtree(projectId, resourceId, { limit: 100_000 }).data.entries.length - 1,
-        );
-      } catch {
-        return null;
-      }
-    },
-    // CR-2026-11-R2 (R2-04): the pages under a page as LegendKeeper holds them now (as the canon guard lists a cascade at
-    // entry, CR-09), only when the tree's count would let the request run directly; at most about `limit` + 1 reads.
-    liveDescendants: async (projectId, resourceId, limit) => {
-      const below = await listSubtree(
-        (opId, params) => engine.internalRead(projectId, opId, params, { priority: 'P1' }),
-        resourceId,
-        limit,
-      );
-      return below === null ? null : below.length;
-    },
-  });
   // v3 F2 (ADR 0049 decision 2): a substantial edit also sets its page's Last Major Revision, in the same job and
   // proposal. The planner reads nothing: the tree's sidebar summary says where the row is.
   const unregisterLmr = engine.setLmrPlanner(
@@ -694,43 +667,6 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         return null;
       }
     },
-  });
-  // ADR 0057 decision 9: a restore counts, for the bulk rail, every page its restore set says may come back with it (an
-  // unknown set fails closed). Decision 4: a whole-list write through a low-level tool is a removal when it drops an
-  // entry LegendKeeper holds now (read live; a read that fails counts as a removal).
-  policy.gate.setRailLookups({
-    restored: async (projectId, id) => {
-      const set = await restoreSet(projectId, id);
-      return set.known ? set.pages.length : null;
-    },
-    drops: listDropsReader((projectId, opId, params) =>
-      engine.internalRead(projectId, opId, params, { priority: 'P1' }),
-    ),
-    // ADR 0061 part B decision 1 (R3-53): text taken off a pack page through a low-level tool is a removal.
-    textRemoved: textRemovalReader({
-      packs,
-      node: treeNode,
-      characterOf: (projectId, id) => {
-        try {
-          return registry.forProject(projectId).characterOfPage(id).ok;
-        } catch {
-          return false;
-        }
-      },
-      factKeys: (projectId, id) => {
-        try {
-          const sb = tree.queries.sidebars(projectId, [id]).data.get(id) ?? null;
-          return sb
-            ? (sb as readonly { kind?: string; rows?: readonly { key: string }[] }[])
-                .filter((x) => x.kind === 'keyValue')
-                .flatMap((x) => (x.rows ?? []).map((r) => r.key))
-            : null;
-        } catch {
-          return null;
-        }
-      },
-      read: (projectId, opId, params) => engine.internalRead(projectId, opId, params, { priority: 'P1' }),
-    }),
   });
   // R4.1 (ADR 0066 amendment 1): the template a page was made from, for the guards' first-fill rule (a value identical to
   // its template's default is replaced as a first fill, not changed).
@@ -962,6 +898,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       afterEditRef.current?.(projectId, change);
     },
   });
+  // v3 F12 (ADR 0081, D3): a restorable copy before every agent's (and Revert's) page or document delete.
+  const detachDeleteCopier = engine.setDeleteCopier(
+    createDeleteCopier({ db: o.db, snapshots: () => snapshots, now: () => (o.clock ?? systemClock).now() }),
+  );
   void snapshots.start();
   // v2 E2 (ADR 0044): the audits, over the snapshots, the registry, the lifecycle records and the chronology check. Its
   // "Propose a fix" for a paragraph with line breaks checks the block inside the lock (the two checkers below).
@@ -1195,7 +1135,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     background,
   });
   const detachBlockwiseUndo = blockwiseUndo.start();
-  // v2 E1a: restores are always proposals; the plan reads the page live at P1 and the tree for names and places.
+  // v2 E1a: restores (v3 F12: direct at scope write and as the owner's confirmed action, else proposals); the plan reads the page live at P1 and the tree for names and places.
   const restores = new Restores({
     background,
     db: o.db,
@@ -1313,6 +1253,38 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     review,
     policy: policy.store,
     now: () => (o.clock ?? systemClock).now(),
+    // v3 F12 (ADR 0081, D3): a deletion LegendKeeper can no longer undo itself, brought back from its copy.
+    recreatePages: (projectId, snapshotId, rootId) =>
+      recreatePagesFromCopy(
+        {
+          db: o.db,
+          engine,
+          restores,
+          linksTo: (pid, id) =>
+            lifecycle.store.linksTo(pid, id).map((l) => ({ id: l.fromId, name: pageName(pid, l.fromId) })),
+        },
+        projectId,
+        snapshotId,
+        rootId,
+      ),
+    restoreDocument: (projectId, resourceId, documentId, snapshotId) =>
+      restoreDocumentOrSay({ engine }, projectId, resourceId, documentId, snapshotId),
+    reuploadAsset: (projectId, assetId, before) =>
+      reuploadAssetFromKept(
+        {
+          engine,
+          latestSnapshot: (pid) => snapshots.index.snapshots(pid, { limit: 1 })[0]?.id ?? null,
+          restoreImage: (input, origin) =>
+            restoreImage(
+              imageRestoreDeps({ svc: snapshots, engine, images, assets, tree, projectId: input.projectId }),
+              input,
+              origin,
+            ),
+        },
+        projectId,
+        assetId,
+        before,
+      ),
     chronology: {
       readiness: (projectId) => {
         const r = chronology.readiness(projectId);
@@ -1378,18 +1350,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       jobResumed: (projectId, jobId) => policy.proposals.jobResumed(projectId, jobId),
       stateOf: (proposalId) => policy.proposals.get(proposalId)?.state ?? null,
     },
-    // CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4): an agent's Resume meets its profile's rails again.
-    rails: (projectId, principalId, items, tool) =>
-      policy.gate.rails({ principalId, profile: '', label: '' }, items, {
-        project: projectId,
-        jobKind: 'batch_ops',
-        ...(tool !== undefined ? { tool } : {}),
-      }),
     finishRecreate: async (projectId, restoreId, origin, by) => {
       const r = await restores.finish(projectId, restoreId, origin, by);
-      return r.status === 'nothing_to_do'
-        ? { status: 'nothing_to_do' as const, summary: r.plan.summary }
-        : { status: 'proposal_captured' as const, proposalId: r.proposalId, summary: r.summary };
+      if (r.status === 'nothing_to_do') return { status: 'nothing_to_do' as const, summary: r.plan.summary };
+      // v3 F12 (ADR 0081): the owner's Finish (or an agent's at scope `write`) runs at once.
+      if (r.status === 'submitted')
+        return { status: 'submitted' as const, newJobId: r.jobId, summary: r.summary };
+      return { status: 'proposal_captured' as const, proposalId: r.proposalId, summary: r.summary };
     },
     revertState: (projectId, jobId) => revertStateOf(projectId, jobId),
     now: () => (o.clock ?? systemClock).now(),
@@ -1961,6 +1928,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     unregisterGuard();
     unregisterLmr();
     detachLifecycle();
+    detachDeleteCopier();
     detachChronology();
     for (const off of detachMaps) off();
     for (const off of detachSnapshotCheckers) off();

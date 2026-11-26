@@ -22,8 +22,8 @@ import type {
  * - Full-text index: the snapshots it was built from, how fresh it is, its size, how long it took; "Rebuild" (free);
  * - Run: the owner appraisal (A2), change impact (A3), the Working digest (A4) or visual hygiene (A5);
  * - Report: in its groups (A2's four: required defects, optional polish, architectural candidates, blocked cases), each
- *   finding with its rule, evidence class, a link to the page in LegendKeeper, and its follow-up: "Propose a fix" ONLY
- *   where the finding has a deterministic repair (one ordinary proposal, approved on the Proposals page); a judgement
+ *   finding with its rule, evidence class, a link to the page in LegendKeeper, and its follow-up: "Apply fix" ONLY
+ *   where the finding has a deterministic repair (v3 F12, ADR 0081: confirmed in a dialog, then one job at once); a judgement
  *   says what has to be decided; nothing on this page writes to LegendKeeper;
  * - Latest runs: the latest stored run of each tool and scope (kept in the bridge's database, never in LegendKeeper).
  */
@@ -105,8 +105,8 @@ export function AppraisalPage() {
       </PageHeader>
       <p className="muted">
         The Arkona pack’s appraisal: read-only reports from the nightly snapshot and the change snapshots
-        since (no request to LegendKeeper). Nothing here writes to LegendKeeper. “Propose a fix” makes one
-        ordinary proposal for you to approve on the <Link to="/proposals">Proposals</Link> page; the audits it
+        since (no request to LegendKeeper). Nothing here writes to LegendKeeper until you ask: “Apply fix…”
+        says what it does, then runs it as one job (on the <Link to="/jobs">Jobs</Link> page); the audits it
         reuses are on the <Link to="/audits">Audits</Link> page.
       </p>
       {!overview.data ? (
@@ -464,14 +464,14 @@ function FindingRow({
   const propose = async () => {
     if (f.followUp.kind !== 'fix') return;
     const yes = await confirm({
-      title: 'Propose this fix?',
+      title: 'Apply this fix?',
       message: (
         <p>
-          {f.followUp.change}. The page is read again first (one read); the fix becomes ONE proposal for you
-          to approve on the Proposals page. Nothing is changed until you approve it.
+          {f.followUp.change}. The page is read again first (one read), then the fix runs at once as one job,
+          every guard checking it again; follow it on the Jobs page.
         </p>
       ),
-      confirmLabel: 'Propose the fix',
+      confirmLabel: 'Apply fix',
     });
     if (!yes) return;
     void run(() =>
@@ -481,7 +481,9 @@ function FindingRow({
       setNote(
         r.status === 'proposal_captured'
           ? `Proposed (${r.proposalId}). Nothing is changed until you approve it.${r.summary ? ` ${r.summary}` : ''}`
-          : r.message,
+          : r.status === 'submitted'
+            ? `Applying: job ${r.jobId}.${r.summary ? ` ${r.summary}` : ''}`
+            : r.message,
       );
     });
   };
@@ -512,7 +514,7 @@ function FindingRow({
       <div className="row">
         {f.followUp.kind === 'fix' ? (
           <Button busy={busy} disabled={!project} onClick={() => void propose()}>
-            Propose a fix
+            Apply fix…
           </Button>
         ) : f.followUp.kind === 'judgement' ? (
           <span className="small-text" data-testid="judgement">

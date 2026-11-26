@@ -14,20 +14,25 @@ import { accept, L, LIFECYCLE, lifecycleWorld, textOf, type LifecycleWorld } fro
 
 let w: LifecycleWorld;
 let client: Client;
+/** F12 (ADR 0081): a propose-scope connection, for the canonical proposal flow (at scope write the change is direct). */
+let proposer: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
+const propose = (tool: string, args: Record<string, unknown>) =>
+  w.stack.call(proposer, tool, { project: 'test', ...args });
 const node = (id: string) => w.stack.runtime.tree.queries.node(PROJECT, id).data;
 const today = isoDate(Date.now());
 
 beforeAll(async () => {
   w = await lifecycleWorld();
   client = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('lifecycle-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 
 describe('archive_page from Authoritative', () => {
-  it('is always a canonical proposal; accepted as canon it archives the page exactly as the owner decided', async () => {
-    const r = await call('archive_page', { page: 'Old Harbour' });
+  it('at scope propose is a canonical proposal; accepted as canon it archives the page exactly as the owner decided', async () => {
+    const r = await propose('archive_page', { page: 'Old Harbour' });
     expect(r.body, r.text).toMatchObject({
       status: 'proposal_captured',
       requiresCanonicalApproval: true,
@@ -83,13 +88,14 @@ describe('archive_page from Authoritative', () => {
 });
 
 describe('archive_page from Working', () => {
-  it('writes the Working note and Temporal Scope; adds Archived when the page lacked Working', async () => {
+  it('at scope write is direct: writes the Working note and Temporal Scope; adds Archived when the page lacked Working', async () => {
     // The Working tag removed by hand: the new tag is added all the same.
     w.repo.res.get(L.ferry)!.tags = ['sky'];
-    const r = await call('archive_page', { page: 'Sky Ferry' });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    const done = await accept(w, r);
+    const done = await call('archive_page', { page: 'Sky Ferry' });
+    // F12 (ADR 0081): an agent at scope write archives directly, as a job listed on the Review page.
     expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(done.body.jobId).toEqual(expect.any(String));
+    expect(done.body).not.toHaveProperty('requiresCanonicalApproval');
     const p = w.repo.live(L.ferry)!;
     expect(p).toMatchObject({ name: '[BARC] Sky Ferry', parentId: LIFECYCLE.archived });
     expect(p.tags).toEqual(['sky', 'Archived']);

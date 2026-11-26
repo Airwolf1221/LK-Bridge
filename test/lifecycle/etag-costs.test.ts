@@ -22,7 +22,8 @@ async function measureAll(mode: Mode) {
   const w = await lifecycleWorld();
   worlds.push(w);
   w.sidebars.rowVersions = mode;
-  const c = await w.stack.connect();
+  // v3 F12 (ADR 0081): as costs.test.ts, the proposal and its approval are measured at scope propose.
+  const c = await w.stack.connect(w.stack.newToken('etag-costs-propose', 'propose').token);
   const got: Record<string, [number, number]> = {};
   const split = (lines: string[]): [number, number] => [
     lines.filter((l) => l.startsWith('GET')).length,

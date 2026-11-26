@@ -57,7 +57,7 @@ import {
   errorResult,
   mcpOrigin,
   projectArg,
-  railBody,
+  reasonBody,
   render,
   withProject,
   type ProjectDeps,
@@ -81,9 +81,9 @@ const RENAME_KEYS = ['Canonical Display Name', 'Subject', 'Name', 'Page Name', '
 /** Protected and lifecycle facts, with the tool that changes each. */
 const PROTECTED: Readonly<Record<string, string>> = {
   status:
-    'promote_page, archive_page or move_to_working (the lifecycle tools; always the owner’s canonical approval)',
-  'continuity type': 'set_facts (always a proposal the owner accepts as canon)',
-  continuity: 'set_facts (always a proposal the owner accepts as canon)',
+    'promote_page, archive_page or move_to_working (the lifecycle tools: canon, direct at scope write, on the owner’s Review page)',
+  'continuity type': 'set_facts (canon: direct at scope write, on the owner’s Review page)',
+  continuity: 'set_facts (canon: direct at scope write, on the owner’s Review page)',
   'last major revision': 'the bridge’s rule (pass lastMajorRevision: "set" or "skip" to override it)',
   inheritance: 'set_facts',
   supersedes: 'set_facts',
@@ -973,7 +973,6 @@ async function plan(
     prefetched.push({ op: 'getResource', path: { resourceId: node.id }, body: fp.res });
   }
   const title = `${IDENTITY_TOOL}: ${toRun.length} character${toRun.length === 1 ? '' : 's'}${toRun.length <= 3 ? ` (${toRun.map((p) => p.character).join(', ')})` : ''}`;
-  const mode = packs.strictToolMode(PACK, IDENTITY_TOOL);
   let r;
   try {
     r = await pd.engine.submit({
@@ -985,7 +984,6 @@ async function plan(
       origin: mcpOrigin(mctx, IDENTITY_TOOL),
       title: title.slice(0, 300),
       internal: true,
-      ...(mode === 'propose' ? { forceProposal: true } : {}),
       ...(args.lastMajorRevision ? { lastMajorRevision: args.lastMajorRevision } : {}),
       resumable: {
         kind: 'identity',
@@ -1032,7 +1030,7 @@ async function plan(
               hint: 'Part of this touches protected canon, so it was NOT made: only the owner can accept it. Never retry it or work around it.',
             }
           : r.proposedBecause
-            ? railBody(r)
+            ? reasonBody(r)
             : {
                 hint: 'Nothing was written: the owner approves the characters (some or all) on the Proposals page. Never resubmit it; follow it with bridge_proposal_status, then { report: reconcileId }.',
               }),

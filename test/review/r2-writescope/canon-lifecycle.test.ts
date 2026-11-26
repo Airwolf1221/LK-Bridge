@@ -1,9 +1,10 @@
 /**
- * CR-2026-11 round 2 (write scope): canon and lifecycle changes by an agent at scope `write` (DEFAULT rails), which
- * must stay proposals only the owner can approve, or be refused (ADR 0032, 0035, 0036 decisions 1 and 7, 0053, 0055).
+ * CR-2026-11 round 2 (write scope): canon and lifecycle changes by an agent at scope `write` (ADR 0032, 0035, 0036
+ * decisions 1 and 7, 0053, 0055, 0081).
  *
- * Every test asserts the SAFE behaviour: the request is refused (POLICY_DENIED) or captured as a CANONICAL proposal,
- * and the change is not made.
+ * A status tag arriving where no lifecycle tool adds it is refused (POLICY_DENIED) or (where a test allows it) captured
+ * as a CANONICAL proposal, and is not made. v3 F12 (ADR 0081): a canon rename at scope `write` is direct, one job on the
+ * owner's Review page with Revert.
  *
  * Mock note: the spec says a template copy "takes the template's fields, properties and documents" and a saved template
  * "takes the resource's fields"; the mock tree keeps no tags on either. `modelTemplateFields` / `modelSaveAsTemplate`
@@ -46,6 +47,13 @@ const call = (tool: string, args: Record<string, unknown>) => w.stack.call(a.cli
 const safe = (r: { body: Record<string, any> }) =>
   r.body.error?.code === 'POLICY_DENIED' ||
   (r.body.status === 'proposal_captured' && r.body.requiresCanonicalApproval === true);
+/** A direct job's outcome: settled, on the owner's Review page, revertible. */
+async function direct(r: { body: Record<string, any> }) {
+  const jobId = String(r.body.jobId);
+  const job = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
+  const item = w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).find((i) => i.jobId === jobId);
+  return { status: job.status, onReview: item !== undefined, revertible: item?.revertible === true };
+}
 const newPagesTagged = (tag: string, before: Set<string>) =>
   [...w.repo.res.values()]
     .filter((r) => !before.has(r.id) && r.deletedAt === null && r.parentId !== null)
@@ -119,26 +127,23 @@ describe('status tags arriving through a template copy (ADR 0036 decision 7: add
 });
 
 describe('renaming canon (ADR 0035 decision 11, ADR 0036 decision 1, CR-14)', () => {
-  it('C2b: renaming [BSRC] Old Harbour (Status Authoritative) to drop its [BSRC] prefix is refused or canonical', async () => {
+  // v3 F12 (ADR 0081): canon changes at scope `write` are direct; each is a job on the owner's Review page, with Revert.
+  it('C2b: renaming [BSRC] Old Harbour (Status Authoritative) to drop its [BSRC] prefix runs directly, on Review', async () => {
     const r = await call('lk_api_write', {
       operationId: 'updateResource',
       params: { path: { resourceId: L.harbour }, body: { name: 'Old Harbour' } },
     });
-    expect({ safe: safe(r), name: w.repo.live(L.harbour)!.name }, r.text).toEqual({
-      safe: true,
-      name: '[BSRC] Old Harbour',
-    });
+    expect(await direct(r), r.text).toEqual({ status: 'succeeded', onReview: true, revertible: true });
+    expect(w.repo.live(L.harbour)!.name).toBe('Old Harbour');
   });
 
-  // ADR 0057 decision 5 (WS-C2a): renaming an Authoritative page is a canonical proposal, even keeping its [BSRC] prefix,
-  // by every route.
-  it('C2a: update_resource renaming [BSRC] Tide Tables to [BSRC] Tide Almanac is a canonical proposal', async () => {
+  // ADR 0057 decision 5 (WS-C2a), v3 F12 (ADR 0081): renaming an Authoritative page by every route is a direct job at
+  // scope write, on the owner's Review page.
+  it('C2a: update_resource renaming [BSRC] Tide Tables to [BSRC] Tide Almanac runs directly, on Review', async () => {
     const r = await call('update_resource', { page: L.tides, name: '[BSRC] Tide Almanac' });
-    expect({ safe: safe(r), name: w.repo.live(L.tides)!.name }, r.text).toEqual({
-      safe: true,
-      name: '[BSRC] Tide Tables',
-    });
-    expect(r.body.status, r.text).toBe('proposal_captured');
+    expect(r.body.status, r.text).toBe('written');
+    expect(await direct(r), r.text).toEqual({ status: 'succeeded', onReview: true, revertible: true });
+    expect(w.repo.live(L.tides)!.name).toBe('[BSRC] Tide Almanac');
   });
 
   it.each([
@@ -155,19 +160,17 @@ describe('renaming canon (ADR 0035 decision 11, ADR 0036 decision 1, CR-14)', ()
         calls: [
           {
             operationId: 'updateResource',
-            params: { path: { resourceId: L.guild }, body: { name: '[BSRC] Harbour Guildhall' } },
+            params: { path: { resourceId: L.guild }, body: { name: '[BSRC] Harbour Hall' } },
           },
         ],
       },
     ],
-  ])('C2a: %s renaming an Authoritative page keeping [BSRC] is a canonical proposal', async (tool, args) => {
+  ])('C2a: %s renaming an Authoritative page keeping [BSRC] runs directly, on Review', async (tool, args) => {
     const r = await call(tool, args);
-    expect({ safe: safe(r), name: w.repo.live(L.guild)!.name }, r.text).toEqual({
-      safe: true,
-      name: '[BSRC] Harbour Guild',
-    });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.canonical?.reason ?? r.text).toMatch(/an Authoritative page/);
+    expect(r.body.status, r.text).not.toBe('proposal_captured');
+    expect(await direct(r), r.text).toEqual({ status: 'succeeded', onReview: true, revertible: true });
+    const name = tool === 'lk_api_write' ? '[BSRC] Harbour Guildhall' : '[BSRC] Harbour Hall';
+    expect(w.repo.live(L.guild)!.name).toBe(name);
   });
 
   it('C2a (control): renaming a Working page runs directly (the renames rail is off by default)', async () => {

@@ -205,6 +205,26 @@ export async function approveAndWait(w: F4bWorld, proposalId: string, items?: re
   throw new Error('the proposal did not finish');
 }
 
+/**
+ * v3 F12 (ADR 0081): the owner's pick, confirmed, runs its edits at once as ONE job (no proposal). Waits for that job
+ * and answers as `approveAndWait` did (`state` 'executed' for a job that succeeded, 'failed' otherwise).
+ */
+export async function pickDone(w: F4bWorld, json: Obj) {
+  expect(typeof json.jobId, JSON.stringify(json)).toBe('string');
+  expect(json.proposalId, 'a confirmed pick makes no proposal').toBeUndefined();
+  const job = await settle(w, String(json.jobId));
+  return { state: job.status === 'succeeded' ? 'executed' : 'failed', jobId: job.id, job };
+}
+
+/**
+ * v3 F12: holds every write (the engine's kill switch) so that a test can change a page between the pick (its plan)
+ * and its job's run, as it could before between the pick and its approval. Answers the release.
+ */
+export function holdWrites(w: F4bWorld): () => void {
+  w.stack.runtime.engine.controls.pauseWrites('test');
+  return () => void w.stack.runtime.engine.controls.resumeWrites('test');
+}
+
 /** Waits until a job has stopped. */
 export async function settle(w: F4bWorld, jobId: string) {
   for (let i = 0; i < 1500; i++) {

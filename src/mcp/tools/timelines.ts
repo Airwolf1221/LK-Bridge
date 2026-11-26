@@ -2161,8 +2161,9 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
             dryRun: args.dryRun,
             // v3 F2.1: a link is a bridge-side record with no LegendKeeper write; it changes what the check pairs,
             // repairs and offers to delete, so it is a proposal, and done it answers `linked`. CR-2026-11-R2 (R2-08): at
-            // every scope: at scope write its job holds only the bridge's own steps, which the Review page (ADR 0055
-            // decision A) never lists, so a direct link was one change the owner never saw (ADR 0057 decision 3).
+            // every scope. v3 F12 (ADR 0081, D2): the one write kind still a proposal at scope `write`: Revert has no way
+            // to take a link alone off yet (a job of the bridge's own steps only), and a write with no way back is never
+            // made directly; deferred in the ADR.
             ...(plan.action === 'link' ? { writtenStatus: 'linked', forceProposal: true } : {}),
           });
         });

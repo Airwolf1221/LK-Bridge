@@ -239,7 +239,7 @@ export function createCtx(pd: ProjectDeps, mctx: McpToolContext, ctx: RepoCtx, t
 export type CreateStatus = 'working' | 'authoritative';
 
 export const STATUS_DESCRIPTION =
-  '"working" (default): a [BWRK] page under [INDEX] Working, or with `parent` under an [INDEX] inside a Working set. "authoritative": a [BSRC] page in its normal place; canon, so always a proposal the owner accepts as canon.';
+  '"working" (default): a [BWRK] page under [INDEX] Working, or with `parent` under an [INDEX] inside a Working set. "authoritative": a [BSRC] page in its normal place; canon, direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose.';
 
 /** The Status value of a create status. */
 export function statusValue(c: LifecycleConfig, status: CreateStatus): string {

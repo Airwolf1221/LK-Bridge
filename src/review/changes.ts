@@ -36,6 +36,8 @@ export interface ChangeView {
   }[];
   /** Any other change, field by field (a page's name or tags, a move, a chronology row, an image's folder). */
   readonly fields?: readonly { readonly field: string; readonly before: unknown; readonly after: unknown }[];
+  /** v3 F12 (ADR 0081): what reverts this with something else (a page the job made, deleted again), in words. */
+  readonly coveredBy?: string;
   /** Not reverted: why, and what to use instead. */
   readonly notRevertible?: {
     readonly reason: string;
@@ -199,7 +201,40 @@ export function changeView(t: Target, n: ChangeNames = {}): ChangeView {
         ],
       };
     }
+    case 'entity': {
+      // v3 F12 (ADR 0081): what the generic undo puts back, field by field; a page the job made lists every sidebar row
+      // the job wrote on it, one line each (the owner's report of 26 November 2026: they were collapsed into one).
+      const u = t.undo;
+      const show = (v: unknown): unknown => (v === undefined ? null : v);
+      const fields: { field: string; before: unknown; after: unknown }[] = [];
+      if (u.action === 'update' && u.left)
+        for (const k of Object.keys(u.left)) fields.push({ field: k, before: show(u.before?.[k]), after: show(u.left[k]) });
+      if ((u.action === 'create' || u.action === 'restore') && u.left)
+        for (const k of Object.keys(u.left))
+          fields.push({
+            field: k === 'parentId' ? 'parent' : k,
+            before: null,
+            after: k === 'parentId' && typeof u.left[k] === 'string' ? (pageName(u.left[k]) ?? u.left[k]) : show(u.left[k]),
+          });
+      if (u.action === 'delete')
+        fields.push({
+          field: u.entity === 'resource' ? 'page' : u.entity,
+          before:
+            (u.before && (typeof u.before.name === 'string' ? u.before.name : null)) ??
+            (u.path.resourceId ? (pageName(u.path.resourceId) ?? u.path.resourceId) : null),
+          after: '(deleted)',
+        });
+      return {
+        ...base,
+        ...(fields.length > 0 ? { fields } : {}),
+        ...(u.sidebar && u.sidebar.length > 0
+          ? { facts: u.sidebar.map((r) => ({ key: r.key, before: null, after: r.value })) }
+          : {}),
+      };
+    }
     case 'none':
+      // v3 F12: a write that goes with another target (a page the job made) is shown as such, never "not reverted".
+      if (t.coveredBy) return { ...base, coveredBy: t.reason };
       return {
         ...base,
         notRevertible: {
