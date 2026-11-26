@@ -33,13 +33,11 @@ import { PatService } from '../../src/auth/pats.js';
 import { AuthStore } from '../../src/auth/store.js';
 import type { Principal } from '../../src/jobs/index.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
-import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import { ProjectStore } from '../../src/projects/index.js';
 import { deleteProbe, type RawLk } from './f4b-probe.js';
 import type { SoakRuntime } from './soak.js';
 import { sandboxRun, type SandboxRun } from './steps.js';
-import { SUPPLEMENTARY_SENTENCE } from './tagging-f5a.js';
-import { SWEEP_SENTENCE } from './automation-f5b.js';
+import { ensureSandboxGovernance } from './governance.js';
 import { copyBridgeState } from './write-scope.js';
 
 type Obj = Record<string, any>;
@@ -183,63 +181,18 @@ export async function runIdentityCheck(
           ...(rootId ? { parentId: rootId } : {}),
         });
         made.index = String(index.id);
-        const gov = await raw.request('createResource', 'POST', '/resources', {
-          name: `lk-bridge f5c governance ${stamp}`,
+        const g = await ensureSandboxGovernance({
+          rt,
+          raw,
+          projectName: name,
+          packId: 'arkona',
           parentId: made.index,
-          documents: [{ name: 'Main', type: 'page' }],
+          label: `lk-bridge f5c governance ${stamp}`,
+          always: true,
         });
-        page.gov = String(gov.id);
-        const docs = (gov.documents ?? []) as Obj[];
-        page.govDoc = String((docs.find((d) => d.name === 'Main') ?? docs[0])?.id ?? '');
-        if (page.govDoc === '') throw new Error(`the governance page ${page.gov} came back with no document`);
-        const sources = [
-          ...pack.governance,
-          ...ARKONA_PACK.governance.filter((g) => !pack.governance.some((x) => x.key === g.key)),
-        ];
-        const headings = [...new Set(sources.flatMap((g) => g.sections ?? []))].filter(
-          // v3 F6a (ADR 0076): the draft vocabulary's section stays unpublished (a placeholder would not parse).
-          (h) => !(pack.rules.referenceTypes?.status === 'draft' && h === pack.rules.referenceTypes.section),
-        );
-        const blocks: Obj[] = [
-          { kind: 'heading', level: 1, content: [{ text: 'lk-bridge f5c governance' }] },
-        ];
-        for (const h of headings)
-          blocks.push(
-            { kind: 'heading', level: 2, content: [{ text: h }] },
-            {
-              kind: 'paragraph',
-              content: [
-                {
-                  text:
-                    h === pack.rules.retag?.supplementary?.section
-                      ? SUPPLEMENTARY_SENTENCE
-                      : h === (pack.rules.automation?.section ?? ARKONA_PACK.rules.automation?.section)
-                        ? SWEEP_SENTENCE
-                        : `The rules of ${h}.`,
-                },
-              ],
-            },
-          );
-        const doc = await raw.request(
-          'getDocumentBlocks',
-          'GET',
-          `/resources/${page.gov}/docs/${page.govDoc}/blocks`,
-        );
-        await raw.request(
-          'replaceDocumentBlocks',
-          'PUT',
-          `/resources/${page.gov}/docs/${page.govDoc}/blocks`,
-          { blocks },
-          { ifMatch: String(doc.version) },
-        );
-        rt.packs.store.setGovernance(
-          'arkona',
-          sources.map((g) => ({ ...g, project: name, resourceId: page.gov, documentId: page.govDoc })),
-        );
-        await rt.packs.commands.approve('owner', 'arkona');
-        const g = await rt.packs.governance('arkona');
-        if (g.state !== 'current') throw new Error(`the pack is ${g.state}: ${g.message}`);
-        return `index ${made.index}, governance ${page.gov}; pack version ${rt.packs.get('arkona')!.approved!.version} approved (temporary database)`;
+        page.gov = g.resourceId ?? '';
+        page.govDoc = g.documentId ?? '';
+        return `index ${made.index}, governance ${page.gov}; ${g.detail}`;
       },
     );
     if (!ok1) return items;
