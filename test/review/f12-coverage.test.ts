@@ -62,7 +62,7 @@ describe('every write kind an agent can cause has a Revert path, or is refused f
     expect(REVERT_PATHS.createImageAsset).toMatch(/placement|upload/);
   });
 
-  it('every refused operation is refused by the policy gate for an agent at scope write, naming why', async () => {
+  it('every refused operation is refused by the policy gate for an agent at scope write, naming why', () => {
     const store = {
       version: 1,
       now: () => 0,
@@ -77,7 +77,7 @@ describe('every write kind an agent can cause has a Revert path, or is refused f
     const gate = createPolicyGate({ store, allowMemberAdmin: true, proposalState: () => undefined });
     const principal = { principalId: 'pat_agent', profile: 'agent', label: 'agent' };
     for (const op of Object.keys(AGENT_REFUSED)) {
-      const d = await gate.authorize(
+      const d = gate.authorize(
         principal,
         policyOpMeta(requireOperation(op), {}),
         {},
@@ -87,13 +87,11 @@ describe('every write kind an agent can cause has a Revert path, or is refused f
           jobKind: 'single_op',
         },
       );
-      expect(d, op).toMatchObject({
-        decision: 'deny',
-        reason: expect.stringContaining('member administration'),
-      });
+      expect(d.decision, op).toBe('deny');
+      expect(d.decision === 'deny' ? d.reason : '', op).toContain('member administration');
     }
     // An ordinary write at scope write: allowed (direct).
-    const ok = await gate.authorize(
+    const ok = gate.authorize(
       principal,
       policyOpMeta(requireOperation('deleteResource'), {}),
       {},

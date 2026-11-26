@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed tool results */
 /**
  * v3 F12 (ADR 0081): an agent at scope `write`, through the real server, MCP transport, policy gate, guards and engine
  * against the mock LegendKeeper. Every change below used to be a proposal; now each runs directly, is on the owner's
@@ -48,8 +47,8 @@ const settle = async (id: string) => {
     j = await rt().engine.wait(PROJECT, id, 25_000);
   return j;
 };
-const jobOf = (r: { body: Record<string, any> }): string =>
-  typeof r.body.jobId === 'string' ? r.body.jobId : String(r.body.job?.id);
+const jobOf = (r: { body: Record<string, unknown> }): string =>
+  typeof r.body.jobId === 'string' ? r.body.jobId : String((r.body.job as { id?: unknown } | undefined)?.id);
 const onReview = (jobId: string) =>
   rt()
     .review.list(PROJECT, { state: 'all', limit: 500 })
@@ -156,7 +155,7 @@ describe('deletes at scope write: a copy first, then Revert brings them back (D3
     const jobId = jobOf(r);
     const gone = w.assets.assets.get(S.imgSea);
     expect(!gone || Boolean((gone as { deletedAt?: unknown }).deletedAt)).toBe(true);
-    expect(rt().images!.store.keptRefs(PROJECT, S.imgSea)).toHaveLength(1);
+    expect(rt().images.store.keptRefs(PROJECT, S.imgSea)).toHaveLength(1);
     const { note } = await revert(jobId);
     const again = w.assets.byName(before.name, before.folderId).filter((a) => a.id !== S.imgSea);
     expect(

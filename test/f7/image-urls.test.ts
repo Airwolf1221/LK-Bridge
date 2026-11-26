@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
+ 
 /**
  * v3 F7 (ADR 0070, G11): a new image's URL in Markdown is checked against the project's image assets (the asset tree),
  * matched on the asset's exact `url`, in both forms LegendKeeper uses. An asset's id cannot be derived from its URL (the

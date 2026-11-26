@@ -33,10 +33,6 @@ afterAll(async () => {
   await s?.close();
 });
 
-const reauth = () =>
-  s.db
-    .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000), s.services.sessionHash(s.sessionToken));
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')

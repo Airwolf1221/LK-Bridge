@@ -174,8 +174,6 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     return { ...built, db, base };
   };
   let live = await boot();
-  const { runtime } = live;
-  const policy = runtime.policy;
   const newToken: Stack['newToken'] = (label, scope) => {
     const policy = live.runtime.policy;
     const services = live.services;
