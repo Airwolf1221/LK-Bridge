@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased: v3 F5b.1, automation paces itself
+
+[ADR 0068 amendment 2](adr/0068-v3-f5b-automatic-actions-for-audits.md). Pack seed `arkona-2026-11-28-f5b1`. New
+settings: `AUTOMATION_BUDGET_MAX_WAIT_SECONDS` (600), `AUTOMATION_RUN_MAX_MINUTES` (120), `AUTOMATION_CAP_PER_CODE` (25)
+and `AUTOMATION_CAP_PER_RUN` (100). Built and tested against the mock; nothing live was touched.
+
+- A run sleeps through a budget wait of up to `AUTOMATION_BUDGET_MAX_WAIT_SECONDS` (abortable, noted in its log as
+  "paused 42 s for the minute tier") instead of stopping, and waits for an Apply job in `waiting_budget` likewise. It
+  stops on a longer wait or any day-tier wait, naming the tier, and after `AUTOMATION_RUN_MAX_MINUTES` in all.
+- The caps are settings, not pack rules; the codes' governance paragraphs say "within the automation caps set on the
+  Settings page" and the existing ones are amended once, the approval carried. The Automation page shows a pause and
+  links to the caps.
+
 ## Unreleased: v3 F6c, territories, nations and their subindexes
 
 [ADR 0080](adr/0080-v3-f6c-territories-nations-and-subindexes.md). Migrations `4800`, `4810` and `4820`. Pack seed

@@ -833,6 +833,46 @@ const SPECS: readonly Spec[] = [
     applies: 'now',
   },
   {
+    key: 'AUTOMATION_CAP_PER_CODE',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Automation: most pages a code acts on in a run',
+    description:
+      'At most this many pages for each automatic code in one run; the rest waits for the next run. (Until v3 F5b.1 this was a pack rule; the codes’ governance paragraphs now say “within the automation caps set on the Settings page”, so changing it never touches Repository Automation.)',
+    unit: UNITS.count,
+    applies: 'now',
+  },
+  {
+    key: 'AUTOMATION_CAP_PER_RUN',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Automation: most pages a run acts on in all',
+    description:
+      'At most this many pages for every automatic code together in one run; the rest waits for the next run.',
+    unit: UNITS.count,
+    applies: 'now',
+  },
+  {
+    key: 'AUTOMATION_BUDGET_MAX_WAIT_SECONDS',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Automation: longest budget wait it sleeps through',
+    description:
+      'When the rate budget says wait before the next page, an automation run pauses for that wait if it is no longer than this, then carries on with the same page. A longer wait, or any wait on the daily tier (or its maintenance floor), stops the run and the rest waits for the next one. Also the longest it waits for one of its own jobs that is waiting for budget.',
+    unit: UNITS.seconds,
+    applies: 'now',
+  },
+  {
+    key: 'AUTOMATION_RUN_MAX_MINUTES',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Automation: longest a run may take',
+    description:
+      'The whole-run ceiling, pauses included. After it the run stops (“the run’s time limit was reached; the rest waits for the next run”). The per-code and per-run page caps are unchanged.',
+    unit: UNITS.minutes,
+    applies: 'now',
+  },
+  {
     key: 'SLOW_REQUEST_WARN_MS',
     schema: 'tools',
     group: 'general',

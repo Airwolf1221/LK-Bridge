@@ -61,8 +61,6 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export const PACK_ID = 'arkona';
-/** The default caps when the approved pack states none. */
-export const DEFAULT_CAPS = { perCode: 25, perRun: 100 } as const;
 /** Three skips in a row for the same reason pause the code. */
 export const SKIP_STREAK_PAUSE = 3;
 /** The tool of every automation job's origin (the policy gate lets only these act as the Automation principal). */
@@ -81,7 +79,7 @@ export class AutomationError extends Error {
 
 export interface AutomationDeps {
   /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
-  readonly background?: Pick<BackgroundRunner, 'track'>;
+  readonly background?: Pick<BackgroundRunner, 'track'> & { readonly signal?: AbortSignal };
   readonly db: Db;
   readonly engine: Pick<JobEngine, 'submit' | 'internalRead' | 'queries' | 'events' | 'stepRecords' | 'wait'>;
   readonly packs: Pick<Packs, 'get' | 'approvedRules' | 'attachment' | 'governance' | 'carryApproval'>;
@@ -102,8 +100,8 @@ export interface AutomationDeps {
       | {
           governor: {
             estimate(w: { reads: number; writes: number; priority: 'P3' }): {
-              tiers: readonly { timeMs: number }[];
-              operationTiers: readonly { timeMs: number }[];
+              tiers: readonly { tier: string; windowMs: number; timeMs: number }[];
+              operationTiers: readonly { tier: string; group: string; windowMs: number; timeMs: number }[];
             };
           };
         }
@@ -113,11 +111,73 @@ export interface AutomationDeps {
   readonly audit: (actor: string, action: string, target: string, before: unknown, after: unknown) => void;
   readonly now: () => number;
   readonly log?: TaskLogger & { warn(o: unknown, m: string): void };
-  /** Test seam: whether the P3 budget says wait now (default: the project's governor estimate). */
-  readonly budgetWaits?: (projectId: string) => boolean;
+  /** Test seam: the P3 budget's wait now, or null (default: the project's governor estimate). */
+  readonly budgetWaits?: (projectId: string) => BudgetWait | null;
+  /** v3 F5b.1: the live settings (default: the defaults). Read on each use, so a change applies to the next check. */
+  readonly settings?: () => AutomationSettings;
+  /** Test seam: an abortable sleep (default: a timer that the abort signal ends at once). */
+  readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   /** How long one job may take to settle before the run stops waiting for it (default 10 minutes). */
   readonly settleMs?: number;
 }
+
+/** v3 F5b.1 (ADR 0068 amendment 1): the settings the automation reads on each use. */
+export interface AutomationSettings {
+  /** AUTOMATION_CAP_PER_CODE. */
+  readonly capPerCode: number;
+  /** AUTOMATION_CAP_PER_RUN. */
+  readonly capPerRun: number;
+  /** AUTOMATION_BUDGET_MAX_WAIT_SECONDS. */
+  readonly budgetMaxWaitSeconds: number;
+  /** AUTOMATION_RUN_MAX_MINUTES. */
+  readonly runMaxMinutes: number;
+}
+
+export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
+  capPerCode: 25,
+  capPerRun: 100,
+  budgetMaxWaitSeconds: 600,
+  runMaxMinutes: 120,
+};
+
+/** The P3 budget's wait before the next page: the longest tier's, named; `day` when a day tier is among the causes. */
+export interface BudgetWait {
+  readonly ms: number;
+  /** The tier that decides it (the day tier when `day`). */
+  readonly tier: string;
+  /** Plain words for it: "minute tier", "day tier", "assets operation tier". */
+  readonly label: string;
+  readonly day: boolean;
+}
+
+/** What a run is doing while it pauses (the Automation page: "pausing for budget (minute tier, 30 s)"). */
+export interface Pausing {
+  readonly label: string;
+  readonly seconds: number;
+  readonly since: number;
+}
+
+const DAY_MS = 86_400_000;
+const sleepFor = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = (): void => {
+      clearTimeout(t);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+/** "42 s", "5 min", "2 h". */
+export const fmtWait = (ms: number): string => {
+  const s = Math.ceil(ms / 1000);
+  if (s < 120) return `${s} s`;
+  if (s < 7200) return `${Math.ceil(s / 60)} min`;
+  return `${Math.round(s / 360) / 10} h`;
+};
+/** The old wording of a governance paragraph's caps (v3 F5b), amended once to the new (F5b.1). */
+const OLD_CAPS_WORDING = /at most \d+ pages a run for this code and \d+ for every code together/;
 
 /** One code as the dashboard shows it. */
 export interface CodeView {
@@ -248,6 +308,12 @@ const errMessage = (e: unknown): string => (e instanceof Error ? e.message : Str
 export class AutomationService {
   readonly store: AutomationStore;
   private stopping = false;
+  private abort = new AbortController();
+  /** Per project, the run in progress: when it started, what it paused for, and what it is pausing for now. */
+  private readonly runInfo = new Map<
+    string,
+    { startedAt: number; pauses: string[]; pausing: Pausing | null }
+  >();
   private readonly running = new Map<string, Promise<RunRow>>();
   private offs: (() => void)[] = [];
   /** Whether each recent governance write had the pack's approval carried over it (false: the pack now drifts). */
@@ -260,6 +326,7 @@ export class AutomationService {
   /** Follows Reverts of governance writes (a reverted paragraph switches its code off). Returns a detach. */
   start(): () => void {
     this.stopping = false;
+    this.abort = new AbortController();
     const off = this.d.engine.events.on('job', (e: { type: string; job: JobView }) => {
       if (e.job.status !== 'succeeded' || e.job.origin.tool !== REVERT_TOOL) return;
       // v3 F6a.1: tracked by the runtime's background work (a stop waits for it before the database closes).
@@ -285,6 +352,7 @@ export class AutomationService {
   /** SIGTERM (CR-2026-11-R3, fix A): every run stops at its next step boundary; waits (bounded) for them. */
   async stop(ms = 10_000): Promise<void> {
     this.stopping = true;
+    this.abort.abort(); // a run pausing for budget wakes at once
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       Promise.allSettled([...this.running.values()]),
@@ -297,9 +365,19 @@ export class AutomationService {
 
   // ============================================================================================ reading
 
+  private settings(): AutomationSettings {
+    return this.d.settings?.() ?? DEFAULT_AUTOMATION_SETTINGS;
+  }
+
+  /** v3 F5b.1: the caps are settings (AUTOMATION_CAP_PER_CODE, AUTOMATION_CAP_PER_RUN), read on each use. */
   caps(): { perCode: number; perRun: number } {
-    const a = this.d.packs.approvedRules(PACK_ID)?.automation;
-    return a ? { perCode: a.perCode, perRun: a.perRun } : { ...DEFAULT_CAPS };
+    const s = this.settings();
+    return { perCode: s.capPerCode, perRun: s.capPerRun };
+  }
+
+  /** What the project's run is pausing for now, or null (the Automation page). */
+  pausing(projectId: string): Pausing | null {
+    return this.runInfo.get(projectId)?.pausing ?? null;
   }
 
   /** Every eligible code with its setting and what it did last (the Automation page). */
@@ -534,7 +612,7 @@ export class AutomationService {
   ): Promise<string> {
     const src = this.source(projectId);
     const doc = await this.readDoc(projectId, src, 'P1');
-    const text = paragraphText(e, o.changes, this.caps());
+    const text = paragraphText(e, o.changes);
     const recorded = this.store.paragraph(projectId, e.code);
     const plan = planParagraph(doc.blocks, {
       code: e.code,
@@ -981,6 +1059,7 @@ export class AutomationService {
 
   /** Amendments owed (an "off" whose write failed) are tried again. */
   private async catchUpGovernance(projectId: string): Promise<void> {
+    await this.amendCapsWording(projectId);
     for (const s of this.store.settings(projectId)) {
       if (!s.governancePending) continue;
       const e = entryOf(s.code);
@@ -1003,6 +1082,34 @@ export class AutomationService {
     }
   }
 
+  /**
+   * v3 F5b.1 (ADR 0068 amendment 1): a paragraph that still states the caps in numbers is amended ONCE, through the
+   * ordinary paragraph path (a block-by-block job, the pack's approval carried over it), to "within the automation caps
+   * set on the Settings page". Only while Repository Automation reads as approved (an edited paragraph is the owner's
+   * to set right first); a failure is recorded as the code's pending governance and tried again.
+   */
+  private async amendCapsWording(projectId: string): Promise<void> {
+    const old = this.store.paragraphs(projectId).filter((p) => OLD_CAPS_WORDING.test(p.text));
+    if (old.length === 0) return;
+    const gov = await this.governanceState(projectId, 'P3');
+    if (!gov.ok) return;
+    for (const p of old) {
+      const e = entryOf(p.code);
+      if (!e) continue;
+      try {
+        await this.writeParagraph(projectId, e, {
+          kind: 'amend',
+          changes: this.store.changes(projectId, p.code),
+          by: 'automation',
+          changeId: null,
+        });
+      } catch (err) {
+        this.store.setGovernancePending(projectId, p.code, `caps wording: ${errMessage(err)}`);
+        return; // the document moved on: the next run reads it afresh
+      }
+    }
+  }
+
   // ============================================================================================ the run
 
   /** Why automation must not run in this project now, or null. */
@@ -1016,12 +1123,141 @@ export class AutomationService {
     return null;
   }
 
-  private budgetWaits(projectId: string): boolean {
+  /** The P3 budget's wait before the next page (6 reads, 2 writes), or null when nothing waits. */
+  private budgetWaits(projectId: string): BudgetWait | null {
     if (this.d.budgetWaits) return this.d.budgetWaits(projectId);
     const g = this.d.projects.anyClient(projectId)?.governor;
-    if (!g) return true;
+    if (!g) return { ms: DAY_MS, tier: 'none', label: 'budget (no client for the project)', day: false };
     const e = g.estimate({ reads: 6, writes: 2, priority: 'P3' });
-    return e.tiers.some((t) => t.timeMs > 0) || e.operationTiers.some((t) => t.timeMs > 0);
+    const label = (t: { tier: string }, group?: string): string =>
+      group !== undefined
+        ? `${group} operation tier`
+        : t.tier.endsWith('-min')
+          ? 'minute tier'
+          : t.tier.endsWith('-hour')
+            ? 'hour tier'
+            : t.tier.endsWith('-day')
+              ? 'day tier'
+              : `${t.tier} tier`;
+    const all = [
+      ...e.tiers.map((t) => ({ ...t, label: label(t), day: t.tier === 'key-day' || t.windowMs >= DAY_MS })),
+      ...e.operationTiers.map((t) => ({ ...t, label: label(t, t.group), day: t.windowMs >= DAY_MS })),
+    ].filter((t) => t.timeMs > 0);
+    if (all.length === 0) return null;
+    const longest = (xs: typeof all) => xs.reduce((a, b) => (b.timeMs > a.timeMs ? b : a));
+    const top = longest(all);
+    const day = all.filter((t) => t.day);
+    const cause = day.length > 0 ? longest(day) : top;
+    return { ms: top.timeMs, tier: cause.tier, label: cause.label, day: day.length > 0 };
+  }
+
+  private sleep(ms: number): Promise<void> {
+    const signal = this.d.background?.signal
+      ? AbortSignal.any([this.abort.signal, this.d.background.signal])
+      : this.abort.signal;
+    return (this.d.sleep ?? sleepFor)(ms, signal);
+  }
+
+  private ceilingReached(projectId: string): boolean {
+    const info = this.runInfo.get(projectId);
+    return !!info && this.d.now() - info.startedAt >= this.settings().runMaxMinutes * 60_000;
+  }
+
+  /** Notes a pause in the run's log and its summary: "paused 42 s for the minute tier". */
+  private notePause(projectId: string, runId: string, what: string, ms: number): void {
+    const note = `paused ${fmtWait(ms)} for ${what}`;
+    this.runInfo.get(projectId)?.pauses.push(note);
+    this.d.log?.info({ project: projectId, run: runId, pausedMs: ms }, `automation: ${note}`);
+  }
+
+  /**
+   * v3 F5b.1 (ADR 0068 amendment 1): the budget before a page. A wait no longer than AUTOMATION_BUDGET_MAX_WAIT_SECONDS
+   * is slept through (abortable: a stop ends it at once) and the check made again, so the run carries on with the same
+   * page; a longer wait, a wait on the day tier (or its maintenance floor), the run's time limit or a stop ends the run.
+   * Returns null to go on, else why the run stops (recorded as an item for the page when there is one).
+   */
+  private async awaitBudget(
+    projectId: string,
+    runId: string,
+    e: CodeEntry,
+    c: { pageId: string | null; pageName: string | null } | null,
+  ): Promise<{ why: string } | null> {
+    const stop = (code: string, why: string): { why: string } => {
+      if (c) this.item(projectId, runId, e.code, c, 'stopped', { reasonCode: code, reason: why });
+      return { why };
+    };
+    let slept = false;
+    for (;;) {
+      if (slept) {
+        const why = this.blocked(projectId);
+        if (why) return stop('STOPPED', why);
+      }
+      if (this.ceilingReached(projectId)) return stop('TIME_LIMIT', 'the run’s time limit was reached');
+      const w = this.budgetWaits(projectId);
+      if (!w) return null;
+      const max = this.settings().budgetMaxWaitSeconds;
+      if (w.day)
+        return stop(
+          'BUDGET',
+          `the ${w.label} says wait ${fmtWait(w.ms)} (the day tier, with its maintenance floor RESERVE_DAY_FLOOR_MAINTENANCE, is never slept through)`,
+        );
+      if (w.ms > max * 1000)
+        return stop(
+          'BUDGET',
+          `the ${w.label} says wait ${fmtWait(w.ms)}, longer than the ${max} s a run pauses for (AUTOMATION_BUDGET_MAX_WAIT_SECONDS)`,
+        );
+      const info = this.runInfo.get(projectId);
+      const started = this.d.now();
+      if (info) info.pausing = { label: w.label, seconds: Math.ceil(w.ms / 1000), since: started };
+      try {
+        await this.sleep(Math.max(w.ms, 50));
+      } finally {
+        if (info) info.pausing = null;
+      }
+      this.notePause(projectId, runId, `the ${w.label}`, w.ms);
+      slept = true;
+    }
+  }
+
+  /**
+   * An Apply job waiting for budget: waited for, up to AUTOMATION_BUDGET_MAX_WAIT_SECONDS (abortable), then settled.
+   * `why` is set when the run must stop (the job is still waiting past the limit, the time limit, or a stop).
+   */
+  private async awaitJob(
+    projectId: string,
+    runId: string,
+    job: JobView,
+  ): Promise<{ job: JobView; why: string | null }> {
+    const max = this.settings().budgetMaxWaitSeconds * 1000;
+    const started = this.d.now();
+    const info = this.runInfo.get(projectId);
+    let j = job;
+    try {
+      while (j.status === 'waiting_budget') {
+        const why = this.blocked(projectId);
+        if (why) return { job: j, why };
+        if (this.ceilingReached(projectId)) return { job: j, why: 'the run’s time limit was reached' };
+        const waited = this.d.now() - started;
+        if (waited >= max)
+          return {
+            job: j,
+            why: `the job ${j.id} is still waiting for budget after ${fmtWait(waited)} (AUTOMATION_BUDGET_MAX_WAIT_SECONDS)`,
+          };
+        if (info)
+          info.pausing = {
+            label: 'a job waiting for budget',
+            seconds: Math.ceil((max - waited) / 1000),
+            since: started,
+          };
+        await this.sleep(Math.min(1_000, max - waited));
+        j = (this.d.engine.queries.getJob(projectId, j.id) as JobView | undefined) ?? j;
+      }
+    } finally {
+      if (info) info.pausing = null;
+    }
+    const waited = this.d.now() - started;
+    if (waited > 0) this.notePause(projectId, runId, 'a job waiting for budget', waited);
+    return { job: await this.settle(projectId, j.id, this.d.settleMs ?? 600_000), why: null };
   }
 
   /** One run in a project (the nightly job, or "Run automation now"). A run already in progress is joined. */
@@ -1078,8 +1314,16 @@ export class AutomationService {
   ): Promise<RunRow> {
     const runId = `aut_${randomBytes(8).toString('hex')}`;
     this.store.startRun(runId, projectId, trigger);
+    const info = { startedAt: this.d.now(), pauses: [] as string[], pausing: null as Pausing | null };
+    this.runInfo.set(projectId, info);
     const finish = (state: RunRow['state'], summary: string, stop: string | null): RunRow => {
-      this.store.finishRun(runId, state, summary, stop);
+      this.runInfo.delete(projectId);
+      this.store.finishRun(
+        runId,
+        state,
+        info.pauses.length > 0 ? `${summary} (${info.pauses.join('; ')}.)` : summary,
+        stop,
+      );
       return this.store.run(runId)!;
     };
     try {
@@ -1108,6 +1352,12 @@ export class AutomationService {
           );
         const mode = this.modeOf(projectId, e);
         if (mode === 'off') continue;
+        if (this.ceilingReached(projectId))
+          return finish(
+            'stopped',
+            `${done.join('; ') || 'nothing done'}. Stopped: the run’s time limit was reached; the rest waits for the next run.`,
+            'the run’s time limit was reached',
+          );
         const out = await this.runCode(projectId, runId, e, mode, Math.min(caps.perCode, left), ctx);
         left -= out.attempted;
         const capped = out.kind === 'done' && out.capped === true;
@@ -1225,7 +1475,8 @@ export class AutomationService {
       }
       const why = this.blocked(projectId);
       if (why) return { kind: 'stopRun', why, attempted };
-      if (this.budgetWaits(projectId)) return { kind: 'stopRun', why: 'the P3 budget says wait', attempted };
+      const paced = await this.awaitBudget(projectId, runId, e, c);
+      if (paced) return { kind: 'stopRun', why: paced.why, attempted };
       attempted++;
       await yieldToLoop(); // R3-64: the owner's and the agents' requests are answered between pages
       let planned: Planned;
@@ -1423,7 +1674,8 @@ export class AutomationService {
       }
       const why = this.blocked(projectId);
       if (why) return { kind: 'stopRun', why, attempted };
-      if (this.budgetWaits(projectId)) return { kind: 'stopRun', why: 'the P3 budget says wait', attempted };
+      const paced = await this.awaitBudget(projectId, runId, e, { pageId: t.key, pageName: t.name });
+      if (paced) return { kind: 'stopRun', why: paced.why, attempted };
       attempted++;
       await yieldToLoop();
       const c: Candidate = {
@@ -1444,7 +1696,19 @@ export class AutomationService {
               : {}),
           });
         else if (r.status === 'job_submitted') {
-          const job = await this.settle(projectId, r.jobId, this.d.settleMs ?? 600_000);
+          let job = await this.settle(projectId, r.jobId, this.d.settleMs ?? 600_000);
+          if (job.status === 'waiting_budget') {
+            const w = await this.awaitJob(projectId, runId, job);
+            job = w.job;
+            if (w.why) {
+              this.item(projectId, runId, e.code, c, 'stopped', {
+                reasonCode: 'BUDGET',
+                reason: w.why,
+                jobId: r.jobId,
+              });
+              return { kind: 'stopRun', why: w.why, attempted };
+            }
+          }
           if (job.status === 'succeeded')
             this.item(projectId, runId, e.code, c, 'applied', { jobId: r.jobId });
           else {
@@ -1821,17 +2085,29 @@ export class AutomationService {
     runId: string,
     e: CodeEntry,
     c: Candidate,
-    job: JobView,
+    submitted: JobView,
     expect: Expectation,
     pre: Obj,
   ): Promise<'ok' | 'skip' | 'stopCode' | { why: string }> {
+    let job = submitted;
+    let budgetWhy: string | null = null;
+    if (job.status === 'waiting_budget') {
+      // v3 F5b.1: waited for (up to AUTOMATION_BUDGET_MAX_WAIT_SECONDS), not a reason to stop the run.
+      const w = await this.awaitJob(projectId, runId, job);
+      job = w.job;
+      budgetWhy = w.why;
+    }
     if (!TERMINAL_JOB_STATUSES.has(job.status)) {
       this.item(projectId, runId, e.code, c, 'stopped', {
         reasonCode: job.status === 'waiting_budget' ? 'BUDGET' : 'NOT_FINISHED',
         reason: `the job is ${job.status}; it finishes by itself and is judged on the Review page`,
         jobId: job.id,
       });
-      return { why: job.status === 'waiting_budget' ? 'the P3 budget says wait' : `a job is ${job.status}` };
+      return {
+        why:
+          budgetWhy ??
+          (job.status === 'waiting_budget' ? 'the P3 budget says wait' : `a job is ${job.status}`),
+      };
     }
     const unknown = this.d.engine.queries
       .journalLookup(projectId, { jobId: job.id, limit: 100 })
@@ -2140,8 +2416,8 @@ export class AutomationService {
     if (mode === 'propose') {
       const pages = ids.slice(0, Math.min(cap, this.d.packs.approvedRules(PACK_ID)?.retag?.batchSize ?? 25));
       if (pages.length === 0) return { kind: 'done', attempted: 0 };
-      if (this.budgetWaits(projectId))
-        return { kind: 'stopRun', why: 'the P3 budget says wait', attempted: 0 };
+      const paced = await this.awaitBudget(projectId, runId, e, null);
+      if (paced) return { kind: 'stopRun', why: paced.why, attempted: 0 };
       try {
         const plan = this.d.retag.planApply({ projectId, runId: audit.run.id, pageIds: pages });
         const sub = await this.d.retag.submitApply(plan, {
@@ -2173,7 +2449,8 @@ export class AutomationService {
       }
       const why = this.blocked(projectId);
       if (why) return { kind: 'stopRun', why, attempted };
-      if (this.budgetWaits(projectId)) return { kind: 'stopRun', why: 'the P3 budget says wait', attempted };
+      const paced = await this.awaitBudget(projectId, runId, e, { pageId: id, pageName: name(id) });
+      if (paced) return { kind: 'stopRun', why: paced.why, attempted };
       attempted++;
       await yieldToLoop(); // R3-64: the owner's and the agents' requests are answered between pages
       const c: Candidate = {

@@ -552,10 +552,11 @@ type's identity fields, the race and culture maps and the retag rules from the a
 
 ## Automation's caps and Repository Automation (v3 F5b)
 
-`arkona-2026-11-23-f5b` ([ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md)): `automation = { perCode: 25,
-perRun: 100, source: 'repository-automation', section: 'Approved Narrow Automations', sweepMarker: 'Assign Block IDs
-Sweep' }`, the caps of the automation framework, and where it records each code the owner switches on (after the
-block-id sweep's paragraph). Which codes run is never pack data: it is the owner's setting per project on the Automation
+`arkona-2026-11-23-f5b` ([ADR 0068](adr/0068-v3-f5b-automatic-actions-for-audits.md)): `automation = { source:
+'repository-automation', section: 'Approved Narrow Automations', sweepMarker: 'Assign Block IDs Sweep' }`: where the
+automation framework records each code the owner switches on (after the block-id sweep's paragraph). Its caps were pack
+rules (`perCode: 25`, `perRun: 100`) until `arkona-2026-11-28-f5b1` (ADR 0068 amendment 2): they are now the settings
+`AUTOMATION_CAP_PER_CODE` and `AUTOMATION_CAP_PER_RUN`, and a stored version that still carries them is read without them. Which codes run is never pack data: it is the owner's setting per project on the Automation
 page ([dashboard.md](dashboard.md#automation-v3-f5b)). Repository Automation is a governance source with its Default
 Boundary, Approved Narrow Automations and Source Boundaries pinned; while any source drifts, no automation runs.
 

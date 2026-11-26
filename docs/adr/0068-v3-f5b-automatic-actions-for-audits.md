@@ -304,3 +304,35 @@ The owner's two requests on the pull request.
    refused (`SOURCE_ELSEWHERE`) with Arkona's Tagging Standard untouched, and from Arkona's page edits Arkona's and
    writes nothing to `test`; the other routes refuse a mismatch; and an automation setting from `test`'s page is refused
    while from Arkona's it is written into Arkona's Repository Automation only.
+
+## Amendment 2 (28 November 2026, F5b.1): automation paces itself, and the caps are settings
+
+The owner's nightly run stopped after three codes with "Stopped: the P3 budget says wait; the rest waits for the next
+run." Cause: `budgetWaits()` was true if ANY tier showed a wait for a 6-read, 2-write P3 estimate, and a submitted Apply
+job in `waiting_budget` stopped the run likewise. A one-minute wait ended a night's work.
+
+1. **A short wait is slept through.** The check returns the estimate's wait (the longest tier, named). If every wait is
+   at most `AUTOMATION_BUDGET_MAX_WAIT_SECONDS` (default 600), the run sleeps that long (abortable: a stop or the
+   background runner's drain ends the sleep at once), notes "paused 42 s for the minute tier" in its log and summary,
+   checks again and carries on with the same page. It stops only when a wait is longer than the limit, or when a **day
+   tier** is among the causes (the day tier, with its maintenance floor `RESERVE_DAY_FLOOR_MAINTENANCE`, is never slept
+   through), the reason naming the tier and the wait. The page about to be done is recorded as a stopped item.
+2. **An Apply job in `waiting_budget` is waited for**, with the same limit and abort; past it the run stops and the item
+   is recorded as before (`BUDGET`).
+3. **A whole-run ceiling**, `AUTOMATION_RUN_MAX_MINUTES` (default 120), pauses included: "the run’s time limit was
+   reached; the rest waits for the next run."
+4. **The caps become settings** (they were pack rules, changeable only by a new seed): `AUTOMATION_CAP_PER_CODE` (25,
+   1–500) and `AUTOMATION_CAP_PER_RUN` (100, 1–2000), applying at once; `caps()` reads them. `perCode` and `perRun` leave
+   the pack rules (seed `arkona-2026-11-28-f5b1` supersedes `-f6c`; a stored version that carries them is read with them
+   dropped). The codes' governance paragraphs no longer state numbers: "within the automation caps set on the Settings
+   page". A paragraph in the old wording is accepted by the checker (it compares with the recorded text) until the bridge
+   amends it, once, at the start of the next run, through the ordinary paragraph path (a block-by-block job, the pack's
+   approval carried with `packs.carryApproval`, only while Repository Automation reads as approved). Changing a cap later
+   never touches governance.
+5. While a run pauses, "Run automation now" still joins it; the Automation page shows "pausing for budget (minute tier,
+   30 s)" and links to the Settings page for the caps.
+
+Tests (`test/automation/pacing.test.ts`): a minute-tier wait of 20 s twice, then clear (the run finishes, both pauses
+logged); a 2 h wait and a day-tier wait (stop, naming the tier); a `waiting_budget` job that clears, and one past the
+limit; a stop during a pause (prompt, item recorded, a second "run now" joins); the ceiling; caps from settings with no
+pack change; the paragraph upgrade carried without drift, once, the old wording accepted until then.
