@@ -162,6 +162,11 @@ export const LIVE_TOOL_SETTINGS: Readonly<Record<string, readonly [Section, stri
   NATION_SUBINDEX_BULK_MAX: [null, 'nationSubindexBulkMax'],
   // v3 F10 (ADR 0078): read each time a change snapshot schedules the chronology check.
   CHRONOLOGY_CHECK_DELAY_MS: [null, 'chronologyCheckDelayMs'],
+  // v3 F5b.1 (ADR 0068 amendment 1): read on each budget check of an automation run.
+  AUTOMATION_BUDGET_MAX_WAIT_SECONDS: [null, 'automationBudgetMaxWaitSeconds'],
+  AUTOMATION_RUN_MAX_MINUTES: [null, 'automationRunMaxMinutes'],
+  AUTOMATION_CAP_PER_CODE: [null, 'automationCapPerCode'],
+  AUTOMATION_CAP_PER_RUN: [null, 'automationCapPerRun'],
   SLOW_REQUEST_WARN_MS: [null, 'slowRequestWarnMs'],
   SLOW_REQUEST_REPEAT_MS: [null, 'slowRequestRepeatMs'],
   EVENT_LOOP_LAG_WARN_MS: [null, 'eventLoopLagWarnMs'],

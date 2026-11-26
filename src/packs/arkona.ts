@@ -1195,9 +1195,8 @@ const rules: PackRules = packRulesSchema.parse({
   },
   // v3 F5b (ADR 0068, H5): the automation framework's caps (pack data, as the design asks), and where the approvals
   // are recorded: Repository Automation's "Approved Narrow Automations", after the block-id sweep's paragraph.
+  // `-f5b1` (ADR 0068 amendment 1, F5b.1): the caps are settings (AUTOMATION_CAP_PER_CODE / _PER_RUN), no longer rules.
   automation: {
-    perCode: 25,
-    perRun: 100,
     source: 'repository-automation',
     section: 'Approved Narrow Automations',
     sweepMarker: 'Assign Block IDs Sweep',
@@ -1587,8 +1586,9 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // classifier, the territory categories' nesting (Conflicts in Historical Events), the Lost Realmships, and the ruling
   // `nation-subindex-roles`. No new pinned section: Source Formatting's "Nation-Centred Territorial Navigation" is pinned
   // already, so the reviewer's paragraph shows as governance drift and the owner approves again.
-  seed: 'arkona-2026-11-27-f6c',
+  seed: 'arkona-2026-11-28-f5b1',
   supersedes: [
+    'arkona-2026-11-27-f6c',
     'arkona-2026-11-25-f6b',
     'arkona-2026-11-24-f6a',
     'arkona-2026-11-23-f7b',

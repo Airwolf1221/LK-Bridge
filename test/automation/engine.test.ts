@@ -42,16 +42,11 @@ const texts = () =>
   w
     .governanceBlocks()
     .map((b) => ((b.content as { text?: string }[] | undefined) ?? []).map((r) => r.text ?? '').join(''));
-const setCaps = async (perCode: number, perRun: number) => {
-  const packs = w.stack.runtime.packs;
-  const pack = packs.get('arkona')!;
-  packs.commands.replaceRules(
-    'owner',
-    'arkona',
-    { ...pack.rules, automation: { ...pack.rules.automation!, perCode, perRun } },
-    'test: the caps',
-  );
-  await packs.commands.approve('owner', 'arkona');
+const setCaps = (perCode: number, perRun: number) => {
+  // v3 F5b.1: the caps are settings, read on each run: no pack change, no approval.
+  const live = w.stack.runtime.configSettings.live;
+  live.set('AUTOMATION_CAP_PER_CODE', perCode, 'test', Date.now());
+  live.set('AUTOMATION_CAP_PER_RUN', perRun, 'test', Date.now());
 };
 
 describe('Apply automatically', () => {
@@ -111,7 +106,7 @@ describe('Apply automatically', () => {
   });
 
   it('the cap per code and the cap per run are honoured; the rest waits for the next run', async () => {
-    await setCaps(2, 3);
+    setCaps(2, 3);
     try {
       await on('retag_correction', 'apply');
       await on('out_of_order', 'apply');
@@ -130,7 +125,7 @@ describe('Apply automatically', () => {
     } finally {
       await on('retag_correction', 'off');
       await on('out_of_order', 'off');
-      await setCaps(25, 100);
+      setCaps(25, 100);
     }
   });
 

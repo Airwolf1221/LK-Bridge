@@ -13,6 +13,7 @@ export type BaseUnit =
   | 'gibibytes'
   | 'milliseconds'
   | 'seconds'
+  | 'minutes'
   | 'days'
   | 'weeks'
   | 'fraction'
@@ -42,6 +43,7 @@ export const UNITS = {
   msAsSeconds: unit('milliseconds', 'seconds', 1000),
   msAsMinutes: unit('milliseconds', 'minutes', 60_000),
   seconds: unit('seconds', 'seconds', 1),
+  minutes: unit('minutes', 'minutes', 1),
   secondsAsMinutes: unit('seconds', 'minutes', 60),
   secondsAsHours: unit('seconds', 'hours', 3600),
   secondsAsDays: unit('seconds', 'days', 86_400),

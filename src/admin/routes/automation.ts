@@ -66,6 +66,7 @@ export const registerAutomation: Register = (api, ctx) => {
       project: p,
       global: a.store.global(),
       caps: a.caps(),
+      pausing: a.pausing(p.id),
       codes: a.codes(p.id),
       runs: a.store.runs(p.id, { limit: 10 }),
       never: CATALOGUE.filter((e) => e.automatable !== 'mechanical').map((e) => ({

@@ -104,6 +104,8 @@ import { snapshotMapCheckers } from './snapshots/restore.js';
 import { Rehearsals } from './snapshots/rehearsal.js';
 import {
   DEFAULT_ART_CACHE_SETTINGS,
+  DEFAULT_AUTOMATION_BUDGET_MAX_WAIT_SECONDS,
+  DEFAULT_AUTOMATION_RUN_MAX_MINUTES,
   DEFAULT_CHRONOLOGY_CHECK_DELAY_MS,
   DEFAULT_SNAPSHOT_SETTINGS,
   DEFAULT_WATCHDOG_SETTINGS,
@@ -1546,6 +1548,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     projectName: (projectId) => projectStore.byId(projectId)?.name ?? null,
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
+    // v3 F5b.1: read on each use, so a change on the Settings page applies to the next check and the next run.
+    settings: () => ({
+      capPerCode: toolsSettings.automationCapPerCode ?? 25,
+      capPerRun: toolsSettings.automationCapPerRun ?? 100,
+      budgetMaxWaitSeconds:
+        toolsSettings.automationBudgetMaxWaitSeconds ?? DEFAULT_AUTOMATION_BUDGET_MAX_WAIT_SECONDS,
+      runMaxMinutes: toolsSettings.automationRunMaxMinutes ?? DEFAULT_AUTOMATION_RUN_MAX_MINUTES,
+    }),
     log: {
       info: (obj, msg) => log.info(obj, msg),
       warn: (obj, msg) => log.warn(obj, msg),
