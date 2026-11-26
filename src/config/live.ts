@@ -158,6 +158,8 @@ export const LIVE_TOOL_SETTINGS: Readonly<Record<string, readonly [Section, stri
   REFTYPE_BULK_MAX: [null, 'reftypeBulkMax'],
   // v3 F6b (ADR 0079): read on each use by the index classification service.
   INDEX_CLASSIFY_BULK_MAX: [null, 'indexClassifyBulkMax'],
+  // v3 F6c (ADR 0080): read on each use by the Nation Subindexes service.
+  NATION_SUBINDEX_BULK_MAX: [null, 'nationSubindexBulkMax'],
   // v3 F10 (ADR 0078): read each time a change snapshot schedules the chronology check.
   CHRONOLOGY_CHECK_DELAY_MS: [null, 'chronologyCheckDelayMs'],
   SLOW_REQUEST_WARN_MS: [null, 'slowRequestWarnMs'],

@@ -513,7 +513,14 @@ export function createPacks(d: PacksDeps): Packs {
             ? {
                 indexTaxonomy: {
                   ...s.rules.indexTaxonomy,
-                  structural: stored.rules.indexTaxonomy.structural,
+                  // v3 F6c (ADR 0080): the nation subindex words are derived from the seed's nation roles and
+                  // variants (F6b's stopgap list replaced); every other structural list stays the owner's.
+                  structural: s.rules.indexTaxonomy.nationRoles
+                    ? {
+                        ...stored.rules.indexTaxonomy.structural,
+                        nationSubindexes: s.rules.indexTaxonomy.structural.nationSubindexes,
+                      }
+                    : stored.rules.indexTaxonomy.structural,
                   outOfScope: stored.rules.indexTaxonomy.outOfScope,
                   ...(stored.rules.indexTaxonomy.status === 'published'
                     ? {

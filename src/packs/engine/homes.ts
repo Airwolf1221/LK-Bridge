@@ -17,6 +17,34 @@ import type { RepoCtx } from '../../mcp/tools/repo.js';
 import { nameKey, type TreeNode } from '../../tree/index.js';
 import type { HomeRule, OwnerKind, OwnerKindName, OwnersRules } from '../types.js';
 
+/**
+ * v3 F6c (ADR 0080; design T4, C5): the registry's structural entries and role bindings, as placement reads them. Once
+ * the Territory type is seeded, `<Continent> <Category>` and the Polities that hold nations are its entries' bound
+ * roles; once the Nation type is seeded, a nation is a Nation entry and `<Nation> <Category>` its bound role (by the
+ * binding, so a short name such as Cantha needs no ancestor of that name). While a type is not seeded the name rules
+ * below stay in force, unchanged.
+ */
+export interface RoleView {
+  readonly territorySeeded: boolean;
+  readonly nationSeeded: boolean;
+  /** Territory entries by their index's id. */
+  readonly territories: ReadonlyMap<string, { readonly entryId: string; readonly name: string }>;
+  /** Nation entries by their index's id. */
+  readonly nations: ReadonlyMap<
+    string,
+    { readonly entryId: string; readonly name: string; readonly shortName: string | null }
+  >;
+  /** Every bound node: whose role it is (`owner` the territory's or the nation's index). */
+  readonly bound: ReadonlyMap<
+    string,
+    { readonly kind: 'territory' | 'nation'; readonly owner: string; readonly role: string }
+  >;
+  /** An entry's index → role → bound node. */
+  readonly bindings: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** The nation role a nation-level category names (C2's matching), or null. */
+  roleForCategory(category: string): string | null;
+}
+
 /** The tree as the owner planner reads it, with every lookup cached for the call. */
 export interface HomeTree {
   node(id: string): TreeNode | null;
@@ -28,9 +56,53 @@ export interface HomeTree {
   readonly owners: OwnersRules;
   /** The Species type's kinds (the race roster's name patterns). */
   readonly kinds: Partial<Record<OwnerKindName, OwnerKind>>;
+  /** v3 F6c: the registry's roles (absent, or a type not seeded: the name rules). */
+  readonly roles?: RoleView | null;
 }
 
-export function homeTree(ctx: RepoCtx, owners: OwnersRules): HomeTree {
+/** v3 F6c: a home tree over any source of nodes (the snapshots' model, for the audits). */
+export function homeTreeOf(
+  src: {
+    node(id: string): TreeNode | null;
+    children(id: string): TreeNode[];
+    indexes(): TreeNode[];
+    byDisplayName(name: string): TreeNode[];
+  },
+  owners: OwnersRules,
+  roles?: RoleView | null,
+): HomeTree {
+  const nodes = new Map<string, TreeNode | null>();
+  const kids = new Map<string, TreeNode[]>();
+  let all: TreeNode[] | null = null;
+  let roster: TreeNode | null | undefined;
+  const node = (id: string): TreeNode | null => {
+    if (!nodes.has(id)) nodes.set(id, src.node(id));
+    return nodes.get(id)!;
+  };
+  return {
+    owners,
+    kinds: owners.types.find((t) => t.kinds)?.kinds ?? {},
+    roles: roles ?? null,
+    node,
+    children(id) {
+      if (!kids.has(id)) kids.set(id, src.children(id));
+      return kids.get(id)!;
+    },
+    indexes() {
+      all ??= src.indexes();
+      return all;
+    },
+    racesRoot() {
+      if (roster !== undefined) return roster;
+      const byId = node(owners.races.root.id);
+      if (byId) return (roster = byId);
+      const hits = src.byDisplayName(owners.races.root.name).filter((n) => n.kind === 'bsrc');
+      return (roster = hits.length === 1 ? hits[0]! : null);
+    },
+  };
+}
+
+export function homeTree(ctx: RepoCtx, owners: OwnersRules, roles?: RoleView | null): HomeTree {
   const nodes = new Map<string, TreeNode | null>();
   const kids = new Map<string, TreeNode[]>();
   let all: TreeNode[] | null = null;
@@ -43,6 +115,7 @@ export function homeTree(ctx: RepoCtx, owners: OwnersRules): HomeTree {
   return {
     owners,
     kinds,
+    roles: roles ?? null,
     node,
     children(id) {
       if (!kids.has(id)) kids.set(id, ctx.tree.children(ctx.projectId, id).data);
@@ -70,18 +143,144 @@ const k = (s: string) => nameKey(cleanPrefixes(s).name.replace(/\s+/g, ' ').trim
 /** The suffix of a name pattern after `{Name}` (`{Name} - Core Information` → ` - Core Information`). */
 const suffixOf = (pattern: string) => pattern.replace(/^\{Name\}/, '');
 
-/** Whether an index is a `<Continent> Polities` index (the category that holds nations). */
+/**
+ * Whether an index is a `<Continent> Polities` index (the category that holds nations). v3 F6c: once the Territory type
+ * is seeded, the node bound as a territory's Polities role.
+ */
 export function isPolities(t: HomeTree, n: TreeNode | null): boolean {
   if (!n || n.kind !== 'index') return false;
+  if (t.roles?.territorySeeded) {
+    const b = t.roles.bound.get(n.id);
+    return b?.kind === 'territory' && k(b.role) === k(t.owners.nations);
+  }
   const want = ` ${k(t.owners.nations)}`;
   const name = k(n.displayName);
   return name.endsWith(want) && name.length > want.length;
 }
 
-/** Whether an index is a nation's own index: directly in a Polities index. */
+/**
+ * Whether an index is a nation's own index: directly in a Polities index. v3 F6c: once the Nation type is seeded, a
+ * Nation entry's index.
+ */
 export function isNation(t: HomeTree, n: TreeNode | null): boolean {
-  if (!n || n.kind !== 'index' || !n.parentId) return false;
+  if (!n || n.kind !== 'index') return false;
+  if (t.roles?.nationSeeded) return t.roles.nations.has(n.id);
+  if (!n.parentId) return false;
   return isPolities(t, t.node(n.parentId));
+}
+
+/** v3 F6c (ADR 0080, T4): which level of placement a home was found at, and why. */
+export type HomeLevel = 'role' | 'nation' | 'territory' | 'name';
+export interface HomeMatch {
+  readonly rule: HomeRule;
+  readonly level: HomeLevel;
+  readonly why: string;
+}
+
+/**
+ * Whether a node is a home the rule allows, and at which level (v3 F6c, C5):
+ *
+ * - `<Continent> <Category>` once the Territory type is seeded: a territory's bound role of that category;
+ * - `<Nation> <Category>` once the Nation type is seeded, T4's three governed levels: the nation's bound role (`role`);
+ *   else the nation index itself, when the nation has no index bound for that role (`nation`); else the territory's bound
+ *   category of the same name (`territory`);
+ * - `nation` once the Nation type is seeded: a Nation entry's index;
+ * - everything else, and every rule while its type is not seeded: the name rules (`name`).
+ */
+export function homeMatch(t: HomeTree, n: TreeNode, rule: HomeRule): HomeMatch | null {
+  const r = t.roles;
+  if (rule.kind === 'category' && rule.level === 'continent' && r?.territorySeeded) {
+    const b = r.bound.get(n.id);
+    if (b?.kind === 'territory' && k(b.role) === k(rule.category))
+      return {
+        rule,
+        level: 'role',
+        why: `bound as ${t.node(b.owner)?.displayName ?? b.owner}’s ${b.role} (the registry’s Territory roles)`,
+      };
+    return null;
+  }
+  if (rule.kind === 'category' && rule.level === 'nation' && r?.nationSeeded) {
+    const role = r.roleForCategory(rule.category);
+    const b = r.bound.get(n.id);
+    if (role && b?.kind === 'nation' && k(b.role) === k(role))
+      return {
+        rule,
+        level: 'role',
+        why: `bound as ${t.node(b.owner)?.displayName ?? b.owner}’s ${b.role} (the nation’s bound role)`,
+      };
+    const nat = r.nations.get(n.id);
+    if (nat && (!role || !r.bindings.get(n.id)?.has(role)))
+      return {
+        rule,
+        level: 'nation',
+        why: role
+          ? `${nat.name} has no ${role} subindex bound, so the nation index itself is the home (T4’s second level)`
+          : `“${rule.category}” is not one of a nation’s roles, so the nation index itself is the home (T4’s second level)`,
+      };
+    if (b?.kind === 'territory' && k(b.role) === k(rule.category))
+      return {
+        rule,
+        level: 'territory',
+        why: `bound as ${t.node(b.owner)?.displayName ?? b.owner}’s ${b.role} (T4’s third level: the territory’s bound category)`,
+      };
+    return null;
+  }
+  if (rule.kind === 'nation' && r?.nationSeeded)
+    return isNation(t, n) ? { rule, level: 'role', why: 'a Nation entry’s index (the registry)' } : null;
+  return matchesHomeByName(t, n, rule)
+    ? { rule, level: 'name', why: 'recognised by its name and place (the registry’s type is not seeded)' }
+    : null;
+}
+
+/** The first rule of `rules` a node fits, with its level, or null. */
+export function homeMatchAmong(t: HomeTree, n: TreeNode, rules: readonly HomeRule[]): HomeMatch | null {
+  for (const rule of rules) {
+    const m = homeMatch(t, n, rule);
+    if (m) return m;
+  }
+  return null;
+}
+
+/**
+ * v3 F6c (T4): where a nation-level category of ONE nation goes: the nation's bound role; else the nation index; else
+ * (a nation with no index, only its Reference in its territory's Polities) the territory's bound category. Null when
+ * the Nation type is not seeded, or nothing fits.
+ */
+export function nationCategoryHome(
+  t: HomeTree,
+  nation: TreeNode,
+  category: string,
+): { readonly node: TreeNode; readonly level: HomeLevel; readonly why: string } | null {
+  const r = t.roles;
+  if (!r?.nationSeeded) return null;
+  const role = r.roleForCategory(category);
+  const nat = r.nations.get(nation.id);
+  if (nat) {
+    const bound = role ? r.bindings.get(nation.id)?.get(role) : undefined;
+    const node = bound ? t.node(bound) : null;
+    if (node) return { node, level: 'role', why: `${nat.name}’s bound ${role} subindex` };
+    return {
+      node: nation,
+      level: 'nation',
+      why: role ? `${nat.name} has no ${role} subindex bound` : `“${category}” is not a nation role`,
+    };
+  }
+  // A compact polity (its Reference in a Polities index): the territory's bound category.
+  const polities = nation.parentId ? t.node(nation.parentId) : null;
+  const terr = polities ? r.bound.get(polities.id) : undefined;
+  if (terr?.kind !== 'territory') return null;
+  const cat = r.bindings.get(terr.owner);
+  for (const [c, id] of cat ?? [])
+    if (k(c) === k(category)) {
+      const node = t.node(id);
+      if (node)
+        return {
+          node,
+          level: 'territory',
+          why: `${nation.displayName} has no index of its own: its territory’s bound ${c}`,
+        };
+    }
+  return null;
 }
 
 /** `<Prefix> <category>` read from an index's name, or null when the name does not end with the category. */
@@ -117,8 +316,13 @@ export function categoryLevel(
   return { level: isNation(t, a) ? 'nation' : 'continent', owner: a.displayName };
 }
 
-/** Whether a node of the tree is a home this rule allows. */
+/** Whether a node of the tree is a home this rule allows (v3 F6c: by role once the type is seeded; `homeMatch`). */
 export function matchesHome(t: HomeTree, n: TreeNode, rule: HomeRule): boolean {
+  return homeMatch(t, n, rule) !== null;
+}
+
+/** The name rules (F3b), as they were before F6c: in force while the registry's type is not seeded. */
+function matchesHomeByName(t: HomeTree, n: TreeNode, rule: HomeRule): boolean {
   switch (rule.kind) {
     case 'category': {
       const c = categoryLevel(t, n, rule.category);
@@ -253,7 +457,14 @@ export type NationLookup =
  */
 export function findNation(t: HomeTree, name: string): NationLookup {
   const want = k(name);
-  const indexes = t.indexes().filter((n) => k(n.displayName) === want && isNation(t, n));
+  // v3 F6c: once the Nation type is seeded, a Nation entry by its index's name or its short name.
+  const short = t.roles?.nationSeeded
+    ? [...t.roles.nations.entries()].filter(([, e]) => e.shortName !== null && k(e.shortName) === want)
+    : [];
+  const indexes = [
+    ...t.indexes().filter((n) => k(n.displayName) === want && isNation(t, n)),
+    ...short.map(([id]) => t.node(id)).filter((n): n is TreeNode => n !== null),
+  ].filter((n, i, all) => all.findIndex((x) => x.id === n.id) === i);
   if (indexes.length === 1) return { kind: 'index', node: indexes[0]! };
   if (indexes.length > 1) return { kind: 'ambiguous', nodes: indexes };
   const refs: { node: TreeNode; polities: TreeNode }[] = [];

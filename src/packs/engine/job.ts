@@ -806,16 +806,20 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
             resourceId: t.resourceId,
             plural: t.plural,
             parentNodeId: t.parentNodeId,
+            ...(t.kind === 'nation' ? { taxonomyKind: 'nation' } : {}),
           },
         },
       },
     });
-    labels.push(`add ${t.plural} to the Character taxonomy`);
+    labels.push(`add ${t.plural} to the ${t.kind === 'nation' ? 'Nation type' : 'Character taxonomy'}`);
     operations.push({
       tool,
       pack: pack.id,
       kind: 'taxonomy_entry',
-      summaryLabel: `${t.plural}: added to the Character taxonomy (Repository Mappings), so characters of it can be placed`,
+      summaryLabel:
+        t.kind === 'nation'
+          ? `${t.plural}: added to the Nation type (Repository Mappings), so placement finds it by its entry`
+          : `${t.plural}: added to the Character taxonomy (Repository Mappings), so characters of it can be placed`,
     });
   }
 

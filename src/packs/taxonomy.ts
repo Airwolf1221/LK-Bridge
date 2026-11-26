@@ -8,22 +8,35 @@
  */
 import { singularFor } from '../registry/names.js';
 import type { RegistryStore } from '../registry/store.js';
+import type { TaxonomyKind } from '../registry/types.js';
 
 export interface TaxonomyRecord {
-  /** The new navigation index. */
+  /** The new index (a race's or racial group's navigation; v3 F6c: a nation's index). */
   readonly resourceId: string;
-  /** Its name (the race or racial group, as the index is named). */
+  /** Its name (the race or racial group, as the index is named; the nation). */
   readonly plural: string;
-  /** The index it was made in (the racial group's navigation, or Characters). */
+  /** The index it was made in (the racial group's navigation, or Characters; a territory's Polities). */
   readonly parentNodeId: string;
+  /**
+   * v3 F6c (ADR 0080): the structural type the entry belongs to (`nation`: a promoted nation's index). Absent: the
+   * Character taxonomy (a race or racial group), as before.
+   */
+  readonly kind?: TaxonomyKind;
 }
 
+/**
+ * Records ONE taxonomy entry for an index an approved package made, exactly as "Add missing" would: a race's or racial
+ * group's navigation in the Character taxonomy (v3 F3b), or (v3 F6c, generalised rather than copied) a nation's new
+ * index in the Nation type, its parent the Territory entry whose Polities holds it. A type not seeded yet, or an index
+ * that already has an entry, is left alone, and the result says why.
+ */
 export function addPackTaxonomyEntry(
   store: RegistryStore,
   r: TaxonomyRecord,
   audit: (actor: string, action: string, target: string | null, before?: unknown, after?: unknown) => void,
   actor: string,
 ): Record<string, unknown> {
+  if (r.kind) return addStructuralEntry(store, r, r.kind, audit, actor);
   const types = store.listTypes().filter((t) => t.placementKind === 'character');
   const type = types.find((t) => t.rootIndexId !== null) ?? types[0];
   if (!type) return { recorded: null, why: 'no character type in the registry' };
@@ -66,6 +79,55 @@ export function addPackTaxonomyEntry(
     by: 'pack navigation',
   });
   return { recorded: 'taxonomy_entry', entryId: entry.id, plural: entry.plural, singular: entry.singular };
+}
+
+/** v3 F6c: the structural case of `addPackTaxonomyEntry` (a nation's index → its Nation entry). */
+function addStructuralEntry(
+  store: RegistryStore,
+  r: TaxonomyRecord,
+  kind: TaxonomyKind,
+  audit: (actor: string, action: string, target: string | null, before?: unknown, after?: unknown) => void,
+  actor: string,
+): Record<string, unknown> {
+  const type = store.typeByKind(kind);
+  if (!type) return { recorded: null, why: `no ${kind.replace('_', ' ')} type in the registry` };
+  if (type.taxonomySeededAt === null)
+    return { recorded: null, why: `the ${type.singular} type is not seeded yet (Repository Mappings)` };
+  const had = store.entryBySource(r.resourceId);
+  if (had) return { recorded: null, why: 'the index already has a taxonomy entry', entryId: had.id };
+  // A nation's parent: the Territory entry whose bound Polities holds it (else the entry of the index it is in).
+  const terr =
+    store.bindingByNode(r.parentNodeId)?.entryId ?? store.entryBySource(r.parentNodeId)?.id ?? null;
+  const parent = terr ? store.entry(terr) : undefined;
+  const parentOk = parent !== undefined && store.type(parent.typeId)?.taxonomyKind === 'territory';
+  const entry = store.insertEntry({
+    typeId: type.id,
+    plural: r.plural,
+    singular: r.plural,
+    singularSource: 'list',
+    parentId: parentOk ? parent.id : null,
+    aliases: [],
+    sourceNodeId: r.resourceId,
+    sourceParentNodeId: r.parentNodeId,
+    assetFolder: r.plural,
+    status: parentOk ? 'ok' : 'needs_review',
+    review: parentOk
+      ? []
+      : [
+          {
+            code: 'no_territory',
+            message: `No Territory entry holds ${r.plural}’s Polities; set the parent.`,
+          },
+        ],
+    origin: 'add_missing',
+  });
+  audit(actor, 'registry.taxonomy_add_entry', type.id, undefined, {
+    entryId: entry.id,
+    plural: entry.plural,
+    sourceNodeId: r.resourceId,
+    by: 'pack nation index',
+  });
+  return { recorded: 'taxonomy_entry', entryId: entry.id, plural: entry.plural, kind };
 }
 
 /**

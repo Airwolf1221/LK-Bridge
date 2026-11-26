@@ -82,7 +82,7 @@ describe('the pack while the tag section is unpublished', () => {
     expect(g.indexTags?.state).toBe('draft');
     expect(rt().packs.approvedRules('arkona')!.indexTaxonomy).toMatchObject({ status: 'draft' });
     expect(svc().auditInput(PROJECT)).toMatchObject({ navOrdering: true, tagsInForce: false });
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-25-f6b');
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-27-f6c'); // v3 F6c (ADR 0080)
   });
 });
 

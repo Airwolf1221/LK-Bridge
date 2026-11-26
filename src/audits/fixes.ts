@@ -94,7 +94,33 @@ export interface FixDeps {
     projectId: string,
     id: string,
   ) => { readonly action: string; readonly target: string | null; readonly conflict: string | null } | null;
+  /** v3 F6c (ADR 0080): the owner's Nation Subindexes decision on a page as it stands now (null: undone). */
+  readonly nationSubindexDecision?: (
+    projectId: string,
+    pageId: string,
+  ) => { readonly id: string; readonly action: string; readonly role: string | null } | null;
+  /** v3 F6c: the `territory_category` fix's creator (create_index's role form). */
+  readonly territoryCategory?: TerritoryCategoryCreator;
 }
+
+/**
+ * v3 F6c (ADR 0080): what plans and submits a `territory_category` fix: create_index's role form (`{ territory,
+ * category }`), from the tool layer, as ONE forced proposal (or, with the automation's Apply, a job every guard judges).
+ */
+export type TerritoryCategoryCreator = (
+  projectId: string,
+  c: {
+    readonly territoryId: string;
+    readonly category: string;
+    readonly parentId: string;
+    readonly name: string;
+  },
+  o: {
+    readonly origin: JobOrigin;
+    readonly engine: FixDeps['engine'];
+    readonly direct?: boolean;
+  },
+) => Promise<FixResult>;
 
 /** v3 F7.1 (ADR 0072): what plans and submits a `core_upgrade` fix. */
 export type CoreUpgrader = (
@@ -817,7 +843,222 @@ export async function proposeFix(
       return fixIndexPrefix(d, projectId, f);
     case 'index_tags':
       return fixIndexTags(d, projectId, f, c.propertiesName);
+    case 'nation_subindex_name':
+      return fixNationSubindexName(d, projectId, f);
+    case 'territory_category': {
+      if (!d.territoryCategory)
+        throw new AuditError(
+          'FIX_UNAVAILABLE',
+          'create_index is not available here, so the category index cannot be planned now. Nothing was proposed.',
+        );
+      const a = f.fix.args as Obj;
+      return d.territoryCategory(
+        projectId,
+        {
+          territoryId: String(a.territoryId),
+          category: String(a.category),
+          parentId: String(a.parentId),
+          name: String(a.name),
+        },
+        { origin: d.origin ?? ORIGIN, engine: d.engine, ...(d.direct === true ? { direct: true } : {}) },
+      );
+    }
+    case 'category_home':
+      return fixCategoryHome(d, projectId, f);
   }
+}
+
+// ============================================================================================ v3 F6c: nations
+
+/**
+ * v3 F6c (ADR 0080): the `nation_subindex_name` fix. The owner's decision must still be the one the finding saw (its id
+ * and role), and the page must still carry the name the finding saw (else FIX_STALE, nothing proposed). ONE
+ * `updateResource` of the name: the display name becomes `<Nation> <Role>`, the prefix ([NAV]) kept; the id, the parent,
+ * the tags and every link stay. Checked inside the lock, read back; its journal entry carries the decision's id (so the
+ * decision can no longer be undone once applied).
+ */
+async function fixNationSubindexName(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const pageId = String(a.pageId);
+  const seen = String(a.name);
+  const to = String(a.to);
+  const decisionId = String(a.decisionId);
+  const c = classifyName(seen);
+  const t = classifyName(to);
+  if (c.kind !== 'index' || t.kind !== 'index' || roleOfClassified(c) !== roleOfClassified(t))
+    throw new AuditError(
+      'FIX_NOT_APPLICABLE',
+      'Only an index’s display name is renamed here; nothing was proposed.',
+    );
+  const now = d.nationSubindexDecision?.(projectId, pageId) ?? null;
+  if (!now || now.id !== decisionId || now.role !== a.role)
+    throw stale(
+      now
+        ? `The decision on this page changed since the finding (it is now ${now.action}${now.role ? ` → ${now.role}` : ''}).`
+        : 'The decision on this page was undone since the finding.',
+    );
+  const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+  if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+  const name = String(res.name);
+  if (name === to) return { status: 'nothing_to_do', message: `The page is already “${to}”.` };
+  if (name !== seen) throw stale(`The page is now “${name}”, not “${seen}”.`, { name });
+  const parentId = typeof res.parentId === 'string' ? res.parentId : null;
+  const change = textChange({ page: name, pageId, what: 'name', before: name, after: to });
+  const title = `Rename ${name} → ${to} (its ${String(a.role)} role)`;
+  const item: PlanItem = {
+    id: `subindex:${pageId}`,
+    kind: 'nation_subindex_name',
+    group: 'Nation subindex names',
+    label: `${name} → ${to}`,
+    page: { id: pageId, name },
+    diff: { before: name, after: to, ...(change ? { changes: [textChangeEntry(change)] } : {}) },
+    dependsOn: [],
+    selected: true,
+  };
+  const steps: StepSpec[] = [
+    {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [
+            { label: 'page', kind: 'resource', resourceId: pageId, name, parentId, tags: tagList(res.tags) },
+          ],
+        },
+      },
+      items: [item.id],
+    },
+    {
+      op: 'updateResource',
+      params: { path: { resourceId: pageId }, body: { name: to } },
+      items: [item.id],
+      journalOperation: {
+        tool: 'audits.nation_subindex_name',
+        page: { id: pageId, name },
+        from: 'audits.propose_fix',
+        write: 'display name',
+        nationSubindexDecision: decisionId,
+      },
+    },
+    {
+      op: VERIFY_STEP,
+      params: {
+        body: {
+          targets: [
+            {
+              kind: 'resource',
+              label: to,
+              resourceId: pageId,
+              fields: { name: to, ...(parentId !== null ? { parentId } : {}), tags: tagList(res.tags) },
+            } satisfies VerifyTarget,
+          ],
+        },
+      },
+      items: [item.id],
+    },
+  ];
+  return submitIndexFix(d, projectId, {
+    steps,
+    title,
+    pageId,
+    name,
+    operation: {
+      tool: 'audits.nation_subindex_name',
+      fromAudit: f.code,
+      nationSubindexDecision: decisionId,
+      changes: { name: { before: name, after: to } },
+      ...(change ? { textChanges: [change] } : {}),
+    },
+    pageParts: [change ? `name: ${textChangeWords({ ...change, page: '' })}` : `name → ${to}`],
+    item,
+    fix: 'nation_subindex_name',
+  });
+}
+
+/**
+ * v3 F6c (ADR 0080): the `category_home` fix. The page is read LIVE: it must still be under the parent, and carry the
+ * tags, the finding saw (else FIX_STALE); the home it goes to must still be there. ONE `moveResource` into that home,
+ * in its place among the home's children (T11's order where in force), the children compared again inside the lock,
+ * read back. Always ONE proposal for the owner (never the automation's: it is a judgement); the canon guard judges a move
+ * of an Authoritative page as it judges any.
+ */
+async function fixCategoryHome(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
+  const a = f.fix!.args as Obj;
+  const pageId = String(a.pageId);
+  const from = String(a.parentId);
+  const to = String(a.to);
+  const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+  if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+  if (res.parentId === to) return { status: 'nothing_to_do', message: 'The page is in that home already.' };
+  if (res.parentId !== from)
+    throw stale(`The page is no longer under the home the audit saw (it is under ${String(res.parentId)}).`, {
+      parentId: res.parentId,
+    });
+  const live = tagList(res.tags);
+  if (live.join('\u0000') !== tagList(a.tags).join('\u0000'))
+    throw stale(`The page's tags are now ${live.join(', ') || '(none)'}.`, { tags: live });
+  const target = (await read(d, projectId, 'getResource', { path: { resourceId: to } })) as Obj | undefined;
+  if (!isObj(target)) throw stale(`The home ${to} is gone.`);
+  const name = String(res.name);
+  const { kind, displayName } = classifyName(name);
+  const kids = await listChildren(d, projectId, to);
+  const others = kids.map((k) => ({ id: k.id, ...classifyName(k.name) }));
+  const slot = slotAmong(
+    others.map((o) => ({
+      id: o.id,
+      displayName: o.displayName,
+      kind: o.kind,
+      indexRole: roleOfClassified(o),
+    })),
+    displayName,
+    kind,
+    d.navOrder === true ? compareSiblingsNav : undefined,
+    roleOfClassified(classifyName(name)),
+  );
+  const then = neighboursAfterInsert([...kids, { id: pageId }], pageId, slot);
+  const title = `Move ${name} to ${String(target.name)} (${typeof a.fits === 'string' ? a.fits : 'an allowed home'})`;
+  const steps: StepSpec[] = [
+    {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [
+            { label: 'home', kind: 'children', resourceId: to, ids: kids.map((k) => k.id) },
+            { label: 'page', kind: 'resource', resourceId: pageId, name, parentId: from, tags: live },
+          ],
+        },
+      },
+    },
+    {
+      op: 'moveResource',
+      params: { path: { resourceId: pageId }, body: { parentId: to, ...slot } },
+      journalOperation: { tool: 'move_resource', page: { id: pageId, name }, from: 'audits.category_home' },
+    },
+    {
+      op: VERIFY_STEP,
+      params: {
+        body: {
+          targets: [
+            {
+              kind: 'resource',
+              label: name,
+              resourceId: pageId,
+              fields: { parentId: to },
+              placement: { parentId: to, after: then.after, before: then.before },
+            } satisfies VerifyTarget,
+          ],
+        },
+      },
+    },
+  ];
+  return propose(d, projectId, {
+    steps,
+    title,
+    holdLock: { resourceId: pageId },
+    operation: { tool: 'move_resource', fromAudit: f.code, from, to, place: then },
+    page: { id: pageId, name },
+    pageParts: [`moved to ${String(target.name)}`],
+    fix: 'category_home',
+  });
 }
 
 // ============================================================================================ v3 F7d: identity copies

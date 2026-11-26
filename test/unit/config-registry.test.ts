@@ -202,6 +202,7 @@ describe('the registry agrees with the schemas', () => {
       REFTYPE_BULK_MAX: [500, 1, 5000],
       // v3 F6b (ADR 0079).
       INDEX_CLASSIFY_BULK_MAX: [500, 1, 5000],
+      NATION_SUBINDEX_BULK_MAX: [500, 1, 5000],
       // v3 F10 (ADR 0078): the chronology check after an edit (10 minutes).
       CHRONOLOGY_CHECK_DELAY_MS: [600000, 1000, 86400000],
       SLOW_REQUEST_WARN_MS: [30000, 1000, 3600000],

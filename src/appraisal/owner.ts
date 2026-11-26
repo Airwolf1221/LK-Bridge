@@ -766,7 +766,14 @@ const NOT_PAGE_CATEGORIES = new Set(['rules', 'audit']);
  * Audit notices about what the bridge's own tools can write back (a collection or an unsupported block is a keep region,
  * an inline icon cannot be written whole): about the tooling, not the page's quality, so not gathered.
  */
-const NOT_PAGE_CODES = new Set(['collection_blocks', 'unsupported_blocks', 'inline_icon_page']);
+// v3 F6c (ADR 0080): `category_home_mismatch` is a placement judgement about where a page sits, not a defect of the
+// page's own content: it stays on the Audits page (with its move proposal and "Keep it here"), not in the appraisal.
+const NOT_PAGE_CODES = new Set([
+  'collection_blocks',
+  'unsupported_blocks',
+  'inline_icon_page',
+  'category_home_mismatch',
+]);
 
 // ============================================================================================ one page
 

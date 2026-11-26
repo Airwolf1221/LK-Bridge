@@ -624,6 +624,8 @@ describe('the lifecycle and the AU rule (design 1.4, 1.5)', () => {
       expect.objectContaining({ key: 'au-status-tag', date: '2026-11-16', by: 'owner' }),
       // v3 F6b (ADR 0079): T11, navigation and subject indexes.
       expect.objectContaining({ key: 'nav-and-subject-indexes', date: '2026-11-25', by: 'owner' }),
+      // v3 F6c (ADR 0080): the nation subindex roles and the unified name.
+      expect.objectContaining({ key: 'nation-subindex-roles', date: '2026-11-26', by: 'owner' }),
     ]);
   });
 });

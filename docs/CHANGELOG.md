@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased: v3 F6c, territories, nations and their subindexes
+
+[ADR 0080](adr/0080-v3-f6c-territories-nations-and-subindexes.md). Migrations `4800`, `4810` and `4820`. Pack seed
+`arkona-2026-11-27-f6c`. New settings: `NATION_SUBINDEX_BULK_MAX` (500) and three per-project switches
+(`checkNationSubindexNames`, `checkTerritoryCategories`, `checkCategoryHomes`, default on). Built and tested against the
+mock; nothing live was touched.
+
+- **Five structural registry types** (Territory, Nation, Divine Realm, Culture family, Religion family), seeded on the
+  owner's request from the APPROVED Index Classification rows only ("classify first" for the rest), Territory first,
+  then Nation; "Add missing" for each. **Roles**: a Territory binds the pack's categories by exact name (`<Territory>
+<Category>`, Conflicts inside Historical Events); a Nation binds the ten nation roles. Unsure: `needs_review`, never
+  guessed. A Nation's **short name**, on Repository Mappings' new "Territories and nations" card.
+- **The ten nation roles** and their approved variants as pack data; the unified name `<Nation> <Role>` (the short name
+  first); matching in the three live forms, case and accents aside; unmatched names go to the owner. F6b's stopgap
+  nation subindex list is replaced by a derived one, and F6b's rule reads the owner's mappings, so the two reports agree.
+- **The Nation Subindexes page** (Setup): every nation's direct child index, its matched role and how, the proposed name,
+  collisions ("two subindexes for one role: merge or re-map first") and content spanning two roles; accept, map (also
+  for every page of the name, one bounded transaction), keep as a specialist subindex, not a subindex, undo until
+  applied. Cached and paged; free.
+- **Three checks** (taxonomy, each switchable per project): `nation_subindex_nonstandard` (the display name renamed to
+  `<Nation> <Role>`, the prefix kept; stale on a changed decision or name), `territory_category_missing` (the empty
+  `[NAV] <Territory> <Category>` made through create_index's role form, the role bound once the job succeeds) — both
+  automation codes, default Off, Apply allowed — and `category_home_mismatch` (a judgement: a move proposal to the
+  nearest allowed home, or "Keep it here" until the page's tags or parent change).
+- **Placement by role** once the types are seeded (T4's three levels: the nation's bound role, else the nation index,
+  else the territory's category; the answer says which and why); the name rules unchanged before. `create_index` gains
+  `roleFor` { nation, role } or { territory, category }; a promoted nation records its Nation entry
+  (`addPackTaxonomyEntry`, generalised).
+- **Governance**: the ruling `nation-subindex-roles` (26 November 2026); no new parsed section (Source Formatting's
+  "Nation-Centred Territorial Navigation" is pinned already; the reviewer's paragraph is in the ADR). The guide gains
+  "Territories, nations and their subindexes"; "How to decide" is unchanged.
+- Sandbox check `f6c-territory` (opt-in), and its mock run in the ordinary suite.
+- **Before deploy (amendment 1)**: `territory_category_missing` reads only the governance's required categories (new pack
+  data `requiredTerritoryCategories`: the seven and Conflicts; Religions is recognised and bound where it exists, never
+  required), so it no longer proposes 17 empty Religions indexes. Nation Subindexes gains **Accept all matched**:
+  undecided rows matched by a role name or an approved variant, with no collision and an approved classification; the
+  count shown before confirming; one request, batched with yields, one rebuild at the end, bounded, undo per row.
+
 ## Unreleased: v3 F9 amendment 1, the daily tier's own floors
 
 [ADR 0074 amendment 1](adr/0074-v3-f9-the-bulk-class-p4.md#amendment-1-25-november-2026-the-daily-tier-has-floors-of-its-own).

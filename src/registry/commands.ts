@@ -85,6 +85,7 @@ const entryBrief = (e: TaxonomyEntry) => ({
   assetFolder: e.assetFolder,
   status: e.status,
   notes: e.notes,
+  ...(e.shortName ? { shortName: e.shortName } : {}),
 });
 
 export function createRegistryCommands(d: RegistryCommandsDeps) {
@@ -357,6 +358,8 @@ export function createRegistryCommands(d: RegistryCommandsDeps) {
         notes: i.notes ?? before.notes,
         status: review.length > 0 ? 'needs_review' : 'ok',
         review,
+        // v3 F6c (ADR 0080): a Nation entry's short name; blank clears it.
+        ...(i.shortName !== undefined ? { shortName: i.shortName?.trim() || null } : {}),
       });
       audit('registry.entry_update', id, entryBrief(before), entryBrief(after));
       return entryView(after);

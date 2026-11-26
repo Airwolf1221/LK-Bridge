@@ -3,6 +3,7 @@
  * lifecycle records and the chronology check's last run. Built once per run by the audit service; checks are pure
  * functions of it, so each is tested with a hand-made context.
  */
+import type { NationAuditInput } from '../packs/nations/service.js';
 import type { IndexTaxonomyAuditInput } from '../packs/indextax/service.js';
 import type { OutfitRecord } from '../art/store.js';
 import type { ArtPageText } from './checks/art-layout.js';
@@ -125,6 +126,11 @@ export interface AuditContext {
    * carries it, so `index_prefix` and `index_tags` report nothing and the ordering is the old rule).
    */
   readonly indexTaxonomy?: IndexTaxonomyAuditInput | null;
+  /**
+   * v3 F6c (ADR 0080): territories, nations and their subindexes: the accepted subindex rows, the Territory entries and
+   * their bindings, the role view and the owner's rulings (null: the approved pack carries no nation roles).
+   */
+  readonly nationTaxonomy?: NationAuditInput | null;
   /** v3 F4c: every page under Narratives (narrative pages: E2's exemptions), worked out by `makeContext`. */
   readonly narrativeIds?: ReadonlySet<string>;
 }

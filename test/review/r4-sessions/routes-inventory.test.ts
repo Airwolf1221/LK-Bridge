@@ -298,6 +298,21 @@ const ROUTES: Record<string, Route> = {
   },
   'POST /api/admin/index-classification/bulk-approve': { kind: 'asks', body: { confirm: true } },
   'PUT /api/admin/index-classification/structural': { kind: 'asks', body: { confirm: true } },
+  // v3 F6c (ADR 0080): every Nation Subindexes decision, the mapping for every page of a name, an undo, the seed of a
+  // structural type and "Keep it here" ask.
+  'POST /api/admin/nation-subindexes/decide': {
+    kind: 'asks',
+    body: { pageId: 'idx00001', action: 'accept', confirm: true },
+  },
+  'POST /api/admin/nation-subindexes/map-all': {
+    kind: 'asks',
+    body: { pageId: 'idx00001', role: 'Institutions', confirm: true },
+  },
+  'POST /api/admin/nation-subindexes/undo': { kind: 'asks', body: { pageId: 'idx00001', confirm: true } },
+  'POST /api/admin/nation-subindexes/accept-all': { kind: 'asks', body: { confirm: true } },
+  'POST /api/admin/registry/structural/:kind/seed': { kind: 'asks', body: { confirm: true } },
+  'POST /api/admin/registry/structural/:kind/add-missing': { kind: 'asks', body: { confirm: true } },
+  'POST /api/admin/audits/findings/:id/keep-home': { kind: 'asks', body: { reason: 'here', confirm: true } },
   // ---- review
   'POST /api/admin/review/mark': { kind: 'outside' },
   'POST /api/admin/review/mark-all': { kind: 'outside' },

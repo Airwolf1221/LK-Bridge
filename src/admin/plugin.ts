@@ -32,6 +32,7 @@ import { registerConsistency } from './routes/consistency.js';
 import { registerTagging } from './routes/tagging.js';
 import { registerReferenceTypes } from './routes/reference-types.js';
 import { registerIndexClassification } from './routes/index-classification.js';
+import { registerNationSubindexes } from './routes/nation-subindexes.js';
 import { registerArt } from './routes/art.js';
 import { registerAutomation } from './routes/automation.js';
 import { registerWorkstreams } from './routes/workstreams.js';
@@ -132,6 +133,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerTagging(api, ctx); // v3 F3f: the retag audit, holds, batches and reconciliations
       registerReferenceTypes(api, ctx); // v3 F6a: the Reference Type report, decisions and publication
       registerIndexClassification(api, ctx); // v3 F6b: the index classification report and decisions
+      registerNationSubindexes(api, ctx); // v3 F6c: territories, nations and their subindexes
       registerArt(api, ctx); // v3 F7: the outfit record (seeding, aliases)
       registerAutomation(api, ctx); // v3 F5b (ADR 0068)
       registerWorkstreams(api, ctx); // v3 F5c (ADR 0069, H8): the workstreams and their reports (read-only)

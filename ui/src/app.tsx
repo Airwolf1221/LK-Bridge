@@ -36,6 +36,7 @@ import { PacksPage } from './pages/packs';
 import { TaggingPage } from './pages/tagging';
 import { ReferenceTypesPage } from './pages/reference-types';
 import { IndexClassificationPage } from './pages/index-classification';
+import { NationSubindexesPage } from './pages/nation-subindexes';
 import { AutomationPage } from './pages/automation';
 import { WorkstreamsPage } from './pages/workstreams';
 import { EvaluationPanel } from './pages/evaluation';
@@ -102,6 +103,8 @@ export const NAV: NavItem[] = [
   // v3 F6a (ADR 0076): the Reference Type vocabulary, next to Repository Mappings.
   { to: '/reference-types', label: 'Reference Types', group: 'Setup' },
   { to: '/index-classification', label: 'Index Classification', group: 'Setup' },
+  // v3 F6c (ADR 0080): a nation's subindexes, beside Reference Types and Index Classification.
+  { to: '/nation-subindexes', label: 'Nation Subindexes', group: 'Setup' },
   { to: '/settings', label: 'Settings', group: 'Setup' },
 ];
 
@@ -117,6 +120,8 @@ export const SUB_PAGES: { module: string; parent: string }[] = [
   // v3 F4b (ADR 0064): "Pick the right value" on a consistency finding of the Audits page.
   { module: 'consistency-pick', parent: '/audits' },
   { module: 'registry', parent: '/mappings' },
+  // v3 F6c (ADR 0080): the Territories and nations card of Repository Mappings.
+  { module: 'territories', parent: '/mappings' },
   // v3 F7 (ADR 0070, G3): the Outfits panel of the Asset Tree page.
   { module: 'outfits', parent: '/assets' },
   // v3 F7c (ADR 0075, Z6): the Image archives card of the Asset Tree page.
@@ -156,6 +161,7 @@ export const ROUTES: { path: string; prefix?: boolean; render: (session: Session
   { path: '/mappings', prefix: true, render: () => <MappingsPage /> },
   { path: '/reference-types', render: () => <ReferenceTypesPage /> },
   { path: '/index-classification', render: () => <IndexClassificationPage /> },
+  { path: '/nation-subindexes', render: () => <NationSubindexesPage /> },
 ];
 
 /** The Evaluation helper on a page of its own (it is also a panel on Tool calls), open from the start. */

@@ -83,6 +83,13 @@ export const projectSettingsSchema = z
     lmrTimelineMap: z.boolean().optional(),
     lmrAuditSplit: z.boolean().optional(),
     lmrHousekeepingKeys: z.string().max(2000).optional(),
+    /**
+     * v3 F6c (ADR 0080, C4): the three taxonomy checks of territories and nations, one switch each (default on):
+     * `nation_subindex_nonstandard`, `territory_category_missing`, `category_home_mismatch`.
+     */
+    checkNationSubindexNames: z.boolean().optional(),
+    checkTerritoryCategories: z.boolean().optional(),
+    checkCategoryHomes: z.boolean().optional(),
   })
   .loose();
 
@@ -297,6 +304,30 @@ export const PROJECT_SETTING_KEYS: readonly {
     default: false,
     editable: true,
     help: 'Timeline events and map features on their own (they are not the page’s text).',
+  },
+  {
+    key: 'checkNationSubindexNames',
+    label: 'Audits: nation subindex names',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'On: nation_subindex_nonstandard reports a nation subindex you accepted or mapped on the Nation Subindexes page whose name is not yet <Nation> <Role>. Off: the check reports nothing for this project.',
+  },
+  {
+    key: 'checkTerritoryCategories',
+    label: 'Audits: missing territory categories',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'On: territory_category_missing reports a Territory entry with one of the pack’s categories unbound and no index of the expected name (Conflicts inside Historical Events). Off: the check reports nothing for this project.',
+  },
+  {
+    key: 'checkCategoryHomes',
+    label: 'Audits: sources outside their category’s homes',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'On: category_home_mismatch reports a source whose primary category tag is not allowed in its current home by the pack’s homes, resolved by role. Off: the check reports nothing for this project.',
   },
   {
     key: 'lmrAuditSplit',

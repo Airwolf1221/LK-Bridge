@@ -78,7 +78,13 @@ export interface PackEngineDeps {
   /** v3 F3b (design 1.1a): records ONE Character taxonomy entry for a navigation index a package made. */
   readonly addTaxonomyEntry?: (
     projectId: string,
-    r: { readonly resourceId: string; readonly plural: string; readonly parentNodeId: string },
+    r: {
+      readonly resourceId: string;
+      readonly plural: string;
+      readonly parentNodeId: string;
+      /** v3 F6c (ADR 0080): `nation` for a promoted nation's index (absent: the Character taxonomy). */
+      readonly kind?: 'nation';
+    },
     actor: string,
   ) => Record<string, unknown>;
   /** v3 F7 (ADR 0070, G3): the outfit record an art job writes after its uploads and moves. */
@@ -122,7 +128,12 @@ export function registerPackEngine(
       ) {
         return d.addTaxonomyEntry(
           job.projectId,
-          { resourceId: r.resourceId, plural: r.plural, parentNodeId: r.parentNodeId },
+          {
+            resourceId: r.resourceId,
+            plural: r.plural,
+            parentNodeId: r.parentNodeId,
+            ...(r.taxonomyKind === 'nation' ? { kind: 'nation' as const } : {}),
+          },
           job.approvedBy ?? job.principalId,
         );
       }

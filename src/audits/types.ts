@@ -56,6 +56,18 @@ export type FixKind =
   | 'index_prefix'
   /** v3 F6b: the index's tags set to the rule's, through the retag engine's own write path (checked, rebased, read back). */
   | 'index_tags'
+  /**
+   * v3 F6c (ADR 0080): a nation subindex's display name set to `<Nation> <Role>` (`updateResource` name; the prefix, id
+   * and links kept); stale when the owner's decision or the page's name changed since the finding.
+   */
+  | 'nation_subindex_name'
+  /**
+   * v3 F6c: the missing `[NAV] <Territory> <Category>` made through create_index's role form (the "[NAV] AI Navigation"
+   * template, T11's order and tags), as a proposal; the role bound once the job succeeds.
+   */
+  | 'territory_category'
+  /** v3 F6c: a source moved to the nearest home its primary category allows (`moveResource`; a proposal, never automatic). */
+  | 'category_home'
   /** `move_resource`: re-places the page under the same parent, alphabetically. */
   | 'move_resource'
   /** `set_facts`: one fact, only when the right value is unambiguous. */
@@ -340,6 +352,25 @@ export const CODES = {
     severity: 'warning',
     title: 'An index’s tags differ from the navigation and subject index rule',
     fix: 'index_tags',
+  },
+  // v3 F6c (ADR 0080; design T3 to T5): territories, nations and their subindexes (each switchable per project).
+  nation_subindex_nonstandard: {
+    category: 'taxonomy',
+    severity: 'warning',
+    title: 'A nation subindex the owner accepted is not yet named <Nation> <Role>',
+    fix: 'nation_subindex_name',
+  },
+  territory_category_missing: {
+    category: 'taxonomy',
+    severity: 'warning',
+    title: 'A territory lacks one of the pack’s category indexes',
+    fix: 'territory_category',
+  },
+  category_home_mismatch: {
+    category: 'taxonomy',
+    severity: 'info',
+    title: 'A source whose primary category does not live in its current home',
+    fix: 'category_home',
   },
   reference_type_category_mismatch: {
     category: 'taxonomy',

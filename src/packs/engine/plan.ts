@@ -583,6 +583,8 @@ export interface PackPlan {
     readonly resourceId: string;
     readonly plural: string;
     readonly parentNodeId: string;
+    /** v3 F6c (ADR 0080): `nation`: a promoted nation's index, recorded in the Nation type (absent: Character). */
+    readonly kind?: 'nation';
   }[];
 }
 

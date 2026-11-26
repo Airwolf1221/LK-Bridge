@@ -589,8 +589,11 @@ export const recordParamsSchema = z
         // C2d: `begin_set` / `complete_set`, a whole set's record and its pages' records together.
         action: z.enum(['begin', 'complete', 'begin_set', 'complete_set']),
         record: z.record(z.string(), z.unknown()),
-        /** v2 D1: which record (`lifecycle`, the default, or `chronology`); v3 F3a: `pack` (a setting pack's). */
-        store: z.enum(['lifecycle', 'chronology', 'pack']).optional(),
+        /**
+         * v2 D1: which record (`lifecycle`, the default, or `chronology`); v3 F3a: `pack` (a setting pack's); v3 F6c
+         * (ADR 0080): `registry_roles` (a role binding, once the job that made its index succeeded).
+         */
+        store: z.enum(['lifecycle', 'chronology', 'pack', 'registry_roles']).optional(),
       })
       .strict(),
   })

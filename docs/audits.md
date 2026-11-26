@@ -377,3 +377,15 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   governs story, continuity and act indexes there, the owner's ruling); the fix goes through the retag engine's write path, and taking CANON off is always a canonical
   proposal. Automation: proposal-first, Apply allowed, default Propose. `out_of_order` applies T11's order ([NAV], then
   [INDEX], then sources) once the approved pack carries it.
+- v3 F6c ([ADR 0080](adr/0080-v3-f6c-territories-nations-and-subindexes.md)), under the approved pack's nation roles,
+  never under Working, Archive, the Legacy Canon Archive, the Design References or Narratives, each switchable per project
+  on the Projects page: `nation_subindex_nonstandard` (warning): a nation subindex you accepted or mapped on the Nation
+  Subindexes page whose name is not `<Nation> <Role>` (never a collision, never into a sibling's name); the fix renames
+  the display name only (stale when the decision or the name changed). `territory_category_missing` (warning): a
+  Territory entry with one of the governance's REQUIRED categories (Cultures; Historical Events with Conflicts inside;
+  Institutions; Polities; Regions; Settlements & Locations; Unique Magic & Technologies: never Religions) unbound and no index of the expected name (Conflicts inside the bound Historical
+  Events); the fix makes the empty `[NAV] <Territory> <Category>` through create_index's role form and binds the role
+  once the job succeeds. Both: automation proposal-first, Apply allowed, default Off. `category_home_mismatch` (info,
+  judgement): a source whose primary category's owner homes, resolved by role, do not include its home; the fix is a
+  move proposal to the nearest allowed home; **Keep it here…** (with a reason, the step-up) silences it until the page's
+  tags or parent change.

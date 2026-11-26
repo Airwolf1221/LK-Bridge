@@ -38,7 +38,14 @@ export type RegistryErrorCode =
   | 'TEMPLATES_UNREADABLE'
   // v2 C2c (ADR 0035): a Working character.
   | 'WORKING_INDEX_MISSING'
-  | 'CHARACTER_INDEX_ELSEWHERE';
+  | 'CHARACTER_INDEX_ELSEWHERE'
+  // v3 F6c (ADR 0080): the structural types and their roles.
+  | 'NO_INDEX_TAXONOMY'
+  | 'SEED_TERRITORY_FIRST'
+  | 'NOT_A_STRUCTURAL_TYPE'
+  | 'ROLE_UNKNOWN'
+  | 'ROLE_BOUND'
+  | 'NODE_BOUND';
 
 /** Every refusal of the registry, resolver and planners: a code, a plain-language message, and details. */
 export class RegistryError extends Error {
@@ -128,6 +135,31 @@ export interface RegistryType {
   readonly review: readonly ReviewReason[];
   readonly notes: string;
   readonly taxonomySeededAt: number | null;
+  /** v3 F6c (ADR 0080): which structural type this is (Territory, Nation…), or null for every other type. */
+  readonly taxonomyKind: TaxonomyKind | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+/** v3 F6c (ADR 0080): the five structural types, seeded from the approved index classification (F6b). */
+export const TAXONOMY_KINDS = [
+  'territory',
+  'nation',
+  'divine_realm',
+  'culture_family',
+  'religion_family',
+] as const;
+export type TaxonomyKind = (typeof TAXONOMY_KINDS)[number];
+
+/** v3 F6c: an entry's role bound to one index (migration 4800). */
+export interface RoleBinding {
+  readonly projectId: string;
+  readonly entryId: string;
+  readonly role: string;
+  readonly nodeId: string;
+  readonly status: ReviewStatus;
+  readonly reason: string;
+  readonly origin: 'seed' | 'add_missing' | 'owner' | 'job';
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -148,6 +180,8 @@ export interface TaxonomyEntry {
   readonly review: readonly ReviewReason[];
   readonly notes: string;
   readonly origin: 'seed' | 'add_missing';
+  /** v3 F6c (ADR 0080): a Nation entry's short name, used only to name its subindexes; null: none. */
+  readonly shortName: string | null;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -279,6 +313,8 @@ export const entryUpdateSchema = z
     assetFolder: text(200).optional(),
     parentId: z.string().trim().min(1).max(64).nullable().optional(),
     notes: z.string().max(4000).optional(),
+    /** v3 F6c (ADR 0080): a Nation entry's short name (empty or null: none, the display name is used). */
+    shortName: z.string().trim().max(100).nullable().optional(),
     reviewed: z.literal(true).optional(),
   })
   .strict();

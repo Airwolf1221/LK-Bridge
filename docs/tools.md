@@ -784,6 +784,13 @@ Without `type`, the type is the one whose root index holds the parent. Refusals:
 `UNKNOWN_CATEGORY` (with `categories`), `CATEGORY_AMBIGUOUS`, `CATEGORY_MISMATCH`, `TYPE_MISMATCH`,
 `TEMPLATE_NOT_CONFIGURED`, `INDEX_EXISTS` (an index of that name under the parent).
 
+v3 F6c ([ADR 0080](adr/0080-v3-f6c-territories-nations-and-subindexes.md)): the role form, `roleFor` `{ nation, role }` or
+`{ territory, category }`, once the owner has seeded the Nation or Territory type: the entry by its index's id, name or a
+nation's short name; the index named `<Nation> <Role>` (the short name first) or `<Territory> <Category>`, placed in the
+nation's or territory's index (Conflicts: in the bound Historical Events), always `[NAV]`; a record step binds the role
+once the job succeeds. Refusals: `NO_NATION_ROLES`, `NOT_SEEDED`, `UNKNOWN_ENTRY`, `ENTRY_AMBIGUOUS`, `ROLE_UNKNOWN`,
+`ROLE_BOUND`, `CATEGORY_PARENT_UNBOUND`, `NAME_NOT_GOVERNED` (a `name` that is not the governed one), `ROLE_FORM_NAV`.
+
 **`create_resource`** `{ name, template, parent, facts?, links?, tags?, aliases?, dryRun?, operation_id?, project }`: a
 `[BSRC]` page from a template (name or id; see `list_templates`) under an index. The name follows the template role's
 pattern (`{name}` by default). `facts` and `links` are as in `set_facts` (a new page has no links to remove), written in

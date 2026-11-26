@@ -813,6 +813,16 @@ const SPECS: readonly Spec[] = [
     applies: 'now',
   },
   {
+    key: 'NATION_SUBINDEX_BULK_MAX',
+    schema: 'tools',
+    group: 'automation',
+    label: 'Nation Subindexes: most rows one “for every page with this name” maps',
+    description:
+      'The Nation Subindexes page’s “Map to a role, for every page with this name” decides at most this many nation children in one request and one transaction; above it nothing is decided and the page says so.',
+    unit: UNITS.count,
+    applies: 'now',
+  },
+  {
     key: 'CHRONOLOGY_CHECK_DELAY_MS',
     schema: 'tools',
     group: 'automation',
