@@ -38,7 +38,7 @@ One versioned JSON document, its **rules** (`src/packs/types.ts` checks its shap
   on the Review page). The Arkona seed: `arkona_create_character`, `arkona_create_owner` and
   `arkona_create_relationship` propose; `arkona_add_character_art` and `arkona_appraisal_fix` follow the scope; the
   read-only tools have no switch ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D). Changing a
-  switch on the Packs page (**Save tool switches**, re-authenticated, audited `pack.set_tool_modes`) makes a new version,
+  switch on the Packs page (**Save tool switches**, audited `pack.set_tool_modes`) makes a new version,
   which waits for the owner's approval like any other.
 - **tags**: the status tags (`CANON` for Authoritative, `Working` for Working, first and with no `CANON`), the AU rule
   (`au`: the Continuity Type that makes a page AU and the tag it carries in place of `CANON`; v3 F3b), the values that are
@@ -110,7 +110,7 @@ headings, in order with their levels. Choosing one and pressing **Re-map** (the 
 A renamed governance heading is therefore an expected drift, not a dead end. If a section was removed rather than
 renamed, the rules derived from it need checking first: re-map only to the section that now says the same thing. A
 later seed that names its own pinned headings replaces a re-mapped one when it is offered (and the owner approves it).
-API: `POST /api/admin/packs/:id/sections` `{ source, from, to, confirm: true }` (re-authenticated). Refusals:
+API: `POST /api/admin/packs/:id/sections` `{ source, from, to, confirm: true }`. Refusals:
 `SECTION_NOT_PINNED` (`from` is not pinned), `HEADING_NOT_FOUND` (`to` is not on the page now, with its outline),
 `SECTION_ALREADY_PINNED`, `SOURCE_NOT_FOUND`, `GOVERNANCE_UNREADABLE`.
 
@@ -142,7 +142,7 @@ packages cannot both create it).
    (`PACK_TEMPLATE_UNSET`) until the owner refreshes the templates and approves again (an approval works the unset ids out
    again).
 3. **Approved** by the owner on the Packs page: the current version, with each governance source's document version read
-   at that moment and (v3 F3b) a digest of each pinned section (`pack.approve`, re-authenticated). An approval is refused
+   at that moment and (v3 F3b) a digest of each pinned section (`pack.approve`). An approval is refused
    when a pinned section cannot be found on its page (`GOVERNANCE_SECTION_MISSING`, listing the page's headings and its
    outline; a heading renumbered, recased or written with "&" for "and" is still found, a shortened one is not); the
    owner re-maps the pin on the Packs page ([above](#re-mapping-a-pinned-heading)). Until a version is approved, the
@@ -176,7 +176,7 @@ derived" and must "compare policy version/digest before writing". So:
 ## Editing a pack
 
 F3a edits only the **token maps**, on the Packs page: a value and its token per row, for Race / Species and Naming
-Culture. A save makes a new version (`pack.set_tokens`, re-authenticated), which waits for approval. A token is never a
+Culture. A save makes a new version (`pack.set_tokens`), which waits for approval. A token is never a
 never-tag, and no value or token has an em or en dash in it. Everything else in the rules is read-only in F3a: the service's `replaceRules` command (the tests use it) makes a new
 version the same way (`pack.replace_rules`), and a seed never overwrites a stored pack.
 
@@ -500,7 +500,7 @@ type, role, primary and specialist), the retag's first evidence after the owner'
 v3 F3f have none; their current tags are their evidence.
 
 **Owner classification.** An "uncertain category" hold is the owner's: on the Tagging page they choose the category (and
-the specialist) from the closed list, with a reason; re-authenticated, audited (`retag.classify`), stored, and used by
+the specialist) from the closed list, with a reason; audited (`retag.classify`), stored, and used by
 every later audit. Agents suggest (`arkona_retag_audit { suggest }`), never classify.
 
 **Apply.** Deterministic corrections of a stored run, at most 25, as ONE proposal (each page an item). The job compares
@@ -529,7 +529,7 @@ newer version waits (the approved version computes nothing until the owner appro
 
 On the Tagging page's Exceptions tab the owner rules on an exception: **Keep this tag here** (one page, while its tags are
 unchanged) or **Allow this tag everywhere** (the bridge edits the section's list as the owner's action, a dry run first,
-the step-up, one revertible job; the pack then offers its new version). Agents suggest either ruling with
+then one revertible job; the pack then offers its new version). Agents suggest either ruling with
 `arkona_retag_audit { suggestRuling }`, never take it.
 
 ## Where `arkona_get_art` reads an image's authority (v3 F7b)

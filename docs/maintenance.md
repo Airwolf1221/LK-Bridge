@@ -239,7 +239,7 @@ for word as in the ADR, so enabling the job is the owner's informed approval.
   read-only mode, a writes pause and draining skip it (recorded).
 - **Prerequisite.** It cannot be enabled (`409 PREREQUISITE_MISSING`) without a PASS of its sandbox check
   ([runbook-deploy.md](runbook-deploy.md#the-block-id-sweeps-sandbox-check-v3-f35)) recorded for the running bridge
-  version, or the owner's override (set on the card with re-authentication, audited `blockids.override`). A run without
+  version, or the owner's override (set on the card, audited `blockids.override`). A run without
   either is skipped, saying why.
 - **Candidates** come from the latest snapshot (the appraisal's overlay and the snapshot store): every `page` document
   inside the AI REPOSITORY with a block without an id or an id used twice. No LegendKeeper request. The card shows each
@@ -266,7 +266,7 @@ for word as in the ADR, so enabling the job is the owner's informed approval.
 | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | `GET /api/admin/maintenance/assign-block-ids-sweep/card`     | The statement, the prerequisite, N, a stop, the candidates per project. |
 | `POST /api/admin/maintenance/assign-block-ids-sweep/dry-run` | `{ project? }`: the next run's documents and cost. Writes nothing.      |
-| `PUT /api/admin/maintenance/assign-block-ids-sweep/override` | `{ on }`: on needs re-authentication (`403 REAUTH_REQUIRED`). Audited.  |
+| `PUT /api/admin/maintenance/assign-block-ids-sweep/override` | `{ on }`: audited (ADR 0081: no fresh code).                            |
 | `PUT /api/admin/maintenance/assign-block-ids-sweep/limit`    | `{ maxPerRun }`, 1 to 500. Audited.                                     |
 
 ## The off-site copy (v2 E1b)

@@ -153,8 +153,8 @@ Changes to the redirect URI can take a few minutes to apply at Google.
 
 1. Open the dashboard: `https://lk.ottomoons.co.uk/ui`, then **Off-site copy** in the menu.
 2. On the **Google Drive** card, paste the **Client ID** and **Client secret**, then **Save the client**. The dashboard
-   asks for the step-up (your authenticator code, or your password without one; ADR 0062) if you have not given it in
-   the last ten minutes. The secret is
+   asks for the step-up (your authenticator code, or your password without one) if you have not given it within the
+   last 12 hours (ADR 0081: `AUTH_STEP_UP_WINDOW_SECONDS`). The secret is
    kept in the bridge's encrypted secret store, never in the env file, and is never shown again.
 3. Click **Connect Google Drive**. Google's sign-in page opens: choose the account from step 1 and allow the access
    described in step 4. Google sends you back to the dashboard, which shows **Connected** and the Google account's name

@@ -2292,8 +2292,8 @@ writes the bridge's own record). Agents can never pick.
 
 ### "Pick the right value" (the owner's, on the Audits page)
 
-`POST /api/admin/audits/findings/:id/consistency-pick` `{ side, shown? | value, confirm: true }`, a step-up action (ADR
-0062). `side` is one of the values the dashboard shows (the audit's stored values; anything else is `SIDE_NOT_FOUND`) and
+`POST /api/admin/audits/findings/:id/consistency-pick` `{ side, shown? | value, confirm: true }` (ADR
+0081: no fresh code). `side` is one of the values the dashboard shows (the audit's stored values; anything else is `SIDE_NOT_FOUND`) and
 `shown` its value as shown (the dashboard sends it): when the side reads otherwise now, the pick is refused with
 `SIDE_CHANGED` and nothing is proposed. A typed `value` must read, whole, as ONE date of the calendar (a range, or a line
 break, is `VALUE_UNREADABLE`); the calendar's own reading of it is written. The bridge makes ONE proposal of items, one
@@ -2310,8 +2310,7 @@ written twice; a date split by a mention or formatting; a field holding a mentio
 date is kept); a page Archived, or filed under the Archived area, the Legacy Canon Archive or the Design References, since
 the check (each page's name, parent and tags are read live, and checked again inside the job's locks before it writes the
 page). The side picked, and every value agreeing with it, is never touched; a gap or a value inherited from Main CANON is
-listed and left. Approval (selective, as every itemized proposal), the rails (more than 10 pages asks for the step-up at
-approval), Last Major Revision (the engine's rule) and Revert work as for any proposal. Audited `consistency.pick`. Cost
+listed and left. Approval (selective, as every itemized proposal), the rails, Last Major Revision (the engine's rule) and Revert work as for any proposal. Audited `consistency.pick`. Cost
 of the planning: 1 read per page (its name, parent and tags), plus 1 for its sidebar or each of its documents; a
 chronology row about 9.
 

@@ -61,27 +61,28 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   owner command layer (`policy.commands`), an engine control, or the runtime settings functions
   (`src/admin/runtime-settings.ts`). Each leaves an `audit_log` row (actor `owner`) and a `policy` event on the stream.
   No route touches the database or the engine itself.
-- **The step-up (OPS2, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), accepted with the owner's rule:
-  tightening is one click, loosening asks).** Keys and secrets, a scope raised, the settings (every off-site setting
-  among them) and releasing a brake (read-only off, resuming writes, undraining), pack approval and the guarded rails
-  (approving a proposal that deletes, touches more than 10 pages, or deletes or moves an asset; the owner's own bulk
-  retag) need a step-up on the session within the last ten minutes: the authenticator code (or a recovery code), or the
-  password when no authenticator is set up. Otherwise the answer is `403 REAUTH_REQUIRED`; the dashboard asks in one
-  dialog and sends the change again ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). A wrong code
-  (`401 REAUTH_FAILED`) stays in the dialog, and a wrong current password (`401 WRONG_PASSWORD`) on the Account page is
-  shown there (CR-2026-11-R4); any other 401 means signed out. Tightenings and brakes stay one click: lowering a scope,
-  moving a connection down, read-only on, ChatGPT's file source off, pausing writes and draining, Sign out everywhere,
-  revoking a connection or a token, cancelling a job, switching most maintenance jobs off, rejecting a proposal.
-  CR-2026-11-R4 (ADR 0062 amendment 1): a guarded approval is judged on the whole proposal by the rail that made it a
-  proposal (its recorded reason: the deletes, bulk or assets rail) and by its operations, with the removals through a
-  low-level tool (`lk_api_write`, `lk_api_batch`, `lk_op_*`: a block or a row deleted, a list write that drops entries,
-  text taken off a pack page) and a member or invite removed counted as deletes; confirming a project's chronology asks
-  too (a reset is one click); and the OAuth consent page asks for the same step-up, on the page itself, before a scope
-  raise, a new profile above the default or a connection at scope `write` ([auth.md](auth.md#consent-and-profiles-chunk-2b)).
-  The owner's decisions on the fourth review ([ADR 0066](adr/0066-cr-2026-11-r4-decisions.md) part B, 21 November 2026):
-  releasing a job asks too, as resuming writes does: **Resume** of a paused job, **Resume** of one stopped part-way, a
-  **forced** step retry and starting a **restore rehearsal** (pausing a job, a normal retry and a rehearsal's plan stay
-  one click).
+- **The step-up (OPS2, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md), narrowed by ADR 0081: the owner's
+  ruling of 26 November 2026, "A code at sign-in is enough").** Signing in asks for the password and the authenticator
+  code. After that, only the **credential changes** ask for a fresh code on the session, within the last **12 hours**
+  (`AUTH_STEP_UP_WINDOW_SECONDS`, 5 minutes to 7 days; the dashboard shows the window the bridge reports): the owner's
+  password, the authenticator (set up, reset or removed) and its recovery codes; connections (a profile made or its
+  scope changed, the default scope changed, a connection moved to another profile, revoked or removed, the stale or
+  inactive ones in bulk) and personal access tokens; a project's LegendKeeper API key (added, replaced or removed with
+  its project); and the off-site copy's Google client, Drive sign-in, disconnection and encryption keys. The code is the
+  authenticator's (or a recovery code), or the password when no authenticator is set up. Otherwise the answer is
+  `403 REAUTH_REQUIRED`; the dashboard asks in one dialog and sends the change again
+  ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). A wrong code (`401 REAUTH_FAILED`) stays in
+  the dialog, and a wrong current password (`401 WRONG_PASSWORD`) on the Account page is shown there (CR-2026-11-R4);
+  any other 401 means signed out. **Nothing else asks**: approving proposals (whatever they hold), mappings, decisions
+  (Reference Types, index classification, nation subindexes, tagging), settings other than credentials, packs,
+  automation, budgets, reserve floors and writers, maintenance, snapshots and restores, rehearsals, jobs (resume, forced
+  retry, resume a stopped job), Review and Revert, audits, staging, chronology settings, lifecycle and canon settings,
+  read-only, pausing and draining (both ways), the tool-call log and the off-site copy's settings and folders. The
+  session, Origin and CSRF checks of every change still apply to all of them. The OAuth consent page keeps its own
+  step-up, on the page itself, before a scope raise, a new profile above the default or a connection at scope `write`
+  ([auth.md](auth.md#consent-and-profiles-chunk-2b)). (ADR 0062 had asked for the code within ten minutes of about 120
+  actions; the routes that ask now are listed in `test/auth/stepup-routes.ts`, and
+  `test/auth/stepup-inventory.test.ts` fails if any other route asks.)
 - **Sessions (ADR 0062).** A session lasts 30 days from its last use (each use renews it and its cookie), survives a
   restart, and ends at sign-out, at **Sign out everywhere** (the Account page: every session, this one included, and
   those already past their end), at a password change (the other sessions) or after 30 days unused. A link to the
@@ -133,16 +134,20 @@ hides or shows the write tools) only after the connector is disconnected and rec
 on 10 November 2026, not a guarantee); in ChatGPT, open Plugins, the bridge, and use **Refresh**. The page says so beside
 the checkbox. See [policy.md](policy.md#hiding-the-low-level-tools-v2-b2).
 
-## Review (v3 F3.4)
+## Review (v3 F3.4, F12)
 
-[ADR 0055](adr/0055-write-scope-review-revert-rails.md). At scope `write` an agent's ordinary changes run at once; the
-**Review** page (top of the sidebar, beside Proposals, with a badge of the unreviewed count) lists every job an agent ran
+[ADR 0055](adr/0055-write-scope-review-revert-rails.md), [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md).
+At scope `write` an agent's changes run at once, canon and lifecycle changes and deletes included: the Review page is
+the safety net. The **Review** page (top of the sidebar, beside Proposals, with a badge of the unreviewed count) lists every job an agent ran
 directly, newest first: the agent, the tool, a summary in the words a proposal would have used, and the pages it
 touched. **Show the changes** expands an item to the same diff a proposal shows (page text as a Markdown diff, facts before
 and after, links added and removed, names, tags, aliases, moves, chronology rows and events, image placements), built
 from the journal's pre-images and the job's own record, with anything Revert cannot put back and why. Filters:
-unreviewed (the default), reviewed or all; agent profile; tool. Approved proposals and pack packages (proposals by
-default) are not listed: you saw them before they happened. The Overview page shows the unreviewed count too.
+unreviewed (the default), reviewed or all; agent profile; tool. Items are **grouped** by workstream and connection
+(Claude or ChatGPT), each group with **Mark reviewed (n)**. A page the job created shows as one line, its sidebar rows
+folded into it; an item with nothing to put back (a write covered by another change of the same job, which it names)
+shows no Revert. Approved proposals are not listed: you saw them before they happened. The Overview page shows the
+unreviewed count too.
 
 - **Mark reviewed** takes an item off the badge (audited `review.mark`). **Mark all reviewed (N)** marks every item the
   filters show, after a confirmation naming N; if the set changed in the meantime nothing is marked and the page asks
@@ -152,15 +157,18 @@ default) are not listed: you saw them before they happened. The Overview page sh
   the job changed, whether it can be put back, and, for one that changed since or cannot be reverted, why. It puts back
   page text (block by block), sidebar facts and links, chronology rows and their events (in step), names, tags, aliases
   and moves, and image placements: the image's file is copied back to the bridge's server, so the image is back on
-  the **Staging** page, and deleting the placed image from the library is **proposed to you** on the Proposals page
-  (nothing is ever written to the `LK-Bridge staging` folder, and the revert itself deletes nothing). A deleted image
-  is not private (W5): LegendKeeper keeps serving its file at its old URL, so approving that deletion takes the image out
-  of the library, not off the web. It never reverts
-  a deletion (it points to `restore_resource`), a proposal, a running job or
-  another revert. **All or nothing by default:** if anything cannot be put back, the dialog lists it and you tick
+  the **Staging** page, and the placed image is deleted from the library in the same confirmed action (nothing is ever
+  written to the `LK-Bridge staging` folder). A deleted image is not private (W5): LegendKeeper keeps serving its file
+  at its old URL, so the deletion takes the image out of the library, not off the web. Since F12 it also puts back
+  canon and lifecycle changes (the names, Status, tags and place before), the writes the generic undo covers (map
+  features, timeline events and lanes, properties, board shapes, documents), and **deletions**: a deleted page (with
+  every page deleted with it) by LegendKeeper's own restore, or, when LegendKeeper no longer holds it, made again from
+  the copy kept before the delete (new ids: the result maps old to new and lists the pages that linked to the old ids);
+  a deleted asset uploaded again from its kept bytes in the same folder under the same name, the unchanged pages
+  relinked. A page the job created is deleted again if nobody has touched it since. It never reverts a proposal, a
+  running job or another revert. **All or nothing by default:** if anything cannot be put back, the dialog lists it and you tick
   the box to revert the others anyway (**Revert the rest**). Each target is checked again inside the revert job, so an edit made
-  meanwhile is never overwritten. It asks for the step-up first (ADR 0062: your authenticator code, or your password
-  without one), and is audited (`job.revert`, with
+  meanwhile is never overwritten. It needs no fresh code (ADR 0081), and is audited (`job.revert`, with
   the targets and the outcome). The revert is one job (system, P1) on the Jobs page; its result points to the journal
   and the snapshots if you need to go further. A reverted job is marked reviewed.
   Since CR-2026-11-R2: a target is compared in full with what the job left (a chronology row with its links, marks and
@@ -171,20 +179,11 @@ default) are not listed: you saw them before they happened. The Overview page sh
   and the item stays unreviewed (R2-25); Last Major Revision goes back exactly, and only with the edit that set it
   (R2-18). A low-level job is summarised from its operations, with the agent's own title beside it (R2-06).
 
-## Safety rails, per profile (v3 F3.4)
+## Safety rails (removed in F12)
 
-Each profile at scope `write` on **Clients & Access** has **Always propose** switches: even at write scope these still
-become proposals, each saying which rail sent it (`proposed because: bulk change (14 pages > 10)`):
-
-- **Deletes** (pages, documents, timeline events, map features, assets): on by default;
-- **Bulk changes**: one job touching more than **N pages** (N per profile, default 10; 1 to 1,000): on by default;
-- **Renames and moves of pages**: off by default;
-- **Asset deletes and asset moves** (placing a staged image is not a move): on by default.
-
-**Save rails for** a profile asks for confirmation and the step-up (ADR 0062: your authenticator code, or your password
-without one), and is audited (`profile.set_rails`, with the
-rails before and after); a change applies at the profile's next request. The rails only ever add proposals: canon and
-lifecycle changes stay proposals whatever they say. See [policy.md](policy.md#write-scope-review-revert-and-safety-rails-v3-f34).
+The per-profile **Always propose** switches of v3 F3.4 are gone ([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)):
+what they held back is on the Review page with Revert, and every agent delete is copied first. A connection you want
+to approve every write of goes at scope `propose`.
 
 ## Old connections (hotfix, ADR 0033)
 
@@ -236,15 +235,15 @@ Standard's label and the digest), or why the retag is unavailable (no approved v
   audit. **Withdraw** removes a classification (password again; audited `retag.unclassify`).
 - **Exceptions** (v3 F5a, [ADR 0067](adr/0067-v3-f5a-supplementary-tags-rulings-bulk-actions-and-unknown-outcomes.md)):
   each exception of the latest audit with its reason, your rulings and agents' suggestions, and the Approved
-  Supplementary Tags the approved pack lists (kept wherever they appear). **Keep this tag here** (a reason, a
-  confirmation and the step-up; audited `retag.keep_here`) keeps the tag on that page alone while its tags are
+  Supplementary Tags the approved pack lists (kept wherever they appear). **Keep this tag here** (a reason and a
+  confirmation; audited `retag.keep_here`) keeps the tag on that page alone while its tags are
   unchanged: if they change, the ruling lapses and the audit asks again; **Withdraw** removes it (one click). **Allow
   this tag everywhere** shows the Tagging Standard's sentence before and after (a dry run, one read), then, confirmed and
   stepped up, edits the Approved Supplementary Tags as your action (one job, journalled, revertible; audited
   `retag.allow_everywhere`): approve the pack's new version on the Packs page afterwards.
 - **Apply all corrections** (Audit tab, v3 F5a): every deterministic correction of the run shown that is not in an open
-  batch, proposed in the usual bounded batches (the pack's batch size, each page an item; more than 10 pages in all asks
-  for the step-up), then **Approve all these batches** (the step-up: a bulk approval), each listed with its outcome.
+  batch, proposed in the usual bounded batches (the pack's batch size, each page an item), then **Approve all these batches** (a bulk
+  approval, one confirmation), each listed with its outcome.
 - **Batches**: each batch's state, proposal and job, and what became of each page: applied (and whether its read-back
   verified), already compliant, held, conflicted or inaccessible.
 - **Reconciliation**: start a named reconciliation (a first audit, free), open one to see its counts (audited,
@@ -253,7 +252,7 @@ Standard's label and the digest), or why the retag is unavailable (no approved v
   snapshots since their verdict show as stale.
 
 Its admin API is `/api/admin/tagging` (`GET`), `/tagging/audit`, `/tagging/runs/:id`, `/tagging/holds`,
-`/tagging/classify` and `/tagging/unclassify` (re-authenticated), `/tagging/batches`, and `/tagging/reconciliations`
+`/tagging/classify` and `/tagging/unclassify`, `/tagging/batches`, and `/tagging/reconciliations`
 (start, `/:id`, `/:id/resume`). The Packs page's token-map editor also takes the Excluded Routine Tags (one per line),
 which make a new version as the token maps do.
 
@@ -262,7 +261,7 @@ which make a new version as the token maps do.
 In the Setup group, after Repository Mappings ([ADR 0076](adr/0076-v3-f6a-reference-type-vocabulary.md)). The
 vocabulary card says whether the vocabulary is a **draft** or **published** (the governance section then its
 authority), lists it, and holds **Publish vocabulary…**: a preview of the section's exact text and what happens next
-(the Packs page asks for the pack's approval again), then the step-up and ONE job writing "Reference Type Vocabulary"
+(the Packs page asks for the pack's approval again), then ONE job writing "Reference Type Vocabulary"
 under "Sidebar Metadata" in Source Formatting (replaced in place when published again). The coverage line gives the
 stored sidebars' age, the pages never read and the areas left out.
 
@@ -270,8 +269,8 @@ The table has one row per value in use and primary category, with its pages, sta
 status (Open by default), minimum count, value text (a finding's link fills it). Per row: **Accept** (a confident
 suggestion), **Edit…** (a picker of the category's canonical values, or "A new canonical value…" with its role word),
 **Reject**, **Keep as specialist** (these pages, or any page of the category); **Undo** until the decision is applied
-or published. **Accept all confident suggestions in this filter** takes every open row that has one. Each decision asks
-for the step-up and is in the audit log (`reftypes.decide`, `reftypes.undo`, `reftypes.publish`). Decisions the
+or published. **Accept all confident suggestions in this filter** takes every open row that has one. Each decision is in
+the audit log (`reftypes.decide`, `reftypes.undo`, `reftypes.publish`). Decisions the
 published section contradicts are listed under "The published section and your decisions disagree": the section wins.
 
 v3 F6a.1 ([ADR 0076 amendment 1](adr/0076-v3-f6a-reference-type-vocabulary.md#amendment-1-v3-f6a1-25-november-2026-the-live-hang-of-24-november-a-decision-is-cheap-the-report-is-cached)):
@@ -299,7 +298,7 @@ Filters: status (Proposed by default), proposed role, rule, name. Per row: **App
 [NAV], or to [INDEX] with the subject's kind: character, polity, culture, religion, place, story; without one its tags are
 left to you), **Leave undecided**. **Approve all as proposed (n)** takes every proposed row of the filter, every page of
 it: ONE request, at most `INDEX_CLASSIFY_BULK_MAX` (500) at a time, decided in one transaction; running it again touches
-only the rows still proposed. Every decision asks for the step-up and is recorded in the audit log. Nothing is renamed or
+only the rows still proposed. Every decision is recorded in the audit log. Nothing is renamed or
 retagged here: approved rows become proposals in the audits (`index_prefix`, `index_tags`), which Automation runs
 (default Propose).
 
@@ -324,8 +323,8 @@ name": every nation's child of that exact name not decided yet, one request, at 
 **Keep as a specialist subindex**, **Not a subindex**, and **Undo** until the rename is applied. **Accept all matched
 (n)** accepts every undecided row matched by a role name or an approved variant, with no collision and an approved [NAV]
 classification (never an unmatched, colliding or unapproved row), in one request; the count is on the button and in the
-confirmation before anything is sent, at most `NATION_SUBINDEX_BULK_MAX` at a time, and each row can be undone on its own. Every decision asks for
-the step-up and is recorded in the audit log. Nothing is renamed here: accepted and mapped rows become
+confirmation before anything is sent, at most `NATION_SUBINDEX_BULK_MAX` at a time, and each row can be undone on its own. Every decision is
+recorded in the audit log. Nothing is renamed here: accepted and mapped rows become
 `nation_subindex_nonstandard` findings in the Audits, which Automation can run (default Off).
 
 ### Repository Mappings › Territories and nations (v3 F6c)
@@ -357,7 +356,7 @@ On the Asset Tree page, the **Outfits** panel holds each character's outfit reco
 decisions 3 and 4): the characters with outfits, each outfit's pieces, folder (or "loose in Wardrobe") and aliases.
 **Seed (read live)** reads one character's folders live (by the folder's name) and lists the outfits it found (a
 `Wardrobe / <X>` folder; a loose piece named `<Character> - <Outfit> - …`) and, separately, anything it could not read
-without guessing; nothing is recorded until you **Save** it (with the step-up) or **Discard** it. **Add alias** and
+without guessing; nothing is recorded until you **Save** it or **Discard** it. **Add alias** and
 **Remove** change an outfit's aliases: an art call naming an alias adds to that outfit. Routes:
 `GET /api/admin/art/outfits`, `POST /api/admin/art/outfits/seed`, `POST /api/admin/art/outfits/seed/:id/save` and
 `…/discard`, `POST /api/admin/art/outfits/:id/aliases` and `…/aliases/remove`; each change audited (`art.*`).
@@ -373,11 +372,8 @@ For each pack:
 - its **state**: approved and current, not approved yet, rules changed since approval, governance changed since
   approval (with the changed sources named, as an alert), or governance unreadable. Anything but "approved and
   current" means the pack's tools compute no tags and refuse every package (`PACK_NOT_CURRENT`): they fail closed;
-- its **tools**, the approval (version, by whom, when), and, since v3 F3.4, a switch per writing tool: **Always
-  propose** (on: a package is a proposal whatever the agent's scope) or off (it follows the agent's scope). The seed's
-  defaults: `arkona_create_character`, `arkona_create_owner` and `arkona_create_relationship` always propose;
-  `arkona_add_character_art` (and F3c's `arkona_appraisal_fix`) follow the scope. A tool with no switch keeps the pack's
-  `alwaysPropose`;
+- its **tools** and the approval (version, by whom, when). Every pack tool follows its connection's scope (direct at
+  `write`, a proposal at `propose`); F3.4's per-tool **Always propose** switches were removed in F12;
 - the **governance sources**: each page the rules were derived from (for Arkona: Character Architecture, Source
   Formatting, and the Controlled Native Tagging Standard v1.8, all on the AI REPOSITORY page), with the document version
   approved and, after **Check governance now** (one read per source), the version now; since v3 F3b also the **pinned
@@ -425,8 +421,8 @@ tool, refresh its tool list (ChatGPT: Plugins, the bridge, Refresh).
 ## Admin API
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take
-`?project=` (v2 A1); routes marked ‡ need the step-up within the last ten minutes (OPS2; ADR 0062, which also asks it of
-every route that changes a setting, a scope or a key, and of approving a proposal of a guarded kind: see
+`?project=` (v2 A1); routes marked ‡ need the step-up within the window (ADR 0081: 12 hours by default), as do the
+connection, token, project key and off-site credential routes; no other route asks (see
 [auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)).
 
 | Area        | Routes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -439,9 +435,9 @@ every route that changes a setting, a scope or a key, and of approving a proposa
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk` (`action`: `approve`, `reject`, or `approve-as-canon` with `{ confirm: true }`; at most 1,000 ids since v3 F5a; a proposal whose job is running is passed over, `PROPOSAL_RUNNING`), v3 F5a: the list's `tool` and `olderThanHours` filters and `total`, `POST /proposals/bulk-matching` (`{ action: approve or reject, filter, expect, confirm: true }`: every proposal the filter matches, refused with `PROPOSALS_CHANGED` when the count changed) |
-| Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/profiles/:id/rails` (`{ rails, confirm: true }`, v3 F3.4) ‡, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /settings/config`, `PUT /settings/config/:key`, `POST /settings/config/:key/reset`, `POST /bridge/restart`, `GET /audit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Maintenance | `GET /maintenance` (v2 E5.1: per-project jobs with `projects` and `runningProjectId`), `GET /maintenance/:id` (with history; `?project=` narrows it), `POST /maintenance/:id/enable\|disable\|run` (`run` takes an optional `project`, v2 E5.1), `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md)); v3 F3.5: `GET /maintenance/assign-block-ids-sweep/card`, `POST …/dry-run`, `PUT …/override` (on: re-authentication), `PUT …/limit`                                                                                                                                                                                                                                                                                                                                                   |
+| Maintenance | `GET /maintenance` (v2 E5.1: per-project jobs with `projects` and `runningProjectId`), `GET /maintenance/:id` (with history; `?project=` narrows it), `POST /maintenance/:id/enable\|disable\|run` (`run` takes an optional `project`, v2 E5.1), `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md)); v3 F3.5: `GET /maintenance/assign-block-ids-sweep/card`, `POST …/dry-run`, `PUT …/override`, `PUT …/limit`                                                                                                                                                                                                                                                                                                                                                                           |
 | Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md))                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Registry †  | `GET /registry`, `POST /registry/types\|seed-character\|templates/refresh`, `GET\|PUT /registry/types/:id`, `POST /registry/types/:id/delete`, `GET /registry/types/:id/taxonomy`, `POST /registry/types/:id/taxonomy/seed\|add-missing`, `PUT /registry/taxonomy/:id`, `POST /registry/taxonomy/:id/delete`, `GET /registry/drift`, `POST /registry/drift/run`, `GET /registry/try/resolve\|placement\|ordering`, `GET /registry/out-of-order` (v2 A3, [docs/registry.md](registry.md))                                                                                                                                                                                                                                                                                                                                |
 | Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1), `PUT /projects/:name/settings` (`{ key, value }`, v2 A2), `GET\|PUT /projects/:name/canon` (`{ rules, agentDefaultStatus?, confirm: true }`, v2 C2a), `GET\|PUT /projects/:name/lifecycle` (`{ …values, workingIndexId?, archiveIndexId?, canonExemptIndexes?, reset?, confirm: true }`, v2 C2c; `canonExemptIndexes` E5.3); OPS2: `POST /projects/check` (`{ name, apiKey }`) ‡, `POST /projects/:name/key/check` (`{ apiKey }`) ‡, `POST /projects/confirm` (`{ checkId, confirm: true }`) ‡, `PUT /projects/:name/draining` (`{ value }`), `POST /projects/:name/remove` (`{ confirm: true }`) ‡                                                                                               |
@@ -461,8 +457,7 @@ CONFIRMATION_REQUIRED`, and every settings and reserve-floor change needs `confi
 
 `retry` on each step says whether it may be retried and whether it is _ambiguous_ (it may already have reached
 LegendKeeper). A normal retry re-checks first and cannot duplicate; `force: true` re-runs it as new work. The dashboard
-shows the warning and asks twice before forcing, and a forced retry asks for the step-up as well (ADR 0066 part B,
-question 4).
+shows the warning and asks twice before forcing (ADR 0081: no fresh code; ADR 0066 part B, question 4, had asked one).
 
 ## Tool calls (v2 E3)
 
@@ -707,8 +702,8 @@ again as prop_…"; the new proposal names the one it came from. Agents can neve
 The design's section 3 (decision D6). A package, a rename or a recreate whose job **stopped part-way** (a failed step, a
 cancel) shows a **Stopped part-way** card on its job page (and in the Review page's detail of a direct job): the step it
 stopped at and why, its last verified step (every step up to it succeeded and read back as planned), and how often it was
-resumed. **Resume** (after a confirmation that says from which step it continues and how many are left, and the step-up:
-ADR 0066 part B, question 4) continues the
+resumed. **Resume** (after a confirmation that says from which step it continues and how many are left; ADR 0081: no fresh
+code) continues the
 same job: its own check runs again first, inside its locks; no step that succeeded is sent again, no page or document is
 made twice, and a step that is no longer safe is refused with its reason (the card shows it; resume again once the page
 is as it should be, or revert). Work you approved resumes without a new approval; every resume is audited (`job.resume`,
@@ -757,14 +752,13 @@ creates refuse until both are confirmed, and again if a confirmed index is renam
 opens the index names, Status values, status tags, fact names, Continuity Types and the archive texts (`{date}` and
 `{source}` are filled in) for editing; C2d adds **Note on an index archived with its set** (default "Archived - {date}.
 The author retired {source} and the pages beneath it. They are kept for provenance.", a proposed wording for the owner
-to confirm). **Save** asks for a confirmation and, since C2d (ADR 0036 decision 4), for the step-up (ADR 0062: the
-authenticator code, or the password without one) if the owner has not given it in the last 10 minutes; **Restore the
+to confirm). **Save** asks for a confirmation (ADR 0081: no fresh code; C2d, ADR 0036 decision 4, had asked one); **Restore the
 defaults** brings back the owner's
-values and clears the confirmation (the same re-authentication applies). Every change is audited as
+values and clears the confirmation. Every change is audited as
 `project.set_lifecycle` with the values before and after.
 
 **Indexes whose pages are Authoritative without CANON** (E5.3, ADR 0046 decision 13): a list of index ids, one per line,
-empty by default, saved with its own **Save** (the same confirmation and re-authentication). Every page beneath a listed
+empty by default, saved with its own **Save** (the same confirmation). Every page beneath a listed
 index, at any depth, stays `[BSRC]` and Authoritative but carries no `CANON` tag (Arkona's `[INDEX] Design References`);
 pages inside the Working and Archived areas keep their own rules. The lifecycle tools and Authoritative creates add no
 `CANON` there, and the lifecycle audit expects none. An id that is not an index in the tree, or is a lifecycle index, is
@@ -782,8 +776,7 @@ project.
   timeline's lanes (about three requests per age) and shows what it found: each age with its era, rows and count, any
   problem, and **how the tables write** dates and KCY values (each aspect's value, how many rows showed each way, up to
   three examples, and the aspects written more than one way). The style can be edited before **Confirm these settings**
-  (asks for a confirmation and, since CR-2026-11-R4, the step-up: they are a project's settings, which the timeline
-  tools write by). **Clear the chronology settings** removes them (the tools refuse again; one click, a tightening).
+  (asks for a confirmation; ADR 0081: no fresh code). **Clear the chronology settings** removes them (the tools refuse again; one click, a tightening).
   Every change is audited as `project.set_chronology`. Until confirmed, the timeline tools refuse. The table is the
   authority; the timeline is a derived view.
 - **Chronology check.** The last run of the check (state, when, requests, summary) and its findings in plain words: rows
@@ -849,7 +842,7 @@ project.
   confirmation; audited `chronology.resolve`) is for one fixed by hand, after which other changes of its ages go ahead.
 
 Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lookup`, `PUT /projects/:name/chronology`
-(`{ confirm: true, settings }`, which needs the step-up, or `{ confirm: true, reset: true }`, which does not), `GET /chronology/records`, `POST
+(`{ confirm: true, settings }` or `{ confirm: true, reset: true }`; neither asks for a fresh code), `GET /chronology/records`, `POST
 /chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`), `POST /chronology/propose-fix`
 (`{ confirm: true, project, age, rowId, confirmShapeChange? }`, `{ …, kind: 'count' }` or `{ …, kind: 'orphan', eventId }`:
 one proposal, or `nothing_to_do`), `GET /chronology/table-only` and `POST /chronology/table-only`
@@ -899,7 +892,7 @@ API: `GET /api/admin/staging`, `POST /api/admin/staging/upload?name=…` (`appli
 /api/admin/staging/preview` `{ destination? | stagedId? }` (the dry run: `path`, `segments` with `new`, `newFolders`; a bad path is
 400 `INVALID_SUBFOLDER`), `POST
 /api/admin/staging/<staged id>/place` `{ destination?, name? }`, `POST /api/admin/staging/<staged id>/discard`
-`{ confirm: true }`, `POST /api/admin/staging/allow-delete` `{ assetId, confirm: true }` (re-authenticated); all with
+`{ confirm: true }`, `POST /api/admin/staging/allow-delete` `{ assetId, confirm: true }`; all with
 `?project=`. Audited as `staging.upload`, `staging.place`, `staging.discard` and `asset.delete_without_bytes`.
 
 ## Snapshots (v2 E1a)
@@ -969,8 +962,7 @@ index's progress), `GET /api/admin/snapshots/pages/<page id>?project=&piece=&ref
 `POST /api/admin/snapshots/runs/<run id>/abandon` `{ confirm: true }`, `POST /api/admin/snapshots/restore?project=`
 `{ page, snapshot, scope, document?, mode?, ids?, parent?, dryRun? }`, `POST /api/admin/snapshots/restore-image?project=`
 `{ snapshot, asset, updateReferences?, dryRun? }`, `POST /api/admin/snapshots/rehearsals/plan` `{ target, snapshot, mode,
-max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202; it asks
-for the step-up, ADR 0066 part B, question 4), `GET
+max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202), `GET
 /api/admin/snapshots/rehearsals/<id>`, `POST /api/admin/snapshots/rehearsals/<id>/delete-root` `{ confirm: true }`. A
 refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`, `snapshots.restore`,
 `snapshots.rehearsal` and `snapshots.rehearsal_delete_root`.
@@ -1016,8 +1008,7 @@ each nightly full snapshot completes, and **Run an audit now** runs one at once.
   registry** (Character Core, Compact Character Reference, the Index template). The tag-definition source is a page (found by
   name) and one of its documents. Settings: report pages no rule matches, the stale limit, how strictly Reference Types are
   judged, the Reference Types that are fine, indexes in a manual order, and (v3 F4a) the external skills the governance
-  check never reports. **Saving asks you to sign in again** (within five
-  minutes, as the canon rules do) and is audited (`audits.set_config`).
+  check never reports. Saving is audited (`audits.set_config`; ADR 0081: no fresh code).
 
 **The Governance category** (v3 F4a) compares the governance pages (every tab of the AI REPOSITORY root the pack's
 governance sources sit on) with the bridge: a tool name the bridge does not have or an old bridge call
@@ -1078,16 +1069,16 @@ determines are listed (13; the never-automatic ones are listed below them, and c
 Off.
 
 - **Each code**: its plain name, an example, the one transformation, its setting (Off, Propose automatically, Apply
-  automatically: a labelled select and **Change**; a confirmation says what is recorded, then the step-up), whether it
-  is paused (and why, with **Resume**, the step-up) or was switched off by the bridge (and why), when it last ran, and
+  automatically: a labelled select and **Change**; a confirmation says what is recorded), whether it
+  is paused (and why, with **Resume**) or was switched off by the bridge (and why), when it last ran, and
   what it did or skipped (each item linking to its job or the Proposals page).
 - **Switching a code on** first writes its paragraph into Repository Automation's "Approved Narrow Automations", after
   the block-id sweep's paragraph, in the sweep's form (the code and its plain name, the owner's approval through the
   dashboard and its date, the setting, scope, transformation, verification, concurrency rules and stop conditions);
   nothing runs unless the governance says so. Switching it off amends that paragraph to say so, and when (it is never
   deleted). Each write is on the Review page and can be Reverted; reverting the paragraph switches the code off.
-- **Pause all automation**: one click (a brake, for every project); **Resume automation** asks for a confirmation and
-  the step-up. **Run automation now** runs the codes switched on in this project at once (the step-up).
+- **Pause all automation**: one click (a brake, for every project); **Resume automation** asks for a confirmation.
+  **Run automation now** runs the codes switched on in this project at once. None asks for a fresh code (ADR 0081).
   **Check Repository Automation** reads the governance sources and says whether automation may run (drift, or a
   bridge-managed paragraph edited outside the bridge, stops it).
 - **The Overview** shows an **Automation overnight** tile: for the last 24 hours, per code, the pages applied,
@@ -1097,10 +1088,10 @@ Off.
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `GET /api/admin/automation`                     | The codes, their settings and recent items, the brake, the caps, the latest runs, the never list. |
 | `GET /api/admin/automation/governance`          | Whether the governance lets automation run (one read of each governance source).                  |
-| `POST /api/admin/automation/codes/:code`        | `{ mode, confirm }`: the setting (the step-up, always). Audited `automation.set_mode`.            |
-| `POST /api/admin/automation/codes/:code/resume` | `{ confirm }`: a paused code resumed (the step-up).                                               |
-| `POST /api/admin/automation/pause` / `resume`   | `{ confirm }`: the brake (one click) / its release (the step-up).                                 |
-| `POST /api/admin/automation/run`                | `{ confirm, wait? }`: Run automation now (the step-up).                                           |
+| `POST /api/admin/automation/codes/:code`        | `{ mode, confirm }`: the setting. Audited `automation.set_mode`.                                  |
+| `POST /api/admin/automation/codes/:code/resume` | `{ confirm }`: a paused code resumed.                                                             |
+| `POST /api/admin/automation/pause` / `resume`   | `{ confirm }`: the brake / its release (one click each).                                          |
+| `POST /api/admin/automation/run`                | `{ confirm, wait? }`: Run automation now.                                                         |
 | `GET /api/admin/automation/runs/:id`            | A run and its items.                                                                              |
 | `GET /api/admin/automation/overnight`           | The last 24 hours, per code (the Overview's tile; also in `GET /api/admin/overview`).             |
 
@@ -1182,8 +1173,9 @@ every few seconds while a run is going.
 - **Runs**: every copy, verify and folder deletion.
 - Links to [drive-setup.md](drive-setup.md) and the runbook's [disaster recovery](runbook-deploy.md#disaster-recovery-from-google-drive).
 
-Saving the client, connecting, disconnecting, setting keys, changing the settings, deleting an old folder and using an
-existing folder ask for the step-up (ADR 0062) if you have not given it in the last ten minutes. Every action is audited
+Saving the client, connecting, disconnecting and setting keys (the credentials) ask for the step-up if you have not
+given it within the window (ADR 0081: 12 hours by default); changing the settings, deleting an old folder and using an
+existing folder do not. Every action is audited
 (`offsite.*`), never with a value.
 
 The **Overview** shows a red card when the connection is broken, when no good copy is younger than the staleness
@@ -1198,9 +1190,9 @@ the copy is not set up at all.
 
 v2 E4 ([ADR 0046](adr/0046-e4-owner-decisions.md) decision 3): `PUT /offsite/settings` needed the re-authentication when
 the change weakened a protection (the verify switched off, a smaller verify sample, a later stale-copy warning, fewer
-days for removed pieces on Drive, another folder); since ADR 0062 every change of these settings needs the step-up,
-times, bandwidth and transfers included, as does enabling a job. Switching off a maintenance job that keeps the backups
-(`POST /maintenance/:id/disable` for `snapshot-*` and `offsite*`) needs it too; other jobs switch off in one click.
+days for removed pieces on Drive, another folder), and ADR 0062 every change of these settings and switching off a
+maintenance job that keeps the backups. ADR 0081 (26 November 2026): none of them asks for a fresh code any more; only
+the off-site copy's credentials do (the Google client, the Drive sign-in and disconnection, the encryption keys).
 
 ## Canon (Projects page, v2 C2a)
 
@@ -1214,9 +1206,8 @@ by default. **Remove** takes a rule out, **Add** puts one in (a fact, and either
 change of a set value", or, since v2 C2b, "deleting a page with these values": the rule that makes deleting an
 Authoritative page need canonical approval, seeded by default as "Status = Authoritative: deleting such a page (or a
 subtree holding one) needs canonical approval; restoring does not"); nothing is stored until **Save**, which asks for a
-confirmation (marked as dangerous when it protects fewer facts than before) and, since C2d (ADR 0036 decision 4), the
-dashboard's step-up (ADR 0062: the authenticator code, or the password without one) unless given in the last 10 minutes:
-switching a rule off and removing every rule count as saving too. **Restore the defaults** brings back the seeded rules.
+confirmation (marked as dangerous when it protects fewer facts than before; ADR 0081: no fresh code, where C2d, ADR
+0036 decision 4, had asked one): switching a rule off and removing every rule count as saving too. **Restore the defaults** brings back the seeded rules.
 C2d adds a rule, on by default: **Status tags (CANON, Working, Archived)**: added or removed only by the lifecycle tools
 and by creates according to their status (ADR 0036 decision 7); switching it off frees them. Every save is audited as `project.set_canonical_rules` with the rules before and after. With no rule at
 all the section warns that agents with scope "write" can change any fact. Changes apply to the next write; nothing
@@ -1264,7 +1255,7 @@ environment, or _saved here_), its range and default, and how a change applies:
 
 **Edit** (validated against the registry: range, whole numbers, choices, and every loader that reads the setting, so a
 rule between two settings is checked too; an amount in the display unit must convert exactly) and **Reset** (back to
-the environment's value, or the default) ask for confirmation and the step-up. Every change is in **Recent changes**
+the environment's value, or the default) ask for confirmation (ADR 0081: no fresh code). Every change is in **Recent changes**
 with its old and new value and source (`settings.config`, `settings.config_reset`; the settings that existed before F8
 keep their own audit lines).
 
@@ -1286,7 +1277,7 @@ value that no longer loads with the environment is left out at start and named a
 
 ### Restart the bridge
 
-The **Restart the bridge** card says how many settings are pending a restart. Its button (confirmation and the step-up)
+The **Restart the bridge** card says how many settings are pending a restart. Its button (a confirmation)
 runs the SIGTERM stop the bridge already has: no new tool calls or requests (answered 503 `BRIDGE_RESTARTING`), each
 running job parked at its next step boundary, waits ended, HTTP and the database closed; then the process exits with
 code **75**, which systemd restarts (`Restart=on-failure`; 75 is not a clean exit). The log says "restart requested by
@@ -1378,15 +1369,15 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
 - `test/e2e/`: Chromium against the built dashboard under the real CSP (sign-in and return, live pages, proposal diff, a
   token, a phone-sized dark layout).
 - `test/admin/packs.test.ts` and `test/ui/packs.test.tsx` (v3 F3a): the Packs page's routes (listed as stored, the
-  governance read on request, approve and token maps refused without a fresh re-authentication, audited, drift and
+  governance read on request, approve and token maps (ADR 0081: no fresh code), audited, drift and
   re-approval) and the page (navigation, state, sources, projects, rules, the drift alert, the two confirmations).
-  Since the ADR 0052 amendment: a missing pinned heading refused with the page's outline, the re-map refused without a
-  fresh re-authentication, audited old → new, and the new version approved; on the page, the picker (headings in order
+  Since the ADR 0052 amendment: a missing pinned heading refused with the page's outline, the re-map (ADR 0081:
+  no fresh code), audited old → new, and the new version approved; on the page, the picker (headings in order
   with levels, a pinned one disabled), its confirmation, the password, and the choice sent.
 
 ## v3 F2 (ADR 0049)
 
-- **Projects**: **Make default** on each project row (a fresh re-authentication; audited `project.make_default`), and the
+- **Projects**: **Make default** on each project row (audited `project.make_default`), and the
   note "The env file's `LK_DEFAULT_PROJECT=…` overrides this; remove that line to use the dashboard's choice." while the
   env file disagrees. The settings list gains the Last Major Revision switches and housekeeping keys, and
   `imageStagingMaxDays`.
@@ -1408,7 +1399,7 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
 
 - **Packs**: a new page, after Repository Mappings ([above](#packs-v3-f3a)): each setting pack's state, governance
   sources, projects and template ids, token maps, read-only rules and versions; **Approve this pack version** and
-  **Save token maps**, each re-authenticated and audited (`pack.approve`, `pack.set_tokens`; also `pack.seed`,
+  **Save token maps**, each audited (`pack.approve`, `pack.set_tokens`; also `pack.seed`,
   `pack.attach`, `pack.drift`, `pack.replace_rules`).
 - **Proposals**: a package from `arkona_create_character` is one proposal, shown page by page (each new page with its
   facts and tags, each change to an existing page, each image and the folders it creates). It is canonical ("Approve and
@@ -1418,9 +1409,9 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
 
 On the Audits page, a finding of the **Consistency** category has **Pick the right value**: the identity page's value and
 each restatement side by side (page, lifecycle, where, excerpt), each with **Pick this value**, a field to type the
-right value, the agents' suggestions (shown, never applied) and the earlier picks. A pick asks for the step-up (ADR 0062:
-a pack-level decision), then makes ONE proposal editing every page that disagrees; approve it on the Proposals page
-(selectively if wanted; more than 10 pages asks for the step-up again). The job is revertible from the Jobs page. **Pick
+right value, the agents' suggestions (shown, never applied) and the earlier picks. A pick (ADR 0081: no fresh code) makes ONE
+proposal editing every page that disagrees; approve it on the Proposals page
+(selectively if wanted). The job is revertible from the Jobs page. **Pick
 this value** sends the value as shown with the side: when that side reads otherwise now (a page changed after the
 audit), the pick is refused ("SIDE_CHANGED") and nothing is proposed; run the audit again and pick again. Each edit is
 made where the check read the value, and only there; the proposal lists what it leaves as it is, with why (a value
@@ -1432,8 +1423,8 @@ changed since, a quotation, a page archived since, a date split by formatting).
 
 - **Proposals**: filters for the tool, who proposed it and its age beside the state tabs (Pending, Conflicted, History).
   Pending and Conflicted have checkboxes: select all on the page, then **Select all N matching the filter** across pages.
-  **Reject selected** and **Reject all conflicted** take one confirmation and no step-up (a brake); **Approve selected**
-  asks for the step-up when any selected proposal triggers a safety rail. Each proposal is decided on its own and the
+  **Reject selected** and **Reject all conflicted** take one confirmation (a brake); **Approve selected** takes one
+  too (ADR 0081: no fresh code, whatever the proposals hold). Each proposal is decided on its own and the
   results list each one; a proposal whose job is running is left alone.
 - **Errors**: a call the client cancelled is "cancelled by the caller" (classification `client`), not a bridge error, and
   is not counted in the Overview's errors. An occurrence without a LegendKeeper request id says why: "refused before it

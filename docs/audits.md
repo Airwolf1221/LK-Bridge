@@ -279,7 +279,7 @@ what to do when nothing is near.
   or any name the equivalence map lists, with its equivalent where there is one (a partial one is said so). These may be
   real skills used elsewhere: **Allow this name** on the finding (after a confirmation; audited `audits.allow_name`)
   adds it to the audit settings' allowed names, and it is never reported again. The allowed names are listed, and can be
-  removed, in the audit settings (saving them asks for the step-up).
+  removed, in the audit settings.
 - `governance_missing_reference` (info): a capitalised name of two words or more, in a section whose heading holds
   Startup, Related Guidance, Source Boundaries or Dependencies (pack data; elsewhere a capitalised phrase is too often
   not a name), that resolves to nothing however generously it is read (the owner's review). A short name resolves if it
@@ -309,7 +309,7 @@ lifecycle, section, excerpt). Working proposals, gaps, historical material and u
 finding clears when the pages agree (the next run over the snapshots that hold the edit). It is computed by the
 consistency service from the same snapshots (its facts index over the appraisal's overlay), and handed to the check,
 which stays a pure function of its context. No "Propose a fix" and no "Re-check now": the owner's **Pick the right
-value** on the Audits page (a step-up) shows both values side by side, the agents' suggestions and earlier picks, and
+value** on the Audits page shows both values side by side, the agents' suggestions and earlier picks, and
 makes ONE proposal editing every page that disagrees (docs/tools.md).
 
 ## Narratives (category Narratives; v3 F4c)
@@ -387,5 +387,5 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   Events); the fix makes the empty `[NAV] <Territory> <Category>` through create_index's role form and binds the role
   once the job succeeds. Both: automation proposal-first, Apply allowed, default Off. `category_home_mismatch` (info,
   judgement): a source whose primary category's owner homes, resolved by role, do not include its home; the fix is a
-  move proposal to the nearest allowed home; **Keep it here…** (with a reason, the step-up) silences it until the page's
+  move proposal to the nearest allowed home; **Keep it here…** (with a reason) silences it until the page's
   tags or parent change.
