@@ -199,9 +199,10 @@ describe('stored runs: tampered, foreign, holds, exceptions, the cap', () => {
 describe('one page, one open batch', () => {
   it('RT-58: two applies of the same page sent at once never make two open batches', async () => {
     const body = await audit(w, { page: P.reorder });
-    // Two connections (two agents at scope write), each sending the same apply at the same moment.
-    const t1 = w.stack.newToken('r3-race-1', 'write').token;
-    const t2 = w.stack.newToken('r3-race-2', 'write').token;
+    // Two connections (two agents at scope propose: v3 F12 makes an apply at scope write direct), each sending the
+    // same apply at the same moment.
+    const t1 = w.stack.newToken('r3-race-1', 'propose').token;
+    const t2 = w.stack.newToken('r3-race-2', 'propose').token;
     const [c1, c2] = await Promise.all([w.stack.connect(t1), w.stack.connect(t2)]);
     const args = { project: 'test', runId: body.runId, pages: [P.reorder] };
     const [a, b] = await Promise.all([

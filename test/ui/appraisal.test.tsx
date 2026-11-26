@@ -147,8 +147,8 @@ const routes = (over: Record<string, unknown> = {}) => ({
   'POST /appraisal/run': { report },
   'GET /appraisal/runs/apr_0123456789abcdef': { report },
   'POST /appraisal/findings/af_00000000000000000001/propose-fix': {
-    status: 'proposal_captured',
-    proposalId: 'prop_abc',
+    status: 'submitted',
+    jobId: 'job_abc',
     summary: 'Replace the dash in 2 blocks. Last Major Revision skipped: punctuation, not a major revision',
     fix: 'em_dash_text',
     reads: 1,
@@ -206,7 +206,7 @@ describe('the Appraisal page', () => {
     expect(link).toHaveAttribute('target', '_blank');
   });
 
-  it('offers Propose a fix only where the finding has a deterministic repair, and a judgement says what to decide', async () => {
+  it('offers Apply fix… only where the finding has a deterministic repair, and a judgement says what to decide', async () => {
     const api = installApi(routes());
     const user = userEvent.setup();
     renderApp('/ui/appraisal');
@@ -214,7 +214,7 @@ describe('the Appraisal page', () => {
     const card = await screen.findByTestId('appraisal-report');
     const row = (id: string) => card.querySelector<HTMLElement>(`[data-finding="${id}"]`)!;
     expect(
-      within(row('af_00000000000000000001')).getByRole('button', { name: 'Propose a fix' }),
+      within(row('af_00000000000000000001')).getByRole('button', { name: 'Apply fix…' }),
     ).toBeInTheDocument();
     for (const id of [
       'af_00000000000000000002',
@@ -222,19 +222,20 @@ describe('the Appraisal page', () => {
       'af_00000000000000000004',
       'af_00000000000000000005',
     ])
-      expect(within(row(id)).queryByRole('button', { name: 'Propose a fix' })).toBeNull();
+      expect(within(row(id)).queryByRole('button', { name: 'Apply fix…' })).toBeNull();
     expect(within(row('af_00000000000000000002')).getByTestId('judgement')).toHaveTextContent(
       'Judgement: write a Purpose section first (write_page)',
     );
     expect(card.querySelectorAll('button')).toHaveLength(1);
-    // Proposing asks first, then says it is a proposal.
-    await user.click(within(row('af_00000000000000000001')).getByRole('button', { name: 'Propose a fix' }));
-    await user.click(await screen.findByRole('button', { name: 'Propose the fix' }));
+    // v3 F12: applying asks first (saying it runs at once as one job), then says which job runs it.
+    await user.click(within(row('af_00000000000000000001')).getByRole('button', { name: 'Apply fix…' }));
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('runs at once as one job');
+    await user.click(screen.getByRole('button', { name: 'Apply fix' }));
     await waitFor(() =>
       expect(api.find('POST', '/appraisal/findings/af_00000000000000000001/propose-fix')).toHaveLength(1),
     );
     expect(
-      await within(row('af_00000000000000000001')).findByText(/Proposed \(prop_abc\)/),
+      await within(row('af_00000000000000000001')).findByText(/Applying: job job_abc\./),
     ).toBeInTheDocument();
   });
 

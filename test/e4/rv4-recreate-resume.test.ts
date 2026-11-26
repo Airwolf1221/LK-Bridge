@@ -24,7 +24,8 @@ const call = (name: string, args: Record<string, unknown>) =>
 /** v3 F12 (ADR 0081): at scope write a restore is direct, one job (on the Review page); how that job ended. */
 async function ran(r: ToolCall) {
   // A job that failed answers as an error that names it.
-  const jobId = (r.body.jobId ?? (r.body.error as { jobId?: string } | undefined)?.jobId) as string | undefined;
+  const jobId = (r.body.jobId ?? (r.body.error as { jobId?: string } | undefined)?.jobId) as
+    string | undefined;
   expect(jobId, r.text).toBeTruthy();
   const job = await w!.stack.runtime.engine.wait(PROJECT, jobId!, 20_000);
   return { state: job.status, job };

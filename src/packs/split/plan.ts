@@ -2483,7 +2483,7 @@ export async function planSplit(
   const marker: LifecycleMarker = {
     tool: SPLIT_TOOL,
     canonical: true,
-    reason: `a split moves established material between owners (${node.rawName} → ${receivers.map((r) => r.page?.name).join(', ')}): always a canonical proposal, at every scope (D7)`,
+    reason: `a split moves established material between owners (${node.rawName} → ${receivers.map((r) => r.page?.name).join(', ')}): a canonical proposal at scope propose; direct at scope write, on the owner’s Review page (D7; v3 F12)`,
     pages: markerPages,
   };
   const cost = splitCost(steps);

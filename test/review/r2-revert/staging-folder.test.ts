@@ -42,7 +42,7 @@ async function stagedTheOldWay(world: ImagesWorld): Promise<{ assetId: string; s
   return { assetId: old.assetId!, staging };
 }
 
-/** The agent moves it out with a raw updateAsset (the default test profile: rails off, as the owner may set them). */
+/** The agent moves it out with a raw updateAsset (the default test profile, at scope write). */
 async function rawMoveOut(world: ImagesWorld, assetId: string): Promise<string> {
   const c = await world.stack.connect();
   const to = world.assets.at('Characters');

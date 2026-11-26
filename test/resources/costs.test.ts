@@ -82,7 +82,7 @@ it('reads and writes per typical call', async () => {
     restore: [4, 1], // +1: the restored page's document
     create_document: [4, 1], // +2: the new map (its settings and features)
     update_document: [6, 1], // +2: the map read whole (its settings and features)
-    delete_document: [9, 1], // +5: the copy (the page and each of its documents)
+    delete_document: [7, 1], // +3: the copy (the page's settings and that document only)
     'set_facts, 2 facts': [5, 2], // +1 pre-image
   });
 });

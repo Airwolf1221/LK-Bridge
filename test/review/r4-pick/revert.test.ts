@@ -119,11 +119,11 @@ describe('Revert of a pick', () => {
     expect(textOf(w, 'rosab001', 'rosab001p')).toBe('Rosa Venn was born in 4A 100.');
     // The owner edits Register B again in the app.
     outsideBlock(w, 'rosab001', 'rosab001p', [t('Rosa Venn was born in 4A 100, at dawn.')]);
-    const whole = await revert(w, done.job!.id);
+    const whole = await revert(w, done.job.id);
     expect(whole.r.status).not.toBe('submitted');
     expect(textOf(w, 'rosab001', 'rosab001p')).toBe('Rosa Venn was born in 4A 100, at dawn.');
     expect(rowText(w, coreOf(ROSA), 'Temporal Scope')).toBe('Born 4A 100');
-    const part = await revert(w, done.job!.id, { confirmPartial: true });
+    const part = await revert(w, done.job.id, { confirmPartial: true });
     expect(part.r.status, JSON.stringify(part.r)).toBe('submitted');
     expect(part.job?.status, JSON.stringify(part.job?.lastError ?? null)).toBe('succeeded');
     expect(rowText(w, coreOf(ROSA), 'Temporal Scope')).toBe('Born 4A 103');
@@ -139,7 +139,7 @@ describe('Revert of a pick', () => {
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     expect(rowText(w, coreOf(YURI), 'Temporal Scope')).toBe('Born 4A 100');
     outsideRow(w, coreOf(YURI), 'Temporal Scope', 'Born 4A 100 (confirmed by the owner)');
-    const rv = await revert(w, done.job!.id, { confirmPartial: true });
+    const rv = await revert(w, done.job.id, { confirmPartial: true });
     if (rv.job) expect(rv.job.status).toBe('succeeded');
     expect(rowText(w, coreOf(YURI), 'Temporal Scope')).toBe('Born 4A 100 (confirmed by the owner)');
   });
@@ -151,7 +151,7 @@ describe('Revert of a pick', () => {
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     const done = await pickDone(w, r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
-    const rv = await revert(w, done.job!.id);
+    const rv = await revert(w, done.job.id);
     expect(rv.r.status, JSON.stringify(rv.r)).toBe('submitted');
     expect(rv.job?.status, JSON.stringify(rv.job?.lastError ?? null)).toBe('succeeded');
     expect(textOf(w, 'saulr001', 'saulr001p')).toBe(before);

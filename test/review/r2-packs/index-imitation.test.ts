@@ -22,12 +22,14 @@ const decoys = (w: PackWorld, name: string, real: string) =>
     .filter((r) => r.id !== real)
     .map((r) => ({ id: r.id, parent: r.parentId }));
 
-describe('ATK-01a: the seed’s switch ("always propose"): the owner approves an ordinary proposal', () => {
+describe('ATK-01a: at scope propose: refused, or the owner approves an ordinary proposal', () => {
   let w: PackWorld;
   let agent: Awaited<ReturnType<typeof writeAgent>>;
   beforeAll(async () => {
-    w = await packWorld({ toolModes: 'seed' });
-    agent = await writeAgent(w);
+    // v3 F12 (ADR 0081): the pack's switches are gone; this world's own agent is at scope propose, so a package is a
+    // proposal (the path under attack here).
+    w = await packWorld();
+    agent = (name, args) => w.call(name, args);
   });
   afterAll(async () => {
     await w?.close();
@@ -69,15 +71,12 @@ describe('ATK-01a: the seed’s switch ("always propose"): the owner approves an
   });
 });
 
-describe('ATK-01b: the switch set to "follow the scope" (owner-approved): direct at scope write', () => {
+describe('ATK-01b: direct at scope write (every pack tool follows the scope, v3 F12)', () => {
   let w: PackWorld;
   let agent: Awaited<ReturnType<typeof writeAgent>>;
   beforeAll(async () => {
     w = await packWorld({ toolModes: 'seed' });
     agent = await writeAgent(w);
-    const packs = w.stack.runtime.packs;
-    packs.commands.setToolModes('owner', 'arkona', { arkona_create_character: 'scope' });
-    await packs.commands.approve('owner', 'arkona');
   });
   afterAll(async () => {
     await w?.close();

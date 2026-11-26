@@ -89,12 +89,6 @@ export async function runChronologyRepairCheck(
     kind: 'other',
     scope: 'write',
   });
-  rt.policy.commands.setRails('owner', profile.id, {
-    deletes: false,
-    bulk: false,
-    renamesMoves: false,
-    assets: false,
-  });
   const pats = new PatService({
     store: new AuthStore(sb.db),
     event: () => undefined,

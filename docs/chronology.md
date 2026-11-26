@@ -138,7 +138,7 @@ is accepted too. Neither is reported as "written differently"; another value is 
 
 ## The timeline event of a qualified row
 
-`sync_timeline_event` (and the dashboard's "Propose a fix") makes it from the anchor:
+`sync_timeline_event` (and the dashboard's "Apply fix", named "Propose a fix" before v3 F12) makes it from the anchor:
 
 | Reading       | Event                                              |
 | ------------- | -------------------------------------------------- |
@@ -156,8 +156,8 @@ charter is sealed – c. 4A 563; exact date unresolved`. The timeline then shows
 
 **The tail follows the row** (v3 F2, [ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md)
 decision 1). The link between a row and its event records the tail the bridge wrote. When the owner later edits the Date
-cell, the next sync or "Propose a fix" that changes the event's date also rewrites the tail (after the name's **last**
-`–`) to the cell, in the same proposal (`name: "… – c. 4A 563; exact date unresolved" → "… – Isar 3rd, 4A 563; exact
+cell, the next sync or "Apply fix" that changes the event's date also rewrites the tail (after the name's **last**
+`–`) to the cell, in the same change (`name: "… – c. 4A 563; exact date unresolved" → "… – Isar 3rd, 4A 563; exact
 day disputed"`); a row that has become plain drops the tail and its `–`. If only the wording changed (the date did not),
 the check reports **name drift** on the row, fixed by a name-only update. The opening words are never touched, and an
 unlinked event, an event the owner renamed, or a `–` written by anyone else is never treated as the bridge's tail.
@@ -193,7 +193,7 @@ pairing now settles every tie it safely can, and the owner settles the rest on t
   Review page; ADR 0057 decision 3). The check honours stored links first, as it does the links the bridge makes, so a
   later tie on that day no longer touches the pair.
 - **None of these: make a new event.** `create_new: true` (never with `event_id`) creates the row's event even though
-  candidates exist; the proposal names the candidates it passed over.
+  candidates exist; the change (the job, or the proposal at `propose`) names the candidates it passed over.
 - **Refusals name the candidates.** `PAIRING_AMBIGUOUS` gives every candidate's name, date and id in its message, not
   only in its details. On the Chronology and Audits pages a refused fix shows each candidate with **Use this event**,
   and one **Make a new event** button.
@@ -232,14 +232,15 @@ counts in the Main count.
 
 ## Events without a row, and events in a tie
 
-An event no row accounts for is the check's "event without a row". Its **Propose a fix** deletes only the event (no row,
+An event no row accounts for is the check's "event without a row". Its fix (**Delete the event…** on the dashboard, one
+confirmed job since v3 F12; before, **Propose a fix**) deletes only the event (no row,
 no count change), and names it, its date and the three rows nearest it by date. The same through MCP:
 `delete_timeline_event { event: { event_id }, orphan: true, confirm: true }`. Both refuse when the event has a row after
 all, or a row could be its own. A row whose Date cannot be read can only be matched by its name, so it could be any
 event's own: **while the age's table has an unpaired row whose date cannot be read, no event of that age is deleted as
 an orphan** (`ORPHAN_NEAR_UNREADABLE`, naming each such row; CR-2026-11-R2, R2-49, and ADR 0057 decision 2, the owner's
 of 17 November 2026). Mark the row table-only (it has no event), or fix its date, and the delete can go ahead; a row
-whose date cannot be read that appears after the proposal was made stops it inside the lock.
+whose date cannot be read that appears after the delete was planned stops it inside the lock.
 
 **An event with candidate rows is not an event without a row** (v3 F2.1, the owner's report of 16 November 2026: all
 four of Arkona's "events without a row" were real events caught in ties). An unpaired event that any unpaired row could

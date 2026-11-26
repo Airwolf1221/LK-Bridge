@@ -10,8 +10,8 @@
  * from the bridge's database (`copyBridgeState`); it never writes to the bridge's database. In the TEMPORARY database
  * only, the Arkona pack's governance sources are pointed at a throwaway governance page the check makes (the test
  * project cannot read Arkona's governance, and the tagging policy check reads it) and the pack is approved there, as the
- * owner would. The tools are called as the MCP server calls them, for a temporary write-scope principal with the rails
- * off. Each step reports PASS or FAIL:
+ * owner would. The tools are called as the MCP server calls them, for a temporary write-scope principal (v3 F12: its
+ * writes direct). Each step reports PASS or FAIL:
  *
  * - **I1** a throwaway index `lk-bridge f5c check <time>` and its governance page (every pinned heading); the pack
  *   approved in the temporary database;
@@ -98,17 +98,11 @@ export async function runIdentityCheck(
     });
     return items;
   }
-  // A temporary write-scope principal, the rails off (as the write-scope rehearsal's).
+  // A temporary write-scope principal (as the write-scope rehearsal's; v3 F12: no rails, its writes direct).
   const profile = rt.policy.commands.createProfile('owner', {
     label: `f5c check ${Date.now()}`,
     kind: 'other',
     scope: 'write',
-  });
-  rt.policy.commands.setRails('owner', profile.id, {
-    deletes: false,
-    bulk: false,
-    renamesMoves: false,
-    assets: false,
   });
   const pats = new PatService({
     store: new AuthStore(sb.db),

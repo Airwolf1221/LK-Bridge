@@ -168,7 +168,7 @@ describe('a chronology row (ADR 0064 D6.2, planEventChange)', () => {
     expect(r.notPlanned, JSON.stringify(r.notPlanned)).toEqual([]);
     const done = await ranAndWait(r);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
-    pickJob = done.job!.id;
+    pickJob = done.job.id;
     expect(cellRuns('rfour007', 0)).toEqual(before);
     expect(cellRuns('rfour007', 1)).toEqual([{ text: '4A 882' }]);
   });

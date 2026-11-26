@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- parsed tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- parsed tool results */
 /**
  * v2 E1a (ADR 0042): restore_snapshot, run through the ordinary machinery: every document type, the sidebar, a deleted
  * page (undeleted, or recreated with its original or new ids), the canon, lifecycle and decision-5 guards, `unsupported`
@@ -416,7 +416,9 @@ describe('restore_snapshot: a deleted page', () => {
       rec = rs.list(PROJECT).find((x) => x.scope === 'deleted')!;
     }
     expect(rec.followUpJobId, JSON.stringify(rec)).toBeTruthy();
-    expect((await w!.stack.runtime.engine.wait(PROJECT, rec.followUpJobId!, 30_000)).status).toBe('succeeded');
+    expect((await w!.stack.runtime.engine.wait(PROJECT, rec.followUpJobId!, 30_000)).status).toBe(
+      'succeeded',
+    );
     expect(texts()).not.toContain('Written before the delete.');
   });
 

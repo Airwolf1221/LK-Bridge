@@ -186,7 +186,30 @@ describe('H2: an exception’s owner actions', () => {
 });
 
 describe('H4: Apply all corrections', () => {
-  it('makes the batches, then approves all of them together after the step-up', async () => {
+  it('v3 F12: confirmed, the batches run at once, each one job; nothing is left to approve', async () => {
+    const api = installApi(
+      routes({
+        'POST /tagging/apply-all': {
+          pages: 30,
+          batches: [
+            { batchId: 'rtb_1', proposalId: null, jobId: 'job_b1', pages: 25 },
+            { batchId: 'rtb_2', proposalId: null, jobId: 'job_b2', pages: 5 },
+          ],
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/tagging');
+    await user.click(await screen.findByRole('button', { name: 'Apply all corrections (30)' }));
+    const c1 = await screen.findByRole('alertdialog');
+    expect(c1).toHaveTextContent(/each one job at once/);
+    await user.click(within(c1).getByRole('button', { name: 'Apply the batches' }));
+    await screen.findByText('2 batches made: 25, 5 pages.');
+    expect(api.find('POST', '/tagging/apply-all')[0]!.body).toEqual({ runId: RUN.id, confirm: true });
+    expect(screen.queryByRole('button', { name: /Approve all these batches/ })).toBeNull();
+  });
+
+  it('batches answered as proposals: approves all of them together after the step-up', async () => {
     const gate = needsReauth(() => ({
       results: [
         { id: 'prop_b1', ok: true, state: 'executing' },
@@ -210,7 +233,7 @@ describe('H4: Apply all corrections', () => {
     renderApp('/ui/tagging');
     await user.click(await screen.findByRole('button', { name: 'Apply all corrections (30)' }));
     const c1 = await screen.findByRole('alertdialog');
-    await user.click(within(c1).getByRole('button', { name: 'Make the batches' }));
+    await user.click(within(c1).getByRole('button', { name: 'Apply the batches' }));
     await screen.findByText('2 batches made: 25, 5 pages.');
     expect(api.find('POST', '/tagging/apply-all')[0]!.body).toEqual({ runId: RUN.id, confirm: true });
     await user.click(screen.getByRole('button', { name: 'Approve all these batches (2)' }));

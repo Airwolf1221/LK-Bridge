@@ -1053,7 +1053,8 @@ async function planSet(
         },
         head: {
           ...head,
-          setId: 'assigned when the change runs (bridge_proposal_status, then bridge_job_status, show it)',
+          setId:
+            'assigned when the change runs: bridge_job_status shows it (for a proposal, bridge_proposal_status first)',
         },
         preview: () => ({ set }),
       });

@@ -14,8 +14,8 @@
  * without the copy. The copy is kept for DELETE_COPY_RETENTION_DAYS (the snapshot pruner keeps it), then goes.
  *
  * Cost: per page, one `getResource` (to list it), its sidebar (one `listProperties`), and one read per document (its
- * blocks, features, lanes and events, or board); a cascade adds one `listResources` per page with children. All at P1,
- * in the job's name.
+ * blocks, features, lanes and events, or board); a cascade adds one `listResources` per page with children. A document's
+ * delete reads only the page and that document. All at P1, in the job's name.
  */
 import type { Db } from '../db/open.js';
 import { JobsError, SYSTEM_PRINCIPAL, type DeleteCopier, type OpParams } from '../jobs/index.js';
@@ -84,7 +84,10 @@ export interface DeleteCopierDeps {
 }
 
 /** Whether a job's deletes keep a copy (an agent's, and Revert's). */
-export function copiesFor(job: { readonly principalId: string; readonly origin: { readonly tool?: string } }): boolean {
+export function copiesFor(job: {
+  readonly principalId: string;
+  readonly origin: { readonly tool?: string };
+}): boolean {
   if (job.origin.tool === REVERT_TOOL) return true;
   return job.principalId !== SYSTEM_PRINCIPAL.principalId && job.principalId !== 'automation';
 }
@@ -148,6 +151,10 @@ export function createDeleteCopier(d: DeleteCopierDeps): DeleteCopier {
       taken = await svc.captureNodes(projectId, nodes, {
         trigger: { kind: 'delete_copy', jobId: ctx.job.id, stepNo: ctx.step.stepNo, op: ctx.opId },
         priority: 'P1',
+        // A document's delete: that document and the page's settings, not every document of the page.
+        ...(ctx.opId === 'deleteDocument' && typeof ctx.params.path?.documentId === 'string'
+          ? { pieces: { resource: true, sidebar: false, documents: [ctx.params.path.documentId] } }
+          : {}),
       });
     } catch (e) {
       throw new CopyFailed(e instanceof Error ? e.message : String(e));

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- LK results and tool results are untyped JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-explicit-any -- LK results and tool results are untyped JSON */
 /**
  * v3 F12 (ADR 0081), opt-in, WRITES then cleans up: an agent at scope `write` makes canon and lifecycle changes and
  * deletes directly, each on the owner's Review page, and Revert brings a delete back from the copy kept before it.

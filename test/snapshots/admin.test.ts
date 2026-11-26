@@ -93,7 +93,7 @@ describe('the Snapshots page API', () => {
     expect(ov.headroom).toBe(ov.disk.free - min);
   });
 
-  it('a page’s history, its diff with now, and a restore proposed from the dashboard (dry run first)', async () => {
+  it('a page’s history, its diff with now, and a restore from the dashboard (dry run first, then confirmed)', async () => {
     w = await snapshotsWorld();
     const o = owner(w);
     await w.stack.runtime.snapshots.full(PROJECT, 'test');
@@ -136,20 +136,33 @@ describe('the Snapshots page API', () => {
     expect(dry.json.plan.pieces[0].diff).toContain('+First notes.');
     expect(w.repo.blocks.get(w.d.main)!.version).toBe(main.version + 1); // nothing written
 
-    const proposed = await o.post('/snapshots/restore?project=test', {
+    // v3 F12 (ADR 0081): the owner's restore needs the dialog's confirmation, then runs at once as one job.
+    const unconfirmed = await o.post('/snapshots/restore?project=test', {
       page: S.atlas,
       snapshot: snap,
       scope: 'document',
       document: w.d.main,
     });
-    expect(proposed.json.status).toBe('proposal_captured');
-    expect(proposed.json.proposalId).toMatch(/^prop_/);
-    expect(w.repo.blocks.get(w.d.main)!.version).toBe(main.version + 1); // still nothing written: a proposal
-    expect(audits('snapshots.restore')[0]!.target).toBe(proposed.json.proposalId);
+    expect(unconfirmed.status).toBe(400);
+    expect(w.repo.blocks.get(w.d.main)!.version).toBe(main.version + 1); // nothing written
+    const confirmed = await o.post('/snapshots/restore?project=test', {
+      page: S.atlas,
+      snapshot: snap,
+      scope: 'document',
+      document: w.d.main,
+      confirm: true,
+    });
+    expect(confirmed.status, JSON.stringify(confirmed.json)).toBe(200);
+    expect(confirmed.json).toMatchObject({ status: 'submitted', jobId: expect.stringMatching(/^j/) });
+    const jobId = String(confirmed.json.jobId);
+    expect((await w.stack.runtime.engine.wait(PROJECT, jobId, 30_000)).status).toBe('succeeded');
+    expect(JSON.stringify(w.repo.blocks.get(w.d.main)!.blocks)).toContain('First notes.');
+    expect(audits('snapshots.restore')[0]!.target).toBe(jobId);
     const listed = await o.get('/snapshots?project=test');
     expect(listed.json.restores[0]).toMatchObject({
-      proposalId: proposed.json.proposalId,
-      state: 'proposed',
+      id: confirmed.json.restoreId,
+      jobId,
+      state: 'executed',
       scope: 'document',
       requestedBy: 'owner',
     });

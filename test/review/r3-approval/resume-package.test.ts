@@ -96,8 +96,9 @@ describe('Resume: a package approved in part', () => {
   it('AP-28 a pack version made after the stop stops the resumed job before any write', async () => {
     const w = (open = await packWorld());
     const { jobId } = await stopped(w, 'Mizuhara Nao', 'Nao');
-    // The owner changes a switch on the Packs page: a new version, waiting for approval.
-    w.stack.runtime.packs.commands.setToolModes('owner', 'arkona', { arkona_create_character: 'scope' });
+    // The owner edits the pack's rules on the Packs page: a new version, waiting for approval.
+    const packs = w.stack.runtime.packs;
+    packs.commands.replaceRules('owner', 'arkona', structuredClone(packs.get('arkona')!.rules), 'r3: a new version');
     const writes = w.stack.mock.calls.filter((c) => c.method !== 'GET').length;
     await w.stack.runtime.resume.resume(PROJECT, jobId, { kind: 'owner' }, OWNER_ORIGIN);
     const job = await settle(w, jobId);

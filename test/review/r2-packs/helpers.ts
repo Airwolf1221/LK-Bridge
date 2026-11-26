@@ -37,7 +37,7 @@ export function developed(name: string, over: Record<string, unknown> = {}): Rec
 }
 
 /**
- * An agent connection at scope `write` with the DEFAULT safety rails (as a new profile on the bridge has them), as the
+ * An agent connection at scope `write` (as a new profile on the bridge has it), as the
  * brief asks (`stack.newToken(label, 'write')`).
  */
 export async function writeAgent(

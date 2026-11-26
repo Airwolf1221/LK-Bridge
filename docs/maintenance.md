@@ -138,9 +138,10 @@ weekly), at P3; a scheduled run waits for the night's chain (the full snapshot, 
 a **background** job. It also runs by itself `CHRONOLOGY_CHECK_DELAY_MS` (10 minutes) after the last change snapshot
 that touched a chronology document (the Main table, an age table or an age timeline), and the automation's chronology
 codes then act on its findings (Propose by default; see the Automation page). The findings are on the dashboard's **Chronology** page, which can also run
-it at once (P2), with **Propose a fix** for a row without an event and for a date mismatch (one `sync_timeline_event`
-proposal each, for the owner to approve; the check itself still never repairs), and for a count mismatch (one proposal
-setting the age's Main count to its table's row count; hotfix of 15 November 2026). Runs are kept in `chronology_checks`
+it at once (P2), with **Apply fix…** (named **Propose a fix** before v3 F12) for a row without an event and for a date
+mismatch (one `sync_timeline_event` job each, run at once once the owner confirms it; before F12 a proposal; the check
+itself still never repairs), and for a count mismatch (one job setting the age's Main count to its table's row count;
+hotfix of 15 November 2026). Runs are kept in `chronology_checks`
 (migration 1800); a run cut off by a restart is closed as failed by the next.
 
 **Chronology II** (v2 E6, [ADR 0048](adr/0048-chronology-ii.md)): a qualified date (`c. 4A 563; exact date unresolved`)
@@ -148,7 +149,7 @@ is read by its anchor for pairing and the KCY check, never rewritten ([chronolog
 unreadable is reported once, with why. The last pass of the pairing is scored (the same start and end, the same start
 and shape, the name, the same start), never pairs a one-day row with a range event while a range row starts there,
 and each run stores how every pair was made. Rows the owner marked table-only are not reported while they are
-unchanged. An event without a row has a **Propose a fix** too (the event deleted, only the event). The request count is
+unchanged. An event without a row has a fix too, **Delete the event…** (the event deleted, only the event). The request count is
 unchanged.
 
 ## `link-sweep` (v2 C2c)

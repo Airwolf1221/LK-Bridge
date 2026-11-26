@@ -103,17 +103,11 @@ export async function runCoreUpgradeCheck(
     registry: true,
   });
 
-  // A temporary write-scope principal, the rails off (as the write-scope rehearsal's).
+  // A temporary write-scope principal (as the write-scope rehearsal's; v3 F12: no rails, its writes direct).
   const profile = rt.policy.commands.createProfile('owner', {
     label: `f7.1 check ${Date.now()}`,
     kind: 'other',
     scope: 'write',
-  });
-  rt.policy.commands.setRails('owner', profile.id, {
-    deletes: false,
-    bulk: false,
-    renamesMoves: false,
-    assets: false,
   });
   const pats = new PatService({
     store: new AuthStore(sb.db),

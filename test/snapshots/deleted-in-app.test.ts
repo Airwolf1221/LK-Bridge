@@ -2,8 +2,8 @@
  * v3 F2 (ADR 0049 decision 5; ADR 0046 decision 4, the owner's amendment): a page deleted in the LegendKeeper app (the
  * bridge holds no delete record of it) can be restored when a full or change snapshot holds it. The lifecycle and canon
  * guards judge the restore from the snapshot's state (its prefix, Status and tags), as they would a create of that page:
- * an Authoritative page comes back as a canonical proposal. Refused only when no snapshot holds it. The proposal says
- * which snapshot it came from and when it was taken.
+ * an Authoritative page comes back as a canonical proposal at scope propose. Refused only when no snapshot holds it.
+ * The result says which snapshot it came from and when it was taken. v3 F12 (ADR 0081): at scope write it is direct.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -28,21 +28,25 @@ async function deleteInApp(world: SnapshotsWorld, id: string) {
 }
 
 describe('a page deleted in the app', () => {
-  it('a Working-area page comes back from the snapshot that holds it: an ordinary proposal naming the snapshot', async () => {
+  it('a page comes back from the snapshot that holds it, at scope write directly (one job), naming the snapshot', async () => {
     w = await snapshotsWorld();
     c = await w.stack.connect();
     const snap = (await w.stack.runtime.snapshots.full(PROJECT, 'manual')).snapshotId!;
     await deleteInApp(w, S.atlas);
     const r = await call('restore_snapshot', { page: S.atlas, snapshot: snap, scope: 'deleted' });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    const summary = w.stack.runtime.policy.proposals.get(String(r.body.proposalId))!.summary;
+    expect(r.body.status, r.text).toBe('written');
+    const summary = String(r.body.summary);
     expect(summary).toContain(snap);
     expect(summary).toMatch(/taken \d{4}-\d{2}-\d{2}T/);
+    expect((await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 30_000)).status).toBe(
+      'succeeded',
+    );
+    expect(w.repo.live(S.atlas)).toBeDefined();
   });
 
-  it('an Authoritative page comes back as a canonical proposal', async () => {
+  it('an Authoritative page comes back as a canonical proposal at scope propose', async () => {
     w = await snapshotsWorld();
-    c = await w.stack.connect();
+    c = await w.stack.connect(w.stack.newToken('deleted-in-app-propose', 'propose').token);
     const snap = (await w.stack.runtime.snapshots.full(PROJECT, 'manual')).snapshotId!;
     await deleteInApp(w, S.harbour);
     const r = await call('restore_snapshot', { page: S.harbour, snapshot: snap, scope: 'deleted' });

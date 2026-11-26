@@ -8,7 +8,7 @@
  * It runs on a temporary database that starts as a READ-ONLY copy of the project's settings, repository tree and packs
  * from the bridge's database (`copyBridgeState`, as the write-scope rehearsal does), so the APPROVED Arkona pack version
  * `arkona-2026-11-20-f4c` or later (its narrative rules) applies; it never writes to the bridge's database. The tools are called
- * as the MCP server calls them, for a temporary write-scope principal with the rails off. Each step reports PASS or FAIL:
+ * as the MCP server calls them, for a temporary write-scope principal (v3 F12: its writes direct). Each step reports PASS or FAIL:
  *
  * - **C1** the chronology's calendar, kept (copied from the bridge's database) or read now (ADR 0064 amendment 2);
  * - **N1** Narratives is found by name; Main CANON is found, or made (a plain index, with the sandbox's RAW client, as
@@ -98,17 +98,11 @@ export async function runNarrativeCheck(
     return items;
   }
   const rules = pack.rules.narrative;
-  // A temporary write-scope principal, the rails off (as the write-scope rehearsal's).
+  // A temporary write-scope principal (as the write-scope rehearsal's; v3 F12: no rails, its writes direct).
   const profile = rt.policy.commands.createProfile('owner', {
     label: `f4c check ${Date.now()}`,
     kind: 'other',
     scope: 'write',
-  });
-  rt.policy.commands.setRails('owner', profile.id, {
-    deletes: false,
-    bulk: false,
-    renamesMoves: false,
-    assets: false,
   });
   const pats = new PatService({
     store: new AuthStore(sb.db),

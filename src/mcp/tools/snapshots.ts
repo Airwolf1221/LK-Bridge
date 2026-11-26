@@ -7,7 +7,7 @@
  * - `snapshot_diff` (R): the Markdown diff of a document or a sidebar between a snapshot and the page now (a few reads),
  *   or between two snapshots (free).
  * - `restore_snapshot` (W): a page's documents, its sidebar, one document, or a deleted page, back to a chosen snapshot.
- *   ALWAYS a proposal, at every scope (`write` included): the owner approves it on the dashboard. `dryRun` shows the plan.
+ *   Direct at scope `write` (on the owner's Review page, with Revert); a proposal at scope `propose` (v3 F12). `dryRun` shows the plan.
  */
 import * as z from 'zod';
 import { mcpOrigin } from '../../policy/mcp.js';
@@ -31,6 +31,17 @@ import { diffText } from '../../snapshots/diff.js';
 import { historyOf, pieceFilterOf, pieceNow, pieceThen } from '../../snapshots/history.js';
 import { imageRestoreDeps, restoreImage } from '../../snapshots/image-restore.js';
 import { describeJob } from './write-job.js';
+
+/** A restore job's steps by their operation (its result lists what was and was not written, by these). */
+const stepLabels = (pd: ProjectDeps, jobId: string): string[] =>
+  (pd.engine.stepRecords(pd.project.id, jobId) ?? []).map((st) => BRIDGE_LABEL[st.opId] ?? st.opId);
+/** The bridge's own steps, as the job result names them (not writes). */
+const BRIDGE_LABEL: Readonly<Record<string, string>> = {
+  'bridge.expect': 'check',
+  'bridge.verify': 'verify',
+  'bridge.record': 'check',
+  'bridge.lmr': 'check',
+};
 
 const ID_ONLY = /^(lk:\/\/resources\/)?([a-z][0-9a-z]{5,31})$/;
 
@@ -398,7 +409,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
           // v3 F12 (ADR 0081): at scope `write` the restore runs directly (on the owner's Review page, with Revert).
           if (r.status === 'submitted') {
             const job = await pd.engine.wait(pd.project.id, r.jobId, 25_000);
-            return describeJob(pd, job, [], { ...view, restoreId: r.restoreId }).result;
+            return describeJob(pd, job, stepLabels(pd, job.id), { ...view, restoreId: r.restoreId }).result;
           }
           return render(
             {
@@ -466,7 +477,7 @@ async function imageScope(
     // v3 F12 (ADR 0081): at scope `write` it runs directly (on the owner's Review page).
     if (r.status === 'submitted' && r.jobId) {
       const job = await pd.engine.wait(pd.project.id, r.jobId, 25_000);
-      return describeJob(pd, job, [], { ...r, scope: 'image' }).result;
+      return describeJob(pd, job, stepLabels(pd, job.id), { ...r, scope: 'image' }).result;
     }
     return render(
       {

@@ -1290,7 +1290,13 @@ export class SnapshotService {
         node = null;
       }
       if (!node) continue;
-      nodes.push({ id: node.id, parentId: node.parentId, rank: node.rank, name: node.rawName, kind: node.kind });
+      nodes.push({
+        id: node.id,
+        parentId: node.parentId,
+        rank: node.rank,
+        name: node.rawName,
+        kind: node.kind,
+      });
     }
     if (nodes.length === 0)
       return { changed: false, skipped: true, summary: 'None of the pages is in the tree.' };
@@ -1309,6 +1315,8 @@ export class SnapshotService {
       readonly trigger: Record<string, unknown>;
       readonly priority?: PriorityClass;
       readonly signal?: AbortSignal;
+      /** The pieces of each page (default: everything); a document's delete copies that document and the page's settings. */
+      readonly pieces?: PieceSelection;
     },
   ): Promise<RunOutcome & { readonly reads?: number }> {
     const startedAt = this.o.now();
@@ -1317,7 +1325,7 @@ export class SnapshotService {
     const read = this.reader(projectId, priority, o.signal ? { signal: o.signal } : {});
     const c = newCounters();
     const pages: PageEntry[] = [];
-    for (const n of nodes) pages.push(await capturePage(deps, read, n, EVERYTHING, c));
+    for (const n of nodes) pages.push(await capturePage(deps, read, n, o.pieces ?? EVERYTHING, c));
     if (pages.length === 0) return { changed: false, skipped: true, summary: 'No page to capture.' };
     let rootId: string | null;
     try {

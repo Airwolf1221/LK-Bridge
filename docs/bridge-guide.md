@@ -712,7 +712,8 @@ exists: edit those with `write_page` and `set_facts`.
   Reference Type. A sibling of the same name is refused (`OWNER_EXISTS`).
 - `home`: **required**, the index the page goes in, by name, id or path (`"Salahad / Salahad Polities"`). See below.
 - `status`: `"working"` (the default) drafts `[BWRK] …` under `[INDEX] Working`, to promote into its home later;
-  `"authoritative"` makes canon in its home (a canonical proposal).
+  `"authoritative"` makes canon in its home (direct at scope `write`, on the owner's Review page: only when the owner
+  asked; a canonical proposal at `propose`).
 - `referenceType`, `scope` and `temporalScope`: **required** (`OWNER_FACTS_INCOMPLETE` names a missing one: ask the
   owner). Subject is the name; Status, Continuity Type, Continuity and Inheritance follow from `status` and `continuity`
   (`"Main"`, the default, or an alternate universe's name, which makes the page AU); `supersedes` is "None" unless given;
@@ -1106,8 +1107,8 @@ what it receives **before anything leaves the source**, then takes the blocks ou
 writes the index lines and the remapped Dependencies, dates Last Major Revision by the owner's rule, and **verifies** with
 a direct re-read (every original block in exactly one place). If any of it fails, the job stops before phase 2: the
 owner resumes or reverts it on the dashboard. **Phase 2**, with `retire: true`, once phase 1 has verified and nothing was
-left out: the bridge proposes archiving the source with `archive_page`, a separate canonical proposal. The split never
-deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it, and
+left out: the source is archived with `archive_page`'s plan, with no second approval (as you, for a direct split, on the
+Review page; as the owner's confirmed action, for a split the owner approved). The split never deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it, and
 its `verified` is the job's own verification: a job that ran to its end but read back a difference leaves the split
 `unverified` (nothing is retired; tell the owner, who looks at the job's differences). Its `nextSteps` (also in the dry
 run and the proposal) list what is still owed afterwards, each with its tool: tell the owner, and do each only when asked. A
@@ -1432,7 +1433,7 @@ The full list of forms is in docs/chronology.md.
 
 If a table row and its event no longer agree, the other tools refuse (`CHRONOLOGY_DRIFT`): repair it with
 `sync_timeline_event` (the nightly chronology check, and the check a few minutes after a table edit, report it; the
-owner's automation proposes or makes the repair, and the dashboard offers "Propose a fix"). If a
+owner's automation proposes or makes the repair, and the dashboard offers "Apply fix"). If a
 change stops part-way, send **the same request again**: it does only what is left; other changes of that age wait for it
 (`CHRONOLOGY_INCOMPLETE`). Before the owner has confirmed the chronology, the tools refuse
 (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on an Authoritative page.
@@ -1571,9 +1572,9 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
 
 - **A finding is a report, not an instruction, and it may be out of date.** It says which snapshot it came from and how
   old that is; edits made since are not in it. Read the page (`get_resource`, `read_document`) before you change anything.
-- **Fix through the ordinary tools** (`set_facts`, `move_resource`, `write_page`, `update_resource`…); they go to
-  proposals as usual. You cannot run, edit or acknowledge an audit: the owner does, on the dashboard, which also offers
-  "Propose a fix" for some findings.
+- **Fix through the ordinary tools** (`set_facts`, `move_resource`, `write_page`, `update_resource`…); they follow
+  your connection's scope as usual (direct at `write`, on the owner's Review page; proposals at `propose`). You cannot
+  run, edit or acknowledge an audit: the owner does, on the dashboard, which also offers "Apply fix" for some findings.
 - **Leave lifecycle and canon findings to the owner** (`lifecycle_*`, a Status or tag that disagrees with a prefix or a
   place). The lifecycle tools refuse an inconsistent page; the owner decides which signal is right. Never edit a page's
   prefix, Status or status tag to make a finding go away.

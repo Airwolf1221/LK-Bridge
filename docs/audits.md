@@ -7,6 +7,12 @@ decision 12. The findings are on the dashboard's **Audits** page and, read-only,
 
 This page documents how three checks decide what to flag, because their rules are the owner's settings.
 
+**Fixes (v3 F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)).** The dashboard's fix button, named
+**Propose a fix** before F12, is **Apply fix…**: a dialog (**Apply this fix?**, **Apply fix**) says what the fix does,
+and once confirmed it runs at once as ONE job, every guard judging it (no proposal to approve next). Below, "the fix"
+is that job. The automation still makes ONE proposal per finding for a code at Propose, and an agent's handed-over fix
+follows its connection's scope.
+
 ## Reference Types (`unknown_reference_type`, category Facts)
 
 A Reference Type is **known** when it is a registry value (a character type's Core and Compact values, such as
@@ -38,7 +44,7 @@ A value resembles a registry value when **one** of these holds:
 So "Continent Reference" ({continent}), "Character Biography" ({character, biography}) and "Relationship" resemble
 nothing, and a value made only of generic words ("Reference") resembles nothing either.
 
-### The expected value and "Propose a fix"
+### The expected value and "Apply fix"
 
 A finding names the right value, and offers a `set_facts` fix, **only when it is unambiguous**:
 
@@ -78,11 +84,12 @@ the one it sits under is `race_index_mismatch` (a subrace under its parent race'
 
 A character index whose identity page is a Compact Character Reference beside one or more other owner pages (a `[BSRC]`
 or `[BWRK]` page directly under the index: the counting the package and split planners share, `src/packs/engine/core.ts`).
-"Propose a fix" plans the upgrade with the character tool's own planner (`arkona_create_character` with `target` and
-`upgradeToCore`): ONE proposal per character, its page read live first (`FIX_STALE` when it has been renamed since):
+"Apply fix" plans the upgrade with the character tool's own planner (`arkona_create_character` with `target` and
+`upgradeToCore`): ONE job per character, its page read live first (`FIX_STALE` when it has been renamed since):
 renamed “<Name> - Character Core”, Reference Type Character Core, the Core template recorded, its compact wording
 replaced, the images its Art page also holds removed from it (those the Art page lacks moved there first); its id,
-identity facts, links and prose kept. An Authoritative page's rename is a canonical proposal, as always. In the
+identity facts, links and prose kept. An Authoritative page's rename is canon: the owner's confirmed fix makes it
+directly (F12), and as a proposal it is a canonical one. In the
 automation the code defaults to **Propose** (each finding its own proposal); the owner may switch it to Apply, which
 submits the same job with every guard judging it (ADR 0072).
 
@@ -92,7 +99,7 @@ A page of a character's set (every page under its index other than the identity 
 a relationship page left out) whose copyable identity fields are empty or differ from the identity page's: Subject,
 Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture and Aliases, only those the page's own
 sidebar has (its template's rows), each reported with both values. Never Temporal Scope, Race / Species or Life State
-(not copies). The motivating case: Iuno - Character Art, made by the bridge before F7d with every copy empty. "Propose a
+(not copies). The motivating case: Iuno - Character Art, made by the bridge before F7d with every copy empty. "Apply
 fix" is ONE governed `set_facts` per page copying the identity page's values, both pages read live first (`FIX_STALE`
 when either changed since the audit). In the automation the code defaults to **Propose**; the owner may switch it to
 Apply, which submits the same job with every guard judging it (ADR 0077).
@@ -108,9 +115,9 @@ the paragraph names nobody else; not followed by “images”, “sheet”, “a
 ADR 0072 (24 November 2026) a compact phrasing on the Core is replaced only when it means the page itself: after “this”,
 or as its Purpose paragraph's opener naming the page's own character (“Compact Main CANON reference for <Subject>…”);
 never in a sentence that names or mentions another character. Everything else is listed, never edited, and the
-proposal shows each sentence before and after with the replaced words highlighted. One finding per character, only where a rule would replace
-something; every other sentence still saying “compact” is listed in the finding, never edited. "Propose a fix" reads
-both pages live (`FIX_STALE` when the phrases to replace are not the ones the audit found), then makes ONE proposal:
+fix shows each sentence before and after with the replaced words highlighted. One finding per character, only where a rule would replace
+something; every other sentence still saying “compact” is listed in the finding, never edited. "Apply fix" reads
+both pages live (`FIX_STALE` when the phrases to replace are not the ones the audit found), then runs ONE job:
 the Art page first, then the Core, each changed inside the lock on the named blocks only. In the automation: default
 **Propose**; Apply only when the owner switches it (ADR 0072).
 
@@ -133,7 +140,7 @@ setting pack says the lifecycle tag leads (`lifecycleTagPosition`: Arkona). A `[
 its lifecycle tag (`Working` or `Archived`) is not its first tag, or when it still carries a status tag (`CANON`, or `AU`
 under the AU ruling). The evidence gives its tags, whether the lifecycle tag is first, and the status tags found.
 
-**Propose a fix** (`reorder_tags`, ONE ordinary proposal) reorders the tags and nothing else: the lifecycle tag first,
+**Apply fix** (`reorder_tags`, ONE ordinary job) reorders the tags and nothing else: the lifecycle tag first,
 every other tag in its order (a leftover status tag included). The page is read live first and must still hold exactly
 the tags the audit saw, in any order (`FIX_STALE` otherwise); the job checks them again in the lock and verifies the
 order. Nothing is added, removed or renamed, so it needs no canonical approval. A page whose lifecycle tag already leads
@@ -158,14 +165,14 @@ asset tree (no request): two or more sibling folders with exactly the same name 
 names). The finding gives each set's path and, for each folder, how many assets it holds (and which is the earliest the
 bridge saw). Before v3 F2, two placements planned while a folder chain was missing could each create it.
 
-**Propose a fix** (`merge_asset_folders`, ONE proposal):
+**Apply fix** (`merge_asset_folders`, ONE job):
 
 1. the assets of the later duplicates move into the earliest one, matched folder by folder down the chain (a subfolder the
    earliest also has, by exact name, is merged the same way);
 2. each duplicate the moves empty is deleted, deepest first; each delete checks the folder again when the job runs and
    skips one that is not empty then (never deleted with what is in it).
 
-An asset whose name the earliest folder already holds is moved anyway, never deleted, and the proposal says so. A
+An asset whose name the earliest folder already holds is moved anyway, never deleted, and the fix says so. A
 duplicate that would still hold something (a subfolder with no match) is never deleted. Pre-images are journalled as for
 any move and delete (a deleted folder's bytes are kept).
 
@@ -177,7 +184,7 @@ Wardrobe, a Forms, Outfits or Details folder, or an asset named after it), again
 character's folder (`<Character> - <Label>`), single-piece outfits loose in `Wardrobe`, outfits of two or more pieces in
 `Wardrobe / <Outfit>` (`<Character> - <Outfit> - <Label>`).
 
-| Code                             | Finding                                                                                                                                                                                                                                     | Propose a fix (`art_layout`, ONE proposal)                                                                                                                                             |
+| Code                             | Finding                                                                                                                                                                                                                                     | Apply fix (`art_layout`, ONE job)                                                                                                                                                      |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `art_outfit_folder_single`       | an outfit folder with one piece                                                                                                                                                                                                             | move the piece into Wardrobe, then delete the folder (only if empty then)                                                                                                              |
 | `art_loose_outfit_pieces`        | two or more loose Wardrobe pieces of one outfit (the outfit record, else names)                                                                                                                                                             | find or make `Wardrobe / <Outfit>`, move them in                                                                                                                                       |
@@ -186,8 +193,8 @@ character's folder (`<Character> - <Label>`), single-piece outfits loose in `War
 | `art_asset_name`                 | a name that breaks the naming rule (a loose `<Character> - <Outfit>` is valid)                                                                                                                                                              | the rename, when certain (an extension dropped; an outfit folder's piece given its outfit); else listed                                                                                |
 | `art_stale_folder_ref`           | a line on ANY of the character's pages (every page under its repository index) naming a folder path under the character's folder that no longer exists, or the id of a folder that is no longer the character's (deleted, or now elsewhere) | a path: the line updated (`replaceBlock` at the version read live) where it matches exactly and the folder's new place is certain; an id: listed, its current name and place suggested |
 
-Every fix reads its targets live first (`FIX_STALE` when they changed) and is a proposal: the bridge never moves,
-renames or deletes an asset on its own initiative. The five codes with a fix are proposal-only in the automation (Off or
+Every fix reads its targets live first (`FIX_STALE` when they changed) and runs only when the owner confirms it (or, in
+the automation, as a proposal): the bridge never moves, renames or deletes an asset on its own initiative. The five codes with a fix are proposal-only in the automation (Off or
 Propose, never Apply; Propose by default): see [ADR 0070](adr/0070-v3-f7-guided-character-art.md) and the Automation
 section of [dashboard.md](dashboard.md).
 
@@ -196,14 +203,15 @@ section of [dashboard.md](dashboard.md).
 ADR 0048's F2.1 amendments. An unpaired timeline event that unpaired rows of its age's table could own (the same date, the
 same start, or its name). It is never reported as `chronology_event_without_row` and never offered for deletion. Its fix
 (`chronology_pair`) lists the candidate rows (date and opening words) with **Pair with this row** for each: one
-`sync_timeline_event` proposal for that row with the event's id (`POST /audits/findings/:id/propose-fix` with `rowId`).
+`sync_timeline_event` job for that row with the event's id, once confirmed (**Apply this choice?**, **Apply**; before
+F12, a proposal; `POST /audits/findings/:id/propose-fix` with `rowId`).
 A chronology fix refused because several events could be a row's own shows them with **Use this event** (`eventId`) and
 **Make a new event** (`createNew: true`).
 
 ## Chronology: an event's date tail out of step (`chronology_name_drift`; v3 F2)
 
 ADR 0049 decision 1. A linked qualified event whose name ends with a date tail the bridge wrote, which no longer says what
-its row's Date cell says although the date agrees (the cell's wording changed). **Propose a fix** goes through
+its row's Date cell says although the date agrees (the cell's wording changed). **Apply fix** goes through
 `sync_timeline_event` and makes a name-only update.
 
 ## The appraisal reuses the audits (v3 F3c)
@@ -220,14 +228,14 @@ row the template audit reports is the audit's, not a second appraisal finding).
   and the rest as `audit_finding` (by severity: `info` is optional polish, the rest required defects). Each keeps its audit code,
   category, severity and evidence, and names the run it came from; the report says when the audit ran on an older
   snapshot than the appraisal's, and when no audit has run yet.
-- **"Propose a fix" is handed over** for sibling order and the tags (the fix kinds `move_resource`, `add_tags`, and
+- **The fix is handed over** for sibling order and the tags (the fix kinds `move_resource`, `add_tags`, and
   F3d's `reorder_tags`, the lifecycle tag put first; ADR 0053): the appraisal's follow-up is the audit's own fix, and
   `arkona_appraisal_fix` (or the Appraisal page's button) calls it, so there is one repair for one finding. Any other
   audit fix stays on the Audits page; the appraisal shows that finding as a judgement, naming the tool and what has to be
   decided.
 - **Who asked is recorded**: the audits' fix now takes the caller's origin, so a fix an agent hands over through
-  `arkona_appraisal_fix` is the agent's proposal (its connection and tool), and one from the Appraisal page the
-  owner's, as one from the Audits page always was.
+  `arkona_appraisal_fix` is the agent's (its connection and tool; since F12 direct at scope `write`, a proposal at
+  `propose`), and one from the Appraisal page the owner's confirmed action, as one from the Audits page is.
 
 ## Tags from the retag engine (v3 F3f)
 
@@ -237,7 +245,7 @@ tag-definition document is not consulted there (a project without retag rules ke
 current Authoritative page (Main CANON, or AU) the engine's verdict becomes:
 
 - `missing_required_tags` (Tags, warning): a tag the proposed array holds that the page lacks, with the slot's rationale.
-  No "Propose a fix" here: the guarded apply is `arkona_retag_apply`.
+  No "Apply fix" here: the guarded apply is `arkona_retag_apply`.
 - `tags_outside_definition` (Tags, warning): a tag outside the grammar (an Excluded Routine Tag the apply removes, or an
   owner exception the apply keeps), each with its reason.
 - `duplicate_tags` (Tags, info): the same tag twice.
@@ -262,7 +270,7 @@ the app". LegendKeeper's API cannot change a mention's custom label (ADR 0058 am
 [ADR 0063](adr/0063-v3-f4a-governance-drift-names-and-briefs.md). On a project whose pack has drift rules (Arkona with
 `arkona-2026-11-19-f4a`, once approved), every run also reads the **governance documents**: every tab of the page the
 pack's governance sources sit on (Arkona's AI REPOSITORY root), the pinned sections included, from the snapshots like
-every other page, and compares them with the bridge. Report only: no finding offers "Propose a fix"; governance edits are
+every other page, and compares them with the bridge. Report only: no finding offers "Apply fix"; governance edits are
 the owner's, made by hand. Each finding names the tab and the sections, and suggests a replacement to copy into a
 `write_page` edit: the pack's equivalence map's (or a retired tool's successor), in the evidence as
 `suggestedReplacement`; for a near miss, the closest known name, also in the evidence; for an unknown tool with no
@@ -308,9 +316,9 @@ the character's identity page; its evidence holds the identity page's value and 
 lifecycle, section, excerpt). Working proposals, gaps, historical material and unreadable dates stay in the tool. A
 finding clears when the pages agree (the next run over the snapshots that hold the edit). It is computed by the
 consistency service from the same snapshots (its facts index over the appraisal's overlay), and handed to the check,
-which stays a pure function of its context. No "Propose a fix" and no "Re-check now": the owner's **Pick the right
-value** on the Audits page shows both values side by side, the agents' suggestions and earlier picks, and
-makes ONE proposal editing every page that disagrees (docs/tools.md).
+which stays a pure function of its context. No "Apply fix" and no "Re-check now": the owner's **Pick the right
+value** on the Audits page shows both values side by side, the agents' suggestions and earlier picks, and, once
+confirmed, runs ONE job editing every page that disagrees (v3 F12; before, ONE proposal; docs/tools.md).
 
 ## Narratives (category Narratives; v3 F4c)
 
@@ -341,7 +349,8 @@ Map not first is this category's own finding. Stable codes:
 | `narrative_placeholder` (a field still holding template placeholder text: pack data's patterns, or its template's default, R4.1)                                | info          | none                                                   |
 | `narrative_lifecycle_page` (a page in Narratives with a lifecycle prefix, a CANON, Working or Archived tag, or Status Authoritative or Archived)                | warning       | none                                                   |
 
-**Propose a fix** is offered only where the fix is mechanical, and is always ONE proposal for the owner: re-read live and
+**Apply fix** is offered only where the fix is mechanical, and is always ONE job the owner confirms (ONE proposal in
+the automation): re-read live and
 compared with what the audit saw (`FIX_STALE` otherwise). A dateline fix replaces the chapter's first block only when its
 text before the separator reads whole as a calendar date, and otherwise puts the dateline before it (an epigraph is
 kept), echoing every other block exactly as read. Never the prose. The tags fix only adds the narrative tags: every tag
@@ -374,8 +383,8 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   prefix only (`[INDEX] X` ↔ `[NAV] X`; display name, id and links kept). `index_tags` (warning): the tags differ from
   T11 (a `[NAV]` exactly Navigation; an `[INDEX]` exactly its subject's primary category; never CANON), once the Tagging
   Standard's "Navigation and Subject Index Tags" is published and approved; not under Narratives (the narrative tag grammar
-  governs story, continuity and act indexes there, the owner's ruling); the fix goes through the retag engine's write path, and taking CANON off is always a canonical
-  proposal. Automation: proposal-first, Apply allowed, default Propose. `out_of_order` applies T11's order ([NAV], then
+  governs story, continuity and act indexes there, the owner's ruling); the fix goes through the retag engine's write path, and taking CANON off is canon: the owner's confirmed fix makes it
+  directly (F12), and in the automation it is always a canonical proposal, even at Apply. Automation: proposal-first, Apply allowed, default Propose. `out_of_order` applies T11's order ([NAV], then
   [INDEX], then sources) once the approved pack carries it.
 - v3 F6c ([ADR 0080](adr/0080-v3-f6c-territories-nations-and-subindexes.md)), under the approved pack's nation roles,
   never under Working, Archive, the Legacy Canon Archive, the Design References or Narratives, each switchable per project
@@ -387,5 +396,5 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   Events); the fix makes the empty `[NAV] <Territory> <Category>` through create_index's role form and binds the role
   once the job succeeds. Both: automation proposal-first, Apply allowed, default Off. `category_home_mismatch` (info,
   judgement): a source whose primary category's owner homes, resolved by role, do not include its home; the fix is a
-  move proposal to the nearest allowed home; **Keep it here…** (with a reason) silences it until the page's
+  move to the nearest allowed home; **Keep it here…** (with a reason) silences it until the page's
   tags or parent change.

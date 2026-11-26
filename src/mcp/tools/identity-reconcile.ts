@@ -1,9 +1,9 @@
 /**
  * `arkona_identity_reconcile` (v3 F5c, ADR 0069, H6): bulk identity facts with their tags, as ONE job with one item per
  * character, so a maintenance objective (a culture split's 27 Naming Culture changes) is one coherent, verified job
- * instead of a character at a time by hand. The approval boundaries are unchanged: at scope `propose` it is a proposal;
- * at `write` it runs directly for 10 pages or fewer, and the bulk rail makes more a proposal whose items the owner
- * approves in part or whole; the canon guard, the lifecycle guard and the rails judge it as any write.
+ * instead of a character at a time by hand. At scope `propose` it is a proposal whose items the owner approves in part or
+ * whole; at `write` it runs directly, at any size (v3 F12, ADR 0081: no bulk rail), on the owner's Review page with
+ * Revert; the canon guard and the lifecycle guard judge it as any write.
  *
  * Per item: the identity page is resolved (the Character Core, else the Compact Character Reference, else the
  * identity-owning Character Reference; an [INDEX] to its Core; a name naming several is refused with the candidates),
@@ -310,7 +310,7 @@ export function identityReconcileTool(deps: ToolDeps): McpToolProvider {
     description:
       'The Arkona pack: ONE bounded job for many characters’ identity facts (a culture split, a race correction): for each item { character, facts } it resolves the identity page (Character Core, else Compact Character Reference, else the identity-owning Character Reference; an [INDEX] goes to its Core), reads it fresh, sets ONLY the facts given, recomputes the page’s tags from the new facts under the approved tagging policy (grammar order, supplementary tags kept), and reads both back. Allowed facts: Race / Species, Naming Culture, Life State, Personal / Given Name, Family / Surname, Temporal Scope. Race and Naming Culture values must be in the pack’s token maps (an unmapped one refuses that item only: ask the owner). A Canonical Display Name or name change is a rename (arkona_rename); Status, Continuity Type, Continuity and other protected facts are refused with their tool. Each Naming Culture gets arkona_name_check’s culture report. A tag result that would be a hold or an exception writes no tags and says why (the facts are still written). ' +
       'Failures are isolated: a character that changed since it was read, or whose write fails, is reported and the others carry on; the job can be resumed. Result: each item done and verified, partly done (facts written, tags held, and why), skipped or failed (and why), with consistency follow-ups. ALWAYS run dryRun first (the full itemised preview: planned facts and tag arrays; nothing written). ' +
-      'At scope write it runs directly for 10 pages or fewer; more becomes ONE proposal with one item per character (the owner approves some or all); at scope propose it is a proposal. Never retry a proposal or a queued job: follow it with { report: reconcileId }. It never infers a culture, race or nationality, and never renames or moves anything. Example: { "items": [{ "character": "Al-Mansur XII", "facts": { "Naming Culture": "Ancient Menkheti" } }], "workstream": "Menkheti culture split", "dryRun": true, "project": "arkona" }. Cost: 1 read per character to plan; then per character about 3 reads, 1 write per fact changed, 1 tag write and 2 read-backs.',
+      'At scope write it runs directly (on the owner’s Review page, with Revert); at scope propose it is ONE proposal with one item per character (the owner approves some or all). Never retry a proposal or a queued job: follow it with { report: reconcileId }. It never infers a culture, race or nationality, and never renames or moves anything. Example: { "items": [{ "character": "Al-Mansur XII", "facts": { "Naming Culture": "Ancient Menkheti" } }], "workstream": "Menkheti culture split", "dryRun": true, "project": "arkona" }. Cost: 1 read per character to plan; then per character about 3 reads, 1 write per fact changed, 1 tag write and 2 read-backs.',
     inputSchema: z.object({
       items: z.array(itemSchema).min(1).max(MAX_ITEMS).optional(),
       reconcileTags: z

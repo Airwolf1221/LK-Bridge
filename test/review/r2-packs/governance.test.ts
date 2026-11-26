@@ -1,18 +1,18 @@
 /**
- * R2-PACKS: governance fails closed, and the per-tool switch (expected HELD; listed so the table covers the brief):
+ * R2-PACKS: governance fails closed (expected HELD; listed so the table covers the brief):
  *
  * - ATK-06: a governance document that cannot be read (deleted, 404) refuses every package (PACK_NOT_CURRENT,
  *   'unreadable'), the direct path at scope write included, and cannot be approved;
- * - ATK-03: a pending pack version that switches a creation tool to "follow the scope" does not let it run directly:
- *   the package tools refuse a pack waiting for approval (PACK_NOT_CURRENT, 'rules_changed');
- * - ATK-04: a tool with no switch (a generic pack tool for a type defined in data only) follows `alwaysPropose` (on in
- *   the seed): ONE proposal at scope write.
+ * - ATK-03: a pending pack version does not let a creation tool run: the package tools refuse a pack waiting for
+ *   approval (PACK_NOT_CURRENT, 'rules_changed');
+ * - ATK-04: a generic pack tool (a type defined in data only) follows the agent's scope like every pack tool (v3 F12,
+ *   ADR 0081: the pack's "always propose" switches are gone): ONE direct job at scope write, on Review.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fixture } from '../../images/world.js';
 import { packWorld, type PackWorld } from '../../packs/world.js';
 import type { TypeRules } from '../../../src/packs/types.js';
-import { body, developed, err, writeAgent } from './helpers.js';
+import { body, developed, err, PROJECT, writeAgent } from './helpers.js';
 
 let w: PackWorld;
 let agent: Awaited<ReturnType<typeof writeAgent>>;
@@ -74,19 +74,21 @@ describe('ATK-06 (HELD expected): a governance document that cannot be read', ()
   });
 });
 
-describe('ATK-03 (HELD expected): a pending version that loosens a switch', () => {
-  it('arkona_create_character switched to "follow the scope" but not approved: refused, nothing written', async () => {
-    packs().commands.setToolModes('owner', 'arkona', { arkona_create_character: 'scope' });
+describe('ATK-03 (HELD expected): a pending version', () => {
+  it('arkona_create_character with a pack version waiting for approval: refused, nothing written', async () => {
+    const p = packs().get('arkona')!;
+    packs().commands.replaceRules('owner', 'arkona', structuredClone(p.rules), 'r2: a pending version');
+    const before = w.stack.mock.calls.filter((c) => c.method !== 'GET').length;
     const r = await agent('arkona_create_character', developed('Pending Loosened'));
-    expect(err(r).code).toBe('PACK_NOT_CURRENT');
-    // Put back (the seed's switch), approved.
-    packs().commands.setToolModes('owner', 'arkona', { arkona_create_character: 'propose' });
+    expect(err(r).code, r.text).toBe('PACK_NOT_CURRENT');
+    expect(w.stack.mock.calls.filter((c) => c.method !== 'GET').length).toBe(before);
+    // Approved again.
     await packs().commands.approve('owner', 'arkona');
   });
 });
 
-describe('ATK-04 (HELD expected): a pack tool with no switch of its own', () => {
-  it('a generic pack tool (a type in data only) follows alwaysPropose: ONE proposal at scope write', async () => {
+describe('ATK-04 (HELD expected): a generic pack tool', () => {
+  it('a generic pack tool (a type in data only) follows the scope: ONE direct job at scope write, on Review', async () => {
     const WARD: TypeRules = {
       name: 'Ward',
       tool: 'create_ward',
@@ -144,7 +146,6 @@ describe('ATK-04 (HELD expected): a pack tool with no switch of its own', () => 
       relationship: null,
     };
     const p = packs().get('arkona')!;
-    expect(p.rules.settings.tools?.['arkona_create_ward']).toBeUndefined();
     packs().commands.replaceRules('owner', 'arkona', { ...p.rules, types: [...p.rules.types, WARD] }, 'r2');
     await packs().commands.approve('owner', 'arkona');
     const r = await agent('arkona_create_ward', {
@@ -153,6 +154,12 @@ describe('ATK-04 (HELD expected): a pack tool with no switch of its own', () => 
       pages: [{ role: 'core', scope: 'A ward', markdown: body('A ward.') }],
       project: 'test',
     });
-    expect(r.body.status, r.text).toBe('proposal_captured');
+    expect(r.body.status, r.text).not.toBe('proposal_captured');
+    expect(typeof r.body.jobId, r.text).toBe('string');
+    const job = await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 30_000);
+    expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+    expect(
+      w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).some((i) => i.jobId === job.id),
+    ).toBe(true);
   });
 });

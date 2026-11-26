@@ -173,7 +173,7 @@ describe('renaming canon (ADR 0035 decision 11, ADR 0036 decision 1, CR-14)', ()
     expect(w.repo.live(L.guild)!.name).toBe(name);
   });
 
-  it('C2a (control): renaming a Working page runs directly (the renames rail is off by default)', async () => {
+  it('C2a (control): renaming a Working page runs directly', async () => {
     const r = await call('update_resource', { page: L.ferry, name: '[BWRK] Sky Ferry Line' });
     if (typeof r.body.jobId === 'string') await w.stack.runtime.engine.wait(PROJECT, r.body.jobId, 20_000);
     expect(r.body.status, r.text).not.toBe('proposal_captured');

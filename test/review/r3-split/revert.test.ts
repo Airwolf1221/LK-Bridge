@@ -13,14 +13,15 @@
  * - SP-02: the deletion proposal that follows that partial revert: does it claim the material is back, and does its
  *   approval delete the only live copy of the moved sections?
  * - SP-03: the same after phase 2 has archived the source (archive_page's note changes the source's text).
- * - SP-04: a page the split made, edited AFTER the deletion proposal was made and before the owner approves it.
+ * - (SP-04, a page the split made edited while its deletion proposal waited, went with that proposal: v3 F12, ADR 0081
+ *   makes the deletion part of the owner's confirmed Revert, one job at once, each page checked first.)
  * - SP-05: a page the split made whose formatting (not its text) was changed since the split.
  * - SP-44 (control): a page someone else made under the index the split made, then Revert.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { splitWorld, statutesBody, type SplitWorld } from '../../packs/split-world.js';
 import { statutesSplit, zahraSplit } from '../../packs/split-inputs.js';
-import { approveSplit, bodyOf, named, recordOf, type Obj } from '../../packs/split-helpers.js';
+import { approveSplit, bodyOf, named, recordOf, settle, type Obj } from '../../packs/split-helpers.js';
 import { editBody, holders, ownerRevert, para, PROJECT, propose, reverted, S, surviving } from './helpers.js';
 
 vi.setConfig({ testTimeout: 300_000, hookTimeout: 300_000 });
@@ -65,7 +66,7 @@ describe('SP-01/02: a partial revert after the surviving source was edited', () 
     expect(lost, `blocks with no live holder after the partial revert: ${lost.join(', ')}`).toEqual([]);
   });
 
-  it('SP-02 the deletion proposal after a partial revert does not claim the material is back, nor delete its only copy', async () => {
+  it('SP-02 the deletion after a partial revert does not claim the material is back, nor delete its only copy', async () => {
     // CR-2026-11-R3 (R3-09, fixed): the partial revert was refused, so the split is not reverted and no deletion is
     // proposed; on the reviewed code a proposal said "the moved material is back" and deleted its only copy.
     if (revertOut.rv.status === 'refused') {
@@ -74,17 +75,11 @@ describe('SP-01/02: a partial revert after the surviving source was edited', () 
       return;
     }
     const rec = await reverted(w, jobId);
-    const proposals = w.stack.runtime.policy.proposals;
-    const del = rec.revert.deletionProposalId ? proposals.get(rec.revert.deletionProposalId) : undefined;
-    const summary = String(del?.summary ?? '');
-    // The source's text was NOT put back (the partial revert left it), so the proposal must not say it was.
-    const claimsBack = /the moved material is back/i.test(summary);
-    let lawLost: string[] = [];
-    if (del && del.state === 'pending') {
-      const d = await approveSplit(w, del.id);
-      expect(d.job.status).toBe('succeeded');
-      lawLost = LAW.filter((id) => holders(w, id).length === 0);
-    }
+    // v3 F12 (ADR 0081): the deletion is a job, part of the owner's confirmed Revert.
+    const del = rec.revert.deletionJobId ? await settle(w, String(rec.revert.deletionJobId)) : undefined;
+    // The source's text was NOT put back (the partial revert left it), so the deletion must not say it was.
+    const claimsBack = /the moved material is back/i.test(String(del?.title ?? ''));
+    const lawLost = LAW.filter((id) => holders(w, id).length === 0);
     expect({ claimsBack, lawLost, lawPageLive: w.repo.live(lawId) !== undefined }).toEqual({
       claimsBack: false,
       lawLost: [],
@@ -104,8 +99,9 @@ describe('SP-03: Revert of phase 1 once phase 2 has archived the source', () => 
     expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
     jobId = done.jobId;
     const rec = await recordOf(w, jobId, (x) => x.state === 'retiring');
-    const archived = await approveSplit(w, rec.phase2.proposalId);
-    expect(archived.job.status, JSON.stringify(archived.job.lastError)).toBe('succeeded');
+    // v3 F12 (ADR 0081): phase 2 is one job at once (the owner's confirmed follow-up), no proposal.
+    const archived = await settle(w, String(rec.phase2.jobId));
+    expect(archived.status, JSON.stringify(archived.lastError)).toBe('succeeded');
     await recordOf(w, jobId, (x) => x.state === 'retired');
   });
   afterAll(() => w?.close());
@@ -115,54 +111,17 @@ describe('SP-03: Revert of phase 1 once phase 2 has archived the source', () => 
     const pending: string[] = [];
     if (out.rv.status === 'submitted' || out.rv.status === 'proposed') {
       const rec = await reverted(w, jobId);
-      const id = rec.revert.deletionProposalId as string | null;
-      if (id && w.stack.runtime.policy.proposals.get(id)?.state === 'pending') {
-        pending.push(String(w.stack.runtime.policy.proposals.get(id)!.summary));
-        await approveSplit(w, id);
+      const id = rec.revert.deletionJobId as string | null;
+      if (id) {
+        const del = await settle(w, id);
+        pending.push(`${del.title} (${del.status})`);
       }
     }
     const lost = [...LAW, ...FAITH].filter((x) => holders(w, x).length === 0);
     expect(
       { status: out.rv.status, lost },
-      `revert ${JSON.stringify(out.rv.status)}; deletion proposal: ${pending.join(' | ')}`,
+      `revert ${JSON.stringify(out.rv.status)}; deletion job: ${pending.join(' | ')}`,
     ).toEqual({ status: out.rv.status, lost: [] });
-  });
-});
-
-describe('SP-04: a made page edited after the deletion proposal was made', () => {
-  let w: SplitWorld;
-  beforeAll(async () => {
-    w = await splitWorld();
-    await w.snapshot();
-  });
-  afterAll(() => w?.close());
-
-  it('SP-04 a made page edited after the deletion proposal was made is not deleted when the owner approves it', async () => {
-    const p = await propose(w, surviving());
-    const lawId = p.pages.get('law')!.id;
-    const done = await approveSplit(w, p.proposalId);
-    expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
-    await recordOf(w, done.jobId, (x) => x.state === 'verified');
-    // A full revert (nothing changed since): the moved material goes back, the Law page to a deletion proposal.
-    const out = await ownerRevert(w, done.jobId);
-    expect(out.rv.status, JSON.stringify(out.rv)).toBe('submitted');
-    expect(out.job?.status).toBe('succeeded');
-    const rec = await reverted(w, done.jobId);
-    expect(rec.revert.deleted.map((x: any) => x.id)).toEqual([lawId]);
-    const delId = rec.revert.deletionProposalId as string;
-    expect(w.stack.runtime.policy.proposals.get(delId)!.state).toBe('pending');
-    // While the proposal waits for the owner, someone writes new material on the Law page (a live page).
-    editBody(w, lawId, (b) => {
-      b.push(
-        para(
-          'owner01',
-          'New material written on the Law page after the revert, before the deletion is approved.',
-        ),
-      );
-    });
-    await approveSplit(w, delId);
-    // SAFE: a page changed since the split made it is kept (ADR 0059 6.2), whenever the change came.
-    expect(holders(w, 'owner01').map((h) => h.pageId)).toEqual([lawId]);
   });
 });
 
@@ -209,7 +168,7 @@ describe('SP-44 (control): a page someone else made under the index a split made
   });
   afterAll(() => w?.close());
 
-  it('SP-44 the deletion proposal after a Revert never deletes a page the split did not make', async () => {
+  it('SP-44 the deletion after a Revert never deletes a page the split did not make', async () => {
     const p = await propose(w, zahraSplit());
     const done = await approveSplit(w, p.proposalId);
     expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
@@ -224,8 +183,9 @@ describe('SP-44 (control): a page someone else made under the index a split made
     const out = await ownerRevert(w, done.jobId);
     expect(out.rv.status, JSON.stringify(out.rv)).toBe('submitted');
     const rec = await reverted(w, done.jobId);
-    if (rec.revert.deletionProposalId)
-      await approveSplit(w, rec.revert.deletionProposalId).catch(() => undefined);
+    // v3 F12 (ADR 0081): the deletion is a job, part of the owner's confirmed Revert.
+    expect(rec.revert.deletionProposalId).toBeNull();
+    if (rec.revert.deletionJobId) await settle(w, String(rec.revert.deletionJobId));
     expect({ notes: w.repo.live('zahnotes') !== undefined, zn1: holders(w, 'zn1').length }).toEqual({
       notes: true,
       zn1: 1,

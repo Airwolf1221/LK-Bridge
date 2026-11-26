@@ -1020,7 +1020,7 @@ async function runLifecycle(
           head: {
             ...head,
             recordId:
-              'assigned when the change runs (bridge_proposal_status, then bridge_job_status, show it)',
+              'assigned when the change runs: bridge_job_status shows it (for a proposal, bridge_proposal_status first)',
           },
           preview: () => ({ page: (head as Obj).page, newName: (head as Obj).newName }),
         });

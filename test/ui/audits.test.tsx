@@ -418,12 +418,12 @@ describe('the Audits page', () => {
     expect(await screen.findByText('evidence changed')).toBeInTheDocument();
   });
 
-  it('offers "Propose a fix" only where there is one, and says a proposal waits for approval; Re-check now says what it found', async () => {
+  it('offers "Apply fix…" only where there is one, confirmed in a dialog, then one job (v3 F12); Re-check now says what it found', async () => {
     const api = installApi(
       routes({
         'POST /audits/findings/1/propose-fix': {
-          status: 'proposal_captured',
-          proposalId: 'prop_77',
+          status: 'job_submitted',
+          jobId: 'job_77',
           summary: 'x',
           fix: 'split_paragraph',
         },
@@ -433,16 +433,21 @@ describe('the Audits page', () => {
     const user = userEvent.setup();
     renderApp('/ui/audits');
     const table = await screen.findByRole('table', { name: 'Findings' });
-    expect(within(table).getAllByRole('button', { name: 'Propose a fix' })).toHaveLength(2); // finding 3 has none
+    expect(within(table).getAllByRole('button', { name: 'Apply fix…' })).toHaveLength(2); // finding 3 has none
     const r1 = table.querySelector('[data-finding="1"]') as HTMLElement;
-    await user.click(within(r1).getByRole('button', { name: 'Propose a fix' }));
+    await user.click(within(r1).getByRole('button', { name: 'Apply fix…' }));
+    // The dialog says what it does; nothing is sent until the owner confirms.
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('It runs at once as one job');
+    expect(api.find('POST', '/audits/findings/1/propose-fix')).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Apply fix' }));
     await waitFor(() => expect(api.find('POST', '/audits/findings/1/propose-fix')).toHaveLength(1));
     expect(api.find('POST', '/audits/findings/1/propose-fix')[0]!.body).toEqual({
       confirm: true,
       project: 'baisheng',
     });
     expect(
-      await within(r1).findByText(/Proposed \(prop_77\)\. Nothing is changed until you approve it\./),
+      await within(r1).findByText(/Applying: job job_77 \(follow it on the Jobs page\)\./),
     ).toBeInTheDocument();
     await user.click(within(r1).getByRole('button', { name: 'Re-check now' }));
     await waitFor(() => expect(api.find('POST', '/audits/findings/1/recheck')).toHaveLength(1));
@@ -477,8 +482,8 @@ describe('the Audits page', () => {
       routes({
         'GET /audits/findings': findings([tie]),
         'POST /audits/findings/5/propose-fix': {
-          status: 'proposal_captured',
-          proposalId: 'prop_80',
+          status: 'job_submitted',
+          jobId: 'job_80',
           summary: 'x',
           fix: 'chronology_pair',
         },
@@ -488,18 +493,20 @@ describe('the Audits page', () => {
     renderApp('/ui/audits');
     const table = await screen.findByRole('table', { name: 'Findings' });
     const r = table.querySelector('[data-finding="5"]') as HTMLElement;
-    expect(within(r).queryByRole('button', { name: 'Propose a fix' })).toBeNull();
+    expect(within(r).queryByRole('button', { name: 'Apply fix…' })).toBeNull();
     const choices = within(r).getByTestId('tie-choices');
     expect(within(choices).getAllByRole('button', { name: 'Pair with this row' })).toHaveLength(2);
     const second = choices.querySelector('[data-candidate="kvqam7yc"]') as HTMLElement;
     await user.click(within(second).getByRole('button', { name: 'Pair with this row' }));
+    // v3 F12: confirmed first, then one job.
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(api.find('POST', '/audits/findings/5/propose-fix')).toHaveLength(1));
     expect(api.find('POST', '/audits/findings/5/propose-fix')[0]!.body).toEqual({
       confirm: true,
       project: 'baisheng',
       rowId: 'kvqam7yc',
     });
-    expect(await within(r).findByText(/Proposed \(prop_80\)/)).toBeInTheDocument();
+    expect(await within(r).findByText(/Applying: job job_80/)).toBeInTheDocument();
   });
 
   it('a chronology fix refused for a tie shows “Use this event” per candidate and “Make a new event” (v3 F2.1)', async () => {
@@ -538,8 +545,8 @@ describe('the Audits page', () => {
                 },
               }
             : {
-                status: 'proposal_captured',
-                proposalId: `prop_9${posts}`,
+                status: 'job_submitted',
+                jobId: `job_9${posts}`,
                 summary: 'x',
                 fix: 'chronology_sync',
               },
@@ -549,10 +556,12 @@ describe('the Audits page', () => {
     renderApp('/ui/audits');
     const table = await screen.findByRole('table', { name: 'Findings' });
     const r = table.querySelector('[data-finding="6"]') as HTMLElement;
-    await user.click(within(r).getByRole('button', { name: 'Propose a fix' }));
+    await user.click(within(r).getByRole('button', { name: 'Apply fix…' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply fix' }));
     const choices = await within(r).findByTestId('tie-choices');
     expect(choices).toHaveTextContent('“Mehrana returns…” (Selyros 40th, 4A 605, n4nl9rud)');
     await user.click(within(choices).getByRole('button', { name: 'Make a new event' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(api.find('POST', '/audits/findings/6/propose-fix')).toHaveLength(2));
     expect(api.find('POST', '/audits/findings/6/propose-fix')[1]!.body).toEqual({
       confirm: true,

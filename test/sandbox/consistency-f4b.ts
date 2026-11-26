@@ -22,8 +22,9 @@
  *   the governor's rate, outlasted the whole 30-minute timeout): the check's temporary database gets an EMPTY base (the
  *   appraisal index is built on a full snapshot; this one holds no page, and never leaves the temporary database), then a
  *   change snapshot of the probe's three pages (`SnapshotService.capturePages`), which the index lays over it;
- * - **F4** the owner's pick of the Core's value: ONE proposal with one item (the restating page), the Core untouched;
- * - **F5** approved, its job succeeds, and the page read live says "Camue 1st, 4A 100" in that sentence, the rest as it
+ * - **F4** the owner's pick of the Core's value: ONE job (v3 F12, ADR 0081: the confirmed pick runs at once, no
+ *   proposal) with one item (the restating page), the Core untouched;
+ * - **F5** its job succeeds, and the page read live says "Camue 1st, 4A 100" in that sentence, the rest as it
  *   was; the Core's Temporal Scope is unchanged;
  * - **F6** the check run again over the job's change snapshot finds the pages agreeing.
  *
@@ -189,10 +190,10 @@ export async function runConsistencyCheck(
     );
     if (!ok3) return items;
 
-    let proposalId = '';
+    let jobId = '';
     const ok4 = await check(
       'F4',
-      'the owner’s pick of the Core’s value: ONE proposal, one item, the Core untouched',
+      'the owner’s pick of the Core’s value: ONE job (v3 F12: run at once, no proposal), one item, the Core untouched',
       async () => {
         const r = await rt.consistency.pick({
           projectId: pid,
@@ -204,18 +205,18 @@ export async function runConsistencyCheck(
         });
         const its = r.items as Obj[];
         if (its.length !== 1 || its[0]!.page.id !== pageId) throw new Error(`items: ${JSON.stringify(its)}`);
-        proposalId = String(r.proposalId);
-        return `proposal ${proposalId}`;
+        if (r.proposalId !== undefined || typeof r.jobId !== 'string')
+          throw new Error(`not one job: ${JSON.stringify({ proposalId: r.proposalId, jobId: r.jobId })}`);
+        jobId = r.jobId;
+        return `job ${jobId}`;
       },
     );
     if (!ok4) return items;
 
-    await check('F5', 'approved: the job succeeds and only the date in the sentence changes', async () => {
-      await rt.policy.commands.approve('owner', proposalId);
+    await check('F5', 'the job succeeds and only the date in the sentence changes', async () => {
       let job: ReturnType<typeof rt.engine.queries.getJob>;
       for (let i = 0; i < 600; i++) {
-        const p = rt.policy.proposals.get(proposalId);
-        job = p?.jobId ? rt.engine.queries.getJob(pid, p.jobId) : undefined;
+        job = rt.engine.queries.getJob(pid, jobId);
         if (job && ['succeeded', 'failed', 'cancelled'].includes(String(job.status))) break;
         await new Promise((res) => setTimeout(res, 500));
       }

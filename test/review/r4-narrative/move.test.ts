@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- tool results and the mock's state are JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- tool results and the mock's state are JSON */
 /**
  * CR-2026-11-R4, pass 1 (the narrative property): moving canon INTO Narratives (and narrative pages OUT), by every route
  * an agent at scope `write` has: `move_resource`, `lk_api_write`, `lk_api_batch`, `lk_op_*`,

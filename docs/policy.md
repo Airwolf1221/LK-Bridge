@@ -480,10 +480,14 @@ directly (not approved by the owner) that wrote something is listed until the ow
 `review.mark`, or `review.mark_all` for a filtered set) or reverts it. Revert (`job.revert`, re-authenticated) is the
 owner's: one job, run by the system principal at P1, that puts back what the job changed when nothing has changed since,
 from the journal's pre-images and the job's own record (page text block by block, sidebar facts and links, chronology
-rows and events in step, names, tags, aliases and moves, image placements). It never reverts a deletion
-(`restore_resource`), a proposal, a running job or a revert, and never deletes an asset itself: a reverted image
-placement goes back on the Staging page (its file copied to the bridge's server, nothing written to `LK-Bridge
-staging`) and deleting the placed asset is one proposal for the owner.
+rows and events in step, names, tags, aliases and moves, image placements). Since F12 it also puts back canon and
+lifecycle changes, the writes the generic undo covers (map features, timeline events and lanes, properties, board
+shapes, documents) and deletions: a deleted page by LegendKeeper's own restore, else made again from the copy kept
+before the delete (new ids, the old ids mapped and the pages linking to them listed); a deleted asset uploaded again
+from its kept bytes in the same folder under the same name. It never reverts a proposal, a running job or a revert. A
+reverted image placement goes back on the Staging page (its file copied to the bridge's server, nothing written to
+`LK-Bridge staging`), and the placed asset is deleted in the same confirmed action (F12; before, a proposal for the
+owner).
 
 ## The second review's changes (CR-2026-11-R2)
 
@@ -513,7 +517,7 @@ What changed in the guards, the rails (removed in F12) and Revert after [CR-2026
   decision 1, accepted; ADR 0081: a connection's scope changed either way, made, moved or revoked, and every token).
 - **An orphan event beside a row whose date cannot be read** is not deleted (ADR 0057 decision 2; R2-49): while the age's
   table has an unpaired row whose Date cell cannot be read and that is not marked table-only, `delete_timeline_event`
-  with `orphan` and the dashboard's "Propose a fix" refuse (`ORPHAN_NEAR_UNREADABLE`, naming the rows), since the bridge
+  with `orphan` and the dashboard's "Delete the event…" (formerly "Propose a fix") refuse (`ORPHAN_NEAR_UNREADABLE`, naming the rows), since the bridge
   cannot tell whether one of them is the event's own. Marking the row table-only, or fixing its date, lifts the block; a
   row whose date cannot be read that appears after the proposal stops it inside the lock.
 - **ChatGPT's file source has its own switch** (ADR 0057 decision 7; R2-45): the project setting `fileSourceEnabled` (on

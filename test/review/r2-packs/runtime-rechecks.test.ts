@@ -8,8 +8,8 @@
  * (src/packs/run.ts:305-329 passes no holdLock/holdMore/holdDocuments to runWriteJob), so `runJob`
  * (engine.ts:2005-2006) goes straight to `runSteps` and a check that succeeded before a hold is never repeated.
  *
- * The world keeps the seed's switches: `arkona_add_character_art` follows the agent's scope, so at scope `write` a
- * package for a Working character is ONE direct job. The owner pauses writes (the dashboard's kill switch) just after
+ * Every pack tool follows the agent's scope (v3 F12, ADR 0081), so at scope `write` a package for a Working character
+ * is ONE direct job. The owner pauses writes (the dashboard's kill switch) just after
  * the job's check step has read the last governance document (as CR-06's own test pauses after a check's read), so the
  * first write is held; then something changes; then writes resume. A budget wait, read-only mode or a restart between
  * the check and the first write opens the same window.
@@ -96,12 +96,12 @@ async function heldAfterCheck(
 }
 
 describe('a direct pack job held between its check and its first write', () => {
-  it('ATK-05a: the owner switches the tool to "always propose" (a new pack version) while it is held: the job must not write', async () => {
+  it('ATK-05a: the owner makes a new pack version while it is held: the job must not write', async () => {
     const staged = await stage();
     const { jobId, call } = await heldAfterCheck(artFor(staged, 'Primary Reference - Portrait'));
-    // The owner changes the switch on the Packs page (re-authenticated): a NEW version, not approved yet. The pack is
-    // no longer current, and the tool now says "always propose".
-    const after = packs().commands.setToolModes('owner', 'arkona', { arkona_add_character_art: 'propose' });
+    // The owner edits the pack's rules on the Packs page: a NEW version, not approved yet. The pack is no longer current.
+    const p = packs().get('arkona')!;
+    const after = packs().commands.replaceRules('owner', 'arkona', structuredClone(p.rules), 'r2: a new version');
     expect(after.approved?.version).not.toBe(after.version);
     expect((await packs().governance('arkona')).state).toBe('rules_changed');
     engine().controls.resumeWrites('test');
@@ -110,7 +110,6 @@ describe('a direct pack job held between its check and its first write', () => {
     const made = liveNamed(w, '[BWRK] Tamsin Reed - Character Art');
     const assets = w.assets.byName('Tamsin Reed - Primary Reference - Portrait');
     // Put the pack back (approved) for the next test.
-    packs().commands.setToolModes('owner', 'arkona', { arkona_add_character_art: 'scope' });
     await packs().commands.approve('owner', 'arkona');
     expect({
       status: job.status,

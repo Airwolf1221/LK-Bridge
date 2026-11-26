@@ -227,8 +227,9 @@ Standard's label and the digest), or why the retag is unavailable (no approved v
 - **Audit**: run the free audit (the snapshots; nothing is read from LegendKeeper) on everything, a page or a branch;
   choose a stored run and what to show (deterministic corrections by default, holds, exceptions, compliant, Working and
   Archived, excluded). Each page shows its current and proposed arrays, its disposition and a rationale per slot (holds
-  and removals with their reasons). Tick deterministic corrections and **Propose the picked corrections**: after a
-  confirmation, ONE batch proposal (each page an item), approved on the Proposals page like any other.
+  and removals with their reasons). Tick deterministic corrections and **Apply the picked corrections**: after a
+  confirmation (**Apply the batch**), ONE batch runs at once as one job (each page read fresh and read back; v3 F12,
+  [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md): no proposal to approve next), with Revert.
 - **Holds**: each hold of the latest audit with its reasons and agents' suggestions. An uncertain category (or
   specialist) is resolved by choosing the category, and the specialist if any, from the closed list, with a reason:
   **Classify** asks for a confirmation and the password again, is audited (`retag.classify`), and is used by every later
@@ -242,13 +243,14 @@ Standard's label and the digest), or why the retag is unavailable (no approved v
   stepped up, edits the Approved Supplementary Tags as your action (one job, journalled, revertible; audited
   `retag.allow_everywhere`): approve the pack's new version on the Packs page afterwards.
 - **Apply all corrections** (Audit tab, v3 F5a): every deterministic correction of the run shown that is not in an open
-  batch, proposed in the usual bounded batches (the pack's batch size, each page an item), then **Approve all these batches** (a bulk
-  approval, one confirmation), each listed with its outcome.
+  batch, in the usual bounded batches (the pack's batch size, each page an item); since F12, after one confirmation
+  (**Apply the batches**), each batch runs at once as one job, each listed with its outcome. **Approve all these
+  batches** (a bulk approval, one confirmation) is offered only for a batch that came back as a proposal.
 - **Batches**: each batch's state, proposal and job, and what became of each page: applied (and whether its read-back
   verified), already compliant, held, conflicted or inaccessible.
 - **Reconciliation**: start a named reconciliation (a first audit, free), open one to see its counts (audited,
   corrections, holds, exceptions, proposed, applied, conflicted, stale, remaining) and its pages, and **Resume**: what
-  remains is audited afresh, then its next batch is proposed. Pages whose facts, Reference Type or template changed in the
+  remains is audited afresh, then its next batch runs (since F12 at once, as one job). Pages whose facts, Reference Type or template changed in the
   snapshots since their verdict show as stale.
 
 Its admin API is `/api/admin/tagging` (`GET`), `/tagging/audit`, `/tagging/runs/:id`, `/tagging/holds`,
@@ -405,8 +407,8 @@ each audited:
   version (`pack.remap_section`, recording the old heading and the new one), which you then approve with **Approve this
   pack version**, so you approve the mapping and the version together. Headings match as a whole (case, punctuation
   and numbering aside), never by prefix ([packs.md](packs.md#re-mapping-a-pinned-heading)).
-- **Save tool switches** (v3 F3.4) makes a new version (`pack.set_tool_modes`), which waits for your approval like any
-  other: until then the tools refuse (`PACK_NOT_CURRENT`).
+- **Save tool switches** (v3 F3.4) was removed in F12 with the switches themselves (ADR 0081): every pack tool follows
+  its connection's scope.
 - **Save token maps** makes a new version (`pack.set_tokens`), which waits for your approval: until then the tools fail
   closed. A token is never one of the never-tags (Unknown, Unestablished, None), and no value or token has an em or
   en dash in it (`INVALID_TOKEN`).
@@ -435,7 +437,7 @@ connection, token, project key and off-site credential routes; no other route as
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk` (`action`: `approve`, `reject`, or `approve-as-canon` with `{ confirm: true }`; at most 1,000 ids since v3 F5a; a proposal whose job is running is passed over, `PROPOSAL_RUNNING`), v3 F5a: the list's `tool` and `olderThanHours` filters and `total`, `POST /proposals/bulk-matching` (`{ action: approve or reject, filter, expect, confirm: true }`: every proposal the filter matches, refused with `PROPOSALS_CHANGED` when the count changed) |
-| Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /settings/config`, `PUT /settings/config/:key`, `POST /settings/config/:key/reset`, `POST /bridge/restart`, `GET /audit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Maintenance | `GET /maintenance` (v2 E5.1: per-project jobs with `projects` and `runningProjectId`), `GET /maintenance/:id` (with history; `?project=` narrows it), `POST /maintenance/:id/enable\|disable\|run` (`run` takes an optional `project`, v2 E5.1), `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md)); v3 F3.5: `GET /maintenance/assign-block-ids-sweep/card`, `POST …/dry-run`, `PUT …/override`, `PUT …/limit`                                                                                                                                                                                                                                                                                                                                                                           |
 | Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md))                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -446,7 +448,7 @@ connection, token, project key and off-site credential routes; no other route as
 | Tool calls  | `GET /tool-calls` (filters `principalId`, `profile`, `tool`, `outcome=success\|error\|proposal\|waiting\|queued\|not_success`, `code`, `project`, `sinceMinutes`; paging `limit` (≤ 500) and `before`, answered with `nextBefore`; also the filter choices and the retention), `PUT /tool-calls/retention` (`{ days: 0-90, confirm: true }`; audited). Owner only; view only (v2 E3, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md))                                                                                                                                                                                                                                                                                                                                                                         |
 | Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                                                                                                                                                                            |
 | Appraisal † | `GET /appraisal` (the full-text index's state and freshness, the non-current areas found, the latest runs; no LegendKeeper request), `POST /appraisal/run` (`{ tool: owner\|impact\|digest\|visual, page?, under?, all?, include?, renameTo?, proposal?, sinceDays?, confirm: true }`; stores the report; no LegendKeeper request), `GET /appraisal/runs/:id`, `POST /appraisal/findings/:id/propose-fix` (`{ confirm: true }`; one live read, then ONE proposal; audited `appraisal.propose_fix`), `POST /appraisal/index/rebuild` (`{ confirm: true }`; from the snapshot store) (v3 F3c, [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md))                                                                                                                                                        |
-| Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)), `POST /packs/:id/sections` (`{ source, from, to, confirm: true }`: re-maps a pinned heading; a new version) ‡ (ADR 0052 amendment), `PUT /packs/:id/tools` (`{ tools, confirm: true }`: the tool switches; a new version) ‡ (v3 F3.4)                                                                                                                                                                    |
+| Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)), `POST /packs/:id/sections` (`{ source, from, to, confirm: true }`: re-maps a pinned heading; a new version) ‡ (ADR 0052 amendment); `PUT /packs/:id/tools` (v3 F3.4, the tool switches) was removed in F12                                                                                                                                                                                               |
 | Review †    | `GET /review` (`state=unreviewed\|reviewed\|all`, `profile`, `tool`, `before`, `limit`; the items, the filter choices, the counts), `GET /review/counts`, `GET /review/:jobId` (with the changes page by page), `POST /review/mark` (`{ ids }`), `POST /review/mark-all` (`{ filter, expect, confirm: true }`; 409 `REVIEW_CHANGED`); Revert: `GET /jobs/:id/revert` (the preview), `POST /jobs/:id/revert` (`{ confirm: true, confirmPartial? }`) ‡ (v3 F3.4, [ADR 0055](adr/0055-write-scope-review-revert-rails.md))                                                                                                                                                                                                                                                                                                 |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
@@ -707,8 +709,8 @@ code) continues the
 same job: its own check runs again first, inside its locks; no step that succeeded is sent again, no page or document is
 made twice, and a step that is no longer safe is refused with its reason (the card shows it; resume again once the page
 is as it should be, or revert). Work you approved resumes without a new approval; every resume is audited (`job.resume`,
-with where it stopped and who approved the work). A recreate is finished as before (F2's Finish: a new proposal of what
-is still missing). Revert (Review page, ADR 0055) stays the other way out for a direct job: it undoes the completed steps.
+with where it stopped and who approved the work). A recreate is finished as before (F2's Finish: what is still missing; since F12, confirmed, it runs at once as one job
+rather than a new proposal). Revert (Review page, ADR 0055) stays the other way out for a direct job: it undoes the completed steps.
 
 ## Splits (v3 F3e)
 
@@ -721,17 +723,19 @@ is still missing). Revert (Review page, ADR 0055) stays the other way out for a 
   **Anti-Fragmentation note** (what should stay together) and the **questions** the bridge cannot measure (Independent
   Retrieval, Independent Maintenance, Downstream Dependency). Owner appraisal (A2) lists the same candidates in its
   Architectural candidates group. Free, and only ever a suggestion.
-- **Proposals**: a split is ONE canonical proposal (**Approve and accept as canon**, whatever the agent's scope). Its Items
-  card has a group per kind (Destinations, Universal material, Character index, Changes to existing pages, Index lines,
+- **Proposals**: a split follows its connection's scope (v3 F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md):
+  direct at `write`, on the Review page with Revert; at `propose` ONE canonical proposal, **Approve and accept as
+  canon**). A proposed split's Items card has a group per kind (Destinations, Universal material, Character index, Changes to existing pages, Index lines,
   Dependencies). Each destination says what **leaving it out** means ("If left out, “Appearance” stays in [BSRC] … (nothing
   is lost)"), on the item when you untick it and again in the confirmation, before you approve; coverage holds whatever
-  you untick. Phase 2 (archiving the source, for a split that retires it) is a SEPARATE canonical proposal the bridge makes
-  only once phase 1 has verified and nothing was left out or skipped: an ordinary `archive_page` proposal. The split never
-  deletes.
+  you untick. Phase 2 (archiving the source, for a split that retires it) runs only once phase 1 has verified and nothing
+  was left out or skipped, through `archive_page`'s own plan; since F12 it is not a second proposal: an agent's direct
+  split retires its source as that agent (on the Review page), and a split you approved retires it at once as your
+  confirmed action (the approval asked for it). The split never deletes.
 - **Jobs**: a stopped phase 1 shows the **Stopped part-way** card (Resume, as for a package). Its job page offers
   **Revert…** although you approved it: the confirmation lists what will be put back and says that the pages the split made
-  then go to ONE deletion proposal (each only while it is exactly as the split made it). When nothing had left the source
-  yet, Revert only proposes deleting those pages.
+  are then deleted in the same confirmed action, as one job (F12; each only while it is exactly as the split made it).
+  When nothing had left the source yet, Revert only deletes those pages.
 
 ## Archive and lifecycle (v2 C2c)
 
@@ -784,34 +788,35 @@ project.
   disagree about the date**), rows out of order, wrong KCY values, cells written differently from the confirmed style,
   count mismatches, event links not to their age's table, dates the engine cannot read. **Run the check now** runs it
   (P2; reads only; the check itself never repairs); it also runs nightly (Maintenance page) and a few minutes after an
-  edit of a chronology document (v3 F10). **Propose a fix** also covers a wrong KCY, a date written in another style, an
-  event's link and rows out of calendar order (only when the order is strict), each proposal showing the text before and
-  after.
+  edit of a chronology document (v3 F10). **Apply fix…** (named **Propose a fix** before F12) also covers a wrong KCY, a
+  date written in another style, an event's link and rows out of calendar order (only when the order is strict), each
+  showing the text before and after.
 - **Repairs by the automation** (v3 F10, ADR 0078). When the automation last ran (and last after a chronology check),
   which chronology codes are set to Apply, and what they did, newest first: rows synced (with the job), proposed (with
   the proposal) or left for you (an ambiguous pairing, a date the engine cannot read, an order that is not strict), with
   the reason. Differences of wording only
   between a row's description and its event's short name, and the thousands separator in a year (LegendKeeper writes
   `AA 1988119`, the tables `AA 1,988,119`), are not findings.
-- **Propose a fix** (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)). A **Row without an
-  event** or **Row and event disagree about the date** finding has a **Propose a fix** button. It plans
-  `sync_timeline_event` for that row (about 3 reads; the table is the authority) and makes ONE proposal: nothing is
-  written until you approve it, as normal, on the **Proposals** page (it shows the row and the event before and after).
-  The proposal is made by the system, audited as `chronology.propose_fix`, creates the missing event or corrects the
+- **Apply fix…** (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md); one confirmed action
+  since v3 F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)). A **Row without an event** or **Row and
+  event disagree about the date** finding has an **Apply fix…** button. It plans `sync_timeline_event` for that row
+  (about 3 reads; the table is the authority) and asks in a dialog (**Apply this fix?**, **Apply fix**); confirmed, it
+  runs at once as ONE job (on the Jobs page; before F12 it made a proposal to approve on the Proposals
+  page). The job is the system's, audited as `chronology.propose_fix`, creates the missing event or corrects the
   paired event's minutes, `detail`, shape and `uri`, and never touches the table or the Main count. An ambiguous pairing
   (several events could be the row's), a change of that age that stopped part-way and a row that is gone are refused with
-  their reason; a row whose event already agrees says so. After approving, run the check again: no findings.
+  their reason; a row whose event already agrees says so. Once the job has run, run the check again: no findings.
   Since the hotfix of 15 November 2026 a **Count mismatch** has the button too, when the Main table has a row for that
-  age: it re-reads the Main table and the age table and makes ONE proposal setting that age's **Event count** cell to the
+  age: it re-reads the Main table and the age table and, confirmed, runs ONE job setting that age's **Event count** cell to the
   table's row count (in the Main table's writing style; every other cell untouched). Its summary shows both figures, for
-  example `Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline events 335)`. A Main document changed before you
-  approve, or a row added to or removed from the table, makes it conflict, and nothing is written; a count that already
+  example `Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline events 335)`. A Main document changed before the
+  job writes, or a row added to or removed from the table, makes it conflict, and nothing is written; a count that already
   matches says "nothing to fix"; a Main table with no row for the age has no fix (add the row by hand).
 - **Chronology II** (v2 E6, [ADR 0048](adr/0048-chronology-ii.md)).
   - **Qualified dates** (`c. 4A 563; exact date unresolved`, `After Isar 6th and before Zarzakh 29th, 4A 610; …`) are
     read by their anchor and never rewritten (the forms: [chronology.md](chronology.md)). A row read that way shows
-    **Read as …** (`year 4A 563, approximate`, `before 4A 623 (an open start)`) on its finding, and its **Propose a
-    fix** makes its event. A date that stays unreadable is reported once, as **Date the engine cannot read**, with why
+    **Read as …** (`year 4A 563, approximate`, `before 4A 623 (an open start)`) on its finding, and its **Apply fix…**
+    makes its event. A date that stays unreadable is reported once, as **Date the engine cannot read**, with why
     (a relative offset, an ambiguous bound, …); it is no longer also a row without an event.
   - **Ages**, below the findings: each age's rows, events and Main count; its dates (how many were read by their
     anchor, how many stay unreadable, how many are table-only, and any table-only mark that no longer holds); and how
@@ -819,16 +824,19 @@ project.
     event that disagree, by the same start and end, the same start and shape, the name, or the same start), with
     **Every pair** on request. A date mismatch says how it was paired.
   - A date mismatch whose fix would turn a range into a single day (or the reverse) carries a warning (**A fix would
-    change the event: range → single day**); its **Propose a fix** asks for a confirmation that names the change, and
-    the proposal's summary says it too. Without the confirmation nothing is proposed (`SHAPE_CHANGE_UNCONFIRMED`).
-  - An **Event without a row** has **Propose deleting the event**, and its finding lists the three rows nearest it by
-    date with their opening words, so you can see what replaced it. The proposal deletes only the event (no row, no
+    change the event: range → single day**); its **Apply fix…** asks for a confirmation that names the change (**This fix
+    changes the event’s shape**), and the job's summary says it too. Without the confirmation nothing is done
+    (`SHAPE_CHANGE_UNCONFIRMED`).
+  - An **Event without a row** has **Delete the event…** (named **Propose deleting the event** before F12; the dialog
+    **Delete this event?**, **Delete the event**), and its finding lists the three rows nearest it by date with their
+    opening words, so you can see what replaced it. The job deletes only the event (no row, no
     count change; journalled with the event); it is refused when the event has a row after all, or an unpaired row
     could be its own.
   - **Ties** (v3 F2.1, [chronology.md](chronology.md#ties-v3-f21)). An **Event in a tie** (rows of the table could be its
     own) lists its candidate rows (date and opening words), each with **Pair with this row**; it is never offered for
-    deletion. A **Propose a fix** refused because several events could be a row's own shows each candidate (name, date,
-    id) with **Use this event**, and one **Make a new event** button. Each makes one proposal; an event that already
+    deletion. An **Apply fix…** refused because several events could be a row's own shows each candidate (name, date,
+    id) with **Use this event**, and one **Make a new event** button. Each, confirmed (**Apply this choice?**,
+    **Apply**), runs one job; an event that already
     agrees is linked to the row (no LegendKeeper write). A pair made because the plain row of a day beats the qualified
     rows anchored on it says **plain row preferred over qualified anchor**.
   - **Table-only** on a row's finding (a row without an event, or an unreadable date) marks a row you never want on the
@@ -845,7 +853,7 @@ Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lo
 (`{ confirm: true, settings }` or `{ confirm: true, reset: true }`; neither asks for a fresh code), `GET /chronology/records`, `POST
 /chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`), `POST /chronology/propose-fix`
 (`{ confirm: true, project, age, rowId, confirmShapeChange? }`, `{ …, kind: 'count' }` or `{ …, kind: 'orphan', eventId }`:
-one proposal, or `nothing_to_do`), `GET /chronology/table-only` and `POST /chronology/table-only`
+one job since F12, or `nothing_to_do`), `GET /chronology/table-only` and `POST /chronology/table-only`
 (`{ confirm: true, project, age, rowId, tableOnly, reason? }`).
 
 ## Staging (v2 D3)
@@ -917,19 +925,23 @@ the bridge's own copies of the selected project's pages.
   and narrowed to a **branch** (the first index below the AI REPOSITORY root); while older snapshots are still being
   indexed after the upgrade, the page says how many are left. A page's snapshots, 50 at a time (**Older snapshots**),
   newest first, piece by piece (first seen,
-  changed, unchanged, deleted, back); **Diff with now** for any piece (a few reads); **Propose a restore** from any
+  changed, unchanged, deleted, back); **Diff with now** for any piece (a few reads); **Restore…** from any
   snapshot: the page's documents, its sidebar, one document, or a deleted page (undelete, or recreate with its original
   or new ids). **Preview** shows the plan (each piece's diff, what cannot be restored exactly, what is left alone, new ids,
-  and since v2 E5.5 how long it should take once approved, with the figures used) without proposing; **Propose this restore** makes the proposal, linked to the Proposals page. A restore is always a
-  proposal, the owner's own included. A restore that finishes with a field LegendKeeper refused (an icon name it does not
+  and since v2 E5.5 how long it should take once it runs, with the figures used) without writing anything; **Restore…**
+  then asks in a dialog (**Restore <page>?**, **Restore**) and, confirmed, runs the restore at once as ONE job, checked
+  again against the page as it is now (v3 F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md); before
+  F12 a restore was always a proposal, the owner's own included). An agent's `restore_snapshot` follows its
+  connection's scope (direct at `write`, on the Review page; a proposal at `propose`). A restore that finishes with a field LegendKeeper refused (an icon name it does not
   know: the write is sent again without it) shows **couldn't be restored exactly** beside its state, with each field
   listed.
 - **Restore a deleted image**: a snapshot and the image's old asset id; the preview lists the pages that showed the old
   URL and where the image goes back (its folder and name, and any folder made on the way); tick **Also update the pages
-  that referred to the old URL** to include them; **Propose it** makes the proposal. Since v3 F3c
-  ([ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md)) nothing is sent to LegendKeeper until
-  it is approved: the image waits on the bridge's server, then one job uploads it into its folder and updates the pages
-  (it comes back as a new asset with a new URL). A page edited meanwhile is left for a hand relink, and the restore's row
+  that referred to the old URL** to include them; **Restore it…** asks in a dialog (**Restore this image?**, **Restore
+  the image**) and, confirmed, runs it at once (F12; before, it made a proposal). Since v3 F3c
+  ([ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md)) nothing is sent to LegendKeeper before
+  that: the image waits on the bridge's server, then one job uploads it into its folder and updates the pages (it comes
+  back as a new asset with a new URL). A page edited meanwhile is left for a hand relink, and the restore's row
   says so (`image_relink_failed`).
 - **Restore rehearsal**: a full snapshot of this project, a sandbox project to rehearse into (never this one), sampled
   (about 50 pages) or every page, and whether to keep the copy. The picker starts on the **newest complete** full snapshot
@@ -951,7 +963,7 @@ the bridge's own copies of the selected project's pages.
   `backups/` next to the database) with their time, age and size; a warning when the newest nightly copy is more than 36
   hours old.
 
-The **Proposals** page shows a restore proposal with its snapshot, the diff (now, then as at the snapshot), and what it
+The **Proposals** page shows a restore proposal (an agent's at scope `propose`, or one made before F12) with its snapshot, the diff (now, then as at the snapshot), and what it
 cannot restore, keeps or leaves alone; an image restore with its new asset and the pages it updates.
 
 API: `GET /api/admin/snapshots?project=&kind=&limit=` (the overview, snapshots, restores, rehearsals, sandboxes, jobs and
@@ -960,8 +972,9 @@ database copies; `running`: the running full snapshot's pages done of the total;
 index's progress), `GET /api/admin/snapshots/pages/<page id>?project=&piece=&ref=&limit=&cursor=` (`history.next`),
 `GET /api/admin/snapshots/diff?project=&page=&piece=&ref=&from=&to=`, `POST /api/admin/snapshots/full?project=` (202),
 `POST /api/admin/snapshots/runs/<run id>/abandon` `{ confirm: true }`, `POST /api/admin/snapshots/restore?project=`
-`{ page, snapshot, scope, document?, mode?, ids?, parent?, dryRun? }`, `POST /api/admin/snapshots/restore-image?project=`
-`{ snapshot, asset, updateReferences?, dryRun? }`, `POST /api/admin/snapshots/rehearsals/plan` `{ target, snapshot, mode,
+`{ page, snapshot, scope, document?, mode?, ids?, parent?, dryRun? | confirm: true }` (F12: `confirm: true` unless a dry
+run; the restore then runs as one job), `POST /api/admin/snapshots/restore-image?project=`
+`{ snapshot, asset, updateReferences?, dryRun? | confirm: true }`, `POST /api/admin/snapshots/rehearsals/plan` `{ target, snapshot, mode,
 max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202), `GET
 /api/admin/snapshots/rehearsals/<id>`, `POST /api/admin/snapshots/rehearsals/<id>/delete-root` `{ confirm: true }`. A
 refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`, `snapshots.restore`,
@@ -987,12 +1000,14 @@ each nightly full snapshot completes, and **Run an audit now** runs one at once.
   document and block, and the fix on offer.
   - **Acknowledge…** asks for a reason (required). The finding is hidden while the same evidence persists, and comes back,
     marked "evidence changed", if the evidence changes. **Un-acknowledge** shows it again. Nothing is acknowledged for you.
-  - **Propose a fix**, where one exists: re-reads the page live, then makes ONE ordinary proposal, which you approve on the
-    [Proposals](#proposals-page-writes-v2-c1) page (every guard runs as for any write; nothing is applied by the audit). The
-    fixes are a paragraph split (one paragraph with line breaks into separate paragraphs, block by block, beside inline icons
+  - **Apply fix…**, where one exists (named **Propose a fix** before v3 F12): asks in a dialog what the fix does
+    (**Apply this fix?**, **Apply fix**); confirmed, it re-reads the page live and runs the fix at once as ONE job, with
+    every guard running as for any write (nothing is applied by the audit itself; before F12 it made ONE ordinary
+    proposal for the [Proposals](#proposals-page-writes-v2-c1) page; [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)).
+    The fixes are a paragraph split (one paragraph with line breaks into separate paragraphs, block by block, beside inline icons
     too), `set_facts` for a Reference Type or Subject only where the right value is unambiguous, `move_resource` to re-place a
     page alphabetically under the same parent, adding a missing required tag (never removing one), and the chronology's
-    `sync_timeline_event`. If the page has changed since the audit, it says so and proposes nothing.
+    `sync_timeline_event`. If the page has changed since the audit, it says so and changes nothing.
   - **Re-check now**: reads the finding's page live (a few requests) and runs its check again; the finding is still there (its
     source becomes "read live") or gone. Findings about more than one page cannot be re-checked, nor can governance findings
     (the next run checks them).
@@ -1047,12 +1062,14 @@ off).
   candidates; A4: Working pages, Open proposals, Approved but not promoted, Declared contradictions; A5: Candidates).
   Each finding shows its evidence class, the rule it comes from (governance page and section), its message, and its
   page as a **link to that page in LegendKeeper** (a new tab). Long reports are paged.
-  - **Propose a fix** appears **only** where the finding has a deterministic repair (an em dash, decorative blank
-    paragraphs, a link in a heading, an asset name with an extension, a Working or Archived page in an Authoritative
-    page's Related Sources; sibling order and tags go to the audits' own fix). It asks first, then re-reads the page live
-    (one request), checks the finding still holds, and makes ONE ordinary proposal, which you approve on the
-    [Proposals](#proposals-page-writes-v2-c1) page; Last Major Revision follows the owner's rule (a dash or a blank
-    paragraph is not a major revision). If the page changed since the report, it says so and proposes nothing.
+  - **Apply fix…** (named **Propose a fix** before v3 F12) appears **only** where the finding has a deterministic repair
+    (an em dash, decorative blank paragraphs, a link in a heading, an asset name with an extension, a Working or
+    Archived page in an Authoritative page's Related Sources; sibling order and tags go to the audits' own fix). It asks
+    first (**Apply this fix?**, **Apply fix**), then re-reads the page live (one request), checks the finding still
+    holds, and runs the fix at once as ONE job (before F12 it made ONE ordinary proposal for the
+    [Proposals](#proposals-page-writes-v2-c1) page; [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)); Last
+    Major Revision follows the owner's rule (a dash or a blank paragraph is not a major revision). If the page changed
+    since the report, it says so and changes nothing.
   - A **judgement** finding shows what has to be decided and the tool for it ("Judgement: write a Purpose section first
     (write_page)"); it never offers a button. A report-only finding says why.
 - **Latest runs**: each tool's latest run per scope (tool, scope, when, findings, how long it took); opening one shows its
@@ -1388,10 +1405,10 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
   be removed from the server unless it is placed. Discard removes the server copy (no job). Images staged in LegendKeeper
   before F2 are marked so until `npm run images -- migrate-staging` moves them.
 - **Chronology**: a new finding, "Event name's date out of step with its row" (`name_drift`), with **Propose a fix** (a
-  name-only update).
+  name-only update; **Apply fix…**, one confirmed job, since v3 F12).
 - **Audits**: a new category, **Asset library**, with the finding "Sibling asset folders with exactly the same name"
   (`duplicate_asset_folders`) and its **Propose a fix** (merge into the earliest; delete the emptied duplicates, deepest
-  first).
+  first; **Apply fix…** since v3 F12).
 - **Jobs**: a job's result lists `foldersUsed` (each folder found or created) and `followUps` (a Last Major Revision write
   that failed after the edit: `lmr_failed`; the job itself succeeded and the edit stayed written).
 
@@ -1409,12 +1426,12 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
 
 On the Audits page, a finding of the **Consistency** category has **Pick the right value**: the identity page's value and
 each restatement side by side (page, lifecycle, where, excerpt), each with **Pick this value**, a field to type the
-right value, the agents' suggestions (shown, never applied) and the earlier picks. A pick (ADR 0081: no fresh code) makes ONE
-proposal editing every page that disagrees; approve it on the Proposals page
-(selectively if wanted). The job is revertible from the Jobs page. **Pick
+right value (**Apply this value…**), the agents' suggestions (shown, never applied) and the earlier picks. A pick (ADR 0081: no fresh code)
+asks in a dialog (**Pick this value?**, **Pick and apply**) and, confirmed, edits every page that disagrees at once, as
+ONE job (v3 F12; before, it made ONE proposal to approve on the Proposals page). The job is revertible from the Jobs page. **Pick
 this value** sends the value as shown with the side: when that side reads otherwise now (a page changed after the
-audit), the pick is refused ("SIDE_CHANGED") and nothing is proposed; run the audit again and pick again. Each edit is
-made where the check read the value, and only there; the proposal lists what it leaves as it is, with why (a value
+audit), the pick is refused ("SIDE_CHANGED") and nothing is changed; run the audit again and pick again. Each edit is
+made where the check read the value, and only there; the job lists what it leaves as it is, with why (a value
 changed since, a quotation, a page archived since, a date split by formatting).
 
 ## Proposals, Errors and Overview: F5a (v3 F5a)

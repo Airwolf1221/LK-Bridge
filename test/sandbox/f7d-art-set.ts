@@ -113,13 +113,6 @@ export async function runArtSetCheck(
       kind: 'other',
       scope,
     });
-    if (scope === 'write')
-      rt.policy.commands.setRails('owner', profile.id, {
-        deletes: false,
-        bulk: false,
-        renamesMoves: false,
-        assets: false,
-      });
     return rt.policy.store.lookupPrincipal(
       pats.create({ name: `f7d check ${scope}`, profileId: profile.id, expiresInDays: 1 }).pat.id,
     )!.principal;

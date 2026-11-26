@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- parsed JSON */
 /**
  * v3 F4b (ADR 0064; design D5, D6): the nightly audit's `consistency` category and "Pick the right value", against the
  * REAL stack on the mock LegendKeeper (test/consistency/world.ts, plus eleven pages restating Leila Darvish's birth):
@@ -173,9 +173,7 @@ describe('“Pick the right value” (D6)', () => {
     );
     expect(temporalScope(K.katsu)).toBe(coreBefore);
     // The pick is audited and recorded.
-    const picks = w.stack.db
-      .prepare('SELECT * FROM consistency_picks WHERE job_id = ?')
-      .all(r.json.jobId);
+    const picks = w.stack.db.prepare('SELECT * FROM consistency_picks WHERE job_id = ?').all(r.json.jobId);
     expect(picks).toHaveLength(1);
     // The next snapshot holds the edit: the pages agree, and the finding clears.
     await w.stack.runtime.snapshots.settled();

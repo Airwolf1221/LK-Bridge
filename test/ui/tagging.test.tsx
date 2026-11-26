@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * v3 F3f (ADR 0060) on the dashboard: the Tagging page, in the Repository group. The audit's pages with their arrays,
- * rationale and disposition; picked corrections proposed as ONE batch after a confirmation; a hold's owner
+ * rationale and disposition; picked corrections applied as ONE batch after a confirmation (v3 F12: one job); a hold's owner
  * classification from the closed list, after a confirmation and the password again; the batches and reconciliations.
  */
 import { screen, waitFor, within } from '@testing-library/react';
@@ -131,7 +131,7 @@ const routes = (over: Record<string, unknown> = {}) => ({
   'GET /tagging': overview,
   [`GET /tagging/runs/${RUN.id}`]: { run: RUN, total: 1, pages: [correction] },
   'GET /tagging/holds': { run: RUN, holds: [hold] },
-  'POST /tagging/batches': { batch: { id: 'rtb_2' }, proposalId: 'prop_new', jobId: null },
+  'POST /tagging/batches': { batch: { id: 'rtb_2' }, proposalId: null, jobId: 'job_new' },
   ...over,
 });
 
@@ -145,7 +145,7 @@ describe('the Tagging page', () => {
     expect(await screen.findByText(/pack arkona version 7/)).toBeInTheDocument();
   });
 
-  it('shows each page’s arrays and rationale, and proposes the picked corrections as ONE batch after a confirmation', async () => {
+  it('shows each page’s arrays and rationale, and applies the picked corrections as ONE batch after a confirmation (v3 F12: one job)', async () => {
     const api = installApi(routes());
     const user = userEvent.setup();
     renderApp('/ui/tagging');
@@ -158,10 +158,11 @@ describe('the Tagging page', () => {
     expect(row).toHaveTextContent('CANON, Polity');
     expect(row).toHaveTextContent('Status Authoritative');
     await user.click(within(row).getByRole('checkbox'));
-    await user.click(screen.getByRole('button', { name: 'Propose the picked corrections (1)' }));
+    await user.click(screen.getByRole('button', { name: 'Apply the picked corrections (1)…' }));
     const confirm = await screen.findByRole('alertdialog');
-    expect(confirm).toHaveTextContent(/ONE proposal/);
-    await user.click(within(confirm).getByRole('button', { name: 'Propose the batch' }));
+    expect(confirm).toHaveTextContent(/ONE job, at once/);
+    expect(api.find('POST', '/tagging/batches')).toHaveLength(0);
+    await user.click(within(confirm).getByRole('button', { name: 'Apply the batch' }));
     await waitFor(() => expect(api.find('POST', '/tagging/batches')).toHaveLength(1));
     expect(api.find('POST', '/tagging/batches')[0]!.body).toEqual({
       runId: RUN.id,

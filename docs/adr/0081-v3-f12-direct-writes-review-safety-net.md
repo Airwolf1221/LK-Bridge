@@ -80,8 +80,9 @@
   copy cannot be taken, the delete is refused with the reason (`DELETE_COPY_FAILED`); nothing is deleted uncopied.
 - **What it costs (P1, in the job's name):** every page is read live (**chosen** over trusting the last snapshot, which
   may be a day old; the last snapshot still holds the pages as a second copy): per page one `getResource`, its sidebar
-  (`listProperties`) and one read per document; a cascade adds one `listResources` per page with children. On the mock a
-  page with one child took 5 reads; the sandbox reports what it measured (`delete_copies.reads`).
+  (`listProperties`) and one read per document; a cascade adds one `listResources` per page with children; a document's
+  delete reads only the page and that document. On the mock a page with one child took 5 reads, and one map's delete
+  went from 4 to 7 reads; the sandbox reports what it measured (`delete_copies.reads`).
 - **Revert of a page delete:** LegendKeeper's own restore first (`restoreResource`, which brings the subtree back with
   its ids); if LegendKeeper no longer holds it, the pages are made again from the copy, parents first, by the snapshot
   restore's `recreate`. The result says the ids changed, maps each old id to its new one, and lists the pages that linked
@@ -161,6 +162,9 @@ edit there is drift until it is approved).
 - **The lifecycle record** (the bridge's own lifecycle history) is not reset by Revert; the page is.
 - **The CLI's `migrate-staging`** keeps making a proposal (the owner's own tool, run by hand).
 - **Re-proposing a proposal's left-out items** keeps its proposal (it is the owner's proposal page).
+- **A dry run of a protected change** still answers `requiresCanonicalApproval: true` at both scopes (the dry run does
+  not know the caller's scope); its message says what each scope does: direct at `write`, a canonical proposal at
+  `propose`.
 
 ## Tests
 

@@ -216,8 +216,13 @@ describe('arkona_chapter_check (E6.2)', () => {
 describe('arkona_promote_from_chapter (E7)', () => {
   /** v3 F12 (ADR 0081): the proposals are made at scope propose (at scope write the same call writes directly). */
   const proposeTool = async (name: string, args: Record<string, unknown>) =>
-    (await w.stack.call(await w.stack.connect(w.stack.newToken('read-proposer', 'propose').token), name, args))
-      .body as Record<string, any>;
+    (
+      await w.stack.call(
+        await w.stack.connect(w.stack.newToken('read-proposer', 'propose').token),
+        name,
+        args,
+      )
+    ).body;
 
   it('a page, a fact and a text become proposals at propose scope; facts and texts are ONE proposal of items; the chapter is cited in the note only', async () => {
     const b = await proposeTool('arkona_promote_from_chapter', {
