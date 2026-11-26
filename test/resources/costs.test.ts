@@ -67,20 +67,22 @@ it('reads and writes per typical call', async () => {
   // document delete reads the page's facts and the document for the delete-document canon rule.
   // v2 E1a (ADR 0042): every write is followed, inside its job, by the change snapshot of what it changed; it reuses the
   // reads the job made after its writes (the verify step, the tree's re-read) and reads the rest. Its extra reads are in
-  // the second comment column (set_facts, rename, move and delete need none).
+  // the second comment column (set_facts, rename, move and delete need none). v3 F12 (ADR 0081): each property row
+  // update after the first reads the rows for its journal pre-image (op-meta), and a delete first takes
+  // a recoverable copy of the page (D3: its resource and documents).
   expect(got).toEqual({
-    'core, new index, 1 fact': [14, 9], // +3: both new pages' documents, and one page's resource
-    'compact, no facts': [9, 7], // +1: the new page's document
+    'core, new index, 1 fact': [19, 9], // +3: both new pages' documents, and one page's resource; +5 pre-images
+    'compact, no facts': [13, 7], // +1: the new page's document; +4 pre-images
     existing: [1, 0],
-    'create_resource, 2 facts, 1 link': [11, 6], // +1: the new page's document
+    'create_resource, 2 facts, 1 link': [12, 6], // +1: the new page's document; +1 pre-image
     bare: [3, 1], // +1: the new page's document
     'rename, re-placed': [4, 1],
     move: [3, 1],
-    delete: [4, 1],
+    delete: [6, 1], // +2: the copy (the page and its document)
     restore: [4, 1], // +1: the restored page's document
     create_document: [4, 1], // +2: the new map (its settings and features)
     update_document: [6, 1], // +2: the map read whole (its settings and features)
-    delete_document: [4, 1],
-    'set_facts, 2 facts': [4, 2],
+    delete_document: [9, 1], // +5: the copy (the page and each of its documents)
+    'set_facts, 2 facts': [5, 2], // +1 pre-image
   });
 });

@@ -13,8 +13,12 @@ import { asCanon, childNames, facts, LIFECYCLE, resourcesWorld, T, type Resource
 
 let w: ResourcesWorld;
 let client: Client;
+/** v3 F12 (ADR 0081): canon changes are direct at scope write; the canonical proposals are made at scope propose. */
+let proposer: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
+const propose = (tool: string, args: Record<string, unknown>) =>
+  w.stack.call(proposer, tool, { project: 'test', ...args });
 const node = (id: string) => w.stack.runtime.tree.queries.node(PROJECT, id).data;
 const writes = () => w.seen.filter((l) => !l.startsWith('GET'));
 const proposals = () => w.stack.runtime.policy.proposals;
@@ -27,6 +31,7 @@ const settle = async (id: string) => {
 beforeAll(async () => {
   w = await resourcesWorld();
   client = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('resources-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 
@@ -356,8 +361,8 @@ describe('delete_resource and restore_resource', () => {
     expect((await call('restore_resource', { page: 'ashg0001' })).body.error.code).toBe('NOT_DELETED');
   });
 
-  it('deleting an Authoritative page is a canonical proposal at scope write; restoring needs none', async () => {
-    const r = await call('delete_resource', { page: '[BSRC] Inae Mikumo', confirm: true });
+  it('deleting an Authoritative page is a canonical proposal at scope propose; restoring needs none', async () => {
+    const r = await propose('delete_resource', { page: '[BSRC] Inae Mikumo', confirm: true });
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     expect(r.body.reason).toMatch(/deleting “Inae Mikumo”, whose Status is Authoritative/);
     expect(w.repo.live('inae0001')).toBeDefined();
@@ -373,10 +378,25 @@ describe('delete_resource and restore_resource', () => {
     expect(w.repo.live('inae0001')).toBeDefined();
   });
 
+  it('at scope write (v3 F12) deleting an Authoritative page is direct, and restore_resource brings it back', async () => {
+    const r = await call('delete_resource', { page: '[BSRC] Inae Mikumo', confirm: true });
+    expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
+    expect(r.body).not.toHaveProperty('requiresCanonicalApproval');
+    expect(w.repo.live('inae0001')).toBeUndefined();
+    const back = await call('restore_resource', { page: 'inae0001' });
+    expect(back.body, back.text).toMatchObject({ status: 'written', verified: true });
+    expect(w.repo.live('inae0001')).toBeDefined();
+  });
+
   it('a cascade holding an Authoritative page is a canonical proposal listing it; a dry run says so', async () => {
-    const dry = await call('delete_resource', { page: 'Elves', confirm: true, cascade: true, dryRun: true });
+    const dry = await propose('delete_resource', {
+      page: 'Elves',
+      confirm: true,
+      cascade: true,
+      dryRun: true,
+    });
     expect(dry.body).toMatchObject({ status: 'dry_run', requiresCanonicalApproval: true });
-    const r = await call('delete_resource', { page: 'Elves', confirm: true, cascade: true });
+    const r = await propose('delete_resource', { page: 'Elves', confirm: true, cascade: true });
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     const p = proposals().detail(String(r.body.proposalId))!;
     expect(JSON.stringify(p.canonical)).toContain('Inae Mikumo');
@@ -395,8 +415,8 @@ describe('delete_resource and restore_resource', () => {
 });
 
 describe('Status and canon on create', () => {
-  it('a create with status authoritative is a canonical proposal; accepted as canon it is written with its ids', async () => {
-    const r = await call('create_resource', {
+  it('a create with status authoritative is a canonical proposal at scope propose; accepted as canon it is written with its ids', async () => {
+    const r = await propose('create_resource', {
       name: 'Canon Court',
       template: T.general,
       parent: 'Kumikas',
@@ -411,6 +431,17 @@ describe('Status and canon on create', () => {
     await w.stack.runtime.policy.commands.approveAsCanon('owner', id);
     expect((await settle(id)).state).toBe('executed');
     expect(facts(w, planned)).toContain('Status=Authoritative');
+  });
+
+  it('at scope write (v3 F12) the same create is direct', async () => {
+    const r = await call('create_resource', {
+      name: 'Canon Hall',
+      template: T.general,
+      parent: 'Kumikas',
+      status: 'authoritative',
+    });
+    expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
+    expect(facts(w, r.body.pages[0].id)).toContain('Status=Authoritative');
   });
 
   it('v2 C2c: Status comes from `status`; another Status in facts is refused, and nothing is sent', async () => {

@@ -4,13 +4,12 @@
  *
  * - the placed asset's file is copied back into the bridge's server staging (one download from the asset host) BEFORE
  *   the revert job, so the image is back on the Staging page once the job succeeds, to place again or discard;
- * - deleting the placed asset is ONE proposal for the owner (by the bridge, never run before the owner approves it);
+ * - v3 F12 (ADR 0081): the placed asset is then deleted by ONE job (its bytes kept first), not a proposal;
  * - the revert job itself only checks, inside its lock, that the asset is still as the placement left it.
  *
  * Both kinds of placement: an image staged on the bridge's server (an upload into its folder), and one staged the old
  * way in LegendKeeper's staging folder (a move out of it). An asset moved since is not touched; a file that cannot be
- * saved refuses the revert, writing nothing. An agent with the default rails places the image again directly (a
- * placement is not an asset move), while a plain asset move is still proposed by the rail.
+ * saved refuses the revert, writing nothing. An agent at scope write places the image again directly.
  */
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -78,7 +77,7 @@ async function placeTheOldWay(world: ImagesWorld) {
   return { stagedId: old.id, assetId: old.assetId!, jobId: row.placementJobId! };
 }
 
-/** Reverts as the owner, waits for the revert job and then for the bridge's follow-up (the deletion proposal). */
+/** Reverts as the owner, waits for the revert job and then for the bridge's follow-up (the deletion job). */
 async function revert(world: ImagesWorld, jobId: string, stagedId: string) {
   const rt = world.stack.runtime;
   const r = await rt.reverts.revert('owner', PROJECT, jobId);
@@ -86,57 +85,52 @@ async function revert(world: ImagesWorld, jobId: string, stagedId: string) {
   if (r.status !== 'submitted') throw new Error('not submitted');
   const job = await rt.engine.wait(PROJECT, r.revertJobId, 25_000);
   expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
-  let proposalId: string | null = null;
-  for (let i = 0; i < 200 && !proposalId; i++) {
+  let deletionJobId: string | null = null;
+  for (let i = 0; i < 200 && !deletionJobId; i++) {
     const a = rt.policy.store.listAudit({ action: 'job.revert', limit: 20 }).find((x) => {
       const after = x.after as { outcome?: string } | null;
       return x.target === jobId && after?.outcome === 'images';
     });
-    const images = (
-      a?.after as { images?: { stagedId: string; deletionProposalId: string | null }[] } | undefined
-    )?.images;
-    proposalId = images?.find((x) => x.stagedId === stagedId)?.deletionProposalId ?? null;
-    if (!proposalId) await sleep(25);
+    const images = (a?.after as { images?: { stagedId: string; deletionJobId: string | null }[] } | undefined)
+      ?.images;
+    deletionJobId = images?.find((x) => x.stagedId === stagedId)?.deletionJobId ?? null;
+    if (!deletionJobId) await sleep(25);
   }
-  expect(proposalId, 'the deletion proposal').toMatch(/^prop_/);
-  return { revertJobId: r.revertJobId, message: r.message, proposalId: proposalId! };
+  expect(deletionJobId, 'the deletion job').toMatch(/^j/);
+  const deletion = await rt.engine.wait(PROJECT, deletionJobId!, 25_000);
+  expect(deletion.status, JSON.stringify(deletion.lastError)).toBe('succeeded');
+  return { revertJobId: r.revertJobId, message: r.message, deletionJobId: deletionJobId! };
 }
 
+/** Writes other than the placed asset's deletion (the one write a revert's follow-up makes). */
+const otherWrites = (world: ImagesWorld, n: number, assetId: string) =>
+  writesSince(world, n).filter((c) => !(c.method === 'DELETE' && c.path.includes(`/assets/${assetId}`)));
+
 describe('Revert of an image placement (ADR 0055 decision B5)', () => {
-  it('a placement from the bridge’s server: the image back on the Staging page, its deletion proposed; nothing written to the staging folder', async () => {
+  it('a placement from the bridge’s server: the image back on the Staging page, the placed asset deleted by a job; nothing written to the staging folder', async () => {
     w = await imagesWorld();
     const { stagedId, assetId, jobId } = await placeOne(w);
     const rt = w.stack.runtime;
-    const placedFolder = w.assets.assets.get(assetId)!.folderId;
     const preview = await rt.reverts.preview(PROJECT, jobId);
     expect(preview.targets.map((t) => `${t.kind}:${t.state}`)).toEqual(['image:ready']);
-    expect(preview.targets[0]!.detail).toMatch(
-      /Staging page.*proposed to you; nothing is written to the staging folder/,
-    );
+    expect(preview.targets[0]!.detail).toMatch(/Staging page.*nothing is written to the staging folder/);
     const callsBefore = w.stack.mock.calls.length;
-    const { message, proposalId } = await revert(w, jobId, stagedId);
-    expect(message).toMatch(/back to the Staging page.*proposed to you on the Proposals page/);
-    // Nothing written to LegendKeeper by the revert: no move, no hiding, no staging folder, no delete.
-    expect(writesSince(w, callsBefore)).toEqual([]);
+    const { message, deletionJobId } = await revert(w, jobId, stagedId);
+    expect(message).toMatch(/back to the Staging page.*deleted from the library/);
+    // Nothing written to LegendKeeper by the revert but the placed asset's deletion: no move, no hiding, no staging folder.
+    expect(otherWrites(w, callsBefore, assetId)).toEqual([]);
     expect(stagingFolders(w)).toEqual([]);
-    expect(w.assets.assets.get(assetId)).toMatchObject({ folderId: placedFolder, isHidden: false });
     // Back on the Staging page, its file on the bridge's server: exactly the file that was staged.
     const row = rt.images.staged(PROJECT, stagedId)!;
     expect(row).toMatchObject({ staged: true, state: 'uploaded', assetId: null, placementJobId: null });
     expect(row.serverSha256).toBe(row.webp.sha256);
     expect(sha((await rt.images.stagedImage(PROJECT, stagedId))!)).toBe(row.webp.sha256);
     expect(rt.images.listStaged(PROJECT).some((x) => x.id === stagedId)).toBe(true);
-    // ONE proposal, by the bridge, to delete the placed asset; nothing deleted before the owner approves it.
-    const p = rt.policy.proposals.detail(proposalId)!;
-    expect(p.state).toBe('pending');
-    expect(p.principalId).toBe('system');
-    expect(
-      p.ops.map((o) => `${o.op} ${(o.params as { path?: { assetId?: string } }).path?.assetId}`),
-    ).toEqual([`deleteAsset ${assetId}`]);
-    expect(w.assets.assets.has(assetId)).toBe(true);
-    // Approved, the asset goes (its bytes kept first, as for every asset delete).
-    await rt.policy.commands.approve('owner', proposalId);
-    for (let i = 0; i < 300 && w.assets.assets.has(assetId); i++) await sleep(20);
+    // ONE job, the owner's (a Revert's follow-up), deletes the placed asset (its bytes kept first, as for every asset
+    // delete); no proposal.
+    const dj = rt.engine.queries.getJob(PROJECT, deletionJobId)!;
+    expect(dj.origin.ownerConfirmed).toBe(true);
+    expect(rt.policy.proposals.list({ project: PROJECT, state: 'pending' })).toEqual([]);
     expect(w.assets.assets.has(assetId)).toBe(false);
     // And the staged image can be placed again: a new asset.
     const c = await w.stack.connect();
@@ -159,24 +153,23 @@ describe('Revert of an image placement (ADR 0055 decision B5)', () => {
     const preview = await rt.reverts.preview(PROJECT, jobId);
     expect(preview.targets.map((t) => `${t.kind}:${t.state}`)).toEqual(['image:ready']);
     const callsBefore = w.stack.mock.calls.length;
-    const { proposalId } = await revert(w, jobId, stagedId);
-    expect(writesSince(w, callsBefore)).toEqual([]);
-    // Not moved back into the staging folder, not hidden: left where it is until the owner approves the delete.
-    expect(w.assets.assets.get(assetId)).toMatchObject({ folderId: placedFolder, isHidden: false });
+    await revert(w, jobId, stagedId);
+    // Not moved back into the staging folder, not hidden: deleted from where it is (the one write).
+    expect(otherWrites(w, callsBefore, assetId)).toEqual([]);
+    expect(w.assets.assets.has(assetId)).toBe(false);
     expect(
       [...w.assets.assets.values()].filter((a) => a.folderId === staging && a.type !== 'FOLDER'),
     ).toEqual([]);
     expect(rt.images.staged(PROJECT, stagedId)).toMatchObject({ staged: true, assetId: null });
-    expect(rt.policy.proposals.detail(proposalId)!.ops.map((o) => o.op)).toEqual(['deleteAsset']);
   });
 
-  it('an agent with the default rails places it again directly: a placement is not an asset move (ADR 0055 F)', async () => {
+  it('an agent at scope write places it again directly (ADR 0055 F)', async () => {
     w = await imagesWorld();
-    const { stagedId, assetId, jobId } = await placeOne(w);
+    const { stagedId, jobId } = await placeOne(w);
     const rt = w.stack.runtime;
     await revert(w, jobId, stagedId);
-    // A profile as the owner will raise it: scope write, the default rails (asset deletes and moves proposed).
-    const t = w.stack.newToken('image-agent-default-rails', 'write');
+    // A profile as the owner will raise it: scope write.
+    const t = w.stack.newToken('image-agent-write', 'write');
     const agent = await w.stack.connect(t.token);
     const again = await w.stack.call(agent, 'upload_image', {
       project: 'test',
@@ -189,14 +182,6 @@ describe('Revert of an image placement (ADR 0055 decision B5)', () => {
     await rt.engine.wait(PROJECT, row.placementJobId!, 25_000);
     const placed = rt.images.staged(PROJECT, stagedId)!.assetId!;
     expect(w.assets.assets.get(placed)).toMatchObject({ isHidden: false });
-    // An asset move that is not a placement is still proposed by the rail.
-    const move = await w.stack.call(agent, 'lk_api_write', {
-      project: 'test',
-      operationId: 'updateAsset',
-      params: { path: { assetId }, body: { folderId: null } },
-    });
-    expect(move.body.status, move.text).toBe('proposal_captured');
-    expect(move.body.proposedBecause).toBe('proposed because: asset move (to another folder)');
   });
 
   it('an asset moved since the placement is not touched, and nothing is copied', async () => {

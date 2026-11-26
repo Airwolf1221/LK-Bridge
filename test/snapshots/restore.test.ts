@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- parsed tool results */
 /**
- * v2 E1a (ADR 0042): restore_snapshot, always a proposal (here at scope `write`), approved by the owner and run through
- * the ordinary machinery: every document type, the sidebar, a deleted page (undeleted, or recreated with its original or
- * new ids), the canon, lifecycle and decision-5 guards, `unsupported` blocks and inline icons, and conflicts at approval
- * and inside the lock.
+ * v2 E1a (ADR 0042): restore_snapshot, run through the ordinary machinery: every document type, the sidebar, a deleted
+ * page (undeleted, or recreated with its original or new ids), the canon, lifecycle and decision-5 guards, `unsupported`
+ * blocks and inline icons, and conflicts at approval and inside the lock. v3 F12 (ADR 0081): at scope `write` a restore
+ * runs at once as ONE job (on the owner's Review page); at scope `propose` it is a proposal the owner approves, so the
+ * tests of approval and of what changes between capture and approval restore at scope `propose`.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +15,8 @@ vi.setConfig({ testTimeout: 90_000 });
 
 let w: SnapshotsWorld | undefined;
 let c: Client;
+/** A connection at scope propose: its restores are proposals. */
+let pc: Client;
 afterEach(async () => {
   await w?.close();
   w = undefined;
@@ -22,11 +25,22 @@ afterEach(async () => {
 async function setup(o: Parameters<typeof snapshotsWorld>[0] = {}) {
   w = await snapshotsWorld(o);
   c = await w.stack.connect();
+  pc = await w.stack.connect(w.stack.newToken('restore-propose', 'propose').token);
   const full = await w.stack.runtime.snapshots.full(PROJECT, 'manual');
   return full.snapshotId!;
 }
 const call = (name: string, args: Record<string, unknown>) =>
   w!.stack.call(c, name, { project: 'test', ...args });
+const propose = (name: string, args: Record<string, unknown>) =>
+  w!.stack.call(pc, name, { project: 'test', ...args });
+
+/** A direct restore (scope write): its one job, waited for. A job that failed answers as an error naming it. */
+async function ran(r: ToolCall): Promise<{ status: string; lastError: unknown; id: string }> {
+  const id = (r.body.jobId ?? (r.body.error as { jobId?: string } | undefined)?.jobId) as string | undefined;
+  expect(id, JSON.stringify(r.body)).toBeTruthy();
+  const job = await w!.stack.runtime.engine.wait(PROJECT, id!, 30_000);
+  return { status: job.status, lastError: job.lastError, id: id! };
+}
 
 /** As the owner does on the Proposals page: approve (or accept as canon), then wait for the job. */
 async function approve(
@@ -53,7 +67,7 @@ const mainBlocks = () =>
 const texts = () => mainBlocks().map((b) => b.content?.map((r) => r.text ?? '').join('') ?? `[${b.kind}]`);
 
 describe('restore_snapshot: a page document', () => {
-  it('is always a proposal (even at scope write); approved, the page is back, unsupported blocks echoed by id', async () => {
+  it('at scope write runs at once as one job; the page is back, unsupported blocks echoed by id', async () => {
     const snap = await setup();
     const before = texts();
     await call('write_page', {
@@ -79,10 +93,8 @@ describe('restore_snapshot: a page document', () => {
       scope: 'document',
       document: 'Main',
     });
-    expect(r.body.status).toBe('proposal_captured');
-    expect(r.body.hint).toMatch(/always a proposal/);
-    expect(texts()).not.toEqual(before); // nothing written yet
-    expect(await approve(r)).toMatchObject({ state: 'executed' });
+    expect(r.body.status, JSON.stringify(r.body)).toBe('written');
+    expect((await ran(r)).status).toBe('succeeded');
     expect(texts()).toEqual(before);
     expect(mainBlocks().find((b) => b.id === 'aun1')).toEqual({ id: 'aun1', kind: 'unsupported' });
     const p = w!.stack.runtime.restores.list(PROJECT)[0]!;
@@ -106,7 +118,7 @@ describe('restore_snapshot: a page document', () => {
       expect.objectContaining({ what: 'unsupported block aun1' }) as unknown,
     ]);
     expect(r.body.kept).toEqual([expect.objectContaining({ what: 'unsupported block aun2' }) as unknown]);
-    await approve(r);
+    expect((await ran(r)).status).toBe('succeeded');
     const ids = mainBlocks().map((b) => b.id);
     expect(ids).not.toContain('aun1');
     expect(ids.at(-1)).toBe('aun2');
@@ -124,16 +136,16 @@ describe('restore_snapshot: a page document', () => {
     expect(other).toBeGreaterThan(1);
     mainBlocks()[other]!.content = [{ text: 'Changed after the snapshot.' }];
     const iconBlock = structuredClone(mainBlocks()[1]);
+    const since = w!.repo.mutations.length;
     const r = await call('restore_snapshot', {
       page: S.atlas,
       snapshot: snap,
       scope: 'document',
       document: 'Main',
     });
-    expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
+    expect(r.body.status, JSON.stringify(r.body)).toBe('written');
     expect(JSON.stringify(r.body)).toMatch(/inline icon/);
-    const since = w!.repo.mutations.length;
-    expect(await approve(r)).toMatchObject({ state: 'executed' });
+    expect((await ran(r)).status).toBe('succeeded');
     const ops = w!.repo.mutations.slice(since).map((m) => m.op);
     expect(ops).toContain('replaceBlock');
     expect(ops).not.toContain('replaceDocumentBlocks');
@@ -162,7 +174,7 @@ describe('restore_snapshot: a page document', () => {
   it('a version change between capture and approval: conflicted at approval, nothing written', async () => {
     const snap = await setup();
     await call('write_page', { page: S.atlas, mode: 'append', markdown: 'Later text.' });
-    const r = await call('restore_snapshot', {
+    const r = await propose('restore_snapshot', {
       page: S.atlas,
       snapshot: snap,
       scope: 'document',
@@ -205,7 +217,7 @@ describe('restore_snapshot: maps, timelines, boards and blank documents', () => 
       document: 'Map',
     });
     expect(r.body.writes).toBe(4); // delete, create, update, and the map image
-    expect((await approve(r)).state).toBe('executed');
+    expect((await ran(r)).status).toBe('succeeded');
     const now = w!.features.get(w!.d.map)!;
     expect(now.map((f) => f.id).sort()).toEqual(['fold0001', 'pin00001', 'pin00002', 'reg00001']);
     expect(now.find((f) => f.id === 'pin00001')!.name).toBe('Ashgate');
@@ -216,7 +228,7 @@ describe('restore_snapshot: maps, timelines, boards and blank documents', () => 
   it('a map changed after the approval’s re-read: the check inside the lock refuses, conflicted, nothing written', async () => {
     const snap = await setup();
     w!.features.get(w!.d.map)!.find((f) => f.id === 'pin00001')!.name = 'Changed once';
-    const r = await call('restore_snapshot', {
+    const r = await propose('restore_snapshot', {
       page: S.atlas,
       snapshot: snap,
       scope: 'document',
@@ -254,7 +266,7 @@ describe('restore_snapshot: maps, timelines, boards and blank documents', () => 
       scope: 'document',
       document: 'Chronicle',
     });
-    expect((await approve(r)).state).toBe('executed');
+    expect((await ran(r)).status).toBe('succeeded');
     expect(
       w!.events
         .get(w!.d.chronicle)!
@@ -282,7 +294,7 @@ describe('restore_snapshot: maps, timelines, boards and blank documents', () => 
       scope: 'document',
       document: 'Plot',
     });
-    expect((await approve(r)).state).toBe('executed');
+    expect((await ran(r)).status).toBe('succeeded');
     expect((w!.boards.get(w!.d.plot)!.content.shapes as unknown[]).length).toBe(3);
     expect((w!.boards.get(w!.d.plot)!.content.bindings as unknown[]).length).toBe(1);
   });
@@ -296,11 +308,11 @@ describe('restore_snapshot: maps, timelines, boards and blank documents', () => 
       scope: 'document',
       document: w!.d.notes,
     });
-    expect((await approve(r)).state).toBe('executed');
+    expect((await ran(r)).status).toBe('succeeded');
     expect(w!.repo.docs.get(w!.d.notes)!.name).toBe('Notes');
   });
 
-  it('scope page: every document the page had, in one proposal; a document added since is left alone (decision 5)', async () => {
+  it('scope page: every document the page had, in one job; a document added since is left alone (decision 5)', async () => {
     const snap = await setup();
     await call('write_page', { page: S.atlas, mode: 'append', markdown: 'Changed.' });
     w!.features
@@ -315,7 +327,7 @@ describe('restore_snapshot: maps, timelines, boards and blank documents', () => 
     expect(r.body.notRestored).toEqual([
       expect.objectContaining({ what: 'document Added later' }) as unknown,
     ]);
-    expect((await approve(r)).state).toBe('executed');
+    expect((await ran(r)).status).toBe('succeeded');
     expect(w!.features.get(w!.d.map)!.some((f) => f.id === 'new00002')).toBe(false);
     expect(texts()).not.toContain('Changed.');
     expect(w!.repo.blocks.get(added.id)!.blocks).toEqual([
@@ -339,7 +351,7 @@ describe('restore_snapshot: the sidebar and the guards', () => {
       links: { Dependencies: { add: ['ashg0001'] } },
     });
     const r = await call('restore_snapshot', { page: S.atlas, snapshot: snap, scope: 'sidebar' });
-    expect((await approve(r)).state).toBe('executed');
+    expect((await ran(r)).status).toBe('succeeded');
     const rows = w!.sidebars.rows(S.atlas).map((x) => `${x.key}=${x.text}`);
     expect(rows).toEqual(expect.arrayContaining(['Scope=Every document type', 'Status=Outline']));
     expect(rows.some((x) => x.startsWith('Added='))).toBe(false);
@@ -347,13 +359,12 @@ describe('restore_snapshot: the sidebar and the guards', () => {
     expect(w!.sidebars.items(S.atlas, 'Dependencies').map((i) => i.resourceId)).toEqual(['miyabi01']);
   });
 
-  it('canon: bringing a Status back to Authoritative needs the owner’s canonical approval', async () => {
+  it('canon: at scope propose, bringing a Status back to Authoritative needs the owner’s canonical approval', async () => {
     const snap = await setup();
+    // Leaving Authoritative is canon too: direct at scope write (v3 F12).
     const changed = await call('set_facts', { page: S.harbour, facts: { Status: 'Outline' } });
-    // Leaving Authoritative is canon too: the owner accepts it.
-    const { asCanon } = await import('../resources/world.js');
-    expect((await asCanon(w!, changed)).body.status).toBe('written');
-    const r = await call('restore_snapshot', { page: S.harbour, snapshot: snap, scope: 'sidebar' });
+    expect(changed.body.status, changed.text).toBe('written');
+    const r = await propose('restore_snapshot', { page: S.harbour, snapshot: snap, scope: 'sidebar' });
     expect(r.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     await expect(
       w!.stack.runtime.policy.commands.approve('owner', String(r.body.proposalId)),
@@ -389,26 +400,23 @@ describe('restore_snapshot: the sidebar and the guards', () => {
 });
 
 describe('restore_snapshot: a deleted page', () => {
-  it('within soft delete: undeleted, then its content comes back as a second proposal', async () => {
+  it('within soft delete: undeleted, then its content comes back as a second job', async () => {
     const snap = await setup();
     await call('write_page', { page: S.atlas, mode: 'append', markdown: 'Written before the delete.' });
     expect((await call('delete_resource', { page: S.atlas, confirm: true })).isError).toBe(false);
     const r = await call('restore_snapshot', { page: S.atlas, snapshot: snap, scope: 'deleted' });
-    expect(r.body).toMatchObject({ status: 'proposal_captured', mode: 'undelete', writes: 1 });
-    expect((await approve(r)).state).toBe('executed');
+    expect(r.body).toMatchObject({ status: 'written', mode: 'undelete', writes: 1 });
+    expect((await ran(r)).status).toBe('succeeded');
     expect(w!.repo.live(S.atlas)).toBeDefined();
-    // The second proposal: the content back to the snapshot.
+    // The second stage, run as its own job: the content back to the snapshot.
     const rs = w!.stack.runtime.restores;
     let rec = rs.list(PROJECT).find((x) => x.scope === 'deleted')!;
-    for (let i = 0; i < 100 && !rec.followUpProposalId; i++) {
+    for (let i = 0; i < 100 && !rec.followUpJobId; i++) {
       await new Promise((res) => setTimeout(res, 20));
       rec = rs.list(PROJECT).find((x) => x.scope === 'deleted')!;
     }
-    expect(rec.followUpProposalId).toBeTruthy();
-    const follow = {
-      body: { status: 'proposal_captured', proposalId: rec.followUpProposalId },
-    } as unknown as ToolCall;
-    expect((await approve(follow)).state).toBe('executed');
+    expect(rec.followUpJobId, JSON.stringify(rec)).toBeTruthy();
+    expect((await w!.stack.runtime.engine.wait(PROJECT, rec.followUpJobId!, 30_000)).status).toBe('succeeded');
     expect(texts()).not.toContain('Written before the delete.');
   });
 
@@ -423,14 +431,13 @@ describe('restore_snapshot: a deleted page', () => {
       scope: 'deleted',
       mode: 'recreate',
     });
-    expect(r.body).toMatchObject({ status: 'proposal_captured', mode: 'recreate' });
-    // Canon: a page created [BSRC] is a canonical proposal (ADR 0036 decision 1).
-    expect(r.body.requiresCanonicalApproval).toBe(true);
+    // Canon: a page created [BSRC] is canon (ADR 0036 decision 1), direct at scope write (v3 F12).
+    expect(r.body).toMatchObject({ status: 'written', mode: 'recreate' });
     expect(r.body.cannotRestore).toEqual(
       expect.arrayContaining([expect.objectContaining({ what: 'unsupported block aun1' }) as unknown]),
     );
-    const res = await approve(r, true);
-    expect(res.state, JSON.stringify(res.job)).toBe('executed');
+    const res = await ran(r);
+    expect(res.status, JSON.stringify(res.lastError)).toBe('succeeded');
     const page = w!.repo.live(S.atlas)!;
     expect(page.name).toBe('[BSRC] Atlas of Snapshots');
     expect(page.parentId).toBe(S.locations);
@@ -471,7 +478,7 @@ describe('restore_snapshot: a deleted page', () => {
     });
     const newId = r.body.idMap[S.atlas] as string;
     expect(newId).toMatch(/^[a-z][0-9a-z]{23}$/);
-    expect((await approve(r, true)).state).toBe('executed');
+    expect((await ran(r)).status).toBe('succeeded');
     expect(w!.repo.live(newId)!.name).toBe('[BSRC] Atlas of Snapshots');
   });
 
@@ -485,9 +492,9 @@ describe('restore_snapshot: a deleted page', () => {
       scope: 'deleted',
       mode: 'recreate',
     });
-    expect(r.body.warnings.join(' ')).toMatch(/DUPLICATE_ID/);
-    const res = await approve(r, true);
-    expect(res.state).toBe('failed');
+    const body = (r.body.error ?? r.body) as { warnings: string[] };
+    expect(body.warnings.join(' '), JSON.stringify(r.body)).toMatch(/DUPLICATE_ID/);
+    expect((await ran(r)).status).toBe('failed');
     expect(w!.repo.res.size).toBe(count);
   });
 
@@ -571,7 +578,8 @@ describe('restore_snapshot: a deleted image', () => {
       }) as unknown,
     ]);
     const mutations = w!.assets.mutations.length;
-    const r = await call('restore_snapshot', {
+    // At scope propose, so that what waits for the approval can be seen.
+    const r = await propose('restore_snapshot', {
       snapshot: snap,
       scope: 'image',
       asset: S.imgSea,
@@ -617,7 +625,7 @@ describe('restore_snapshot: a deleted image', () => {
     const snap = await setup();
     const oldUrl = w!.url(S.imgSea);
     await call('lk_api_write', { operationId: 'deleteAsset', params: { path: { assetId: S.imgSea } } });
-    const r = await call('restore_snapshot', {
+    const r = await propose('restore_snapshot', {
       snapshot: snap,
       scope: 'image',
       asset: S.imgSea,
@@ -678,7 +686,7 @@ describe('restore_snapshot: a deleted image', () => {
       expect(del.isError, JSON.stringify(del.body)).toBe(false);
     }
     expect(w!.assets.byName('Characters')).toEqual([]);
-    const r = await call('restore_snapshot', { snapshot: snap, scope: 'image', asset: S.imgSea });
+    const r = await propose('restore_snapshot', { snapshot: snap, scope: 'image', asset: S.imgSea });
     expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
     expect(r.body.image).toMatchObject({
       name: 'Weeping Sea',
@@ -704,7 +712,8 @@ describe('restore_snapshot: a deleted image', () => {
     expect(r.body.notes).toEqual([
       expect.objectContaining({ what: '1 page(s) refer to the old URL' }) as unknown,
     ]);
-    expect((await approve(r)).state).toBe('executed');
+    // Direct at scope write (v3 F12): one job.
+    expect((await ran(r)).status).toBe('succeeded');
     expect((mainBlocks().find((b) => b.id === 'aimg') as unknown as { url: string }).url).toBe(
       w!.url(S.imgSea),
     );

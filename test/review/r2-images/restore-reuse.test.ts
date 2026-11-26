@@ -28,18 +28,14 @@ const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const call = (name: string, args: Record<string, unknown>) =>
   w!.stack.call(c, name, { project: 'test', ...args });
 
-async function approve(r: ToolCall) {
-  expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
-  const id = String(r.body.proposalId);
-  const pol = w!.stack.runtime.policy;
-  await pol.commands.approve('owner', id);
-  for (
-    let i = 0;
-    i < 400 && !['executed', 'failed', 'conflicted'].includes(pol.proposals.get(id)!.state);
-    i++
-  )
+/** v3 F12 (ADR 0081): at scope write the restore runs directly as one job; it ends, then the asset is back. */
+async function restoredAs(r: ToolCall, name: string, folder: string) {
+  expect(r.body.status, JSON.stringify(r.body)).toBe('written');
+  const job = await w!.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 30_000);
+  expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+  for (let i = 0; i < 400 && w!.assets.byName(name, folder).length === 0; i++)
     await new Promise((res) => setTimeout(res, 20));
-  return pol.proposals.get(id)!.state;
+  return w!.assets.byName(name, folder);
 }
 
 it('F6: a deleted PNG restored while an agent has the same original staged comes back byte for byte', async () => {
@@ -64,8 +60,7 @@ it('F6: a deleted PNG restored while an agent has the same original staged comes
   const agentRow = w.stack.runtime.images.store.upload(PROJECT, String(staged.body.staged_id))!;
   expect(agentRow.webp.sha256).not.toBe(sha(png)); // converted
   const r = await call('restore_snapshot', { snapshot: snap, scope: 'image', asset: id });
-  expect(await approve(r)).toBe('executed');
-  const [made] = w.assets.byName('Heraldry', S.folderA);
+  const [made] = await restoredAs(r, 'Heraldry', S.folderA);
   expect(made, 'the restored asset').toBeDefined();
   const restored = w.served.get(made!.id)!;
   const after = w.stack.runtime.images.store.upload(PROJECT, agentRow.id)!;

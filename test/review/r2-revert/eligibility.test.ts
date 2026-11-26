@@ -1,7 +1,7 @@
 /**
  * R2-revert, attack (g): revert a job that is still running (held while writes are paused), a job that ran from a
- * proposal (here a rail's proposal, ADR 0055 C2, approved by the owner), or the bridge's own work. Controls: each
- * should HOLD.
+ * proposal (a propose-scope connection's delete, approved by the owner; v3 F12 removed the rails that made one at
+ * scope write), or the bridge's own work. Controls: each should HOLD.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import { PROJECT, jobOf, sleep, writeAgent } from './helpers.js';
 
 let w: FactsWorld;
 let agent: Client;
+let proposer: Client;
 
 beforeAll(async () => {
   w = await factsWorld({
@@ -17,6 +18,7 @@ beforeAll(async () => {
     limits: { 'key-min': 5000, 'write-min': 2000 },
   });
   agent = (await writeAgent(w.stack, 'r2-eligibility-agent')).client;
+  proposer = await w.stack.connect(w.stack.newToken('r2-eligibility-proposer', 'propose').token);
 });
 afterAll(async () => w.close());
 
@@ -41,9 +43,9 @@ describe('which jobs may be reverted', () => {
     await rt().engine.wait(PROJECT, jobId, 25_000);
   });
 
-  it('a rail’s proposal, approved by the owner: WAS_A_PROPOSAL', async () => {
-    // The deletes rail (on by default for a new profile) makes a delete a proposal; the owner approves it.
-    const r = await call('delete_resource', { page: 'bk000005', confirm: true });
+  it('a proposal, approved by the owner: WAS_A_PROPOSAL', async () => {
+    // A connection at scope propose makes a delete a proposal; the owner approves it.
+    const r = await w.stack.call(proposer, 'delete_resource', { project: 'test', page: 'bk000005', confirm: true });
     expect(r.body.status, r.text).toBe('proposal_captured');
     await rt().policy.commands.approve('owner', String(r.body.proposalId));
     let jobId: string | null = null;

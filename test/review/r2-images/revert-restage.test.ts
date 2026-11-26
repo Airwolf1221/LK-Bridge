@@ -3,13 +3,14 @@
  *
  * - F1: two reverts of one placement at once (a double click, two tabs). `RevertService.eligibility` reads
  *   `job_reverts` (src/review/revert.ts) and the row is only inserted after the live reads, the file copy and the
- *   submit, so both pass: two revert jobs, two re-stages and TWO proposals to delete the same asset. Safe: the second
- *   is refused (REVERT_RUNNING) and the owner gets one deletion proposal.
+ *   submit, so both pass: two revert jobs, two re-stages and TWO deletions of the same asset. Safe: the second is
+ *   refused (REVERT_RUNNING) and the placed asset is deleted once (v3 F12, ADR 0081: by one job, not a proposal).
  * - F2: the asset host now serves a different file for the placed asset: the copy must be refused (IMAGE_NOT_SAVED),
  *   nothing staged, nothing written, nothing proposed.
  * - F3: the placed asset's URL (as LegendKeeper answers getAsset) is not on an asset host, or redirects to a private
  *   address: refused, and the bridge never asks that host.
- * - F4: the revert of a placement never writes to LegendKeeper's staging folder and never deletes an asset itself.
+ * - F4: the revert of a placement never writes to LegendKeeper's staging folder; its only write is the placed asset's
+ *   deletion (v3 F12: one job after the revert job, its bytes kept first).
  */
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -46,22 +47,24 @@ async function placeOne(world: ImagesWorld) {
   return { stagedId, assetId: row.assetId!, jobId: row.placementJobId! };
 }
 
-const deletionProposals = (world: ImagesWorld, assetId: string) =>
-  world.stack.runtime.policy.proposals
-    .list({ project: PROJECT, state: 'pending' })
-    .map((p) => world.stack.runtime.policy.proposals.detail(p.id)!)
-    .filter((d) =>
-      d.ops.some(
-        (o) =>
-          o.op === 'deleteAsset' && (o.params as { path?: { assetId?: string } }).path?.assetId === assetId,
-      ),
-    );
+/** The placed asset's deletions sent to LegendKeeper since call `n`. */
+const deletions = (world: ImagesWorld, assetId: string, n = 0) =>
+  writesSince(world, n).filter((c) => c.method === 'DELETE' && c.path.includes(`/assets/${assetId}`));
+/** The deletion jobs the revert's follow-ups started for the asset (from the `job.revert` audit). */
+const deletionJobs = (world: ImagesWorld, jobId: string) =>
+  world.stack.runtime.policy.store
+    .listAudit({ action: 'job.revert', limit: 50 })
+    .filter((x) => x.target === jobId && (x.after as { outcome?: string } | null)?.outcome === 'images')
+    .flatMap((x) => ((x.after as { images?: { deletionJobId: string | null }[] }).images ?? []))
+    .map((im) => im.deletionJobId)
+    .filter((id): id is string => typeof id === 'string');
 
 describe('F1: two reverts of one image placement at once', () => {
-  it('the second is refused (REVERT_RUNNING); ONE revert job and ONE deletion proposal', async () => {
+  it('the second is refused (REVERT_RUNNING); ONE revert job and ONE deletion of the placed asset', async () => {
     w = await imagesWorld();
     const { assetId, jobId } = await placeOne(w);
     const rt = w.stack.runtime;
+    const before = w.stack.mock.calls.length;
     const [r1, r2] = await Promise.all([
       rt.reverts.revert('owner', PROJECT, jobId),
       rt.reverts.revert('owner', PROJECT, jobId),
@@ -69,19 +72,23 @@ describe('F1: two reverts of one image placement at once', () => {
     const statuses = [r1, r2].map((r) => (r.status === 'refused' ? r.code : r.status));
     for (const r of [r1, r2])
       if (r.status === 'submitted') await rt.engine.wait(PROJECT, r.revertJobId, 25_000);
-    // Let the follow-ups (re-stage, deletion proposal) run.
-    for (let i = 0; i < 100 && deletionProposals(w, assetId).length < 2; i++) await sleep(20);
+    // Let the follow-ups (re-stage, the deletion job) run.
+    for (let i = 0; i < 200 && deletionJobs(w, jobId).length === 0; i++) await sleep(20);
+    for (const id of deletionJobs(w, jobId)) await rt.engine.wait(PROJECT, id, 25_000);
+    await sleep(100); // a second follow-up, if any, would have started by now
     const rows = w.stack.db
       .prepare('SELECT revert_job_id, state FROM job_reverts WHERE job_id = ?')
       .all(jobId) as { revert_job_id: string; state: string }[];
     const detail = JSON.stringify({
       statuses,
       rows,
-      proposals: deletionProposals(w, assetId).map((p) => p.id),
+      deletionJobs: deletionJobs(w, jobId),
+      deletions: deletions(w, assetId, before).length,
     });
     expect(statuses.sort(), detail).toEqual(['REVERT_RUNNING', 'submitted']);
     expect(rows, detail).toHaveLength(1);
-    expect(deletionProposals(w, assetId), detail).toHaveLength(1);
+    expect(deletionJobs(w, jobId), detail).toHaveLength(1);
+    expect(deletions(w, assetId, before), detail).toHaveLength(1);
   });
 });
 
@@ -124,7 +131,7 @@ describe('F3: the placed asset’s URL is not on an asset host', () => {
   });
 });
 
-describe('F4: nothing written to the staging folder, no asset deleted by the revert', () => {
+describe('F4: nothing written to the staging folder; the placed asset deleted by one job after the revert', () => {
   it('a placement whose record says it came from a folder named like the staging folder is not moved back there', async () => {
     w = await imagesWorld();
     const { stagedId, assetId, jobId } = await placeOne(w);
@@ -134,9 +141,12 @@ describe('F4: nothing written to the staging folder, no asset deleted by the rev
     expect(r.status).toBe('submitted');
     if (r.status !== 'submitted') return;
     await rt.engine.wait(PROJECT, r.revertJobId, 25_000);
-    for (let i = 0; i < 100 && deletionProposals(w, assetId).length === 0; i++) await sleep(20);
-    expect(writesSince(w, before)).toEqual([]);
-    expect(w.assets.assets.has(assetId)).toBe(true);
+    for (let i = 0; i < 200 && deletionJobs(w, jobId).length === 0; i++) await sleep(20);
+    for (const id of deletionJobs(w, jobId)) await rt.engine.wait(PROJECT, id, 25_000);
+    // The one write: the placed asset's deletion. Nothing moved, hidden or put into a staging folder.
+    expect(writesSince(w, before).filter((c) => !deletions(w, assetId, before).includes(c))).toEqual([]);
+    expect(deletions(w, assetId, before)).toHaveLength(1);
+    expect(w.assets.assets.has(assetId)).toBe(false);
     expect(
       [...w.assets.assets.values()].filter((a) => a.type === 'FOLDER' && a.name === 'LK-Bridge staging'),
     ).toEqual([]);

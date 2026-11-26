@@ -4,13 +4,12 @@
  * REAL stack on the mock LegendKeeper (test/consistency/world.ts, plus eleven pages restating Leila Darvish's birth):
  *
  * - only Contradictory pairs become findings, with stable codes, and they clear when the pages agree;
- * - the pick needs the step-up; it makes ONE proposal with one item per disagreeing page and never touches the side
- *   picked; a typed value edits the identity page too; an agent's suggestion is shown and applies nothing; Revert works;
- *   a pick of more than 10 pages asks for the step-up at approval (the bulk rail's size, ADR 0062).
+ * - the pick needs the step-up; it plans one item per disagreeing page and never touches the side picked, and (v3 F12,
+ *   ADR 0081) runs at once as ONE job, with no proposal, a pick of more than 10 pages included; a typed value edits the
+ *   identity page too; an agent's suggestion is shown and applies nothing; Revert works.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Finding } from '../../src/audits/types.js';
-import { approve } from '../packs/world.js';
 import { C, f4bWorld, K, ownerClient, PROJECT, type F4bWorld } from './world.js';
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -57,6 +56,17 @@ const temporalScope = (pageId: string) =>
     .content.map((c: any) => c.text ?? '')
     .join('');
 const proposals = () => w.stack.runtime.policy.proposals.list({ project: PROJECT, limit: 500 }).length;
+/** v3 F12 (ADR 0081): the owner's confirmed pick runs at once as ONE job (no proposal); waits for it. */
+async function ran(json: Record<string, any>) {
+  expect(typeof json.jobId, JSON.stringify(json)).toBe('string');
+  expect(json.proposalId).toBeUndefined();
+  for (let i = 0; i < 1000; i++) {
+    const job = w.stack.runtime.engine.queries.getJob(PROJECT, String(json.jobId));
+    if (job && ['succeeded', 'failed', 'cancelled'].includes(job.status)) return { job, jobId: job.id };
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  throw new Error('the pick’s job did not finish');
+}
 
 describe('the audits’ consistency category (D5)', () => {
   it('reports only Contradictory pairs (Authoritative against Authoritative), with the four stable codes', () => {
@@ -135,7 +145,7 @@ describe('“Pick the right value” (D6)', () => {
   });
 
   let katsuJob: string;
-  it('picking the identity page’s value: ONE proposal, one item for the page that disagrees, the side picked untouched; approved, it edits only the date; the finding clears', async () => {
+  it('picking the identity page’s value: ONE job (v3 F12), one item for the page that disagrees, the side picked untouched; it edits only the date; the finding clears', async () => {
     const f = findingOf('Katsuragi Yamato', 'consistency_birth');
     const o = ownerClient(w);
     const v = await o.get(`/audits/findings/${f.id}/consistency?project=test`);
@@ -151,9 +161,11 @@ describe('“Pick the right value” (D6)', () => {
     expect(r.json.untouched).toEqual([
       expect.objectContaining({ value: 'Isar 3rd, 4A 300', why: 'the side picked' }),
     ]);
-    const done = await approve(w, r.json.proposalId);
+    const before = proposals();
+    const done = await ran(r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
-    katsuJob = done.jobId!;
+    expect(proposals()).toBe(before);
+    katsuJob = done.jobId;
     expect(textOf(K.nation)).toContain('Rita von Katzen was born in Isar 3rd, 4A 300, in the river quarter.');
     // The other line of the page is as it was; the Core is untouched.
     expect(textOf(K.nation)).toContain(
@@ -162,8 +174,8 @@ describe('“Pick the right value” (D6)', () => {
     expect(temporalScope(K.katsu)).toBe(coreBefore);
     // The pick is audited and recorded.
     const picks = w.stack.db
-      .prepare('SELECT * FROM consistency_picks WHERE proposal_id = ?')
-      .all(r.json.proposalId);
+      .prepare('SELECT * FROM consistency_picks WHERE job_id = ?')
+      .all(r.json.jobId);
     expect(picks).toHaveLength(1);
     // The next snapshot holds the edit: the pages agree, and the finding clears.
     await w.stack.runtime.snapshots.settled();
@@ -202,7 +214,7 @@ describe('“Pick the right value” (D6)', () => {
     });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(r.json.items.map((i: any) => i.page.id).sort()).toEqual([K.yasminBio, K.yasmin].sort());
-    const done = await approve(w, r.json.proposalId);
+    const done = await ran(r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     expect(temporalScope(K.yasmin)).toBe('Born Camue 2nd, 4A 100');
     expect(textOf(K.yasminBio)).toContain('Yasmin was born on Camue 2nd, 4A 100 in the old quarter.');
@@ -210,25 +222,23 @@ describe('“Pick the right value” (D6)', () => {
     expect(textOf(K.yasminBio)).toContain('She was born in 4A 90 by another count.');
   });
 
-  it('a pick of more than 10 pages is one proposal whose approval asks for the step-up (the bulk rail’s size)', async () => {
+  it('a pick of more than 10 pages runs at once as ONE job editing all of them (v3 F12: no bulk rail, no proposal)', async () => {
     const f = findingOf('Leila Darvish', 'consistency_birth');
     expect((f.evidence.restatements as unknown[]).length).toBe(11);
     const o = ownerClient(w);
     const v = await o.get(`/audits/findings/${f.id}/consistency?project=test`);
     o.reauth();
+    const before = proposals();
     const r = await o.post(`/audits/findings/${f.id}/consistency-pick?project=test`, {
       confirm: true,
       side: v.json.values[0].key,
     });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(r.json.items).toHaveLength(11);
-    // A fresh session, without the step-up: approving it is refused until the owner confirms.
-    const fresh = ownerClient(w);
-    const refused = await fresh.post(`/proposals/${r.json.proposalId}/approve?project=test`, {});
-    expect(refused.status).toBe(403);
-    expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
-    fresh.reauth();
-    const ok = await fresh.post(`/proposals/${r.json.proposalId}/approve?project=test`, {});
-    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
+    const done = await ran(r.json);
+    expect(done.job.status, JSON.stringify(done.job.lastError ?? null)).toBe('succeeded');
+    expect(proposals()).toBe(before);
+    // Every note was edited by the one job (none still gives the old date).
+    for (const id of LEILA_NOTES) expect(textOf(id)).not.toContain('born in 4A 700');
   });
 });

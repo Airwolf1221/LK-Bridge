@@ -4,7 +4,7 @@
  * searched for. Regression tests beside the reviewer's attempts (test/review/r4-pick), for what they leave unpinned:
  *
  * - the facts index records where each value was read (its sentence or clause, by its SHA-1, and the date's offset);
- * - a page Archived between the pick and its approval: the job checks the page's name, parent and tags inside its locks
+ * - a page Archived between the pick and its job's run (v3 F12: the pick runs at once as a job): the job checks the page's name, parent and tags inside its locks
  *   and stops before writing it;
  * - a restatement inside a quotation is listed (never edited) while the page's plain restatement is planned, and the
  *   item shows the whole sentence before and after;
@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Finding } from '../../src/audits/types.js';
 import { placeSha } from '../../src/consistency/extract.js';
 import { SidebarModel } from '../resources/world.js';
-import { approve, IDENTITY_KEYS, LIFECYCLE } from '../packs/world.js';
+import { IDENTITY_KEYS, LIFECYCLE } from '../packs/world.js';
 import { C, f4bWorld, ownerClient, PROJECT, type F4bWorld } from './world.js';
 
 vi.setConfig({ testTimeout: 120_000, hookTimeout: 240_000 });
@@ -187,6 +187,22 @@ const rowText = (pageId: string, key: string): string =>
     .content.map((c: Obj) => c.text ?? '')
     .join('');
 const proposals = () => w.stack.runtime.policy.proposals.list({ project: PROJECT, limit: 1000 }).length;
+/** v3 F12 (ADR 0081): the owner's confirmed pick runs at once as ONE job (no proposal); waits for it. */
+async function ran(json: Obj) {
+  expect(typeof json.jobId, JSON.stringify(json)).toBe('string');
+  expect(json.proposalId).toBeUndefined();
+  for (let i = 0; i < 1000; i++) {
+    const job = w.stack.runtime.engine.queries.getJob(PROJECT, String(json.jobId));
+    if (job && ['succeeded', 'failed', 'cancelled'].includes(job.status)) return { job };
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  throw new Error('the pick’s job did not finish');
+}
+/** v3 F12: holds every write, so a page can change between the pick and its job's run (as before approval). */
+function holdWrites(): () => void {
+  w.stack.runtime.engine.controls.pauseWrites('test');
+  return () => void w.stack.runtime.engine.controls.resumeWrites('test');
+}
 
 describe('the pick places each edit where the check read the value (CR-2026-11-R4)', () => {
   it('the facts index records the sentence and the date’s offset in it, and a clause’s', () => {
@@ -197,16 +213,19 @@ describe('the pick places each edit where the check read the value (CR-2026-11-R
     expect(scope.place).toEqual({ sha: placeSha('Born 4A 100'), at: 5 });
   });
 
-  it('a page Archived between the pick and its approval: the job checks it inside its locks and writes nothing', async () => {
+  it('a page Archived between the pick and its job’s run: the job checks it inside its locks and writes nothing', async () => {
     const f = findingOf(AMOS.name, 'consistency_birth');
     const side = (await valuesOf(f)).find((v) => v.page.id === core(AMOS))!;
+    // v3 F12: the pick runs at once; the engine's write hold stands in for the wait before approval.
+    const release = holdWrites();
     const r = await pick(f, { side: side.key });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    // The owner archives the register in the app while the pick waits for approval.
+    // The owner archives the register in the app before the pick's job runs.
     w.repo.outside.move(reg(AMOS), LIFECYCLE.archived);
     w.repo.outside.rename(reg(AMOS), '[BARC] Hale Register');
     w.repo.outside.setTags(reg(AMOS), ['Archived']);
-    const done = await approve(w, String(r.json.proposalId));
+    release();
+    const done = await ran(r.json);
     expect(done.job?.status).not.toBe('succeeded');
     expect(JSON.stringify(done.job?.lastError ?? null)).toMatch(/name|parent|tags/);
     expect(textOf(reg(AMOS), 'amosp1')).toBe('Amos Hale was born in 4A 103.');
@@ -231,16 +250,8 @@ describe('the pick places each edit where the check read the value (CR-2026-11-R
         added: { start: 26, end: 29 },
       },
     ]);
-    // …and the proposal's summary and operations show the sentence before and after.
-    const detail = w.stack.runtime.policy.proposals.detail(String(r.json.proposalId))!;
-    expect((detail.operations as Obj[]).flatMap((o) => (o.textChanges as Obj[] | undefined) ?? [])).toEqual([
-      expect.objectContaining({
-        before: 'Beth Ivers was born in 4A 103, the parish says.',
-        after: 'Beth Ivers was born in 4A 100, the parish says.',
-      }),
-    ]);
-    expect(detail.summary).toContain('“Beth Ivers was born in 4A 103, the parish says.”');
-    const done = await approve(w, String(r.json.proposalId));
+    // v3 F12 (ADR 0081): the confirmed pick runs at once, so no proposal's summary repeats the item (it went with it).
+    const done = await ran(r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     expect(textOf(reg(BETH), 'bethp1')).toBe('The stone by the well reads “Beth Ivers was born in 4A 103.”');
     expect(textOf(reg(BETH), 'bethp2')).toBe('Beth Ivers was born in 4A 100, the parish says.');
@@ -280,7 +291,7 @@ describe('the pick places each edit where the check read the value (CR-2026-11-R
     expect(side.value).toBe('Elf (by adoption)');
     const r = await pick(f, { side: side.key });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    const done = await approve(w, String(r.json.proposalId));
+    const done = await ran(r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     expect(rowText(core(ELLA), 'Race / Species')).toBe('Elf');
     expect(rowText(reg(ELLA), 'Race / Species')).toBe('Elf (by adoption)');
@@ -294,7 +305,7 @@ describe('the pick places each edit where the check read the value (CR-2026-11-R
     expect(r.json.items).toHaveLength(1);
     const changes = r.json.items[0].diff.changes as Obj[];
     expect(changes.map((c) => c.what)).toEqual(['Temporal Scope', 'the sentence']);
-    const done = await approve(w, String(r.json.proposalId));
+    const done = await ran(r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     expect(rowText(reg(GWYN), 'Temporal Scope')).toBe('Born 4A 100');
     expect(textOf(reg(GWYN), 'gwynp1')).toBe('Gwyn Nash was born in 4A 100.');
