@@ -3,6 +3,9 @@
  * rename and status tags. CR-06's fix (`recheckOnRelock`) checks again only when nothing has been sent, on the claim that
  * "the writes after it carry their own checks". A set's later `updateResource` steps carry none: the tags (and name) are
  * the list planned at the start, so an edit made meanwhile in the app is overwritten when writes resume.
+ *
+ * v3 F12 (ADR 0081): at scope `write` the set archive is direct (its job runs at once, no approval), so the pause is set
+ * up before the call.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
@@ -35,8 +38,6 @@ const until = async (fn: () => boolean, ms = 10_000) => {
 it('a set archive held after its first write does not overwrite a tag added in the app to a later page', async () => {
   const engine = w.stack.runtime.engine;
   const s = await seedSet(w, 'authoritative');
-  const r = await w.stack.call(client, 'archive_page', { project: 'test', page: s.root, subtree: true });
-  expect(r.body.status, r.text).toBe('proposal_captured');
   // The owner pauses writes just as the job's FIRST write (the root's status tag) is made.
   let paused = false;
   w.stack.mock.inject(
@@ -54,11 +55,11 @@ it('a set archive held after its first write does not overwrite a tag added in t
     },
     { kind: 'drop' },
   );
-  const id = String(r.body.proposalId);
-  await w.stack.runtime.policy.commands.approveAsCanon('owner', id);
-  const proposals = w.stack.runtime.policy.proposals;
-  await until(() => proposals.get(id)!.jobId !== null && proposals.get(id)!.jobId !== undefined);
-  const jobId = proposals.get(id)!.jobId!;
+  const r = await w.stack.call(client, 'archive_page', { project: 'test', page: s.root, subtree: true });
+  // Direct at scope write: a job, no proposal.
+  expect(r.body.proposalId, r.text).toBeUndefined();
+  expect(r.body.jobId, r.text).toBeTruthy();
+  const jobId = String(r.body.jobId);
   await until(() => paused && engine.queries.getJob(PROJECT, jobId)?.waitReason?.held === 'writes_paused');
   expect(
     engine.queries.getJob(PROJECT, jobId)?.waitReason?.held,

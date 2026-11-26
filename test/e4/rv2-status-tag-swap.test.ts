@@ -66,7 +66,10 @@ describe('RV2-3: the genuine status tag swapped for a look-alike', () => {
       ...(fv ? { baseFactsVersion: fv } : {}),
     });
     // SAFE: Status stays exactly Authoritative until the owner accepts the change as canon.
-    expect(set.body, set.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
+    expect(set.body, set.text).toMatchObject({
+      status: 'proposal_captured',
+      requiresCanonicalApproval: true,
+    });
     expect(status(L.guild), set.text).toBe('Authoritative');
   });
 

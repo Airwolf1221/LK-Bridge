@@ -2836,7 +2836,7 @@ export interface RevertPreview {
   ready: number;
   notReverted: number;
   /**
-   * v3 F3e (ADR 0059): a split's phase 1: the pages it made go to ONE deletion proposal. CR-2026-11-R3 (R3-09): it is
+   * v3 F3e (ADR 0059): a split's phase 1: the pages it made go to ONE deletion job. CR-2026-11-R3 (R3-09): it is
    * reverted whole or not at all (`wholeOnly`).
    */
   split?: { pagesMade: number; wholeOnly?: boolean };

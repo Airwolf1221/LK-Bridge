@@ -141,7 +141,7 @@ describe('the dashboard API', () => {
     expect(log.map((l) => l.action)).toEqual(['audits.acknowledge', 'audits.unacknowledge']);
   });
 
-  it('Propose a fix and Re-check now are the owner’s buttons: a proposal, never applied; refusals are typed', async () => {
+  it('Apply fix and Re-check now are the owner’s buttons: the fix is one confirmed action (a job at once, no proposal); refusals are typed', async () => {
     w = await auditsWorld();
     await w.snapshotAndAudit();
     const o = owner(w);
@@ -149,22 +149,32 @@ describe('the dashboard API', () => {
       await o.get(`/audits/findings${q}&code=line_break_paragraph&page=Many`)
     ).json.findings.find((f: Json) => f.blockId === 'bp1');
     const before = structuredClone(w.blocksOf(A.breaks));
+    // A re-check of the finding reads the page live.
+    const rc = await o.post(`/audits/findings/${split.id}/recheck${q}`, { confirm: true });
+    expect(rc.json).toMatchObject({ status: 'still_present' });
+    expect(rc.json.finding.source.kind).toBe('live');
+    expect((await o.post(`/audits/findings/${split.id}/propose-fix${q}`, {})).status).toBe(400); // confirm is required
+    expect(w.blocksOf(A.breaks)).toEqual(before);
+    // v3 F12 (ADR 0081): the owner's confirmed "Apply fix…" runs the job at once; nothing waits for an approval.
+    const pending = (await o.get('/proposals?state=pending')).json;
     const p = await o.post(`/audits/findings/${split.id}/propose-fix${q}`, { confirm: true });
     expect(p.status, JSON.stringify(p.json)).toBe(200);
-    expect(p.json).toMatchObject({ status: 'proposal_captured', fix: 'split_paragraph' });
-    expect(w.blocksOf(A.breaks)).toEqual(before);
-    const proposals = (await o.get('/proposals?state=pending')).json;
-    expect(JSON.stringify(proposals)).toContain(p.json.proposalId);
+    expect(p.json).toMatchObject({ status: 'job_submitted', fix: 'split_paragraph' });
+    expect(p.json.proposalId).toBeUndefined();
+    const job = await w.stack.runtime.engine.wait(PROJECT, String(p.json.jobId), 30_000);
+    expect(job.status, JSON.stringify(job.lastError ?? null)).toBe('succeeded');
+    // The paragraph is split at its line breaks: three paragraphs in its place.
+    expect(w.blocksOf(A.breaks)).toHaveLength(before.length + 2);
+    expect((await o.get('/proposals?state=pending')).json).toEqual(pending);
+    // Re-checked after the fix: gone.
+    expect((await o.post(`/audits/findings/${split.id}/recheck${q}`, { confirm: true })).json).toMatchObject({
+      status: 'gone',
+    });
     // No fix to offer: a typed refusal.
     const noFix = (await o.get(`/audits/findings${q}&code=unclassified_page`)).json.findings[0];
     const refused = await o.post(`/audits/findings/${noFix.id}/propose-fix${q}`, { confirm: true });
     expect(refused.status).toBe(409);
     expect(refused.json.error.code).toBe('NO_FIX');
-    // A re-check of the same finding reads the page live.
-    const rc = await o.post(`/audits/findings/${split.id}/recheck${q}`, { confirm: true });
-    expect(rc.json).toMatchObject({ status: 'still_present' });
-    expect(rc.json.finding.source.kind).toBe('live');
-    expect((await o.post(`/audits/findings/${split.id}/propose-fix${q}`, {})).status).toBe(400); // confirm is required
   });
 
   it('the rules editor: seeded defaults from the registry, saved without a fresh code (ADR 0081), audited, validated', async () => {

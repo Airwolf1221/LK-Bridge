@@ -11,9 +11,8 @@
  * - **A stopped phase 1** (a verification failure, a conflict): no phase 2; Resume and Revert stay available.
  * - **Revert of phase 1**: the revert job puts the moved content back (the Revert service's own targets: the source's
  *   text, the existing owners' appends, the remapped Dependencies, the index lines, Last Major Revision); once it has
- *   succeeded, the pages phase 1 made go to ONE deletion proposal for the owner (the deletes rail's way: a delete is a
- *   proposal; an Authoritative page's is canonical), each only while it is exactly as the job made it; one changed
- *   since is kept and listed.
+ *   succeeded, the pages phase 1 made are deleted by ONE job (v3 F12, ADR 0081: the owner's confirmed action, no longer
+ *   a proposal), each only while it is exactly as the job made it; one changed since is kept and listed.
  */
 import type { BackgroundRunner } from '../../background.js';
 import type { Db } from '../../db/open.js';
@@ -87,7 +86,7 @@ export interface SplitRevert {
   /** Pages kept because they changed since phase 1 made them (or could not be read). */
   readonly kept: readonly { readonly id: string; readonly name: string; readonly why: string }[];
   /**
-   * CR-2026-11-R3 (R3-66): a source phase 1 upgraded to its Character Core: whether the deletion proposal puts it back to
+   * CR-2026-11-R3 (R3-66): a source phase 1 upgraded to its Character Core: whether the deletion job puts it back to
    * its Compact Character Reference (after the deletions), or why not.
    */
   readonly core?: { readonly back: boolean; readonly why?: string };
@@ -526,7 +525,7 @@ export class SplitService {
     return this.byJob(projectId, jobId) !== null;
   }
 
-  /** How many pages a split's phase 1 made (they go to a deletion proposal when it is reverted). */
+  /** How many pages a split's phase 1 made (they are deleted by a job when it is reverted). */
   pagesMade(projectId: string, jobId: string): number {
     return (this.d.engine.stepRecords(projectId, jobId) ?? []).filter(
       (s) =>
@@ -701,7 +700,7 @@ export class SplitService {
   }
 
   /**
-   * After a revert of phase 1 has succeeded: the pages it made go to ONE deletion proposal, children before their
+   * After a revert of phase 1 has succeeded: the pages it made go to ONE deletion job, children before their
    * parents, each only while it is exactly as phase 1 made it (its text as written, its name).
    */
   async afterRevert(

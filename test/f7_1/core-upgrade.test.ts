@@ -64,7 +64,7 @@ async function settle(r: { body: any; text: string }) {
 }
 
 describe('arkona_add_character_art', () => {
-  it('a standalone Compact character: ONE proposal makes its index, upgrades it to its Core and makes its Art page', async () => {
+  it('a standalone Compact character: ONE direct job (scope write, F12) makes its index, upgrades it to its Core and makes its Art page', async () => {
     const id = await stage('alpha.png');
     const args = { character: 'Emine al-Noor', images: [portrait(id)], project: 'test' };
     const dry = await w.call('arkona_add_character_art', { ...args, dryRun: true });
@@ -98,10 +98,11 @@ describe('arkona_add_character_art', () => {
       expect.objectContaining({ code: 'UPGRADE_OVERLAP', section: 'Visual Disposition' }),
     );
 
+    // v3 F12 (ADR 0081): at scope write the canon upgrade is direct (on the owner's Review page with Revert), no
+    // proposal; at scope propose it is one canonical proposal (test/f7_1/wording-proposal.test.ts).
     const p = await w.call('arkona_add_character_art', args);
-    expect(p.body.status, p.text).toBe('proposal_captured');
-    const prop = w.stack.runtime.policy.proposals.get(String(p.body.proposalId))!;
-    expect(prop.requiresCanonicalApproval).toBe(true);
+    expect(p.body.status, p.text).toBe('written');
+    expect(p.body.proposalId).toBeUndefined();
     const { job } = await settle(p);
     expect(job?.status, JSON.stringify(job?.lastError)).toBe('succeeded');
     expect((job?.result as { verified?: boolean }).verified, JSON.stringify(job?.result).slice(0, 3000)).toBe(
@@ -271,7 +272,6 @@ describe('refusals', () => {
 
 describe('Revert', () => {
   it('reverting the package puts the Compact Character Reference back: its name, Reference Type and template', async () => {
-    console.log('TPL BEFORE', templateOf(F.tomo));
     const id = await stage('png-named.jpg');
     const r = await w.call('arkona_add_character_art', {
       character: 'Tomo Reed',
@@ -284,12 +284,12 @@ describe('Revert', () => {
     expect(w.repo.live(F.tomo)!.name).toBe('[BWRK] Tomo Reed - Character Core');
     expect(rowsOf(F.tomo)['Reference Type']).toBe('Character Core');
     expect(templateOf(F.tomo)).toBe(TPL.core);
-    // Revert never deletes what a job made (the index and the Art page stay; ADR 0055): a partial revert, confirmed.
+    expect(pageNamed('[INDEX] Tomo Reed')).toBeDefined();
+    expect(pageNamed('[BWRK] Tomo Reed - Character Art')).toBeDefined();
+    // v3 F12 (ADR 0081 D2): Revert also deletes again the pages the job made (the index and the Art page, untouched
+    // since), last, after the Core has gone back.
     const preview = await w.stack.runtime.reverts.preview(PROJECT, jobId!);
     const ready = preview.targets.filter((t) => t.state === 'ready').map((t) => t.key);
-    console.log('PREVIEW', JSON.stringify(preview.targets, null, 1).slice(0, 6000));
-    const jr = w.stack.runtime.engine.queries.getJob(PROJECT, jobId!);
-    console.log('RECSTEPS', JSON.stringify((w.stack.runtime.engine.queries as any).steps?.(PROJECT, jobId!) ?? null).slice(0,3000));
     expect(ready).toEqual(
       expect.arrayContaining([`resource:${F.tomo}`, `facts:${F.tomo}`, `move:${F.tomo}`]),
     );
@@ -305,13 +305,13 @@ describe('Revert', () => {
       rj = w.stack.runtime.engine.queries.getJob(PROJECT, rv.revertJobId);
     }
     expect(rj?.status, JSON.stringify(rj?.lastError)).toBe('succeeded');
-    console.log('RJSTEPS', JSON.stringify((rj as any).steps.map((x: any) => [x.stepNo, x.opId, x.status, JSON.stringify(x.params).slice(0,300), JSON.stringify(x.response ?? x.result ?? null).slice(0,200)]), null, 1));
-    console.log('TPL AFTER', templateOf(F.tomo));
     expect(w.repo.live(F.tomo)!.name).toBe('[BWRK] Tomo Reed - Character Reference');
     expect(rowsOf(F.tomo)['Reference Type']).toBe('Compact Character Reference');
     expect(templateOf(F.tomo)).toBe(TPL.compact);
     expect(w.repo.live(F.tomo)!.parentId).toBe(LIFECYCLE.working);
     expect(textOf(mainOf(F.tomo)[1])).toBe('The compact reference for Tomo Reed.');
+    expect(pageNamed('[INDEX] Tomo Reed')).toBeUndefined();
+    expect(pageNamed('[BWRK] Tomo Reed - Character Art')).toBeUndefined();
   });
 });
 

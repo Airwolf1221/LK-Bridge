@@ -99,7 +99,7 @@ export interface RevertPreview {
   /** Targets that would not (changed since, gone, not revertible): a revert of the rest needs `confirmPartial`. */
   readonly notReverted: number;
   /**
-   * v3 F3e (ADR 0059): a split's phase 1: the pages it made, which go to ONE deletion proposal once the revert has run
+   * v3 F3e (ADR 0059): a split's phase 1: the pages it made, which go to ONE deletion job once the revert has run
    * (or at once, when nothing else needs putting back).
    */
   readonly split?: {
@@ -178,7 +178,7 @@ export interface RevertDeps {
   /**
    * v3 F3e (ADR 0059): a split's phase 1 is revertible although the owner approved it (the design: "phase 1 can be
    * reverted, putting the moved content back and removing what it created"): the pages it made are not reverted by the
-   * job but go to ONE deletion proposal once it has succeeded (`afterRevert`).
+   * job but go to ONE deletion job once it has succeeded (`afterRevert`).
    */
   readonly splits?: {
     isPhase1(projectId: string, jobId: string): boolean;
@@ -186,12 +186,12 @@ export interface RevertDeps {
     isReverted?(projectId: string, jobId: string): boolean;
     /** CR-2026-11-R3 (R3-09): whether phase 2 archived the source (its archive note changed the source's text). */
     isRetired?(projectId: string, jobId: string): boolean;
-    /** How many pages a split's phase 1 made (its deletion proposal's pages, at most). */
+    /** How many pages a split's phase 1 made (its deletion job's pages, at most). */
     pagesMade?(projectId: string, jobId: string): number;
     /**
      * CR-2026-11-R3 (R3-66): the source a split's phase 1 upgraded from its Compact Character Reference to its Character
      * Core (renaming an Authoritative page is canon, ADR 0057 decision 5, which the bridge never does on its own): its name
-     * and Reference Type are put back by the deletion proposal of the pages the split made, not by the revert job.
+     * and Reference Type are put back by the deletion job of the pages the split made, not by the revert job.
      */
     coreUpgrade?(
       projectId: string,
@@ -425,7 +425,7 @@ export class RevertService {
             page: t.page,
             what: t.what,
             state: 'nothing_to_do',
-            detail: `${t.what}: ${upgrade!.from} became ${upgrade!.to} with the split; it is put back (with its Reference Type) by the deletion proposal of the pages the split made, which the owner approves as canon`,
+            detail: `${t.what}: ${upgrade!.from} became ${upgrade!.to} with the split; it is put back (with its Reference Type) by the deletion of the pages the split made, which runs once the revert has (your confirmed action)`,
           },
         });
         continue;
@@ -595,7 +595,7 @@ export class RevertService {
     const readyKeys = readyPlans.map((p) => p.check.key).sort();
     if (readyPlans.length === 0) {
       // v3 F3e (ADR 0059): a split's phase 1 that stopped before anything left the source made pages and nothing else
-      // to put back: those pages go to ONE deletion proposal (each only while it is as the split made it).
+      // to put back: those pages go to ONE deletion job (each only while it is as the split made it).
       const splits = this.d.splits;
       const splitMade =
         splits?.isPhase1(projectId, jobId) === true &&
@@ -931,7 +931,7 @@ export class RevertService {
         'putting a revert’s images back on the Staging page',
         this.afterImages(row.id, row.project_id, row.job_id, note, notes),
       );
-    // v3 F3e (ADR 0059): a split's phase 1 reverted: the pages it made go to ONE deletion proposal.
+    // v3 F3e (ADR 0059): a split's phase 1 reverted: the pages it made go to ONE deletion job.
     if (this.d.splits?.isPhase1(row.project_id, row.job_id))
       this.follow(
         'proposing the deletion of a reverted split’s pages',
@@ -1259,7 +1259,7 @@ const resourceOf = (t: Target): string | null =>
 
 /**
  * CR-2026-11-R3 (R3-66): a target of the source a split upgraded to its Character Core, without the upgrade (its new name,
- * its Reference Type row), which the deletion proposal puts back; null when nothing else of it is left to revert.
+ * its Reference Type row), which the deletion job puts back; null when nothing else of it is left to revert.
  */
 function withoutUpgrade(t: Target, u: { readonly from: string; readonly to: string }): Target | null {
   if (t.kind === 'resource') {

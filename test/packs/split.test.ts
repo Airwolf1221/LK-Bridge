@@ -478,7 +478,8 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 
   it('the costs, measured: the proposal’s capture and the job', () => {
     expect(cost).toEqual(COSTS.zahra);
-    // The preview's estimate: the job's writes exactly, its reads within about a tenth (175 estimated, 159 made).
+    // The preview's estimate: the job's writes exactly; its reads 175 estimated, 209 made (159 before v3 F12's
+    // pre-image reads, which the estimate does not count).
     expect(proposal.cost).toMatchObject({ planReads: 10, job: { reads: 175, writes: cost.writes } });
   });
 
@@ -527,8 +528,11 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 /** The costs, measured (pinned: a change is a cost change to state). */
 const COSTS = {
   // CR-2026-11-R3 (R3-66): + the Core upgrade (her rename and Reference Type; the two templates read at the capture).
-  zahra: { capture: 26, requests: 248, writes: 89 },
-  statutes: { capture: 12, requests: 84, writes: 22 },
+  // v3 F12 (ADR 0081): the pre-image Revert needs: every sidebar row write (updatePropertyRow) now reads its property's
+  // rows first, inside the lock, where a row write chained on the previous one's version read nothing (248 → 298 and
+  // 84 → 97 requests; the writes are the same).
+  zahra: { capture: 26, requests: 298, writes: 89 },
+  statutes: { capture: 12, requests: 97, writes: 22 },
 };
 
 describe('arkona_split_owner: phase 2 on an owner with two domains (the source retired)', () => {
@@ -611,7 +615,8 @@ describe('arkona_split_owner: phase 2 on an owner with two domains (the source r
 
   it('the costs, measured', () => {
     expect(cost).toEqual(COSTS.statutes);
-    // 58 reads estimated, 62 made; the writes exactly.
+    // 58 reads estimated, 75 made (62 before v3 F12's pre-image reads, which the estimate does not count); the writes
+    // exactly.
     expect(proposal.cost).toMatchObject({ planReads: 6, job: { reads: 58, writes: cost.writes } });
   });
 });

@@ -252,15 +252,19 @@ describe('the upgrade (core_text): the proposal and the Review card show the wor
     interpretation: 'His smile.',
   });
 
-  it('an upgrade’s proposal: the summary and the item hold the sentence before and after', async () => {
+  it('an upgrade’s proposal (a propose-scope connection): the summary and the item hold the sentence before and after', async () => {
     const id = await stage('alpha.png');
-    const p = await w.call('arkona_add_character_art', {
+    // v3 F12 (ADR 0081): at scope write the upgrade is direct; a propose-scope connection's is the proposal.
+    const proposer = w.stack.newToken('upgrade-proposer', 'propose');
+    const pc = await w.stack.connect(proposer.token);
+    const p = await w.stack.call(pc, 'arkona_add_character_art', {
       character: 'Emine al-Noor',
       images: [portrait(id)],
       project: 'test',
     });
     expect(p.body.status, p.text).toBe('proposal_captured');
     const prop = w.stack.runtime.policy.proposals.get(String(p.body.proposalId))!;
+    expect(prop.requiresCanonicalApproval).toBe(true);
     expect(prop.summary).toContain('Text: “');
     expect(prop.summary).toContain('Compact Main CANON reference');
     const detail = w.stack.runtime.policy.proposals.detail(prop.id)!;
@@ -276,6 +280,7 @@ describe('the upgrade (core_text): the proposal and the Review card show the wor
     expect(owns.before!.slice(owns.removed!.start, owns.removed!.end)).toBe('compact reference');
     expect(owns.after!.slice(owns.added!.start, owns.added!.end)).toBe('Character Core');
     expect((detail.operations as any[]).some((o) => (o.textChanges ?? []).length > 0)).toBe(true);
+    w.stack.runtime.policy.commands.reject('owner', prop.id, 'not now');
   });
 
   it('a direct upgrade (a Working character at scope write): its Review card lists the words it changed', async () => {

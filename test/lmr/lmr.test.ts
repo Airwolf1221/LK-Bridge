@@ -101,7 +101,7 @@ describe('counting edits', () => {
     expect(lmrWrites()).toEqual([]);
   });
 
-  it('set_facts of a non-housekeeping key chains on its own row write’s version: no extra read', async () => {
+  it('set_facts of a non-housekeeping key chains on its own row write’s version: no read of its own', async () => {
     const r = await w.stack.call(writer, 'set_facts', {
       page: RHEASHIRA.page,
       facts: { Scope: 'Moon elf envoy, recalled' },
@@ -112,9 +112,22 @@ describe('counting edits', () => {
     expect(rowWrites.map((x) => x.path.split('/').at(-1))).toEqual(['rhea0012', LMR_ROW]);
     // The If-Match of the date's write is the version the Scope write answered.
     expect(rowWrites[1]!.ifMatch).not.toBe(rowWrites[0]!.ifMatch);
-    console.log('DBG', JSON.stringify(since().map((x) => [x.method, x.path, x.ifMatch])));
-    const rowReads = since().filter((x) => x.method === 'GET' && /\/rows$/.test(x.path));
-    expect(rowReads).toHaveLength(1); // set_facts' own check in the lock; none for the date
+    // Two reads of the rows, one before each row write. v3 F12 (ADR 0081): the pre-image Revert needs: an
+    // updatePropertyRow keeps the row as it was, so the engine reads the rows once before each write, inside the lock.
+    // The date's write still chains on the Scope write's version (above) and makes no read of its own: the read before
+    // it is the journal's pre-image read, and nothing else.
+    const lines = since().map((x) => `${x.method} ${x.path.split('/').slice(-2).join('/')}`);
+    const rows = `GET ${RHEASHIRA.property}/rows`;
+    expect(lines.filter((l) => l.startsWith('GET ') && l.endsWith('/rows'))).toEqual([rows, rows]);
+    expect(lines.indexOf(`PATCH rows/rhea0012`)).toBe(lines.indexOf(rows) + 1);
+    expect(lines.indexOf(`PATCH rows/${LMR_ROW}`)).toBe(lines.lastIndexOf(rows) + 1);
+    const jobId = String(r.body.jobId);
+    const entries = w.stack.runtime.engine.queries.journalLookup(PROJECT, {
+      jobId,
+      opId: 'updatePropertyRow',
+    });
+    expect(entries.map((x) => x.targetId).sort()).toEqual(['rhea0012', LMR_ROW].sort());
+    for (const x of entries) expect(x.preImage).not.toBeNull();
   });
 
   it('a block edit through lk_api_write counts', async () => {

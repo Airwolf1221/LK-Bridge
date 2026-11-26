@@ -478,7 +478,7 @@ async function proposeRestore(
     });
   }
   const where = path.length > 0 ? path.join(' / ') : 'the library’s root';
-  const summary = `restore_snapshot: image “${placed.name}” back as a new asset in ${where}${creates.length ? ` (making ${creates.join(', ')})` : ''}, uploaded from the bridge’s server when approved${updated ? `, and ${refs.reduce((n, r) => n + r.documents.length, 0)} reference(s) updated to its new URL` : ''}`;
+  const summary = `restore_snapshot: image “${placed.name}” back as a new asset in ${where}${creates.length ? ` (making ${creates.join(', ')})` : ''}, uploaded from the bridge’s server when it runs${updated ? `, and ${refs.reduce((n, r) => n + r.documents.length, 0)} reference(s) updated to its new URL` : ''}`;
   const imageView = { stagedId: row.id, name: placed.name, path, creates };
   const r = await d.engine.submit({
     kind: 'batch_ops',
