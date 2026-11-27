@@ -19,8 +19,8 @@
  * - **N2** a snapshot of only these pages;
  * - **N3** the audit, then the report's rows: templated, rename, held_no_subject, exempt_specialist;
  * - **N4** the code at Propose: ONE proposal with ONE item, approved (as canon: an Authoritative page's rename);
- * - **N5** a second page to rename, snapshotted and audited; the code at Apply: its job (or, the canon guard deciding,
- *   its canonical proposal, approved as the owner would);
+ * - **N5** a second page to rename, snapshotted and audited; the code at Apply: ONE direct job (an Authoritative page's
+ *   rename included: the owner's ruling of the F6d follow-up), read back;
  * - **N6** read back live: the two new names, and the templated, no-Subject and specialist pages unchanged.
  *
  * Clean-up: the throwaway index deleted with everything under it, even after a failure or a step's timeout, and again
@@ -301,9 +301,9 @@ export async function runNamesCheck(
       await rt.automation.setMode('owner', pid, CODE, 'off');
       const it = its.find((i) => i.pageId === page.second);
       if (!it) throw new Error(`run ${run.id} (${run.summary}) took no item for the second page`);
-      if (it.outcome === 'applied') return `run ${run.id}: job ${it.jobId} (Apply), read back`;
-      if (it.outcome === 'guarded' && it.proposalId)
-        return `run ${run.id}: the canon guard made it a canonical proposal; ${await approveAndWait(it.proposalId, 'the Apply run')}`;
+      // The owner's ruling (F6d follow-up): an Authoritative page's rename at Apply is ONE direct job, no proposal.
+      if (it.outcome === 'applied' && it.proposalId === null)
+        return `run ${run.id}: job ${it.jobId} (Apply, direct), read back`;
       throw new Error(`run ${run.id}: ${it.outcome} ${it.reasonCode ?? ''} ${it.reason ?? ''}`);
     });
     if (!ok5) return items;

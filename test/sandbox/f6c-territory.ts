@@ -32,6 +32,7 @@
  * or a step's timeout, and again from the test file's `afterAll`. Cost: about 25 writes and 60 reads.
  */
 import { ProjectStore } from '../../src/projects/index.js';
+import { AUTOMATION_PRINCIPAL } from '../../src/jobs/types.js';
 import type { RawLk } from './f4b-probe.js';
 import { deleteProbe } from './f4b-probe.js';
 import { ensureSandboxGovernance } from './governance.js';
@@ -120,9 +121,20 @@ export async function runTerritoryCheck(
       throw new Error(`${what}: job ${jobId} ${job.status} ${JSON.stringify(job.lastError)}`);
     return `proposal ${p.id}, job ${jobId}`;
   };
-  /** As the automation's Apply submits a proposal-first code's fix: a direct job, every guard judging it. */
+  /** As the automation's Apply submits a proposal-first code's fix: a direct job, every guard allowing or refusing it. */
   const apply = async (code: string, f: { id: number }): Promise<string> => {
-    const r = await rt.audits.proposeFix('automation', pid, f.id, { direct: true });
+    // As the automation's Apply submits it: the Automation principal's maintenance origin with its Apply marker (the
+    // owner's ruling, F6d follow-up: direct, canon included).
+    const r = await rt.audits.proposeFix('automation', pid, f.id, {
+      direct: true,
+      origin: {
+        kind: 'maintenance',
+        client: 'automation',
+        tool: `automation.${code}`,
+        principal: AUTOMATION_PRINCIPAL,
+        automationApply: true,
+      },
+    });
     if (r.status === 'job_submitted') {
       const job = await waitForJob(rt.engine, pid, r.jobId, code, o.wait);
       if (job.status !== 'succeeded')

@@ -7,8 +7,8 @@
  * The page is read live first: a page renamed since the audit (upgraded meanwhile, say) is FIX_STALE and nothing is
  * proposed. The plan's writes go through the given engine as ONE forced proposal (the dashboard's, or the Automation
  * principal's); with `direct` (the automation's Apply, only when the owner switched the code to it) the job is submitted
- * without being forced, and every guard judges it: the canon guard keeps an Authoritative page's rename a canonical
- * proposal. Nothing here bypasses a guard.
+ * without being forced: a direct job, canon included (the owner's ruling, F6d follow-up: the Apply setting is the
+ * approval); a guard's refusal still refuses. Nothing here bypasses a guard.
  */
 import { AuditError } from '../audits/errors.js';
 import type { CoreUpgrader, FixResult } from '../audits/fixes.js';

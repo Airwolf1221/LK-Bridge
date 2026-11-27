@@ -183,6 +183,12 @@ export const fmtWait = (ms: number): string => {
 };
 /** The old wording of a governance paragraph's caps (v3 F5b), amended once to the new (F5b.1). */
 const OLD_CAPS_WORDING = /at most \d+ pages a run for this code and \d+ for every code together/;
+/**
+ * The old wording of a governance paragraph that said an Apply of canon is a proposal (before the owner's ruling of the
+ * F6d follow-up, which made the automation's Apply direct, canon included), amended once to the new.
+ */
+const OLD_CANON_WORDING =
+  /what the canon guard decides|stays a canonical proposal|always the owner’s canonical approval, whatever the mode|nothing is forced into a proposal: every guard judges each job/;
 
 /** One code as the dashboard shows it. */
 export interface CodeView {
@@ -1088,13 +1094,17 @@ export class AutomationService {
   }
 
   /**
-   * v3 F5b.1 (ADR 0068 amendment 1): a paragraph that still states the caps in numbers is amended ONCE, through the
+   * v3 F5b.1 (ADR 0068 amendment 1): a paragraph that still states the caps in numbers (and, since the F6d follow-up, one
+   * that still says an Apply of canon is a proposal) is amended ONCE, through the
    * ordinary paragraph path (a block-by-block job, the pack's approval carried over it), to "within the automation caps
    * set on the Settings page". Only while Repository Automation reads as approved (an edited paragraph is the owner's
    * to set right first); a failure is recorded as the code's pending governance and tried again.
    */
   private async amendCapsWording(projectId: string): Promise<void> {
-    const old = this.store.paragraphs(projectId).filter((p) => OLD_CAPS_WORDING.test(p.text));
+    // F6d follow-up: also a paragraph that still says an Apply of canon is a proposal.
+    const old = this.store
+      .paragraphs(projectId)
+      .filter((p) => OLD_CAPS_WORDING.test(p.text) || OLD_CANON_WORDING.test(p.text));
     if (old.length === 0) return;
     const gov = await this.governanceState(projectId, 'P3');
     if (!gov.ok) return;
@@ -1109,7 +1119,7 @@ export class AutomationService {
           changeId: null,
         });
       } catch (err) {
-        this.store.setGovernancePending(projectId, p.code, `caps wording: ${errMessage(err)}`);
+        this.store.setGovernancePending(projectId, p.code, `paragraph wording: ${errMessage(err)}`);
         return; // the document moved on: the next run reads it afresh
       }
     }
@@ -1439,13 +1449,20 @@ export class AutomationService {
     return false;
   }
 
-  private origin(e: CodeEntry): JobOrigin {
+  /**
+   * The automation's origin. At Apply it carries `automationApply` (the owner's ruling of the F6d follow-up; ADR 0057
+   * decision 5 and ADR 0081 amended): the owner's Apply setting is the approval, so the job runs directly, canon and
+   * lifecycle changes included (the guards allow or refuse, never propose), on the Review page with Revert. At Propose
+   * every submission is forced into a proposal, so the marker is never set there.
+   */
+  private origin(e: CodeEntry, mode?: Mode): JobOrigin {
     return {
       kind: 'maintenance',
       client: 'automation',
       tool: `automation.${e.code}`,
       detail: e.name,
       principal: AUTOMATION_PRINCIPAL,
+      ...(mode === 'apply' ? { automationApply: true as const } : {}),
     };
   }
 
@@ -1460,7 +1477,7 @@ export class AutomationService {
     if (e.source === 'retag') return this.runRetag(projectId, runId, e, mode, cap, ctx);
     if (e.source === 'chronology') return this.runChronologyCode(projectId, runId, e, cap, mode);
     if (e.automatable === 'propose' && e.batch !== true)
-      return this.runProposals(projectId, runId, e, cap, mode);
+      return this.runProposals(projectId, runId, e, cap, mode, ctx);
     let candidates: Candidate[];
     try {
       candidates = (await this.candidates(projectId, e, ctx)).filter((c) => ctx.allows(c.pageId));
@@ -1535,10 +1552,12 @@ export class AutomationService {
     e: CodeEntry,
     cap: number,
     mode: Exclude<Mode, 'off'> = 'propose',
+    ctx: RunContext | null = null,
   ): Promise<CodeOutcome> {
     const list = this.d.audits.store
       .list(projectId, { code: [e.code], state: 'open', limit: 5000 })
-      .findings.filter((f) => f.fix !== null)
+      // The sandbox check's seam (onlyPages) holds here as on the other paths.
+      .findings.filter((f) => f.fix !== null && (ctx === null || ctx.allows(f.pageId ?? '')))
       .sort((a, b) => a.id - b.id);
     const done = new Set(
       this.store
@@ -1572,16 +1591,14 @@ export class AutomationService {
       };
       try {
         const r = await this.d.audits.proposeFix('automation', projectId, f.id, {
-          origin: this.origin(e),
+          origin: this.origin(e, mode),
           ...(direct ? { direct: true } : {}),
         });
         if (r.status === 'proposal_captured')
           this.item(projectId, runId, e.code, c, 'proposed', {
             proposalId: r.proposalId,
-            // Apply: a guard (the canon guard, for an Authoritative page's rename) made it a proposal, as always.
-            ...(direct
-              ? { reasonCode: 'GUARDED', reason: 'a guard made it a proposal (canon is the owner’s)' }
-              : {}),
+            // Apply is direct (the owner's ruling): a proposal here is the fix's own (a step it always proposes).
+            ...(direct ? { reasonCode: 'GUARDED', reason: 'the fix made it a proposal' } : {}),
           });
         else if (r.status === 'job_submitted') {
           const job = await this.settle(projectId, r.jobId, this.d.settleMs ?? 600_000);
@@ -1705,7 +1722,7 @@ export class AutomationService {
       try {
         // C5: a repair caused by a table edit with a workstream is in that workstream (bridge_workstream_report).
         const ws = this.chronologyWorkstreams.get(projectId)?.(t.fix.age) ?? null;
-        const origin = ws ? { ...this.origin(e), workstream: ws } : this.origin(e);
+        const origin = ws ? { ...this.origin(e, mode), workstream: ws } : this.origin(e, mode);
         const r = await chron.repair('automation', projectId, t.fix, { mode, origin });
         if (r.status === 'proposal_captured')
           this.item(projectId, runId, e.code, c, 'proposed', {
@@ -2022,7 +2039,7 @@ export class AutomationService {
       r = (await this.d.engine.submit({
         ...rest,
         priority: 'P3',
-        origin: this.origin(e),
+        origin: this.origin(e, 'apply'),
         title: `Automation (${e.name}): ${typeof p.req.title === 'string' ? p.req.title : c.pageName}`.slice(
           0,
           300,
@@ -2031,9 +2048,9 @@ export class AutomationService {
     } catch (err) {
       const why = this.blocked(projectId);
       if (why) return { why };
-      // A guard (the lifecycle guard, the canon guard, the policy gate) refusing the change: never bypassed. It is
-      // offered to the owner as an ordinary proposal where the guards allow one, and the code pauses for review.
-      if (GUARD_CODES.has(errCode(err))) return this.guarded(projectId, runId, e, c, rest, errMessage(err));
+      // A guard (the lifecycle guard, the canon guard, the policy gate) refusing the change: never bypassed. Apply never
+      // becomes a proposal (the owner's ruling): the refusal is recorded and the code pauses for review.
+      if (GUARD_CODES.has(errCode(err))) return this.guarded(projectId, runId, e, c, errMessage(err));
       await this.fail(projectId, runId, e, c, 'UNEXPECTED_ERROR', `the job was refused: ${errMessage(err)}`);
       return 'stopCode';
     }
@@ -2085,7 +2102,7 @@ export class AutomationService {
       r = (await this.d.engine.submit({
         ...rest,
         priority: 'P3',
-        origin: this.origin(e),
+        origin: this.origin(e, 'apply'),
         title: `Automation (${e.name}): ${typeof p.req.title === 'string' ? p.req.title : c.pageName}`.slice(
           0,
           300,
@@ -2131,42 +2148,20 @@ export class AutomationService {
     }
   }
 
-  /** A change a guard refused: an ordinary proposal where the guards allow one; the code paused either way. */
-  private async guarded(
-    projectId: string,
-    runId: string,
-    e: CodeEntry,
-    c: Candidate,
-    req: Obj,
-    refusal: string,
-  ): Promise<'stopCode'> {
-    let proposalId: string | undefined;
-    try {
-      const r = (await this.d.engine.submit({
-        ...req,
-        priority: 'P3',
-        origin: this.origin(e),
-        forceProposal: true,
-      } as unknown as SubmitRequest)) as unknown as Obj;
-      if (typeof r.proposalId === 'string') proposalId = r.proposalId;
-    } catch {
-      // Refused as a proposal too: the owner does it with the right tool (the refusal says which).
-    }
+  /**
+   * A change a guard refused (a prefix that disagrees with Status, a look-alike value, a lifecycle index): recorded and
+   * the code paused for the owner's review. The owner's ruling (F6d follow-up): Apply never turns into a proposal, so
+   * nothing is proposed in its place; the owner does it with the right tool (the refusal says which).
+   */
+  private guarded(projectId: string, runId: string, e: CodeEntry, c: Candidate, refusal: string): 'stopCode' {
     const because = `a guard refused it: ${refusal}`.slice(0, 1500);
-    this.item(projectId, runId, e.code, c, 'guarded', {
-      reasonCode: 'GUARDED',
-      reason: because,
-      ...(proposalId ? { proposalId } : {}),
-    });
+    this.item(projectId, runId, e.code, c, 'guarded', { reasonCode: 'GUARDED', reason: because });
     this.store.pause(
       projectId,
       e.code,
-      `${because}${proposalId ? `; it became proposal ${proposalId}` : ''}. Paused for the owner’s review: the code was not as mechanical as assumed`,
+      `${because}. Paused for the owner’s review: the code was not as mechanical as assumed`,
     );
-    this.d.audit('system', 'automation.paused', `${projectId}:${e.code}`, null, {
-      reason: 'GUARDED',
-      ...(proposalId ? { proposalId } : {}),
-    });
+    this.d.audit('system', 'automation.paused', `${projectId}:${e.code}`, null, { reason: 'GUARDED' });
     return 'stopCode';
   }
 
@@ -2505,7 +2500,7 @@ export class AutomationService {
       .flat()
       .filter((id) => reader.page(id) !== null && reader.labels(id).area === null && ctx.allows(id));
     const name = (id: string) => audit.verdicts.find((v) => v.pageId === id)?.name ?? id;
-    const origin = this.origin(e);
+    const origin = this.origin(e, mode);
     if (mode === 'propose') {
       const pages = ids.slice(0, Math.min(cap, this.d.packs.approvedRules(PACK_ID)?.retag?.batchSize ?? 25));
       if (pages.length === 0) return { kind: 'done', attempted: 0 };

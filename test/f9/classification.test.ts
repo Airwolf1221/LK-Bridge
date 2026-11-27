@@ -79,7 +79,8 @@ const BULK_FILES: Record<string, { readonly bulk: string; readonly routineP3: re
 const ROUTINE: readonly (readonly [file: string, fn: string, why: string])[] = [
   ['src/automation/service.ts', 'governanceState', 'automation: the governance reads before a run'],
   ['src/automation/service.ts', 'applyOne', 'automation: one fix (a page, re-checked live, then written)'],
-  ['src/automation/service.ts', 'guarded', 'automation: a fix under the page lock'],
+  // (F6d follow-up: `guarded` no longer submits anything: a refusal at Apply is recorded, never proposed.)
+  ['src/automation/service.ts', 'applyBatchOne', 'automation: one page of a batch code, direct at Apply'],
   ['src/automation/service.ts', 'proposeAll', 'automation: one proposal per code'],
   ['src/automation/service.ts', 'budgetWaits', 'automation: whether the P3 budget says wait'],
   ['src/blockids/service.ts', 'dryRun', 'block-id upkeep: the dry run’s estimate'],

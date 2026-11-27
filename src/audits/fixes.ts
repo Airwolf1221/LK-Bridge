@@ -94,7 +94,7 @@ export interface FixDeps {
   readonly coreUpgrade?: CoreUpgrader;
   /**
    * v3 F7.1: the automation's Apply of a code that allows it: the fix submitted as a job (every guard judging it: the
-   * canon guard keeps an Authoritative page's rename a canonical proposal) rather than forced into a proposal.
+   * F6d follow-up: the automation's Apply is direct, canon included) rather than forced into a proposal.
    */
   readonly direct?: boolean;
   /**
@@ -1271,7 +1271,7 @@ async function fixIdentityCopy(
  * FIX_STALE, nothing proposed); the page's Reference Type is read LIVE and must still be the value the finding saw. Then
  * ONE field is set through the governed facts path (`planFacts` and `expandFacts`: the row checked inside the lock, the
  * write's If-Match chained from that check, journalled with the decision, read back). A proposal; with the automation's
- * Apply (`direct`), a job that every guard judges (the canon guard decides an Authoritative page's: never bypassed).
+ * Apply (`direct`), a direct job (the owner's ruling, F6d follow-up: canon included; a guard's refusal still refuses).
  */
 async function fixReferenceType(
   d: FixDeps,
@@ -2089,8 +2089,8 @@ async function fixNarrative(
 
 /**
  * v3 F6b (ADR 0079): submits an index fix: a proposal (one item, its before and after shown, F7.1a's display), or with
- * the automation's Apply (`direct`) a job that every guard judges (an Authoritative page's rename is what the canon guard
- * decides: never bypassed). Tags never date a page (ADR 0051): Last Major Revision is skipped.
+ * the automation's Apply (`direct`) a direct job, canon included (the owner's ruling, F6d follow-up; a guard's refusal
+ * still refuses). Tags never date a page (ADR 0051): Last Major Revision is skipped.
  */
 async function submitIndexFix(
   d: FixDeps,
@@ -2118,11 +2118,9 @@ async function submitIndexFix(
     title: spec.title.slice(0, 300),
     holdLock: { resourceId: spec.pageId },
     internal: true,
-    // A canonical change (CANON taken off an index) is always the owner's canonical proposal under the automation's
-    // Apply; v3 F12 (ADR 0081): the owner's own confirmed "Apply fix" runs it at once.
-    ...(ownerConfirmed(d) || (d.direct === true && spec.lifecycle?.canonical !== true)
-      ? {}
-      : { forceProposal: true }),
+    // v3 F12 (ADR 0081): the owner's own confirmed "Apply fix" runs it at once; the F6d follow-up (the owner's ruling):
+    // so does the automation's Apply, canon included (CANON taken off an index): the owner's Apply setting is the approval.
+    ...(ownerConfirmed(d) || d.direct === true ? {} : { forceProposal: true }),
     lastMajorRevision: 'skip',
     ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
     proposal: {
@@ -2379,8 +2377,9 @@ async function fixIndexTags(
     item,
     fix: 'index_tags',
     // T11: an index never carries CANON. Taking a status tag (CANON, AU) off a page is canon's: the job declares it with
-    // a CANONICAL marker, so it is always the owner's canonical approval, whatever the scope or the automation's mode (the
-    // canon guard decides, never bypassed). An index stays where it is: its state is unchanged (`authoritative`).
+    // a CANONICAL marker: the owner's canonical approval of a proposal (Propose, or a propose-scope connection), or a direct
+    // job (an agent at write, the owner's confirmed fix, or the automation's Apply: the owner's ruling, F6d follow-up).
+    // An index stays where it is: its state is unchanged (`authoritative`).
     ...(removesStatus
       ? {
           lifecycle: {

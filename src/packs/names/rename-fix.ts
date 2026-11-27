@@ -10,7 +10,8 @@
  * planned. The plan goes through the given engine: ONE forced proposal (the dashboard's "Propose", or the automation
  * gathering its run's ONE proposal), a job at once for the owner's confirmed "Apply fix", or, with `direct` (the
  * automation's Apply, only when the owner switched the code to it), a job submitted without being forced, every guard
- * judging it: the canon guard keeps an Authoritative page's rename the owner's canonical proposal (ADR 0057 decision 5).
+ * judging it: a direct job, an Authoritative page's rename included (the owner's ruling of the F6d follow-up amends ADR 0057
+ * decision 5: the Apply setting is the approval); a guard's refusal still refuses.
  * Nothing here bypasses a guard.
  */
 import { AuditError } from '../../audits/errors.js';

@@ -128,7 +128,7 @@ export type FixKind =
   /**
    * v3 F6a (ADR 0076): one sidebar field, Reference Type, set to the owner's mapped value through the governed facts path
    * (the check of the row, the If-Match chain, the journal, the read-back); a proposal, or a job when the automation's
-   * Apply asks (every guard judging it: the canon guard decides an Authoritative page's).
+   * Apply asks (a direct job, canon included: the owner's ruling, F6d follow-up; a guard's refusal still refuses).
    */
   | 'reference_type'
   /**

@@ -96,18 +96,14 @@ the page only. Its fix, `templated_name` (`src/packs/names/rename-fix.ts`):
 - **Propose**: ONE proposal per run, an item per page (the engine's `proposeAll`; the rename plans captured and merged,
   their step references re-numbered); the owner approves some or all items (as canon for Authoritative pages). A page an
   earlier run proposed (approved or left out) or applied is not taken again. Not paused for being canonical.
-- **Apply**: ONE job per page, submitted as the Automation principal and never forced into a proposal (no forced
-  proposal path), settled and read back (the page identical but for its name and rank). A guard's refusal is a skip; a
-  guard that makes it the owner's canonical proposal (**every Authoritative page's rename: ADR 0057 decision 5**) is
-  recorded as `guarded` and the run goes on, the code not paused.
+- **Apply**: ONE direct job per page, submitted as the Automation principal and never forced into a proposal (no forced
+  proposal path), settled and read back (the page identical but for its name and rank), on the Review page with Revert.
+  An Authoritative page's rename included: see amendment 1. A guard's refusal is a skip.
 - Order: primary category, then name (the finding's `order`). A rename colliding with another of the run is held by the
   report (N2), naming the other page. The caps (`AUTOMATION_CAP_PER_CODE`, `_PER_RUN`) apply.
 
-**For the owner to know**: at Apply, a `[BSRC]` page's rename is still the canon guard's: it becomes a canonical
-proposal per page (only `[BWRK]` and `[BARC]` pages run as jobs). Most of Arkona's sources are `[BSRC]`, so the Propose
-batch (one proposal, approved as canon) is the practical path for them; making the owner's Apply switch stand as the
-canonical approval of this one transformation would need an amendment to ADR 0057 decision 5 and ADR 0081 (deferred,
-for the owner to decide).
+As first built, a `[BSRC]` page's rename at Apply became the canon guard's canonical proposal (ADR 0057 decision 5);
+the owner's ruling of 29 November 2026 (amendment 1) made it direct.
 
 ## N5: governance and seed
 
@@ -139,8 +135,9 @@ The bridge guide gains "Templated names" under the Arkona sections; `create_reso
 - World and contract (`test/f6d/world.test.ts`, mock LegendKeeper): the draft vocabulary holding every row; published:
   each status from the published role words, a character's page left out, the route's filters and counts; the findings;
   the stale refusal; Propose: ONE proposal with three items, one approved and two left out, only that page renamed and
-  not proposed again; Apply: a Working page renamed by one job and read back, an Authoritative page the canon guard's
-  proposal (guarded, not paused); a mention on another page showing the new name, the routing line following, prose left
+  not proposed again, the approved page's rename record done with the batch's job and the two left out closed; Apply:
+  a Working page and an Authoritative page each renamed by one direct job, read back, on Review, Revert of the
+  Authoritative page's restoring its old name, its routing line and what its mention shows; a mention on another page showing the new name, the routing line following, prose left
   and listed for review in the rename record; Keep this name holding, lapsing when the Subject changes, Undo.
 - Performance (`test/f6d/scale.test.ts`, 1,500 sources): the audit timing test (medians of seven interleaved runs with and
   without templated names, at most 10% more) and the page (each GET under 500 ms, the loop never held for 100 ms, memory
@@ -150,8 +147,18 @@ The bridge guide gains "Templated names" under the Arkona sections; `create_reso
 
 ## Deferred
 
-- The owner's Apply switch as standing canonical approval of a `[BSRC]` page's templated rename (see Automation above).
-- A rename record made for a run's merged proposal stays `proposed` after the owner approves it (`arkona_rename`'s hooks
-  follow only its own proposals); its review list is kept.
 - The report is as fresh as the newest audit run (a Subject fixed in the app shows after the next snapshot and audit, or
   "Run audit now").
+
+## Amendment 1 (29 November 2026): the owner's ruling on Apply, and the batch's rename records
+
+1. **Automation at Apply is direct, canon changes included** (amends [ADR 0057](0057-cr-2026-11-r2-owner-decisions.md)
+   decision 5 and [ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md) ruling 1; see their amendments). The owner's
+   Apply setting is the approval; proposals come only from codes at Propose (or a `propose`-scope connection). For every
+   automation code, the Automation principal at Apply (`origin.automationApply`) is answered `allow` or `refuse` by the
+   canon and lifecycle guards, never `propose`. `name_nontemplated` at Apply renames an Authoritative page in ONE direct
+   job, read back, on the Review page; Revert restores its old name, its routing lines and what its mentions show.
+   Refusals stay, and a refused change pauses the code without a proposal in its place.
+2. **The batch's rename records follow it**: when the owner approves a Propose batch, each approved page's rename record
+   takes the batch's job and becomes `done` (or `stopped`) with it; a page left out is `closed`. So the rename report
+   (`arkona_rename` `report`) and the review list agree with what ran. (Before, the record stayed `proposed`.)

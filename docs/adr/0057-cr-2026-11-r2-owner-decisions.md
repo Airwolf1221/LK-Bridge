@@ -186,3 +186,27 @@ image is not private.
 - A move's or create's ancestors above the parent still come from the repository tree, as CR-13 left them.
 - The in-process holds of R2-21 (one revert at a time) and R2-38 (one placement at a time) do not survive a restart; a
   restart between the hold and the record leaves at most a refusal to retry.
+
+## Amendment 1 (29 November 2026): decision 5 at the automation's Apply (the owner's ruling, F6d follow-up)
+
+Decision 5 stands for proposals: renaming an Authoritative page, even keeping `[BSRC]`, is a canonical change, and where
+it is proposed (a connection at scope `propose`, or an automation code at **Propose**) it is a canonical proposal the
+owner accepts as canon. F12 ([ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md)) made it direct for an agent at
+scope `write`. The owner's ruling of the F6d follow-up adds the third direct case:
+
+- **The owner's automation at Apply is direct, canon and lifecycle changes included.** The owner's Apply setting is the
+  approval. For the Automation principal at Apply (`origin.automationApply`, set only by the automation engine, refused by
+  the engine on any other principal or origin) the canon and lifecycle guards answer `allow` or `refuse`, never a
+  proposal, exactly as for an agent at `write`. This holds for every automation code (`name_nontemplated`,
+  `index_prefix`, `index_tags`, `em_dash_name`, `reference_type_noncanonical` and the rest), not only the templated
+  names.
+- **Refusals stay**: a prefix that disagrees with Status, a look-alike value, a lifecycle index. A refused change is
+  recorded and the code paused for the owner's review; nothing is proposed in its place.
+- Every Apply write is on the Review page with Revert, as before. At Propose nothing changes.
+- Code: `directWrite` and `directJob` (`src/jobs/write-guard.ts`), the engine's check of the marker
+  (`src/jobs/engine.ts`), the automation's origin (`src/automation/service.ts`), and the fixes that forced a proposal at
+  Apply for a canonical change (`submitIndexFix` in `src/audits/fixes.ts`). Tests: `test/f6d/automation-apply.test.ts`,
+  `test/automation/engine.test.ts` (an Authoritative page's dash fix at Apply, direct; a refusal proposes nothing),
+  `test/f6b/world.test.ts` (`index_prefix` and `index_tags` on a CANON page at Apply, direct; at Propose a canonical
+  proposal; the marker refused elsewhere), `test/f6d/world.test.ts` (an Authoritative page's templated rename at Apply:
+  one direct job, read back, on Review; Revert restores the old name, the routing line and what the mention shows).

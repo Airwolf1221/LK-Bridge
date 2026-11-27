@@ -384,7 +384,7 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   T11 (a `[NAV]` exactly Navigation; an `[INDEX]` exactly its subject's primary category; never CANON), once the Tagging
   Standard's "Navigation and Subject Index Tags" is published and approved; not under Narratives (the narrative tag grammar
   governs story, continuity and act indexes there, the owner's ruling); the fix goes through the retag engine's write path, and taking CANON off is canon: the owner's confirmed fix makes it
-  directly (F12), and in the automation it is always a canonical proposal, even at Apply. Automation: proposal-first, Apply allowed, default Propose. `out_of_order` applies T11's order ([NAV], then
+  directly (F12), and so does the automation at Apply (the owner's ruling, F6d follow-up: the Apply setting is the approval; at Propose, a canonical proposal). Automation: proposal-first, Apply allowed, default Propose. `out_of_order` applies T11's order ([NAV], then
   [INDEX], then sources) once the approved pack carries it.
 - v3 F6c ([ADR 0080](adr/0080-v3-f6c-territories-nations-and-subindexes.md)), under the approved pack's nation roles,
   never under Working, Archive, the Legacy Canon Archive, the Design References or Narratives, each switchable per project
@@ -408,4 +408,4 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   rename engine (arkona_rename's path, its page mode): the page re-placed, routing lines naming the old name following,
   other text naming it listed for review; refused as stale when the name, Subject or Reference Type changed. Automation:
   default Off; Propose makes ONE proposal per run (an item per page), Apply ONE job per page, read back (an
-  Authoritative page's rename is the canon guard's canonical proposal).
+  Authoritative page's rename included: the owner's ruling of the F6d follow-up makes the automation's Apply direct, canon included, on the Review page with Revert).

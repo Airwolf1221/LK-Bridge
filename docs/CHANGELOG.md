@@ -2,6 +2,15 @@
 
 ## Unreleased: v3 F6d, templated source names
 
+**Follow-up (29 November 2026, the owner's ruling; [ADR 0057 amendment 1](adr/0057-cr-2026-11-r2-owner-decisions.md),
+[ADR 0081 amendment 2](adr/0081-v3-f12-direct-writes-review-safety-net.md), [ADR 0082 amendment 1](adr/0082-v3-f6d-templated-names.md)):**
+the owner's automation at Apply is direct, canon and lifecycle changes included, for every code (the Apply setting is
+the approval; `origin.automationApply`, the automation engine's own): an Authoritative page's rename, CANON taken off an
+index, each one job on the Review page with Revert. Proposals come only from codes at Propose (or a `propose`-scope
+connection). Refusals stay, and a refused change pauses the code with no proposal in its place. Governance paragraphs
+that still say an Apply of canon is a proposal are amended once. When the owner approves a Propose batch of templated
+renames, each approved page's rename record follows the batch's job (done); a page left out is closed.
+
 [ADR 0082](adr/0082-v3-f6d-templated-names.md). Migration `5000`. Pack seed `arkona-2026-11-29-f6d` (supersedes
 `arkona-2026-11-28-f12`), with the ruling `templated-names`. New per-project switch `checkTemplatedNames` (default on).
 Built and tested against the mock; nothing live was touched.

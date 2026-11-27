@@ -1110,6 +1110,12 @@ Off.
   dashboard and its date, the setting, scope, transformation, verification, concurrency rules and stop conditions);
   nothing runs unless the governance says so. Switching it off amends that paragraph to say so, and when (it is never
   deleted). Each write is on the Review page and can be Reverted; reverting the paragraph switches the code off.
+- **Propose and Apply** (the owner's ruling of the F6d follow-up, amending ADR 0057 decision 5 and ADR 0081): at
+  **Propose** a code makes proposals (canonical ones for canon, which you approve as canon); at **Apply** your setting is
+  the approval: each job runs directly, canon and lifecycle changes included (an Authoritative page's rename, CANON taken
+  off an index), and is on the Review page with Revert. A guard's refusal still refuses (a prefix disagreeing with
+  Status, a look-alike value, a lifecycle index): the code pauses for your review, and nothing is proposed in its
+  place.
 - **Pause all automation**: one click (a brake, for every project); **Resume automation** asks for a confirmation.
   **Run automation now** runs the codes switched on in this project at once. None asks for a fresh code (ADR 0081).
   **Check Repository Automation** reads the governance sources and says whether automation may run (drift, or a

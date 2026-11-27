@@ -99,6 +99,13 @@ export interface JobOrigin {
    * acting as the system principal; the policy gate refuses it anywhere else.
    */
   readonly ownerConfirmed?: true;
+  /**
+   * v3 F6d follow-up (the owner's ruling; ADR 0057 decision 5 and ADR 0081 amended): the owner's automation at Apply. The
+   * owner's Apply setting is the approval, so the request runs directly, canon and lifecycle changes included (the guards
+   * allow or refuse, never propose), and is on the Review page with Revert. Bridge code only (the automation engine), on
+   * a maintenance origin acting as the Automation principal; the engine refuses it anywhere else.
+   */
+  readonly automationApply?: true;
 }
 
 /** Caller-facing input of a registry operation: `{ path?, query?, ifMatch?, body? }` (see src/lk/registry). */

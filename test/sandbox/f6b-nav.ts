@@ -31,6 +31,7 @@
  * or a step's timeout, and again from the test file's `afterAll`. Cost: about 15 writes and 40 reads.
  */
 import { ProjectStore } from '../../src/projects/index.js';
+import { AUTOMATION_PRINCIPAL } from '../../src/jobs/types.js';
 import { indexTagSectionText } from '../../src/packs/indextax/rules.js';
 import type { RawLk } from './f4b-probe.js';
 import { deleteProbe } from './f4b-probe.js';
@@ -126,11 +127,22 @@ export async function runNavCheck(
     rt.audits.store
       .list(pid, { code: [code as never], state: 'open', limit: 500 })
       .findings.find((x) => x.pageId === pageId);
-  /** As the automation's Apply submits a proposal-first code's fix: a direct job, every guard judging it. */
+  /** As the automation's Apply submits a proposal-first code's fix: a direct job, every guard allowing or refusing it. */
   const apply = async (code: string, pageId: string): Promise<string> => {
     const f = findingFor(code, pageId);
     if (!f) throw new Error(`no ${code} finding for ${pageId}`);
-    const r = await rt.audits.proposeFix('automation', pid, f.id, { direct: true });
+    // As the automation's Apply submits it: the Automation principal's maintenance origin with its Apply marker (the
+    // owner's ruling, F6d follow-up: direct, canon included).
+    const r = await rt.audits.proposeFix('automation', pid, f.id, {
+      direct: true,
+      origin: {
+        kind: 'maintenance',
+        client: 'automation',
+        tool: `automation.${code}`,
+        principal: AUTOMATION_PRINCIPAL,
+        automationApply: true,
+      },
+    });
     if (r.status === 'job_submitted') {
       const job = await waitForJob(rt.engine, pid, r.jobId, code, o.wait);
       if (job.status !== 'succeeded')

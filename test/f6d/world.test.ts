@@ -8,7 +8,8 @@
  * - the code at Propose: ONE proposal with three items (one per page); one approved, two left out (rejected);
  * - the code at Apply: a Working page's rename as ONE job, read back; a mention on another page shows the new name, a
  *   routing line naming the old name follows, other text is listed for review only; an Authoritative page's rename is
- *   the canon guard's canonical proposal (recorded as guarded; nothing forced, the code not paused);
+ *   ONE direct job too (the owner's ruling, F6d follow-up), on the Review page, and Revert restores its old name, its
+ *   routing line and what its mention shows;
  * - the stale refusal; "Keep this name" lapsing when the Subject changes; Undo.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -134,6 +135,7 @@ beforeAll(async () => {
             kind: 'paragraph',
             content: [{ text: 'Valdris Draft: the working polity notes.' }],
           },
+          { id: 'tnr00003', kind: 'paragraph', content: [{ text: 'Mithral Polity: the mithral polity.' }] },
         ],
       });
       r.blocks.set(main(D.mentions), {
@@ -148,6 +150,11 @@ beforeAll(async () => {
             id: 'tnm00002',
             kind: 'paragraph',
             content: [{ text: 'The Valdris Draft was begun in the spring.' }],
+          },
+          {
+            id: 'tnm00003',
+            kind: 'paragraph',
+            content: [{ text: 'Its neighbour is ' }, { mention: { resourceId: D.noSubject } }, { text: '.' }],
           },
         ],
       });
@@ -323,6 +330,15 @@ describe('the code at Propose: ONE proposal, an item per page', () => {
     expect(live(D.valdris).name).toBe('[BSRC] Valdris Polity Notes');
     // The id, the parent, the tags stay.
     expect(live(D.falken)).toMatchObject({ parentId: DESK, tags: ['CANON', 'Polity'] });
+    // F6d follow-up: the approved page's rename record follows the batch's job (done, with the job); the two left out
+    // are closed, so the report and the review list agree.
+    const rec = (id: string) => rt().renames.forSubject(PROJECT, id, 5)[0]!;
+    for (let i = 0; i < 100 && rec(D.falken).state !== 'done'; i++)
+      await new Promise((r) => setTimeout(r, 50));
+    expect(rec(D.falken)).toMatchObject({ state: 'done', jobId: done.jobId, proposalId });
+    expect(rec(D.shahravi)).toMatchObject({ state: 'closed', jobId: null });
+    expect(rec(D.valdris)).toMatchObject({ state: 'closed', jobId: null });
+    expect(rt().renames.find(PROJECT, done.jobId!)?.subjectId).toBe(D.falken);
   });
 
   it('a later run does not propose the left-out pages again (the owner decided them once)', async () => {
@@ -347,7 +363,7 @@ describe('the code at Apply: ONE job per page, read back', () => {
     await a().setMode('owner', PROJECT, 'name_nontemplated', 'apply');
   });
 
-  it('the Working page is renamed by one job and read back; the Authoritative page is the canon guard’s proposal', async () => {
+  it('each page is ONE direct job, read back: the Working page, and the Authoritative page too (the owner’s ruling)', async () => {
     const run = await runOurs();
     expect(run.state, run.summary ?? '').toBe('succeeded');
     const items = a()
@@ -355,20 +371,41 @@ describe('the code at Apply: ONE job per page, read back', () => {
       .filter((i) => i.code === 'name_nontemplated');
     expect(items, why(items)).toHaveLength(2);
     const byPage = new Map(items.map((i) => [i.pageId, i]));
-    expect(byPage.get(D.working)).toMatchObject({
-      outcome: 'applied',
-      reason: 'written, read back and verified',
-    });
+    for (const id of [D.working, D.noSubject]) {
+      expect(byPage.get(id), why(items)).toMatchObject({
+        outcome: 'applied',
+        reason: 'written, read back and verified',
+        proposalId: null,
+      });
+      const job = rt().engine.queries.getJob(PROJECT, byPage.get(id)!.jobId!)!;
+      expect(job.principalId).toBe('automation');
+      expect(job.origin).toMatchObject({ automationApply: true });
+      // On the Review page, as the Automation principal's direct write.
+      expect(rt().review.store.get(PROJECT, job.id)).toMatchObject({ principalId: 'automation' });
+    }
     expect(live(D.working).name).toBe('[BWRK] Ostlund - Polity');
-    const job = rt().engine.queries.getJob(PROJECT, byPage.get(D.working)!.jobId!)!;
-    expect(job.principalId).toBe('automation');
-    // Nothing forced: the Authoritative page's rename is the canon guard's own canonical proposal.
-    expect(byPage.get(D.noSubject)).toMatchObject({ outcome: 'guarded', reasonCode: 'GUARDED' });
-    expect(rt().policy.proposals.get(byPage.get(D.noSubject)!.proposalId!)!.requiresCanonicalApproval).toBe(
-      true,
-    );
-    expect(live(D.noSubject).name).toBe('[BSRC] Mithral Polity');
+    // F6d follow-up (ADR 0057 decision 5 amended): an Authoritative page's rename at Apply is direct, no proposal.
+    expect(live(D.noSubject).name).toBe('[BSRC] Mithral - Polity');
     expect(a().store.setting(PROJECT, 'name_nontemplated')?.pausedAt ?? null).toBeNull();
+  });
+
+  it('Revert of the Authoritative page’s rename restores its old name, its routing line and what its mention shows', async () => {
+    const deskText = () => (w.repo.blocks.get(live(DESK).docs[0] as string)!.blocks as any[]).map(textOf);
+    expect(deskText()).toContain('Mithral - Polity: the mithral polity.');
+    const item = a()
+      .store.codeItems(PROJECT, 'name_nontemplated', 50)
+      .find((i) => i.pageId === D.noSubject && i.outcome === 'applied')!;
+    const r = await rt().reverts.revert('owner', PROJECT, item.jobId!);
+    expect(r.status, JSON.stringify(r)).toBe('submitted');
+    const done = await rt().engine.wait(PROJECT, (r as { revertJobId: string }).revertJobId, 30_000);
+    expect(done.status, JSON.stringify(done.lastError)).toBe('succeeded');
+    expect(live(D.noSubject).name).toBe('[BSRC] Mithral Polity');
+    expect(deskText()).toContain('Mithral Polity: the mithral polity.');
+    (w.repo as any).fillMentions = true;
+    const read = await w.callRead('read_document', { project: 'test', resource: D.mentions });
+    (w.repo as any).fillMentions = false;
+    expect(read.text).toContain('[\\\\[BSRC\\\\] Mithral Polity](lk://resources/tnnosb01)');
+    expect(read.text).not.toContain('Mithral - Polity');
   });
 
   it('a mention on another page shows the new name; the routing line follows; prose is left for review', async () => {

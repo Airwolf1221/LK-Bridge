@@ -88,6 +88,7 @@ import type { StepPlanner, StepPlanners } from './planners.js';
 import type { Rebaser } from './rebase.js';
 import {
   SYSTEM_PRINCIPAL,
+  AUTOMATION_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
   type BatchSubmit,
   type ControlsView,
@@ -3733,6 +3734,20 @@ export class JobEngine {
         new PolicyDeniedError(
           items[0]?.opId ?? 'operation',
           'ownerConfirmed can only be set by the dashboard, for the owner',
+          principal.principalId,
+        ),
+        principal,
+        project,
+      );
+    // v3 F6d follow-up: the automation's Apply marker is the automation engine's own (its principal, a maintenance origin).
+    if (
+      origin.automationApply === true &&
+      (principal.principalId !== AUTOMATION_PRINCIPAL.principalId || origin.kind !== 'maintenance')
+    )
+      throw this.policyDenied(
+        new PolicyDeniedError(
+          items[0]?.opId ?? 'operation',
+          'automationApply can only be set by the automation engine, as the Automation principal',
           principal.principalId,
         ),
         principal,
