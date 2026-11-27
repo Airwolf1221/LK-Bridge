@@ -131,6 +131,31 @@ describe('slow requests', () => {
 });
 
 describe('event-loop lag', () => {
+  it('a block the histogram lost (its sample discarded by the tick’s reset) is still warned of: the tick’s own lateness', async () => {
+    // PR 106's CI run: when the first tick after a block ran before the histogram's overdue sample, its reset discarded
+    // the block (about once in 15 blocks). A histogram that reports nothing is that case, every time.
+    const c = capture();
+    const w = new Watchdog({
+      log: c.log,
+      settings: () => ({ ...SETTINGS, eventLoopLagWarnMs: 150 }),
+      activities: new Activities(),
+      memoryHigh: () => null,
+      lag: { max: () => 0, reset: () => undefined, stop: () => undefined },
+      tickMs: 50,
+    });
+    stopped.push(w);
+    w.start();
+    await new Promise((r) => setTimeout(r, 120));
+    const t0 = Date.now();
+    while (Date.now() - t0 < 400) {
+      // the block
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    const lag = c.lines.filter((l) => l.msg === 'event loop blocked');
+    expect(lag).toHaveLength(1);
+    expect((lag[0]!.obj as { lagMs: number }).lagMs).toBeGreaterThanOrEqual(300);
+  });
+
   it('an artificial block above the threshold is a warning naming what ran, with heap and RSS', async () => {
     const activities = new Activities();
     const c = capture();

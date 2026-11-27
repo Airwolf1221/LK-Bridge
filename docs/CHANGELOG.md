@@ -11,6 +11,12 @@ connection). Refusals stay, and a refused change pauses the code with no proposa
 that still say an Apply of canon is a proposal are amended once. When the owner approves a Propose batch of templated
 renames, each approved page's rename record follows the batch's job (done); a page left out is closed.
 
+**CI (PR 106):** the event-loop watchdog no longer misses a block when its first tick after the block runs before the
+lag histogram's overdue sample (the tick's `reset()` discarded it, about once in 15 blocks): the lag is at least the
+timer's own lateness. The timing tests (the `scale` files, the snapshots' scale tests and the watchdog) run as a Vitest
+project of their own, one file at a time, after the rest of each shard, so they never share the machine with other
+files.
+
 [ADR 0082](adr/0082-v3-f6d-templated-names.md). Migration `5000`. Pack seed `arkona-2026-11-29-f6d` (supersedes
 `arkona-2026-11-28-f12`), with the ruling `templated-names`. New per-project switch `checkTemplatedNames` (default on).
 Built and tested against the mock; nothing live was touched.
