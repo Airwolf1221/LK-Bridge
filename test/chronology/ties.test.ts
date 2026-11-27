@@ -601,9 +601,10 @@ describe('a caller’s choice is remembered; create_new makes a new event', () =
     expect(refused.body.error.message).toContain(X.id);
     const before = w.mark();
     const r = await call('sync_timeline_event', { row: { row_id: A.id, age: FOURTH }, event_id: X.id });
-    // CR-2026-11-R2 (R2-08): a link is a proposal at every scope; approved, it is recorded with no LegendKeeper write.
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured' });
-    expect(await h.approve(String(r.body.proposalId))).toMatchObject({ state: 'executed' });
+    // v3 F12 follow-up (ADR 0081 amendment 1, decision 3): at scope write a link is direct (on the owner's Review page,
+    // with Revert), recorded with no LegendKeeper write.
+    expect(r.body, r.text).toMatchObject({ status: 'linked' });
+    await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 20_000);
     expect(before().writes).toBe(0);
     const link = w.stack.runtime.chronology.store.links(PROJECT).find((l) => l.rowId === A.id);
     expect(link).toMatchObject({ eventId: X.id, tableDocumentId: h.table() });
@@ -779,9 +780,9 @@ describe('same-day pairing without guessing (v3 F3c, ADR 0051 decision 2)', () =
 
   it('once the owner picks one (a stored link), the one row and one event left pair by the date', async () => {
     const r = await call('sync_timeline_event', { row: { row_id: R1.id, age: FOURTH }, event_id: E2.id });
-    // CR-2026-11-R2 (R2-08): the owner's pick is a proposal, approved.
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(await h.approve(String(r.body.proposalId))).toMatchObject({ state: 'executed' });
+    // v3 F12 follow-up: at scope write the pick is a direct link.
+    expect(r.body.status, r.text).toBe('linked');
+    await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 20_000);
     const c = await h.check();
     const pairs = fourthPairs(c);
     expect(pairs.find((p) => p.rowId === R1.id)).toMatchObject({ eventId: E2.id });

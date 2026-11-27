@@ -172,7 +172,9 @@ export class ReviewService {
     if (job.principalId === SYSTEM_PRINCIPAL.principalId || job.approvedBy !== null) return false;
     if (job.origin.approval !== undefined || job.kind === 'paginate_all') return false;
     const full = this.d.engine.queries.getJob(job.projectId, job.id);
-    if (!full?.steps.some((s) => s.opKind !== 'read')) return false;
+    // v3 F12 follow-up: a chronology change that only records a link has no LegendKeeper write, only the bridge's own
+    // record (`bridge.record`): it changes what the check pairs from then on, so it is on the Review page too.
+    if (!full?.steps.some((s) => s.opKind !== 'read' || s.opId === 'bridge.record')) return false;
     this.store.record({
       jobId: job.id,
       projectId: job.projectId,

@@ -1298,6 +1298,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       },
       calendar: (projectId, calendarId) => chronology.calendar(projectId, calendarId),
       remember: (projectId, definition) => chronology.remember(projectId, definition),
+      // v3 F12 follow-up: a link-only chronology change's Revert reads the links.
+      store: { links: (projectId, tableDocumentId) => chronology.store.links(projectId, tableDocumentId) },
     },
     images,
     // v3 F3e (ADR 0059): a split's phase 1 is revertible; the pages it made go to a deletion proposal afterwards.

@@ -212,6 +212,11 @@ export interface ChronologyUnitTarget extends Common {
    * stored field: colour, icon, image too), or null when the answer is not recorded.
    */
   readonly leftEvents: Readonly<Record<string, Obj | null>>;
+  /**
+   * v3 F12 follow-up (ADR 0081 amendment 1, decision 3): a change that only recorded the bridge's link between a row and
+   * its event (no LegendKeeper write): Revert takes the link off, while it still pairs that row with that event.
+   */
+  readonly linkOnly?: NonNullable<ChronologyRecord['target']['link']>;
 }
 
 export interface ImageTarget extends Common {
@@ -1220,9 +1225,15 @@ function chronologyUnit(
       isObj(s.options.journalOperation) &&
       isObj(s.options.journalOperation.chronology),
   );
-  if (mine.length === 0) return null;
+  // v3 F12 follow-up (ADR 0081 amendment 1, decision 3): a change that only recorded a link writes nothing to
+  // LegendKeeper: it is the link alone (its Revert takes the link off), below.
+  const linkOnly =
+    mine.length === 0 && record.state === 'complete' && record.target.link && !record.target.unlink
+      ? record.target.link
+      : null;
+  if (mine.length === 0 && !linkOnly) return null;
   const steps = mine.map((s) => s.stepNo);
-  const resourceId = mine[0]!.params.path?.resourceId ?? null;
+  const resourceId = mine[0]?.params.path?.resourceId ?? null;
   const base = {
     key: `chronology:${record.id}`,
     page: page(resourceId),
@@ -1371,7 +1382,28 @@ function chronologyUnit(
         break; // the compare-and-swap entries (asserts) write nothing
     }
   }
-  if (inverse.length === 0) return null;
+  if (inverse.length === 0) {
+    // v3 F12 follow-up: a change that only recorded a link (the row and the event already agreed): Revert takes it off.
+    // One that also took an earlier link off has no record of that link to put back: not revertible, with why.
+    const link = record.target.link;
+    if (link && !record.target.unlink)
+      return {
+        target: {
+          ...base,
+          kind: 'chronology',
+          record,
+          inverse: [],
+          oldRows: {},
+          oldEvents: {},
+          leftRows: {},
+          leftEvents: {},
+          linkOnly: link,
+        },
+        steps,
+      };
+    if (link) return refuse('a chronology change that replaced a link: the link before it is not recorded');
+    return null;
+  }
   // CR-2026-11-R2 (R2-16): what the job left, whole: each row block it wrote, and each event as LegendKeeper answered the
   // job's last write of it (null when that answer is not recorded: then the event cannot be compared, and is not reverted).
   const leftRows: Record<string, Obj> = {};

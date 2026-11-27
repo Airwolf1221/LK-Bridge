@@ -57,8 +57,12 @@ const toRow = (r: Row): DirectWriteRow => ({
 });
 
 /** A finished job that wrote something (applied, or possibly applied). */
+// v3 F12 follow-up (ADR 0081 amendment 1): or a completed chronology change that recorded a link (no LegendKeeper write:
+// the bridge's own record of which event is a row's, which the chronology check pairs by from then on).
 const LISTED = `j.status IN ('succeeded', 'failed', 'cancelled')
-  AND EXISTS (SELECT 1 FROM write_journal w WHERE w.job_id = d.job_id AND w.outcome IN ('applied', 'unknown', 'superseded'))`;
+  AND (EXISTS (SELECT 1 FROM write_journal w WHERE w.job_id = d.job_id AND w.outcome IN ('applied', 'unknown', 'superseded'))
+    OR EXISTS (SELECT 1 FROM chronology_records c WHERE c.project_id = d.project_id AND c.job_id = d.job_id
+      AND c.state = 'complete' AND json_extract(c.target, '$.link') IS NOT NULL))`;
 
 export class ReviewStore {
   constructor(

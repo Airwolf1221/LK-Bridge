@@ -180,6 +180,14 @@ export function changeView(t: Target, n: ChangeNames = {}): ChangeView {
             after: `${w.delta > 0 ? '+' : ''}${w.delta}`,
           });
       }
+      // v3 F12 follow-up: the link a change recorded (the row and the event the chronology check pairs from then on).
+      const link = t.record.target.link;
+      if (link)
+        fields.push({
+          field: `${link.age} link (row ${link.rowId} ↔ event)`,
+          before: null,
+          after: `event ${link.eventId}`,
+        });
       return { ...base, fields };
     }
     case 'image': {
