@@ -30,6 +30,7 @@ import { ProjectStore } from '../../src/projects/index.js';
 import type { RawLk } from './f4b-probe.js';
 import { deleteProbe } from './f4b-probe.js';
 import { ensureSandboxGovernance } from './governance.js';
+import { parseSection, sameVocabulary, vocabularySection } from '../../src/packs/reftypes/vocabulary.js';
 import { snapshotPagesOnly } from './page-snapshot.js';
 import type { SoakRuntime } from './soak.js';
 import { sandboxRun, type SandboxRun } from './steps.js';
@@ -230,21 +231,47 @@ export async function runNamesCheck(
         if (job.status !== 'succeeded') throw new Error(`publish: job ${pub.jobId} ${job.status}`);
         // The governance check the publication starts (background), then the new version approved as the owner would.
         // Every source points at the one throwaway page, so the publication reads as drift on each: approved, then the
-        // offered version (the section as the authority) approved, as the owner would on the Packs page.
+        // offered version (the section as the authority) approved, as the owner would on the Packs page. The loop ends
+        // when the APPROVED rules hold what was just published, never on `published` alone: a copied vocabulary that
+        // the owner published already reads `published` before this check publishes anything.
         await rt.referenceTypes.settled();
+        const rtRules = rt.packs.get('arkona')!.rules.referenceTypes!;
+        const src = rt.packs.get('arkona')!.governance.find((x) => x.key === rtRules.source)!;
+        const doc = await raw.request(
+          'getDocumentBlocks',
+          'GET',
+          `/resources/${src.resourceId}/docs/${src.documentId}/blocks`,
+        );
+        const section = parseSection(vocabularySection(doc.blocks, rtRules.section));
+        if (!section.ok) throw new Error(`the published section does not parse: ${section.reason}`);
+        const missing = (): string | null => {
+          const a = rt.packs.approvedRules('arkona')?.referenceTypes;
+          if (!a) return 'the approved rules carry no vocabulary';
+          if (a.status !== 'published') return `the approved vocabulary is ${a.status}`;
+          const hasType = a.specialist.some(
+            (x) =>
+              x.type === specialistType &&
+              (x.pages === null || x.pages.some((pg) => pg.id === page.specialist)),
+          );
+          if (!hasType) return `the approved vocabulary lacks the specialist type “${specialistType}”`;
+          if (
+            !sameVocabulary(
+              { rule: a.rule, categories: a.categories, specialist: a.specialist },
+              section.vocabulary,
+            )
+          )
+            return 'the approved vocabulary differs from the section just published';
+          return null;
+        };
         let g = await rt.packs.governance('arkona');
-        for (
-          let i = 0;
-          i < 3 && rt.packs.approvedRules('arkona')?.referenceTypes?.status !== 'published';
-          i++
-        ) {
+        for (let i = 0; i < 3 && missing() !== null; i++) {
           await rt.packs.commands.approve('owner', 'arkona').catch(() => undefined);
           g = await rt.packs.governance('arkona');
         }
-        const status = rt.packs.approvedRules('arkona')?.referenceTypes?.status;
-        if (status !== 'published')
+        const lack = missing();
+        if (lack !== null)
           throw new Error(
-            `the vocabulary is ${status ?? 'missing'} after publishing (governance ${g.state}: ${g.message}; its vocabulary ${JSON.stringify(g.referenceTypes ?? null)})`,
+            `${lack} after publishing and three rounds of approval (governance ${g.state}: ${g.message}; its vocabulary ${JSON.stringify(g.referenceTypes ?? null)})`,
           );
         return `${Object.keys(page).length} pages; vocabulary published to the throwaway page (job ${pub.jobId})`;
       },
