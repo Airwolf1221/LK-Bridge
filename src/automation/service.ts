@@ -316,6 +316,28 @@ const errCode = (e: unknown): string =>
   typeof (e as { code?: unknown } | null)?.code === 'string' ? String((e as { code: string }).code) : 'ERROR';
 const errMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/**
+ * v3 F5b.2: a read that the budget held longer than a run pauses for (or on the day tier): the run stops with this as
+ * its reason. It is never a finding's failure, a skip or a verification failure, so no catch may class it.
+ */
+class RunBudgetStop extends Error {
+  readonly code = 'BUDGET_STOP';
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunBudgetStop';
+  }
+}
+const isBudgetError = (e: unknown): boolean => errCode(e) === 'BUDGET_EXHAUSTED';
+/** A tier id (`key-min`, `maintenance-hour`, an operation group) in words: "minute tier". */
+const tierWords = (tier: string): string =>
+  tier.endsWith('-min')
+    ? 'minute tier'
+    : tier.endsWith('-hour')
+      ? 'hour tier'
+      : tier.endsWith('-day')
+        ? 'day tier'
+        : `${tier} tier`;
+
 export class AutomationService {
   readonly store: AutomationStore;
   private stopping = false;
@@ -323,7 +345,7 @@ export class AutomationService {
   /** Per project, the run in progress: when it started, what it paused for, and what it is pausing for now. */
   private readonly runInfo = new Map<
     string,
-    { startedAt: number; pauses: string[]; pausing: Pausing | null }
+    { startedAt: number; runId: string; pauses: string[]; pausing: Pausing | null }
   >();
   private readonly running = new Map<string, Promise<RunRow>>();
   private offs: (() => void)[] = [];
@@ -1235,6 +1257,51 @@ export class AutomationService {
   }
 
   /**
+   * v3 F5b.2: any read inside a run (a read-back, a pre-image, a planning read, the chronology's) that the budget
+   * refuses is paused and tried again under the F5b.1 rules: a wait up to AUTOMATION_BUDGET_MAX_WAIT_SECONDS is slept
+   * through (abortable, logged "paused 33 s for the minute tier"); past it, on the day tier, at the run's time limit or
+   * on a stop, the run stops with a budget reason (RunBudgetStop). A budget refusal is never a failure of the page.
+   */
+  private async paced<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (!isBudgetError(err)) throw err;
+        const info = this.runInfo.get(projectId);
+        const stopWhy = this.blocked(projectId);
+        if (stopWhy) throw new RunBudgetStop(stopWhy);
+        if (this.ceilingReached(projectId)) throw new RunBudgetStop('the run’s time limit was reached');
+        const x = err as { retryAtMs?: unknown; tier?: unknown };
+        const known = typeof x.tier === 'string' ? x.tier : null;
+        const fallback =
+          known === null || typeof x.retryAtMs !== 'number' ? this.budgetWaits(projectId) : null;
+        const ms =
+          typeof x.retryAtMs === 'number' ? Math.max(0, x.retryAtMs - this.d.now()) : (fallback?.ms ?? 1_000);
+        const label = known !== null ? tierWords(known) : (fallback?.label ?? 'budget');
+        const day = known !== null ? known.endsWith('-day') : (fallback?.day ?? false);
+        const max = this.settings().budgetMaxWaitSeconds;
+        if (day)
+          throw new RunBudgetStop(
+            `the ${label} says wait ${fmtWait(ms)} (the day tier is never slept through)`,
+          );
+        if (ms > max * 1000)
+          throw new RunBudgetStop(
+            `the ${label} says wait ${fmtWait(ms)}, longer than the ${max} s a run pauses for (AUTOMATION_BUDGET_MAX_WAIT_SECONDS)`,
+          );
+        const started = this.d.now();
+        if (info) info.pausing = { label, seconds: Math.ceil(ms / 1000), since: started };
+        try {
+          await this.sleep(Math.max(ms, 50));
+        } finally {
+          if (info) info.pausing = null;
+        }
+        this.notePause(projectId, info?.runId ?? '', `the ${label}`, ms);
+      }
+    }
+  }
+
+  /**
    * An Apply job waiting for budget: waited for, up to AUTOMATION_BUDGET_MAX_WAIT_SECONDS (abortable), then settled.
    * `why` is set when the run must stop (the job is still waiting past the limit, the time limit, or a stop).
    */
@@ -1329,7 +1396,12 @@ export class AutomationService {
   ): Promise<RunRow> {
     const runId = `aut_${randomBytes(8).toString('hex')}`;
     this.store.startRun(runId, projectId, trigger);
-    const info = { startedAt: this.d.now(), pauses: [] as string[], pausing: null as Pausing | null };
+    const info = {
+      startedAt: this.d.now(),
+      runId,
+      pauses: [] as string[],
+      pausing: null as Pausing | null,
+    };
     this.runInfo.set(projectId, info);
     const finish = (state: RunRow['state'], summary: string, stop: string | null): RunRow => {
       this.runInfo.delete(projectId);
@@ -1474,6 +1546,27 @@ export class AutomationService {
     cap: number,
     ctx: RunContext,
   ): Promise<CodeOutcome> {
+    try {
+      return await this.runCodeInner(projectId, runId, e, mode, cap, ctx);
+    } catch (err) {
+      // v3 F5b.2: a read the budget held past the limit stops the run with a budget reason; nothing is failed or skipped.
+      if (!(err instanceof RunBudgetStop)) throw err;
+      this.item(projectId, runId, e.code, { pageId: null, pageName: null }, 'stopped', {
+        reasonCode: 'BUDGET',
+        reason: err.message,
+      });
+      return { kind: 'stopRun', why: err.message, attempted: 0 };
+    }
+  }
+
+  private async runCodeInner(
+    projectId: string,
+    runId: string,
+    e: CodeEntry,
+    mode: Exclude<Mode, 'off'>,
+    cap: number,
+    ctx: RunContext,
+  ): Promise<CodeOutcome> {
     if (e.source === 'retag') return this.runRetag(projectId, runId, e, mode, cap, ctx);
     if (e.source === 'chronology') return this.runChronologyCode(projectId, runId, e, cap, mode);
     if (e.automatable === 'propose' && e.batch !== true)
@@ -1492,6 +1585,7 @@ export class AutomationService {
         candidates = candidates.filter((c) => !done.has(c.pageId));
       }
     } catch (err) {
+      if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       this.item(projectId, runId, e.code, { pageId: null, pageName: null }, 'skipped', {
         reasonCode: errCode(err),
         reason: `the findings could not be gathered: ${errMessage(err)}`,
@@ -1516,6 +1610,7 @@ export class AutomationService {
       try {
         planned = await c.plan();
       } catch (err) {
+        if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
         const code = errCode(err);
         if (code === 'BUDGET_EXHAUSTED')
           return { kind: 'stopRun', why: 'the P3 budget says wait', attempted };
@@ -1621,6 +1716,7 @@ export class AutomationService {
             reason: r.message,
           });
       } catch (err) {
+        if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
         if (this.skipped(projectId, runId, e, c, errCode(err), errMessage(err)))
           return { kind: 'done', attempted };
       }
@@ -1723,7 +1819,9 @@ export class AutomationService {
         // C5: a repair caused by a table edit with a workstream is in that workstream (bridge_workstream_report).
         const ws = this.chronologyWorkstreams.get(projectId)?.(t.fix.age) ?? null;
         const origin = ws ? { ...this.origin(e, mode), workstream: ws } : this.origin(e, mode);
-        const r = await chron.repair('automation', projectId, t.fix, { mode, origin });
+        const r = await this.paced(projectId, () =>
+          chron.repair('automation', projectId, t.fix, { mode, origin }),
+        );
         if (r.status === 'proposal_captured')
           this.item(projectId, runId, e.code, c, 'proposed', {
             proposalId: r.proposalId,
@@ -1762,6 +1860,7 @@ export class AutomationService {
         } else if (this.skipped(projectId, runId, e, c, 'NOTHING_TO_DO', r.message))
           return { kind: 'done', attempted };
       } catch (err) {
+        if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
         const code = errCode(err);
         if (code === 'BUDGET_EXHAUSTED')
           return { kind: 'stopRun', why: 'the P3 budget says wait', attempted };
@@ -1793,7 +1892,9 @@ export class AutomationService {
       return area === null || area === e.area;
     };
     const read = (op: string, params: Obj) =>
-      this.d.engine.internalRead(projectId, op, params, { priority: 'P3', notFoundIsAnswer: true });
+      this.paced(projectId, () =>
+        this.d.engine.internalRead(projectId, op, params, { priority: 'P3', notFoundIsAnswer: true }),
+      );
     if (e.source === 'audit') {
       // v3 F6d (ADR 0082): a batch code takes its findings in the check's run order (primary category, then name).
       const order = (f: Finding): number =>
@@ -1905,13 +2006,15 @@ export class AutomationService {
       const r = await this.d.audits.proposeFix('automation', projectId, f.id, {
         origin: this.origin(e),
         engine: {
-          internalRead: (p, op, params) => this.d.engine.internalRead(p, op, params, { priority: 'P3' }),
+          internalRead: (p, op, params) =>
+            this.paced(projectId, () => this.d.engine.internalRead(p, op, params, { priority: 'P3' })),
           submit: cap.submit,
         },
       });
       if (r.status !== 'proposal_captured')
         return { ok: false, code: 'NOTHING_TO_DO', reason: 'message' in r ? r.message : 'not planned' };
     } catch (err) {
+      if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       return { ok: false, code: errCode(err), reason: errMessage(err) };
     }
     return this.planned(e, cap.taken(), pre, ids);
@@ -1954,6 +2057,7 @@ export class AutomationService {
       });
       if (r.status === 'nothing_to_do') return { ok: false, code: 'NOTHING_TO_DO', reason: r.message };
     } catch (err) {
+      if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       return { ok: false, code: errCode(err), reason: errMessage(err) };
     }
     const req = cap.taken();
@@ -2046,6 +2150,7 @@ export class AutomationService {
         ),
       } as unknown as SubmitRequest)) as unknown as Obj;
     } catch (err) {
+      if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       const why = this.blocked(projectId);
       if (why) return { why };
       // A guard (the lifecycle guard, the canon guard, the policy gate) refusing the change: never bypassed. Apply never
@@ -2264,7 +2369,20 @@ export class AutomationService {
       return 'stopCode';
     }
     // Succeeded: the automation's own read-back, against the read before it.
-    const diff = await this.verify(projectId, e, expect, pre);
+    let diff: string[];
+    try {
+      diff = await this.verify(projectId, e, expect, pre);
+    } catch (err) {
+      // v3 F5b.2: the read-back the budget held past the limit is not a failed verification; the run stops, the job
+      // stays as written, and the page is judged on the Review page.
+      if (!(err instanceof RunBudgetStop)) throw err;
+      this.item(projectId, runId, e.code, c, 'stopped', {
+        reasonCode: 'BUDGET',
+        reason: `written; ${err.message} before it could be read back`,
+        jobId: job.id,
+      });
+      return { why: err.message };
+    }
     if (diff.length > 0) {
       await this.fail(
         projectId,
@@ -2305,7 +2423,9 @@ export class AutomationService {
   /** The read-back: the differences from "identical apart from the change" (empty: verified). */
   private async verify(projectId: string, e: CodeEntry, x: Expectation, pre: Obj): Promise<string[]> {
     const read = (op: string, params: Obj) =>
-      this.d.engine.internalRead(projectId, op, params, { priority: 'P3', notFoundIsAnswer: true });
+      this.paced(projectId, () =>
+        this.d.engine.internalRead(projectId, op, params, { priority: 'P3', notFoundIsAnswer: true }),
+      );
     const out: string[] = [];
     const allowed = new Set(e.changes ?? []);
     const compare = (before: Obj, after: Obj) => {
@@ -2352,6 +2472,7 @@ export class AutomationService {
         if (!cmp.ok) out.push(...cmp.differences.slice(0, 5).map((d) => `the document differs at ${d.path}`));
       } else compare(resBefore, res);
     } catch (err) {
+      if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       return [`it could not be read back (${errMessage(err)})`];
     }
     return out;
@@ -2451,6 +2572,7 @@ export class AutomationService {
         },
       } as unknown as SubmitRequest)) as unknown as Obj;
     } catch (err) {
+      if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       for (const { c } of list)
         this.item(projectId, runId, e.code, c, 'skipped', {
           reasonCode: errCode(err),
@@ -2488,6 +2610,7 @@ export class AutomationService {
     try {
       audit = await this.d.retag.audit({ projectId, actor: 'automation', scope: { all: true } });
     } catch (err) {
+      if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       this.item(projectId, runId, e.code, { pageId: null, pageName: null }, 'skipped', {
         reasonCode: errCode(err),
         reason: `the retag audit could not run: ${errMessage(err)}`,
@@ -2520,6 +2643,7 @@ export class AutomationService {
             ...(sub.proposalId ? { proposalId: sub.proposalId } : {}),
           });
       } catch (err) {
+        if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
         for (const id of pages)
           this.item(projectId, runId, e.code, { pageId: id, pageName: name(id) }, 'skipped', {
             reasonCode: errCode(err),
@@ -2546,11 +2670,13 @@ export class AutomationService {
         pageName: name(id),
         plan: () => Promise.reject(new Error('unused')),
       };
-      const pre = await this.d.engine.internalRead(
-        projectId,
-        'getResource',
-        { path: { resourceId: id } },
-        { priority: 'P3', notFoundIsAnswer: true },
+      const pre = await this.paced(projectId, () =>
+        this.d.engine.internalRead(
+          projectId,
+          'getResource',
+          { path: { resourceId: id } },
+          { priority: 'P3', notFoundIsAnswer: true },
+        ),
       );
       if (!isObj(pre)) {
         if (this.skipped(projectId, runId, e, c, 'FIX_STALE', 'the page is gone'))
@@ -2569,6 +2695,7 @@ export class AutomationService {
           mode: 'direct',
         });
       } catch (err) {
+        if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
         if (this.skipped(projectId, runId, e, c, errCode(err), errMessage(err)))
           return { kind: 'done', attempted };
         continue;
@@ -2599,7 +2726,9 @@ export class AutomationService {
           return { kind: 'done', attempted };
         continue;
       }
-      if (job.status === 'succeeded' && disp?.verified === false) {
+      // v3 F5b.2: the job's own read-back that could not run (not_checked: no differences, only a reason) is not a
+      // mismatch, whatever stopped it (the budget among them); the automation's own read-back below is paced.
+      if (job.status === 'succeeded' && disp?.verified === false && (disp.differences ?? []).length > 0) {
         await this.fail(
           projectId,
           runId,

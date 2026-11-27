@@ -14,6 +14,8 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { automationWorld, PROJECT, type AutomationWorld } from './world.js';
+import { BudgetExhaustedError } from '../../src/jobs/errors.js';
+import type { BudgetTierId } from '../../src/lk/governor/groups.js';
 
 vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 
@@ -154,6 +156,79 @@ describe('an Apply job waiting for budget', () => {
     expect(run.state).toBe('stopped');
     expect(run.stopReason).toMatch(/still waiting for budget/);
     expect(items(run.id).find((i) => i.reasonCode === 'BUDGET')).toMatchObject({ outcome: 'stopped' });
+  });
+});
+
+describe('a read the budget refuses is never a verification failure (F5b.2)', () => {
+  /** The first `n` reads made after the automation's write is submitted (its read-back) are refused by the budget. */
+  const refuseReadBack = (n: number, tierId: string, afterMs: number) => {
+    const eng = d().engine as {
+      submit: (...x: unknown[]) => Promise<unknown>;
+      internalRead: (...x: any[]) => any;
+    };
+    const realSubmit = eng.submit.bind(eng);
+    const realRead = eng.internalRead.bind(eng);
+    let submitted = false;
+    let left = n;
+    const refused: string[] = [];
+    vi.spyOn(eng, 'submit').mockImplementation(async (...x: unknown[]) => {
+      const r = await realSubmit(...x);
+      submitted = true;
+      return r;
+    });
+    vi.spyOn(eng, 'internalRead').mockImplementation((p: string, op: string, ...rest: unknown[]) => {
+      // The automation's own read-back (service.verify), not the job's own verify step.
+      if (submitted && left > 0 && op === 'getResource' && /verify/.test(new Error().stack ?? '')) {
+        left--;
+        refused.push(op);
+        throw new BudgetExhaustedError(op, tierId as BudgetTierId, Date.now() + afterMs);
+      }
+      return realRead(p, op, ...rest);
+    });
+    return refused;
+  };
+
+  it('pauses for the minute tier (33 s), reads again and verifies; the code is not switched off', async () => {
+    const slept: number[] = [];
+    seams({ sleep: (ms) => (slept.push(ms), Promise.resolve()) });
+    fakeGovernor([null]);
+    const refused = refuseReadBack(1, 'key-min', 33_000);
+    await on('out_of_order', 'apply');
+    const run = await a().run(PROJECT, 'manual');
+    expect(refused).toHaveLength(1);
+    expect(run.state, run.summary ?? '').toBe('succeeded');
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toBeGreaterThan(30_000);
+    expect(run.summary).toMatch(/paused \d+ s for the minute tier/);
+    const all = items(run.id);
+    expect(all.some((i) => i.reasonCode === 'VERIFICATION_FAILED')).toBe(false);
+    expect(all.some((i) => i.outcome === 'failed')).toBe(false);
+    expect(all.find((i) => i.outcome === 'applied')).toBeDefined();
+    expect(a().store.setting(PROJECT, 'out_of_order')?.pausedAt ?? null).toBeNull();
+    expect(
+      a()
+        .codes(PROJECT)
+        .find((c) => c.code === 'out_of_order')!.mode,
+    ).toBe('apply');
+  });
+
+  it('a refusal that frees past the limit stops the run with a budget reason, never VERIFICATION_FAILED', async () => {
+    seams({ sleep: () => Promise.resolve() });
+    fakeGovernor([null]);
+    refuseReadBack(1_000, 'key-hour', 2 * 3_600_000);
+    await on('out_of_order', 'apply');
+    const run = await a().run(PROJECT, 'manual');
+    expect(run.state).toBe('stopped');
+    expect(run.stopReason).toMatch(/hour tier says wait/);
+    const all = items(run.id);
+    expect(all.some((i) => i.reasonCode === 'VERIFICATION_FAILED' || i.outcome === 'failed')).toBe(false);
+    expect(all.find((i) => i.outcome === 'stopped')).toMatchObject({ reasonCode: 'BUDGET' });
+    expect(a().store.setting(PROJECT, 'out_of_order')?.pausedAt ?? null).toBeNull();
+    expect(
+      a()
+        .codes(PROJECT)
+        .find((c) => c.code === 'out_of_order')!.mode,
+    ).toBe('apply');
   });
 });
 
