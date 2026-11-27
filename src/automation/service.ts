@@ -111,6 +111,11 @@ export interface AutomationDeps {
   readonly audit: (actor: string, action: string, target: string, before: unknown, after: unknown) => void;
   readonly now: () => number;
   readonly log?: TaskLogger & { warn(o: unknown, m: string): void };
+  /**
+   * v3 F6d (ADR 0082): told of each page a batch code submitted (its job, or the proposal it is an item of), so the
+   * rename engine's record (and its review list) follows the automation's renames as it follows arkona_rename's.
+   */
+  readonly afterBatch?: (projectId: string, req: Obj, ids: { jobId?: string; proposalId?: string }) => void;
   /** Test seam: the P3 budget's wait now, or null (default: the project's governor estimate). */
   readonly budgetWaits?: (projectId: string) => BudgetWait | null;
   /** v3 F5b.1: the live settings (default: the defaults). Read on each use, so a change applies to the next check. */
@@ -1454,10 +1459,21 @@ export class AutomationService {
   ): Promise<CodeOutcome> {
     if (e.source === 'retag') return this.runRetag(projectId, runId, e, mode, cap, ctx);
     if (e.source === 'chronology') return this.runChronologyCode(projectId, runId, e, cap, mode);
-    if (e.automatable === 'propose') return this.runProposals(projectId, runId, e, cap, mode);
+    if (e.automatable === 'propose' && e.batch !== true)
+      return this.runProposals(projectId, runId, e, cap, mode);
     let candidates: Candidate[];
     try {
       candidates = (await this.candidates(projectId, e, ctx)).filter((c) => ctx.allows(c.pageId));
+      if (e.batch === true) {
+        // v3 F6d (ADR 0082): a page an earlier run proposed (the owner decides it once) or applied is not taken again.
+        const done = new Set(
+          this.store
+            .codeItems(projectId, e.code, 5000)
+            .filter((i) => i.proposalId !== null || (i.outcome === 'applied' && i.jobId !== null))
+            .map((i) => i.pageId),
+        );
+        candidates = candidates.filter((c) => !done.has(c.pageId));
+      }
     } catch (err) {
       this.item(projectId, runId, e.code, { pageId: null, pageName: null }, 'skipped', {
         reasonCode: errCode(err),
@@ -1497,7 +1513,10 @@ export class AutomationService {
         proposals.push({ c, planned });
         continue;
       }
-      const r = await this.applyOne(projectId, runId, e, c, planned);
+      const r =
+        e.batch === true
+          ? await this.applyBatchOne(projectId, runId, e, c, planned)
+          : await this.applyOne(projectId, runId, e, c, planned);
       if (r === 'stopCode') return { kind: 'done', attempted };
       if (typeof r === 'object') return { kind: 'stopRun', why: r.why, attempted };
     }
@@ -1759,10 +1778,15 @@ export class AutomationService {
     const read = (op: string, params: Obj) =>
       this.d.engine.internalRead(projectId, op, params, { priority: 'P3', notFoundIsAnswer: true });
     if (e.source === 'audit') {
+      // v3 F6d (ADR 0082): a batch code takes its findings in the check's run order (primary category, then name).
+      const order = (f: Finding): number =>
+        e.batch === true && typeof f.evidence.order === 'number' ? f.evidence.order : 0;
       const list = this.d.audits.store
         .list(projectId, { code: [e.code], state: 'open', limit: 5000 })
         .findings.filter((f) => f.fix !== null && inScope(f.pageId))
-        .sort((a, b) => (a.pageName ?? '').localeCompare(b.pageName ?? '') || a.id - b.id);
+        .sort(
+          (a, b) => order(a) - order(b) || (a.pageName ?? '').localeCompare(b.pageName ?? '') || a.id - b.id,
+        );
       const seen = new Set<string>();
       return list
         .filter((f) => {
@@ -2039,6 +2063,72 @@ export class AutomationService {
     const jobId = String(r.jobId);
     const job = await this.settle(projectId, jobId, this.d.settleMs ?? 600_000);
     return this.judgeJob(projectId, runId, e, c, job, p.expect, p.pre);
+  }
+
+  /**
+   * v3 F6d (ADR 0082; F12's division): a batch code's Apply of one page: the captured job submitted as the Automation
+   * principal at P3, never forced into a proposal. A guard that makes it the owner's canonical proposal (an Authoritative
+   * page's rename) is recorded as guarded and the run goes on; a guard's refusal is a skip; otherwise the job is settled
+   * and read back as every Apply is.
+   */
+  private async applyBatchOne(
+    projectId: string,
+    runId: string,
+    e: CodeEntry,
+    c: Candidate,
+    p: Extract<Planned, { ok: true }>,
+  ): Promise<'ok' | 'skip' | 'stopCode' | { why: string }> {
+    const { forceProposal: _f, ...rest } = p.req;
+    void _f;
+    let r: Obj;
+    try {
+      r = (await this.d.engine.submit({
+        ...rest,
+        priority: 'P3',
+        origin: this.origin(e),
+        title: `Automation (${e.name}): ${typeof p.req.title === 'string' ? p.req.title : c.pageName}`.slice(
+          0,
+          300,
+        ),
+      } as unknown as SubmitRequest)) as unknown as Obj;
+    } catch (err) {
+      const why = this.blocked(projectId);
+      if (why) return { why };
+      if (GUARD_CODES.has(errCode(err))) {
+        if (this.skipped(projectId, runId, e, c, errCode(err), `a guard refused it: ${errMessage(err)}`))
+          return 'stopCode';
+        return 'skip';
+      }
+      await this.fail(projectId, runId, e, c, 'UNEXPECTED_ERROR', `the job was refused: ${errMessage(err)}`);
+      return 'stopCode';
+    }
+    if (typeof r.proposalId === 'string') {
+      const because =
+        typeof r.proposedBecause === 'string'
+          ? r.proposedBecause
+          : isObj(r.canonical)
+            ? `the canon guard: ${String(r.canonical.reason)}`
+            : 'a guard made it a proposal';
+      this.item(projectId, runId, e.code, c, 'guarded', {
+        reasonCode: 'GUARDED',
+        reason: because.slice(0, 1500),
+        proposalId: r.proposalId,
+      });
+      this.tellBatch(projectId, p.req, { proposalId: r.proposalId });
+      return 'ok';
+    }
+    const jobId = String(r.jobId);
+    this.tellBatch(projectId, p.req, { jobId });
+    const job = await this.settle(projectId, jobId, this.d.settleMs ?? 600_000);
+    return this.judgeJob(projectId, runId, e, c, job, p.expect, p.pre);
+  }
+
+  private tellBatch(projectId: string, req: Obj, ids: { jobId?: string; proposalId?: string }): void {
+    try {
+      this.d.afterBatch?.(projectId, req, ids);
+    } catch (err) {
+      this.d.log?.warn({ err, projectId }, 'a batch code’s submission could not be recorded');
+    }
   }
 
   /** A change a guard refused: an ordinary proposal where the guards allow one; the code paused either way. */
@@ -2376,8 +2466,11 @@ export class AutomationService {
     const proposalId = typeof r.proposalId === 'string' ? r.proposalId : undefined;
     for (const { c } of list)
       this.item(projectId, runId, e.code, c, 'proposed', { ...(proposalId ? { proposalId } : {}) });
+    if (proposalId && e.batch === true)
+      for (const { planned } of list) this.tellBatch(projectId, planned.req, { proposalId });
     this.store.clearSkips(projectId, e.code);
-    if (proposalId && (isObj(r.canonical) || typeof r.proposedBecause === 'string')) {
+    // v3 F6d: a batch code's renames of Authoritative pages are canon by their nature (the owner approves them as such).
+    if (proposalId && e.batch !== true && (isObj(r.canonical) || typeof r.proposedBecause === 'string')) {
       this.store.pause(
         projectId,
         e.code,

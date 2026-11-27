@@ -809,7 +809,9 @@ once the job succeeds. Refusals: `NO_NATION_ROLES`, `NOT_SEEDED`, `UNKNOWN_ENTRY
 pattern (`{name}` by default). `facts` and `links` are as in `set_facts` (a new page has no links to remove), written in
 the same job in the template's order. Refusals: `TEMPLATE_NOT_FOUND` (with `templates`), `TEMPLATE_AMBIGUOUS`,
 `CHARACTER_TEMPLATE` (use `create_character`), `INDEX_TEMPLATE` (use `create_index`), `PAGE_EXISTS`, the facts and
-links codes of `set_facts`.
+links codes of `set_facts`. v3 F6d ([ADR 0082](adr/0082-v3-f6d-templated-names.md)): on a pack project with templated names, when `facts`
+give the Subject and the Reference Type and the name is not `<Subject> - <Role>`, the result says `templatedName` (the
+prefix kept) and `templatedNameNote`; nothing is refused (`arkona_create_owner` says it in its `notes`).
 
 **`create_bare_resource`** `{ name, parent?, status?, tags?, aliases?, dryRun?, operation_id?, project }` (a rarely used tool, v2 E3b: listed only with the profile's “show low-level and rarely used tools”, callable always): a page
 with no template. The name is used as given and must start with exactly `[INDEX] `, `[BSRC] ` or `[BWRK] `

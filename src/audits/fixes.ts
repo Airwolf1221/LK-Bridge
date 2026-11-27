@@ -112,7 +112,33 @@ export interface FixDeps {
   ) => { readonly id: string; readonly action: string; readonly role: string | null } | null;
   /** v3 F6c: the `territory_category` fix's creator (create_index's role form). */
   readonly territoryCategory?: TerritoryCategoryCreator;
+  /** v3 F6d (ADR 0082): the `templated_name` fix's renamer (the rename engine's page mode). */
+  readonly templatedRename?: TemplatedRenamer;
 }
+
+/**
+ * v3 F6d (ADR 0082): what plans and submits a `templated_name` fix: the page read live (FIX_STALE when its name, Subject
+ * or Reference Type changed since the finding), then the rename engine's page mode (arkona_rename's path), submitted
+ * through `engine.submit`: a proposal, or with the automation's Apply (`direct`) a job every guard judges.
+ */
+export type TemplatedRenamer = (
+  projectId: string,
+  a: {
+    readonly pageId: string;
+    readonly name: string;
+    readonly to: string;
+    readonly subject: string;
+    readonly referenceType: string;
+    readonly subjectRow: string;
+    readonly referenceTypeRow: string;
+  },
+  o: {
+    readonly origin: JobOrigin;
+    readonly engine: FixDeps['engine'];
+    readonly direct?: boolean;
+    readonly ownerConfirmed?: boolean;
+  },
+) => Promise<FixResult>;
 
 /**
  * v3 F6c (ADR 0080): what plans and submits a `territory_category` fix: create_index's role form (`{ territory,
@@ -879,6 +905,32 @@ export async function proposeFix(
     }
     case 'category_home':
       return fixCategoryHome(d, projectId, f);
+    case 'templated_name': {
+      if (!d.templatedRename)
+        throw new AuditError(
+          'FIX_UNAVAILABLE',
+          'The rename engine is not available here, so the rename cannot be planned now. Nothing was proposed.',
+        );
+      const a = f.fix.args as Obj;
+      return d.templatedRename(
+        projectId,
+        {
+          pageId: String(a.pageId),
+          name: String(a.name),
+          to: String(a.to),
+          subject: String(a.subject),
+          referenceType: String(a.referenceType),
+          subjectRow: String(a.subjectRow),
+          referenceTypeRow: String(a.referenceTypeRow),
+        },
+        {
+          origin: d.origin ?? ORIGIN,
+          engine: d.engine,
+          ...(d.direct === true ? { direct: true } : {}),
+          ...(ownerConfirmed(d) ? { ownerConfirmed: true } : {}),
+        },
+      );
+    }
   }
 }
 

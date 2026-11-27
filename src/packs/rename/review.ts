@@ -30,7 +30,8 @@ export interface ReviewPart {
 
 /** One occurrence for the owner to review (never an item). */
 export interface ReviewOccurrence {
-  readonly kind: 'name part' | 'custom label';
+  /** v3 F6d (ADR 0082): `restatement`, the old page name in another page's text or sidebar (the page mode only). */
+  readonly kind: 'name part' | 'custom label' | 'restatement';
   /** The part found (or, for a custom label, the old name it holds). */
   readonly part: string;
   readonly page: { readonly id: string; readonly name: string };
@@ -144,8 +145,11 @@ export function reviewList(
       o.parts.length > 0
         ? `These are ${names} on their own (not inside “${o.oldName}”): characters share names, so bring them to the owner, who can ask for a follow-up rename of specific occurrences (arkona_rename with from).`
         : '',
-      (o.customLabels?.length ?? 0) > 0
+      (o.customLabels ?? []).some((x) => x.kind === 'custom label')
         ? 'A custom mention label cannot be changed through LegendKeeper’s API: change it in the app if wanted.'
+        : '',
+      (o.customLabels ?? []).some((x) => x.kind === 'restatement')
+        ? `The old page name “${o.oldName}” in other pages’ text (not a routing line) is left as written: a plain mention shows the new name by itself; change the text by hand if wanted.`
         : '',
       more > 0 ? `Only the first ${REVIEW_CAP} are listed; ${more} more are not.` : '',
     ]

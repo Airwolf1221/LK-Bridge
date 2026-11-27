@@ -50,6 +50,7 @@ export default defineConfig({
       'test/f10/**/*.test.ts', // v3 F10: the chronology repaired soon after an edit (ADR 0078)
       'test/f6b/**/*.test.ts', // v3 F6b: navigation and subject indexes (ADR 0079)
       'test/f6c/**/*.test.ts', // v3 F6c: territories, nations and their subindexes (ADR 0080)
+      'test/f6d/**/*.test.ts', // v3 F6d: templated source names (ADR 0082)
       'test/snapshots-scale/**/*.test.ts', // the Snapshots freeze at Arkona's scale (ADR 0042 amendment 2)
       'test/sandbox-mock/**/*.test.ts', // CR-2026-11-R4 (S): every sandbox check, run against the mock in the ordinary suite
       'test/ui/**/*.test.{ts,tsx}',

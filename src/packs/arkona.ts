@@ -1411,6 +1411,13 @@ const rules: PackRules = packRulesSchema.parse({
       summary:
         'F6c (the F6 taxonomy design, T3 to T5 as amended, approved 23 November 2026): a nation’s subindexes follow one list of ten roles, in this order: Government & Administration, Institutions, Historical Events, Military & Technology, Unique Magic & Technologies, Cultures, Settlements & Locations, Religion & Religious Administration, Household & Court, Historical Polities. A subindex is named <Nation> <Role>, where <Nation> is the nation’s short name when it has one (Cantha), else the nation index’s display name (Jabal al-Noor Military & Technology); the prefix stays [NAV]. A child whose name matches no role or approved variant is never guessed: it goes to the owner, who maps it, keeps it as a specialist subindex, or rules it not a subindex. Not yet recorded in Source Formatting’s Nation-Centred Territorial Navigation: the owner’s reviewer writes it after deploy.',
     },
+    {
+      key: 'templated-names',
+      date: '2026-11-26',
+      by: 'owner',
+      summary:
+        'F6d (the F6 taxonomy design, T13 as amended by the owner on 26 November 2026): an ordinary source in the AI REPOSITORY is named <Subject> - <Role>: its Subject sidebar value as written, and the role word of its canonical Reference Type in the published Reference Type Vocabulary; the lifecycle prefix ([BSRC], [BWRK], [BARC]) stays. Exempt (the Specialist exemption): a page whose Reference Type is an approved specialist type of the published vocabulary, for any page of its category or for the pages it names, keeps its unique name. A registered character’s pages keep the names the character tools give them. A page with no Subject (or a Subject holding an em dash) is held, never named by guess; a name a sibling already holds, or two renames to one name, is held. The renames run as the automation code name_nontemplated at the mode the owner chooses (Off by default; Propose, then Apply). Not yet recorded in Source Formatting’s Page Names and Templates: the owner’s reviewer writes it after deploy.',
+    },
   ],
   // v3 F6b (ADR 0079; design T11, T12): navigation and subject indexes. The tag rule is a draft until the Tagging
   // Standard's "Navigation and Subject Index Tags" section exists (its pin reads unpublished meanwhile, never refusing the
@@ -1519,6 +1526,16 @@ const rules: PackRules = packRulesSchema.parse({
     ],
     lostRealmshipParents: ['Lost Realmships'],
   },
+  // v3 F6d (ADR 0082; design T13 as amended on 26 November 2026): templated source names, <Subject> - <Role>, the role
+  // word read from the published Reference Type Vocabulary (never hard-coded here); the vocabulary's specialist types are
+  // exempt. No new section is parsed: Source Formatting's "Page Names and Templates" is pinned, so the reviewer's
+  // paragraph shows as governance drift and the owner approves again.
+  templatedNames: {
+    template: '<Subject> - <Role>',
+    subjectRow: 'Subject',
+    exempt: 'vocabulary-specialist-types',
+    ruling: 'templated-names',
+  },
 });
 
 export const ARKONA_PACK: PackSeed = Object.freeze({
@@ -1567,8 +1584,13 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // settings, AUTOMATION_CAP_PER_CODE / _PER_RUN).
   // `-f12` (ADR 0081, 28 November 2026; session F12, after F5b.1): the per-tool "always propose" switches dropped
   // (`settings` is empty); every pack tool follows the agent's scope. Nothing else changed.
-  seed: 'arkona-2026-11-28-f12',
+  // `-f6d` (ADR 0082, 29 November 2026; session F6d, after F12): templated source names (`templatedNames`: the template
+  // <Subject> - <Role>, the Subject row, the vocabulary's specialist types exempt) and the ruling `templated-names`. No
+  // new pinned section: Source Formatting's "Page Names and Templates" is pinned already, so the reviewer's paragraph
+  // shows as governance drift and the owner approves again.
+  seed: 'arkona-2026-11-29-f6d',
   supersedes: [
+    'arkona-2026-11-28-f12',
     'arkona-2026-11-28-f5b1',
     'arkona-2026-11-26-f12', // F12's seed before F5b.1 merged (never released)
     'arkona-2026-11-27-f6c',

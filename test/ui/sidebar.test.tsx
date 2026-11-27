@@ -27,7 +27,7 @@ const EXPECTED: [string, string[]][] = [
   ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree', 'Tagging']],
   [
     'Setup',
-    // v3 F6b (ADR 0079): Index Classification; v3 F6c (ADR 0080): Nation Subindexes.
+    // v3 F6b (ADR 0079): Index Classification; v3 F6c (ADR 0080): Nation Subindexes; v3 F6d (ADR 0082): Templated Names.
     [
       'Index Classification',
       'Maintenance Jobs',
@@ -37,6 +37,7 @@ const EXPECTED: [string, string[]][] = [
       'Reference Types',
       'Repository Mappings',
       'Settings',
+      'Templated Names',
     ],
   ],
 ];
@@ -113,6 +114,7 @@ describe('the sidebar', () => {
       'Reference Types',
       'Repository Mappings',
       'Settings',
+      'Templated Names',
     ]);
     expect(groups.find(([g]) => g === 'Monitoring')![1]).toEqual([
       'Errors',

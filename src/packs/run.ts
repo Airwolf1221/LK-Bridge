@@ -29,6 +29,8 @@ import type { GovernanceStatus } from './service.js';
 import type { Pack, PackAttachment } from './types.js';
 import { creationCheck } from './reftypes/service.js';
 import { categoryFromTags, vocabularyOf } from './retag/engine.js';
+import { templatedNameFor } from './names/template.js';
+import { classifyName } from '../tree/classify.js';
 
 type Obj = Record<string, unknown>;
 
@@ -332,6 +334,28 @@ export async function finishPackage(
       };
       if (check.verdict === 'refuse') plan.refusals.push(issue);
       else plan.warnings.push(issue);
+    }
+  }
+  // v3 F6d (ADR 0082): a source's templated name, suggested when the name given differs (never a refusal).
+  if (pack.rules.templatedNames) {
+    const vocab = vocabularyOf(pack.rules);
+    for (const p of plan.pages) {
+      const c = categoryFromTags(p.tags ?? p.rule.tags.filter((t) => !t.startsWith('$')), vocab);
+      const subject =
+        p.factValues.find(
+          (f) => f.key.trim().toLowerCase() === pack.rules.templatedNames!.subjectRow.toLowerCase(),
+        )?.value ?? p.subject;
+      const display = classifyName(p.rawName).displayName;
+      const t = templatedNameFor(pack.rules, {
+        displayName: display,
+        subject,
+        referenceType: p.referenceType,
+        category: 'primary' in c ? c.primary : null,
+      });
+      if (t)
+        plan.notes.push(
+          `templatedName: ${p.rawName} would be “${p.rawName.slice(0, p.rawName.length - display.length)}${t}” by the template <Subject> - <Role>; the name given is kept (name_nontemplated reports it later).`,
+        );
     }
   }
   let job: PackJob | null = null;

@@ -50,10 +50,17 @@ import {
   proposeFix as proposeFixVia,
   type CoreUpgrader,
   type FixResult,
+  type TemplatedRenamer,
   type TerritoryCategoryCreator,
 } from './fixes.js';
 import type { NationAuditInput } from '../packs/nations/service.js';
 import { nationTaxonomyCheck } from './checks/nation-taxonomy.js';
+import {
+  templatedNamesCheck,
+  templatedNamesReport,
+  type TemplatedNamesAuditInput,
+} from './checks/templated-names.js';
+import type { TemplatedRow } from '../packs/names/template.js';
 import {
   extractResource,
   extractSidebar,
@@ -99,6 +106,8 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'index-taxonomy', run: indexTaxonomyCheck },
   // v3 F6c (ADR 0080): territories, nations and their subindexes (each of the three switchable per project).
   { id: 'nation-taxonomy', run: nationTaxonomyCheck },
+  // v3 F6d (ADR 0082): templated source names (switchable per project; the report is built once per run).
+  { id: 'templated-names', run: templatedNamesCheck },
   { id: 'facts', run: factsCheck },
   { id: 'lifecycle', run: lifecycleCheck },
   { id: 'keep-regions', run: keepRegionsCheck },
@@ -196,6 +205,22 @@ export interface AuditDeps {
     projectId: string,
     id: string,
   ) => { readonly action: string; readonly target: string | null; readonly conflict: string | null } | null;
+  /**
+   * v3 F6d (ADR 0082): templated source names' input for a project (null: the approved pack carries none). The pages
+   * under a character's repository index are added by the run.
+   */
+  readonly templatedNames?: (projectId: string) => Omit<TemplatedNamesAuditInput, 'characterPages'> | null;
+  /** v3 F6d: where each run's Templated Names report goes (the Templated Names page reads it). */
+  readonly templatedNamesSink?: (
+    projectId: string,
+    meta: {
+      readonly runId: string;
+      readonly snapshotId: string;
+      readonly takenAt: number;
+      readonly excluded: Readonly<Record<string, number>>;
+    },
+    rows: readonly TemplatedRow[],
+  ) => void;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -234,6 +259,12 @@ export class Audits {
   private coreUpgrader: CoreUpgrader | null = null;
   setCoreUpgrader(u: CoreUpgrader | null): void {
     this.coreUpgrader = u;
+  }
+
+  /** v3 F6d (ADR 0082): the `templated_name` fix's renamer (the rename engine's page mode), set by the runtime. */
+  private templatedRenamer: TemplatedRenamer | null = null;
+  setTemplatedRenamer(r: TemplatedRenamer | null): void {
+    this.templatedRenamer = r;
   }
 
   /** v3 F6c (ADR 0080): the `territory_category` fix's creator (create_index's role form), set by the runtime. */
@@ -444,6 +475,7 @@ export class Audits {
         governance ? governanceInput(governance, model, cfg) : null,
         await this.consistencyItems(projectId),
         await this.nationTaxonomyInput(projectId),
+        this.templatedNamesInput(projectId, characterPages),
       );
       const drafts: FindingDraft[] = [];
       for (const c of CHECKS) {
@@ -474,6 +506,23 @@ export class Audits {
         });
       const stored = drafts.map((d) => this.stored(ctx, d));
       const counts: RunCounts = this.store.commit(projectId, run.id, stored);
+      // v3 F6d (ADR 0082): the Templated Names report the run worked out (once, memoised), for the dashboard.
+      const names = this.d.templatedNamesSink ? templatedNamesReport(ctx) : null;
+      if (names)
+        try {
+          this.d.templatedNamesSink!(
+            projectId,
+            {
+              runId: run.id,
+              snapshotId: model.newest.id,
+              takenAt: model.newest.takenAt,
+              excluded: names.excluded,
+            },
+            names.rows,
+          );
+        } catch (e) {
+          this.d.log?.warn({ err: e, projectId }, 'the Templated Names report could not be stored');
+        }
       const summary =
         `${counts.open} open finding${counts.open === 1 ? '' : 's'} (${counts.new} new, ${counts.still} still present, ${counts.gone} gone` +
         `${counts.acknowledged > 0 ? `, ${counts.acknowledged} acknowledged` : ''}) across ${model.pages.size} pages, from ${model.base.id}` +
@@ -623,6 +672,7 @@ export class Audits {
           ...(this.d.referenceTypeDecision ? { referenceTypeDecision: this.d.referenceTypeDecision } : {}),
           ...(this.d.nationSubindexDecision ? { nationSubindexDecision: this.d.nationSubindexDecision } : {}),
           ...(this.territoryCreator ? { territoryCategory: this.territoryCreator } : {}),
+          ...(this.templatedRenamer ? { templatedRename: this.templatedRenamer } : {}),
           // v3 F6b (ADR 0079): T11's order where the approved pack carries it (and as the narrative order's fallback).
           ...(this.indexTaxonomyInput(projectId)?.navOrdering ? { navOrder: true } : {}),
           narrativeOrder: (() => {
@@ -845,6 +895,21 @@ export class Audits {
     }
   }
 
+  /** v3 F6d (ADR 0082): templated names' input (null: none, or it could not be read: logged). */
+  templatedNamesInput(
+    projectId: string,
+    characterPages?: ReadonlySet<string>,
+  ): TemplatedNamesAuditInput | null {
+    if (!this.d.templatedNames) return null;
+    try {
+      const i = this.d.templatedNames(projectId);
+      return i ? { ...i, ...(characterPages ? { characterPages } : {}) } : null;
+    } catch (e) {
+      this.d.log?.warn({ err: e, projectId }, 'templated names could not be read; the check is skipped');
+      return null;
+    }
+  }
+
   indexTaxonomyInput(projectId: string): IndexTaxonomyAuditInput | null {
     if (!this.d.indexTaxonomy) return null;
     try {
@@ -894,6 +959,7 @@ export class Audits {
     governance: GovernanceAuditInput | null = null,
     consistency: readonly ConsistencyAuditItem[] | null = null,
     nationTaxonomy: NationAuditInput | null = null,
+    templatedNames: TemplatedNamesAuditInput | null = null,
   ): AuditContext {
     const registry = this.d.registry.forProject(projectId).store;
     const chron = this.d.chronology;
@@ -1059,6 +1125,7 @@ export class Audits {
         : {}),
       ...(this.d.indexTaxonomy ? { indexTaxonomy: this.indexTaxonomyInput(projectId) } : {}),
       ...(nationTaxonomy ? { nationTaxonomy } : {}),
+      ...(templatedNames ? { templatedNames } : {}),
     });
   }
 

@@ -319,6 +319,9 @@ const ROUTES: Record<string, Route> = {
     kind: 'was-asked',
     body: { reason: 'here', confirm: true },
   },
+  // v3 F6d (ADR 0082): "Keep this name" and its undo (never asked: after ADR 0081).
+  'POST /api/admin/templated-names/keep': { kind: 'no' },
+  'POST /api/admin/templated-names/undo': { kind: 'no' },
   // ---- review
   'POST /api/admin/review/mark': { kind: 'no' },
   'POST /api/admin/review/mark-all': { kind: 'no' },

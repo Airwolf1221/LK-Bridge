@@ -398,3 +398,14 @@ Archive, Design References, Working, Archived and Narratives pages are out of sc
   judgement): a source whose primary category's owner homes, resolved by role, do not include its home; the fix is a
   move to the nearest allowed home; **Keep it here…** (with a reason) silences it until the page's
   tags or parent change.
+- v3 F6d ([ADR 0082](adr/0082-v3-f6d-templated-names.md)), under the approved pack's templated names, switchable per
+  project on the Projects page (`checkTemplatedNames`, default on): `name_nontemplated` (info): a source ([BSRC],
+  [BWRK], [BARC]) whose name is not `<Subject> - <Role>` (its Subject as written, the role word of its canonical
+  Reference Type in the published vocabulary), when the rename is known and free. Only `rename` rows of the Templated
+  Names page are findings; held rows (no Subject, a type not canonical, a collision) are on that page only. Never
+  indexes, Narratives, the Legacy Canon Archive, the Design References, a [BSRC] page directly in Working or Archive, or a
+  character's pages; an approved specialist type and your "Keep this name" are exempt. The fix is a rename through the
+  rename engine (arkona_rename's path, its page mode): the page re-placed, routing lines naming the old name following,
+  other text naming it listed for review; refused as stale when the name, Subject or Reference Type changed. Automation:
+  default Off; Propose makes ONE proposal per run (an item per page), Apply ONE job per page, read back (an
+  Authoritative page's rename is the canon guard's canonical proposal).

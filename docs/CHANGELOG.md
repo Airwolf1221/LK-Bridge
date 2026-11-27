@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased: v3 F6d, templated source names
+
+[ADR 0082](adr/0082-v3-f6d-templated-names.md). Migration `5000`. Pack seed `arkona-2026-11-29-f6d` (supersedes
+`arkona-2026-11-28-f12`), with the ruling `templated-names`. New per-project switch `checkTemplatedNames` (default on).
+Built and tested against the mock; nothing live was touched.
+
+- **The template**: an ordinary source is named `<Subject> - <Role>`, its Subject as written and the role word of its
+  canonical Reference Type in the PUBLISHED vocabulary (never hard-coded); the prefix stays. Exempt: the vocabulary's
+  approved specialist types; never in scope: indexes, Narratives, the two archive areas, Working's infrastructure pages,
+  characters' pages.
+- **The Templated Names page** (Setup): every source's status (to rename, held: collision, held: no Subject, held:
+  type, templated, specialist, kept) with its reason, the counts at the top, filters by status and primary category;
+  built once per audit run from the snapshots and stored (free; paged in SQL). **Keep this name** (until the Subject,
+  Reference Type or name changes) and **Undo**.
+- **`name_nontemplated`** (taxonomy, info): one finding per rename row; held rows only on the page. Its fix renames
+  through the rename engine's new page mode (arkona_rename's path): mentions show the new name, routing lines follow,
+  other text naming the old name is listed for review; refused as stale when the name, Subject or Reference Type
+  changed. Never `update_resource` alone.
+- **Automation** (default Off): Propose makes ONE proposal per run with an item per page; Apply ONE job per page, read
+  back, never forced into a proposal (an Authoritative page's rename stays the canon guard's canonical proposal).
+- **Creation tools**: `create_resource` (`templatedName`) and `arkona_create_owner` (`notes`) suggest the templated name
+  when the name given differs; neither refuses. The bridge guide's new "Templated names" section.
+- Sandbox check `f6d-names` (opt-in, the owner's) and its mock run; the audit timing test (the 10% rule) and the page
+  at 1,500 sources.
+
 ## Unreleased: v3 F12, direct writes with the Review page as the safety net
 
 **Follow-up (27 November 2026, [ADR 0081 amendment 1](adr/0081-v3-f12-direct-writes-review-safety-net.md#amendment-1-the-owners-decisions-of-27-november-2026)):**

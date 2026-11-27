@@ -329,6 +329,22 @@ confirmation before anything is sent, at most `NATION_SUBINDEX_BULK_MAX` at a ti
 recorded in the audit log. Nothing is renamed here: accepted and mapped rows become
 `nation_subindex_nonstandard` findings in the Audits, which Automation can run (default Off).
 
+## Templated Names (v3 F6d)
+
+In the Setup group, after Nation Subindexes ([ADR 0082](adr/0082-v3-f6d-templated-names.md)). Every source in the AI
+REPOSITORY with the name the template `<Subject> - <Role>` gives it, as the newest audit judged it from the snapshots
+(free; nothing is read from LegendKeeper): the page (linked), its current name, the proposed name, its Subject, its
+Reference Type (and role word), and its status with the reason: **to rename**, **held: collision** (a sibling has the
+name, or another rename would take it too: the other page is named), **held: no Subject** (empty, missing, twice, or
+holding an em dash), **held: type** (the vocabulary not published, the type missing or not canonical yet, or of another
+category), **templated**, **specialist (exempt)**, **kept**. The counts per status are at the top, with the run and the
+pages left out of scope (Narratives, the two archive areas, Working's infrastructure pages, characters' pages).
+
+Filters: status, primary category. Per row: **Keep this name…** (with a reason; it holds until the page's Subject,
+Reference Type or name changes, then the row is judged again) and **Undo**. Both are audited. Nothing is renamed here:
+the renames are `name_nontemplated`'s fix, run from the Automation page (Off by default: Propose for a first batch, then
+Apply).
+
 ### Repository Mappings › Territories and nations (v3 F6c)
 
 The five structural types (Territory, Nation, Divine Realm, Culture family, Religion family): **Seed** each, Territory

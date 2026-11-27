@@ -105,6 +105,13 @@ export interface CodeEntry {
    */
   readonly applyDirect?: true;
   /**
+   * v3 F6d (ADR 0082; F12's division, ADR 0081): a proposal-first audit code whose Propose is ONE proposal per run, an
+   * item per page, and whose Apply is ONE job per page, read back; at Apply nothing is forced into a proposal (a guard's
+   * own canonical proposal is recorded as guarded, and the run goes on). The run takes the findings in their `order`
+   * (the check's run order). Only with `automatable: 'propose'` and `applyDirect`.
+   */
+  readonly batch?: true;
+  /**
    * v3 F10 (ADR 0078): a chronology code's finding (the chronology check's own kind, read from its newest successful
    * run) and the fix the chronology module plans for it.
    */
@@ -129,6 +136,13 @@ export class AutomationFlagError extends Error {
 export function defineCode(e: CodeEntry): CodeEntry {
   if (e.defaultMode === 'propose' && e.automatable !== 'propose')
     throw new AutomationFlagError(`${e.code} cannot default to Propose: only a proposal-only code can.`);
+  if (
+    e.batch === true &&
+    (e.automatable !== 'propose' || e.applyDirect !== true || e.source !== 'audit' || !e.target)
+  )
+    throw new AutomationFlagError(
+      `${e.code}: a batch code is a proposal-first audit code with Apply allowed and a read-back target.`,
+    );
   if (e.applyDirect === true && e.automatable !== 'propose')
     throw new AutomationFlagError(`${e.code}: only a proposal-only audit code can allow a direct Apply.`);
   if (e.automatable === 'propose' && e.source !== 'audit' && e.source !== 'chronology')
@@ -663,6 +677,22 @@ export const CATALOGUE: readonly CodeEntry[] = [
     transformation:
       'none: moving a source to another home is the owner’s judgement (the finding offers ONE move proposal to the nearest allowed home, or “Keep it here”)',
     traits: ['judgement'],
+  }),
+  // ======================================================================== v3 F6d (ADR 0082): default Off, Propose one batch, Apply per page
+  defineCode({
+    code: 'name_nontemplated',
+    source: 'audit',
+    name: 'Templated source name (<Subject> - <Role>)',
+    example:
+      '“[BSRC] Falkenreich Polity Reference”, Subject Falkenreich, Reference Type Polity Reference (role word Polity), becomes “[BSRC] Falkenreich - Polity”.',
+    transformation:
+      'Propose: ONE proposal per run, an item per page; Apply: ONE job per page, read back. Each page is renamed to <Subject> - <Role> (its Subject as written, the role word of its canonical Reference Type in the published vocabulary) through the rename engine (arkona_rename’s path, its page mode): the page re-placed among its siblings, routing lines naming the old name following, plain mentions showing the new name by themselves; the id, the prefix, the tags and every link stay; other text naming the old name and custom mention labels are listed for review, never edited. Only rows the Templated Names page shows as rename: never a page held (no Subject, a type not canonical, a collision with a sibling or with another rename of the run), exempt (an approved specialist type), kept by the owner, or a registered character’s. The page read live first (its name, Subject or Reference Type changed since the finding: nothing done), checked inside the lock. Pages in the order primary category, then name. At Apply nothing is forced into a proposal: every guard judges each job, and an Authoritative page’s rename is what the canon guard decides',
+    traits: ['rename', 'canon'],
+    target: 'resource',
+    changes: ['name', 'rank'],
+    automatable: 'propose',
+    applyDirect: true,
+    batch: true,
   }),
   // ======================================================================== v3 F10 (ADR 0078): the chronology, default Propose, Apply allowed
   defineCode({

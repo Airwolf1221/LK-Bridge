@@ -278,9 +278,9 @@ describe('the approved pack', () => {
   // The reviewer ran this pass on arkona-2026-11-20-f41; the seed is now arkona-2026-11-21-r4 (this review's own version).
   it('control: the world runs on the seed, approved', async () => {
     // v3 F5a (ADR 0067): the seed is now arkona-2026-11-23-f5a (its consistency rules are r4's, unchanged).
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-28-f12'); // v3 F12 (ADR 0081): -f12 supersedes -f5b1
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-29-f6d'); // v3 F6d (ADR 0082): -f6d supersedes -f12
     const pack = w.stack.runtime.packs.get('arkona')!;
-    expect(pack.seed).toBe('arkona-2026-11-28-f12'); // v3 F12 (ADR 0081): -f12 supersedes -f5b1
+    expect(pack.seed).toBe('arkona-2026-11-29-f6d'); // v3 F6d (ADR 0082): -f6d supersedes -f12
     expect(pack.approved?.version).toBe(pack.version);
     expect(pack.rules.consistency?.aliveValues).toEqual(['Alive', 'Living']);
     // The consistency tools are listed (the approved version has consistency rules) and answer.
