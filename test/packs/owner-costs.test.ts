@@ -105,23 +105,24 @@ it('reads and writes per typical package', async () => {
   // rows to fill and Last Major Revision). The job re-reads the governance (the drift check in the lock), lists the
   // places for the in-job re-checks, then per page: the copy, its rows, its tags, its text and Last Major Revision, and
   // the verify.
+  // v3 F12 (ADR 0081): each row update after the first reads its rows for the pre-image Revert needs.
   expect(got).toEqual({
     'compact owner, dry run: plan': [4, 0],
     'compact owner, Working: plan': [4, 0],
-    'compact owner, Working: job': [20, 13],
+    'compact owner, Working: job': [29, 13],
     // v3 F3d (ADR 0053): one more read to plan, the home index's text for its routing line.
     'compact owner, Authoritative: plan': [5, 0],
-    'compact owner, Authoritative: job': [18, 13],
+    'compact owner, Authoritative: job': [27, 13],
     // v3 F3d: one more read to plan, the Polities index's text for the nation's line.
     'promoteNation: index, Reference moved, owner: plan': [8, 0],
-    'promoteNation: index, Reference moved, owner: job': [31, 16],
+    'promoteNation: index, Reference moved, owner: job': [40, 16],
     'relationship of two canon characters: plan': [14, 0],
-    'relationship of two canon characters: job': [40, 15],
+    'relationship of two canon characters: job': [48, 15],
     // v3 F7 (ADR 0070, G9): one more read to plan each: the character's folder listed live before placing anything.
     // v3 F7d (ADR 0077 amendment 1): the identity page read when planned (and, on an existing page, its sidebar); a new
     // page's job checks the identity page and writes its Dependencies (the identity page).
     'art: a new Art page with 1 image: plan': [9, 0],
-    'art: a new Art page with 1 image: job': [29, 17],
+    'art: a new Art page with 1 image: job': [37, 17],
     'art: 1 image on an existing Art page: plan': [7, 0],
     'art: 1 image on an existing Art page: job': [11, 3],
     'brief: plan': [0, 0],

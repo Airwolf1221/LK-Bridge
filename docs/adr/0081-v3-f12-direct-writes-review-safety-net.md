@@ -168,6 +168,11 @@ edit there is drift until it is approved).
 - **The lifecycle record** (the bridge's own lifecycle history) is not reset by Revert; the page is.
 - **The CLI's `migrate-staging`** keeps making a proposal (the owner's own tool, run by hand).
 - **Re-proposing a proposal's left-out items** keeps its proposal (it is the owner's proposal page).
+- **The pre-image's cost:** a sidebar row update after the first now reads its rows for its pre-image (inside the lock).
+  The Last Major Revision row write reads the rows its `bridge.lmr` step has just read (it could take that read as its
+  pre-image); and the split's preview estimate does not count the pre-image reads yet (a split of 89 writes: 175
+  estimated, 209 made). Measured on the mock: the compact character package 20 → 35 reads, the developed one 57 → 88,
+  a rename of a character 185 → 194 requests, a split's phase 1 248 → 298. The writes are unchanged.
 - **A dry run of a protected change** still answers `requiresCanonicalApproval: true` at both scopes (the dry run does
   not know the caller's scope); its message says what each scope does: direct at `write`, a canonical proposal at
   `propose`.

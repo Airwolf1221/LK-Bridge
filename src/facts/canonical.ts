@@ -1033,6 +1033,18 @@ export class CanonicalGuard implements WriteGuard {
     const ref = { jobId: input.job.id, stepNo: input.step.stepNo };
     // The one property the write touches, as it is now: the read made in the lock, or one more read.
     let prop: SidebarProperty | undefined;
+    // A row write whose If-Match the engine chained from this job's own previous write (or its bridge.expect check):
+    // LegendKeeper's If-Match refuses it if the rows changed since. CR-2026-11 (CR-08): only such a chain; a version
+    // the CALLER gave proves nothing about what the entry check judged (a step before it may have failed), so that
+    // write is read and judged here like any other. Checked before the read the lock made: since v3 F12 a row write
+    // keeps a pre-image (its rows read in the lock), which must not turn a chained write into a judged one (one more
+    // read of the whole sidebar per row).
+    if (
+      input.params.ifMatch !== undefined &&
+      input.opId.endsWith('PropertyRow') &&
+      input.step.options.ifMatchFrom !== undefined
+    )
+      return;
     if (input.opId === 'createProperty') {
       prop = undefined;
     } else if (input.current) {
@@ -1043,16 +1055,6 @@ export class CanonicalGuard implements WriteGuard {
       } else if (c.entity && typeof c.entity === 'object') {
         prop = sidebarFrom([c.entity])[0];
       }
-    } else if (
-      input.params.ifMatch !== undefined &&
-      input.opId.endsWith('PropertyRow') &&
-      input.step.options.ifMatchFrom !== undefined
-    ) {
-      // A row write whose If-Match the engine chained from this job's own previous write (or its bridge.expect check):
-      // LegendKeeper's If-Match refuses it if the rows changed since. CR-2026-11 (CR-08): only such a chain; a version
-      // the CALLER gave proves nothing about what the entry check judged (a step before it may have failed), so that
-      // write is read and judged here like any other.
-      return;
     } else if (pid) {
       const got = await input.read('getProperty', { path: { resourceId: rid, propertyId: pid } });
       prop = got ? sidebarFrom([got])[0] : undefined;
