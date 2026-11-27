@@ -30,6 +30,8 @@ import {
   errorResult,
   mcpOrigin,
   projectArg,
+  protectedDryRun,
+  protectedDryRunText,
   render,
   withProject,
   type ProjectDeps,
@@ -325,13 +327,11 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         }
-        const canonical =
-          canon.length > 0
-            ? {
-                requiresCanonicalApproval: true,
-                protectedChanges: canon.map((c) => c.text),
-              }
-            : {};
+        // v3 F12 follow-up: what the protected part does at the caller's scope (direct at write, a proposal at propose).
+        const canonical = protectedDryRun(
+          mctx.scope,
+          canon.map((c) => c.text),
+        );
         const { parts } = planCounts(plan);
         const preview = () => ({ page, summary: parts.join(', ') });
         if (args.dryRun === true) {
@@ -347,7 +347,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
               ...canonical,
               message:
                 canon.length > 0
-                  ? 'Dry run: nothing was written. This change touches protected canon: at scope write it runs directly (on the owner’s Review page, with Revert; make it only when the owner asked for it), at scope propose it becomes a proposal only the owner can accept as canon.'
+                  ? `Dry run: nothing was written. This change touches protected canon. ${protectedDryRunText(mctx.scope)}`
                   : 'Dry run: nothing was written and nothing was proposed.',
             },
             preview,

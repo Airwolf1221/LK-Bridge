@@ -76,7 +76,16 @@ import { defineTool } from './define.js';
 import { liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
 import { CHANGE_ANNOTATIONS } from './resources.js';
 import { pageRef, templateKeysFor } from './set-facts.js';
-import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
+import {
+  errorResult,
+  projectArg,
+  protectedDryRun,
+  protectedDryRunText,
+  render,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 import { runSet, subtreeArg } from './lifecycle-sets.js';
 
@@ -995,9 +1004,8 @@ async function runLifecycle(
                 ...head,
                 status: 'dry_run',
                 steps: b.labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l)),
-                requiresCanonicalApproval: true,
-                message:
-                  'Dry run: nothing was written and nothing was proposed. Run without dryRun to make it (direct at scope write, on the owner’s Review page; a canonical proposal at scope propose).',
+                ...protectedDryRun(mctx.scope, [`${tool} changes a page’s lifecycle state`]),
+                message: `Dry run: nothing was written and nothing was proposed. ${protectedDryRunText(mctx.scope)}`,
               },
               pd,
             ),

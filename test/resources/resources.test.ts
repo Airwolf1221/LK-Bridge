@@ -388,6 +388,16 @@ describe('delete_resource and restore_resource', () => {
     expect(w.repo.live('inae0001')).toBeDefined();
   });
 
+  // v3 F12 follow-up (ADR 0081 amendment 1, decision 4): at scope write the same dry run says it runs directly.
+  it('at scope write, the dry run of that cascade says it runs directly, on the Review page, with no approval', async () => {
+    const dry = await call('delete_resource', { page: 'Elves', confirm: true, cascade: true, dryRun: true });
+    expect(dry.body.status, dry.text).toBe('dry_run');
+    expect(dry.body.requiresCanonicalApproval, dry.text).toBeUndefined();
+    expect(dry.body.protectedChanges, dry.text).toBeDefined();
+    expect(String(dry.body.message)).toMatch(/runs directly and appears on the owner’s Review page/);
+    expect(String(dry.body.message)).not.toMatch(/approv/i);
+  });
+
   it('a cascade holding an Authoritative page is a canonical proposal listing it; a dry run says so', async () => {
     const dry = await propose('delete_resource', {
       page: 'Elves',

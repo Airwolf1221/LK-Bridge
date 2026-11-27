@@ -168,7 +168,9 @@ export async function runSplit(
         status: 'dry_run',
         ...preview,
         message:
-          'Dry run: nothing was written and nothing was proposed. Bring the map, the warnings and the Anti-Fragmentation note to the owner; call again without dryRun only when the owner wants the split: ONE canonical proposal, approved whole or destination by destination.',
+          mctx.scope === 'propose'
+            ? 'Dry run: nothing was written and nothing was proposed. Bring the map, the warnings and the Anti-Fragmentation note to the owner; call again without dryRun only when the owner wants the split: at your connection’s scope (propose) ONE canonical proposal, approved whole or destination by destination.'
+            : 'Dry run: nothing was written. Bring the map, the warnings and the Anti-Fragmentation note to the owner; call again without dryRun only when the owner wants the split: at your connection’s scope (write) ONE job that runs directly and appears on the owner’s Review page, with Revert.',
       },
       () => ({ items: plan.items.length, summary: plan.summary }),
     );

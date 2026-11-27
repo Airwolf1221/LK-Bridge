@@ -426,6 +426,28 @@ export function runResultBody(
  * v2 C2a: the agent-facing part of a captured proposal: when the write touches protected canon, that it needs the
  * owner's canonical approval, and why (v3 F12: only at scope `propose`; at `write` canon changes are direct).
  */
+/**
+ * v3 F12 follow-up (the owner, 27 November 2026; ADR 0081 amendment 1, decision 4): what a dry run says of a protected
+ * (canon or lifecycle) change, at the caller's scope. At scope write it runs directly and appears on the owner's Review
+ * page (no `requiresCanonicalApproval`); at scope propose it becomes a proposal only the owner can accept as canon.
+ */
+export function protectedDryRun(
+  scope: string | undefined,
+  changes: readonly string[],
+): Record<string, unknown> {
+  if (changes.length === 0) return {};
+  return scope === 'propose'
+    ? { requiresCanonicalApproval: true, protectedChanges: changes, atYourScope: 'a canonical proposal' }
+    : { protectedChanges: changes, atYourScope: 'runs directly, on the owner’s Review page' };
+}
+
+/** The dry run's sentence for a protected change (see `protectedDryRun`). `what`: the change ("it", "the delete"). */
+export function protectedDryRunText(scope: string | undefined, what = 'it'): string {
+  return scope === 'propose'
+    ? `At your connection’s scope (propose) ${what} becomes a proposal only the owner can accept as canon.`
+    : `At your connection’s scope (write) ${what} runs directly and appears on the owner’s Review page, with Revert: make it only when the owner has asked for it in this conversation, and say what you changed.`;
+}
+
 export function canonicalBody(
   r: { readonly canonical?: { readonly reason: string }; readonly proposedBecause?: string },
   lead = 'The change needs the owner’s approval and was not made.',

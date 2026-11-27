@@ -84,7 +84,16 @@ import {
 import { defineTool } from './define.js';
 import { finish, liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
 import { factValue, linkRef, pageRef } from './set-facts.js';
-import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
+import {
+  errorResult,
+  projectArg,
+  protectedDryRun,
+  protectedDryRunText,
+  render,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 import { sidebarFrom } from '../../facts/sidebar.js';
 import { subjectRenameRefusal } from '../../packs/rename/guard.js';
@@ -327,10 +336,10 @@ export async function finishCreate(
       ...head,
       status: 'dry_run',
       steps: job.labels.filter((l) => l !== 'check' && l !== 'verify'),
-      ...(canon.length > 0 ? { requiresCanonicalApproval: true, protectedChanges: canon } : {}),
+      ...protectedDryRun(mctx.scope, canon),
       message:
         canon.length > 0
-          ? 'Dry run: nothing was written. This touches protected canon: at scope write it runs directly (on the owner’s Review page, with Revert; make it only when the owner asked for it), at scope propose it becomes a proposal only the owner can accept as canon.'
+          ? `Dry run: nothing was written. This touches protected canon. ${protectedDryRunText(mctx.scope)}`
           : 'Dry run: nothing was written and nothing was proposed.',
     };
     return { kind: 'answer', result: finish(pd, mctx, tool, body, preview) };
@@ -2047,10 +2056,10 @@ function deleteResourceTool(deps: ToolDeps): McpToolProvider {
             {
               ...head,
               status: 'dry_run',
-              ...(canon.length > 0 ? { requiresCanonicalApproval: true, protectedChanges: canon } : {}),
+              ...protectedDryRun(mctx.scope, canon),
               message:
                 (canon.length > 0
-                  ? 'Dry run: nothing was deleted. As the tree last read them, these pages are protected canon: at scope write the delete runs directly (a copy kept first; on the owner’s Review page, with Revert; make it only when the owner asked for it), at scope propose it becomes a proposal only the owner can accept as canon. '
+                  ? `Dry run: nothing was deleted. As the tree last read them, these pages are protected canon. ${protectedDryRunText(mctx.scope, 'the delete (a copy kept first)')} `
                   : 'Dry run: nothing was deleted. ') + 'The real check reads every page again.',
             },
             pd,

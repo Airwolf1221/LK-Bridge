@@ -169,7 +169,11 @@ export async function runRename(
       {
         status: 'dry_run',
         ...preview,
-        message: `Dry run: nothing was written and nothing was proposed. Call again without dryRun to propose it: ONE canonical proposal for the owner, who approves it whole or item by item.${plan.review.count > 0 ? ` Bring the ${plan.review.count} review-only occurrence${plan.review.count === 1 ? '' : 's'} (reviewOnly: name parts on their own, custom labels) to the owner: the bridge never edits them, and the owner can ask for a follow-up rename (from) of specific ones.` : ''}`,
+        message: `Dry run: nothing was written and nothing was proposed. ${
+          mctx.scope === 'propose'
+            ? 'Call again without dryRun to make it: at your connection’s scope (propose) ONE canonical proposal for the owner, who approves it whole or item by item.'
+            : 'Call again without dryRun to make it: at your connection’s scope (write) ONE job that runs directly and appears on the owner’s Review page, with Revert (a rename of canon: make it only when the owner has asked for it in this conversation, and say what you changed).'
+        }${plan.review.count > 0 ? ` Bring the ${plan.review.count} review-only occurrence${plan.review.count === 1 ? '' : 's'} (reviewOnly: name parts on their own, custom labels) to the owner: the bridge never edits them, and the owner can ask for a follow-up rename (from) of specific ones.` : ''}`,
       },
       () => ({ items: plan.items.length, summary: plan.summary }),
     );
@@ -177,7 +181,7 @@ export async function runRename(
   const marker: LifecycleMarker = {
     tool: RENAME_TOOL,
     canonical: true,
-    reason: `renaming ${plan.oldName} to ${plan.newName} changes how canon names it (ADR 0057 decision 5): every rename is a canonical proposal`,
+    reason: `renaming ${plan.oldName} to ${plan.newName} changes how canon names it (ADR 0057 decision 5): a rename of canon (direct at scope write, a canonical proposal at scope propose)`,
     pages: [],
   };
   return withRequest(

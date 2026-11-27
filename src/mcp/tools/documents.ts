@@ -21,7 +21,16 @@ import { CHANGE_ANNOTATIONS, CREATE_ANNOTATIONS, operationIdArg } from './resour
 import { pageRef } from './set-facts.js';
 import { resolveMapAsset } from './map-support.js';
 import { featurePoints, frameState } from '../../maps/index.js';
-import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
+import {
+  errorResult,
+  projectArg,
+  protectedDryRun,
+  protectedDryRunText,
+  render,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 
 type Obj = Record<string, unknown>;
@@ -589,7 +598,10 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
           page,
           document,
           ...(canon.length > 0
-            ? { requiresCanonicalApproval: true, protectedChanges: canon.map((c) => c.text) }
+            ? protectedDryRun(
+                mctx.scope,
+                canon.map((c) => c.text),
+              )
             : assessDelete(rules, facts, node.rawName).length > 0
               ? {
                   note: 'The page is protected canon (Authoritative); deleting this kind of document is not guarded by a canon rule.',
@@ -603,7 +615,7 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
               status: 'dry_run',
               message:
                 canon.length > 0
-                  ? 'Dry run: nothing was deleted. As the tree last read it, the page is protected canon: at scope write the delete runs directly (a copy kept first; on the owner’s Review page, with Revert; make it only when the owner asked for it), at scope propose it becomes a proposal only the owner can accept as canon.'
+                  ? `Dry run: nothing was deleted. As the tree last read it, the page is protected canon. ${protectedDryRunText(mctx.scope, 'the delete (a copy kept first)')}`
                   : 'Dry run: nothing was deleted.',
             },
             pd,

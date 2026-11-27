@@ -373,8 +373,11 @@ export async function finishPackage(
     const body = {
       status: 'dry_run',
       ...preview,
+      // v3 F12 follow-up (ADR 0081 amendment 1, decision 4): what it will be at the caller's scope.
       message:
-        'Dry run: nothing was written and nothing was proposed. Call again without dryRun to propose it (one proposal for the owner).',
+        mctx.scope === 'propose'
+          ? 'Dry run: nothing was written and nothing was proposed. Call again without dryRun to make it: at your connection’s scope (propose) ONE proposal for the owner.'
+          : 'Dry run: nothing was written. Call again without dryRun to make it: at your connection’s scope (write) ONE job that runs directly and appears on the owner’s Review page, with Revert (make it only when the owner has asked for it in this conversation, and say what you changed).',
     };
     return finish(pd, mctx, o.tool, body, () => ({ pages: plan.pages.length, summary: job!.summary }));
   }
