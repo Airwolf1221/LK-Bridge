@@ -11,7 +11,6 @@
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PROJECT } from '../tools/helpers.js';
 import { L, lifecycleWorld, type LifecycleWorld } from '../lifecycle/world.js';
 
 let w: LifecycleWorld;
