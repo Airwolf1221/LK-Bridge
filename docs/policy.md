@@ -515,7 +515,7 @@ What changed in the guards, the rails (removed in F12) and Revert after [CR-2026
   page** (by its `[BSRC]` prefix or its Status), even keeping `[BSRC]`, is a canonical proposal too (ADR 0057 decision 5),
   by every route: `update_resource`, `lk_api_write`, `lk_api_batch`, `lk_op_updateResource` and the setting-pack tools
   (an upgrade to a Core, the appraisal's name fix). Judged by the canon guard at entry and again inside the lock. A
-  Working or Archived page's rename is not affected. (F12: for an agent at scope `write` these run directly.)
+  Working or Archived page's rename is not affected. (F12: for an agent at scope `write` these run directly; the F6d follow-up, the owner's ruling: so does the owner's automation at Apply, `origin.automationApply`, the Apply setting being the approval. A connection at scope `propose` and an automation code at Propose still make the canonical proposal.)
 - **Template copies take the template's tags** (and a page saved as a template its page's): they are judged as a
   create's tags, at entry and in the lock; a copy whose template's tags cannot be read is refused (R2-13).
 - **Where a page lands is judged inside the lock**, on its parent as LegendKeeper holds it now: a `[BWRK]`, `[BARC]` or

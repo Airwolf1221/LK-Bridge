@@ -316,6 +316,8 @@ export class RenameService {
     readonly items: readonly PlanItem[] | null;
     readonly approved: readonly string[] | null;
   }): { readonly waitFor?: WaitForShape } | null {
+    // v3 F6d follow-up: a proposal holding templated renames (page renames): which of its pages the owner approved.
+    if (this.pageRecords(ctx.proposal.id).length > 0) this.approvedPages.set(ctx.proposal.id, ctx.approved);
     const rec = this.renameOf(ctx.proposal, ctx.operation);
     const token =
       rec?.token ?? (isObj(ctx.operation?.token) ? (ctx.operation.token as unknown as RenameToken) : null);
@@ -362,8 +364,35 @@ export class RenameService {
   }
 
   private afterSubmit(proposal: ProposalView, jobId: string): void {
+    // v3 F6d follow-up: a proposal of templated renames (the automation's Propose batch, one item per page, or the
+    // dashboard's one page): each approved page's record follows the job; a page left out is closed.
+    const pages = this.pageRecords(proposal.id);
+    if (pages.length > 0) {
+      const approved = this.approvedPages.get(proposal.id) ?? null;
+      this.approvedPages.delete(proposal.id);
+      for (const r of pages) {
+        const kept =
+          approved === null ||
+          approved.includes(`page:${r.subjectId}`) ||
+          approved.includes(`name:${r.subjectId}`);
+        this.update(r.id, kept ? { state: 'running', jobId } : { state: 'closed' });
+      }
+      return;
+    }
     const rec = this.byProposal(proposal.id);
     if (rec) this.update(rec.id, { state: 'running', jobId });
+  }
+
+  /** v3 F6d follow-up: the approved items of a proposal of page renames, between its two hooks. */
+  private readonly approvedPages = new Map<string, readonly string[] | null>();
+
+  /** v3 F6d: the page renames (the templated names' page mode) a proposal holds. */
+  private pageRecords(proposalId: string): RenameRecord[] {
+    return (
+      this.d.db
+        .prepare(`SELECT * FROM pack_renames WHERE proposal_id = ? AND subject_kind = 'page'`)
+        .all(proposalId) as Row[]
+    ).map(toRecord);
   }
 
   /** "Propose these again": the new proposal is a rename of its own (the same subject and names). */
@@ -399,8 +428,16 @@ export class RenameService {
   }
 
   private onJob(job: JobView): void {
-    const rec = this.byJob(job.projectId, job.id);
-    if (!rec) return;
+    // v3 F6d follow-up: one job may carry several page renames (an approved Propose batch): each follows it.
+    const recs = (
+      this.d.db
+        .prepare('SELECT * FROM pack_renames WHERE project_id = ? AND job_id = ?')
+        .all(job.projectId, job.id) as Row[]
+    ).map(toRecord);
+    for (const rec of recs) this.followJob(rec, job);
+  }
+
+  private followJob(rec: RenameRecord, job: JobView): void {
     if (!TERMINAL.has(job.status)) {
       if (rec.state === 'stopped') this.update(rec.id, { state: 'running' });
       return;

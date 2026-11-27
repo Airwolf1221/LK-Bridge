@@ -7,7 +7,8 @@
  * - a finding no longer present is skipped and recorded (FIX_STALE); three skips in a row for one reason pause the code;
  * - the caps per code and per run are honoured;
  * - the first failed verification switches the code off, with the reason, and its paragraph says so;
- * - a guard catching a change makes an ordinary proposal and pauses the code;
+ * - at Apply an Authoritative page's change runs directly (the owner's ruling, F6d follow-up); a guard's refusal pauses
+ *   the code and proposes nothing;
  * - nothing runs while automation is paused, writes are paused or draining, or the project is read-only.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -169,30 +170,27 @@ describe('Apply automatically', () => {
     }
   });
 
-  it('a guard catching a change makes an ordinary proposal and pauses the code for review', async () => {
+  it('at Apply an Authoritative page’s rename runs directly (the owner’s ruling), read back, on the Review page', async () => {
+    // F6d follow-up (ADR 0057 decision 5 and ADR 0081 amended): the owner's Apply setting is the approval.
     await on('em_dash_name', 'apply');
-    const writes = w.requests().writes;
-    const run = await a().run(PROJECT, 'manual');
-    const guarded = items(run.id, 'em_dash_name').find((i) => i.pageId === DASH_ROLE)!;
-    expect(guarded).toMatchObject({ outcome: 'guarded', reasonCode: 'GUARDED' });
-    expect(guarded.reason).toMatch(/canon guard/);
-    const p = w.stack.runtime.policy.proposals.get(guarded.proposalId!)!;
-    expect(p.state).toBe('pending');
-    expect(p.principalId).toBe('automation');
-    expect(a().store.setting(PROJECT, 'em_dash_name')!.pausedReason).toMatch(/not as mechanical as assumed/);
-    // Nothing was written by the code (its only writes are none: the guard captured it).
-    expect(w.requests().writes).toBe(writes);
-    // Paused: the next run does nothing for it.
-    const next = await a().run(PROJECT, 'manual');
-    expect(items(next.id, 'em_dash_name')).toEqual([]);
-    a().resume('owner', PROJECT, 'em_dash_name');
+    const run = await a().run(PROJECT, 'manual', { onlyPages: new Set([DASH_ROLE]) });
+    const item = items(run.id, 'em_dash_name').find((i) => i.pageId === DASH_ROLE)!;
+    expect(item, JSON.stringify(item)).toMatchObject({
+      outcome: 'applied',
+      reason: 'written, read back and verified',
+    });
+    expect(item.proposalId).toBeNull();
+    expect((w.repo as any).res.get(DASH_ROLE).name).toMatch(/^\[BSRC\] Varn Harbour - Toll Ledger.*Annex$/);
+    expect((w.repo as any).res.get(DASH_ROLE).name).not.toContain('\u2014');
+    const job = w.stack.runtime.engine.queries.getJob(PROJECT, item.jobId!)!;
+    expect(job.principalId).toBe('automation');
+    expect(job.origin).toMatchObject({ automationApply: true });
+    expect(w.stack.runtime.review.store.get(PROJECT, job.id)).toMatchObject({ principalId: 'automation' });
+    expect(a().store.setting(PROJECT, 'em_dash_name')!.pausedAt ?? null).toBeNull();
     await on('em_dash_name', 'off');
-    w.stack.runtime.policy.commands.reject('owner', guarded.proposalId!, 'test');
   });
 
-  it('a guard refusing a change pauses the code (it stays on, and nothing is written)', async () => {
-    // The Authoritative page's dash is taken out in the app (its finding is stale now), so the Working pages are reached.
-    (w.repo as any).res.get(DASH_ROLE).name = '[BSRC] Varn Harbour - Toll Ledger Annex';
+  it('a guard refusing a change pauses the code (it stays on, nothing is written, nothing is proposed)', async () => {
     await on('em_dash_name', 'apply');
     const run = await a().run(PROJECT, 'manual');
     const got = items(run.id, 'em_dash_name');
@@ -204,9 +202,10 @@ describe('Apply automatically', () => {
     expect(s.mode).toBe('apply');
     expect(s.pausedReason).toMatch(/a guard refused it/);
     expect((w.repo as any).res.get(DASH_STRAY).name).toMatch(/\u2014Stray$/);
+    // The owner's ruling: Apply never turns into a proposal; a refusal is a refusal.
+    expect(stray.proposalId).toBeNull();
     a().resume('owner', PROJECT, 'em_dash_name');
     await on('em_dash_name', 'off');
-    if (stray.proposalId) w.stack.runtime.policy.commands.reject('owner', stray.proposalId, 'test');
   });
 
   it('three skips in a row for the same reason pause the code', async () => {

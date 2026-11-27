@@ -905,6 +905,27 @@ export type ReferenceTypeRules = z.infer<typeof referenceTypesRulesSchema>;
  * Classification › Structural names) as a new pack version the owner approves.
  */
 const indexName = text(200);
+/**
+ * v3 F6d (ADR 0082; design T13 as amended by the owner on 26 November 2026): an ordinary source is named
+ * `<Subject> - <Role>`: its Subject sidebar value as written, and the role word of its canonical Reference Type in the
+ * PUBLISHED vocabulary (`referenceTypes`). The vocabulary's approved specialist types are exempt (the Specialist
+ * exemption), and a registered character's pages keep the names the character tools give them. No new section is
+ * parsed: the reviewer's paragraph in Source Formatting's "Page Names and Templates" (pinned) shows as drift.
+ */
+export const templatedNamesRulesSchema = z
+  .object({
+    /** The template, as the governance states it. Only this form is known. */
+    template: z.literal('<Subject> - <Role>'),
+    /** The sidebar row that holds the Subject (the PROPERTIES key-value property's). */
+    subjectRow: text(100),
+    /** What is exempt: the vocabulary's approved specialist types (category-wide or named pages). */
+    exempt: z.literal('vocabulary-specialist-types'),
+    /** The ruling these rules follow (`rulings`). */
+    ruling: text(100),
+  })
+  .strict();
+export type TemplatedNamesRules = z.infer<typeof templatedNamesRulesSchema>;
+
 export const indexTaxonomyRulesSchema = z
   .object({
     /** The governance source holding the tag section (its key). */
@@ -1142,6 +1163,11 @@ export const packRulesSchema = z
      * report as before).
      */
     indexTaxonomy: indexTaxonomyRulesSchema.optional(),
+    /**
+     * v3 F6d (ADR 0082; design T13 as amended on 26 November 2026): templated source names (absent: no
+     * `name_nontemplated` check, no Templated Names report and no suggestion in the creation tools).
+     */
+    templatedNames: templatedNamesRulesSchema.optional(),
   })
   .strict()
   .superRefine((r, ctx) => {

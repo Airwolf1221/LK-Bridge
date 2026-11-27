@@ -20,6 +20,7 @@ import { ROOT } from '../discover/world.js';
 import { entryOf } from '../../src/automation/registry.js';
 import { indexTagSectionText } from '../../src/packs/indextax/rules.js';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
+import { withAutomationGovernance } from '../automation/world.js';
 
 vi.setConfig({ testTimeout: 180_000 });
 
@@ -30,6 +31,11 @@ const D = {
   source: 'nvsrc001', // [BSRC] Desk Notes
   linker: 'nvlink01', // a page linking to the group
 } as const;
+
+/** F6d follow-up: a CANON index (not in D: the earlier sections' findings are D's). */
+const KAPPA = 'nvkappa1';
+/** F6d follow-up: another CANON index, for the Propose check. */
+const LAMBDA = 'nvlamda1';
 
 let w: RetagWorld;
 const rt = () => w.stack.runtime;
@@ -45,7 +51,11 @@ const tagging = () =>
     .governance.find((g) => g.key === 'tagging-standard')!;
 
 beforeAll(async () => {
+  // Several full snapshots in one file: limits well above the mock's hour (bulk reads keep the night's floor).
+  const big = { 'key-min': 100_000, 'key-hour': 1_000_000, 'key-day': 10_000_000, 'project-hour': 1_000_000 };
   w = await retagWorld({
+    env: { LK_TIER_LIMITS: JSON.stringify(big) },
+    limits: big,
     seed: (world) => {
       const r = world.repo;
       r.seed({ id: D.desk, name: '[INDEX] Navigation Desk', parentId: ROOT });
@@ -53,6 +63,11 @@ beforeAll(async () => {
       r.seed({ id: D.group, name: '[INDEX] Zeta Group', parentId: D.desk, tags: ['Species', 'Navigation'] });
       r.seed({ id: D.source, name: '[BSRC] Desk Notes', parentId: D.desk, tags: ['CANON', 'Culture'] });
       r.seed({ id: D.linker, name: '[BSRC] Linker', parentId: D.desk, tags: ['CANON', 'Culture'] });
+      // F6d follow-up: a CANON index, Authoritative by its Status: its prefix and tags fixed at the automation's Apply.
+      r.seed({ id: KAPPA, name: '[INDEX] Kappa Group', parentId: D.desk, tags: ['CANON', 'Species'] });
+      r.outside.setRow(KAPPA, 'Status', 'Authoritative');
+      r.seed({ id: LAMBDA, name: '[NAV] Lambda Group', parentId: D.desk, tags: ['CANON', 'Navigation'] });
+      r.outside.setRow(LAMBDA, 'Status', 'Authoritative');
     },
   });
   // The Tagging Standard pins the new section (as the f6b seed does); it is not on the page yet.
@@ -82,7 +97,7 @@ describe('the pack while the tag section is unpublished', () => {
     expect(g.indexTags?.state).toBe('draft');
     expect(rt().packs.approvedRules('arkona')!.indexTaxonomy).toMatchObject({ status: 'draft' });
     expect(svc().auditInput(PROJECT)).toMatchObject({ navOrdering: true, tagsInForce: false });
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-28-f12'); // v3 F12 (ADR 0081): -f12 supersedes -f5b1
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-29-f6d'); // v3 F6d (ADR 0082): -f6d supersedes -f12
   });
 });
 
@@ -335,5 +350,87 @@ describe('create_index', () => {
       dryRun: true,
     });
     expect(r.text).toContain('[INDEX] Delta Person');
+  });
+});
+
+describe('the owner’s ruling (F6d follow-up): index_prefix and index_tags on a CANON page at Apply are direct', () => {
+  const run = (code: string, page = KAPPA) =>
+    rt().automation.run(PROJECT, 'manual', { onlyPages: new Set([page]), codes: new Set([code]) });
+  const item = (runId: string, code: string) =>
+    rt()
+      .automation.store.items(runId)
+      // A proposal-first code's items are keyed by their finding: the run acted on this page only (onlyPages).
+      .find((i) => i.code === code);
+  beforeAll(async () => {
+    await svc().prepare(PROJECT);
+    svc().decide('owner', PROJECT, { pageId: KAPPA, action: 'change', role: 'nav' });
+    const lambda = svc().row(PROJECT, LAMBDA);
+    svc().decide(
+      'owner',
+      PROJECT,
+      lambda?.proposed === 'nav'
+        ? { pageId: LAMBDA, action: 'approve' }
+        : { pageId: LAMBDA, action: 'change', role: 'nav' },
+    );
+    await withAutomationGovernance(w);
+    await w.snapshot();
+  });
+
+  it('index_prefix: ONE direct job (no proposal), read back, on the Review page', async () => {
+    const f = rt()
+      .audits.store.list(PROJECT, { code: ['index_prefix'], state: 'open', limit: 500 })
+      .findings.find((x) => x.pageId === KAPPA);
+    expect(f?.fix).toMatchObject({ kind: 'index_prefix', args: { to: '[NAV] Kappa Group' } });
+    await rt().automation.setMode('owner', PROJECT, 'index_prefix', 'apply');
+    const r = await run('index_prefix');
+    const it0 = item(r.id, 'index_prefix');
+    expect(it0, r.summary ?? '').toMatchObject({ outcome: 'applied', proposalId: null });
+    expect(live(KAPPA).name).toBe('[NAV] Kappa Group');
+    const job = rt().engine.queries.getJob(PROJECT, it0!.jobId!)!;
+    expect(job.origin).toMatchObject({ automationApply: true });
+    expect(rt().review.store.get(PROJECT, job.id)).toMatchObject({ principalId: 'automation' });
+    await rt().automation.setMode('owner', PROJECT, 'index_prefix', 'off');
+  });
+
+  it('index_tags: CANON taken off at Apply in ONE direct job (no canonical proposal), read back', async () => {
+    await w.snapshot();
+    const f = rt()
+      .audits.store.list(PROJECT, { code: ['index_tags'], state: 'open', limit: 500 })
+      .findings.find((x) => x.pageId === KAPPA);
+    expect(f?.fix?.args).toMatchObject({ current: ['CANON', 'Species'], proposed: ['Navigation'] });
+    await rt().automation.setMode('owner', PROJECT, 'index_tags', 'apply');
+    const r = await run('index_tags');
+    const it1 = item(r.id, 'index_tags');
+    expect(it1, r.summary ?? '').toMatchObject({ outcome: 'applied', proposalId: null });
+    expect(live(KAPPA).tags).toEqual(['Navigation']);
+    const job = rt().engine.queries.getJob(PROJECT, it1!.jobId!)!;
+    expect(job.origin).toMatchObject({ automationApply: true });
+    expect(rt().review.store.get(PROJECT, job.id)).toMatchObject({ principalId: 'automation' });
+    await rt().automation.setMode('owner', PROJECT, 'index_tags', 'off');
+  });
+
+  it('at Propose nothing changes: the canonical change is a canonical proposal', async () => {
+    await rt().automation.setMode('owner', PROJECT, 'index_tags', 'propose');
+    const r = await run('index_tags', LAMBDA);
+    const it2 = item(r.id, 'index_tags');
+    expect(it2, r.summary ?? '').toMatchObject({ outcome: 'proposed' });
+    expect(rt().policy.proposals.get(it2!.proposalId!)!.requiresCanonicalApproval).toBe(true);
+    expect(live(LAMBDA).tags).toEqual(['CANON', 'Navigation']);
+    rt().policy.commands.reject('owner', it2!.proposalId!, 'test');
+  });
+
+  it('the marker is the automation’s own: on any other principal or origin the engine refuses it', async () => {
+    await expect(
+      rt().engine.submit({
+        kind: 'batch_ops',
+        project: PROJECT,
+        steps: [
+          { op: 'updateResource', params: { path: { resourceId: KAPPA }, body: { name: '[NAV] Kappa X' } } },
+        ],
+        onError: 'stop',
+        origin: { kind: 'ui', client: 'owner', tool: 'test', automationApply: true },
+      } as never),
+    ).rejects.toThrow(/automationApply can only be set by the automation engine/);
+    expect(live(KAPPA).name).toBe('[NAV] Kappa Group');
   });
 });

@@ -100,10 +100,18 @@ export interface CodeEntry {
   /**
    * v3 F7.1 (ADR 0072): a `propose` code whose fix may also run as a job once the owner switches it to Apply (Off,
    * Propose or Apply; default Propose): submitted as the Automation principal without being forced into a proposal, so
-   * every guard judges it as it judges any write (the canon guard keeps an Authoritative page's rename a canonical
-   * proposal). Only the owner's switch allows it.
+   * every guard judges it as it judges any write. F6d follow-up (the owner's ruling): at Apply it is direct, canon
+   * included (the owner's Apply setting is the approval), and a guard only allows or refuses. Only the owner's switch
+   * allows it.
    */
   readonly applyDirect?: true;
+  /**
+   * v3 F6d (ADR 0082; F12's division, ADR 0081): a proposal-first audit code whose Propose is ONE proposal per run, an
+   * item per page, and whose Apply is ONE job per page, read back; at Apply nothing is forced into a proposal (a guard's
+   * proposal would be recorded as guarded, and the run goes on; since the F6d follow-up Apply is direct, canon included). The run takes the findings in their `order`
+   * (the check's run order). Only with `automatable: 'propose'` and `applyDirect`.
+   */
+  readonly batch?: true;
   /**
    * v3 F10 (ADR 0078): a chronology code's finding (the chronology check's own kind, read from its newest successful
    * run) and the fix the chronology module plans for it.
@@ -129,6 +137,13 @@ export class AutomationFlagError extends Error {
 export function defineCode(e: CodeEntry): CodeEntry {
   if (e.defaultMode === 'propose' && e.automatable !== 'propose')
     throw new AutomationFlagError(`${e.code} cannot default to Propose: only a proposal-only code can.`);
+  if (
+    e.batch === true &&
+    (e.automatable !== 'propose' || e.applyDirect !== true || e.source !== 'audit' || !e.target)
+  )
+    throw new AutomationFlagError(
+      `${e.code}: a batch code is a proposal-first audit code with Apply allowed and a read-back target.`,
+    );
   if (e.applyDirect === true && e.automatable !== 'propose')
     throw new AutomationFlagError(`${e.code}: only a proposal-only audit code can allow a direct Apply.`);
   if (e.automatable === 'propose' && e.source !== 'audit' && e.source !== 'chronology')
@@ -541,7 +556,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       '[INDEX] Kamigawa Shirahime holds her Compact Character Reference and her Character Art: the Reference becomes “Kamigawa Shirahime - Character Core”.',
     transformation:
-      'ONE proposal per character: arkona_create_character’s upgrade (target, upgradeToCore) of its Compact Character Reference, read live first: renamed “<Name> - Character Core”, Reference Type Character Core, the Core template recorded, its compact wording replaced, the images its Art page holds removed from it (those the Art page lacks moved there first); its id, identity facts, links and prose kept. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s rename stays a canonical proposal',
+      'ONE proposal per character: arkona_create_character’s upgrade (target, upgradeToCore) of its Compact Character Reference, read live first: renamed “<Name> - Character Core”, Reference Type Character Core, the Core template recorded, its compact wording replaced, the images its Art page holds removed from it (those the Art page lacks moved there first); its id, identity facts, links and prose kept. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['fact', 'canon'],
     target: 'resource',
     changes: ['name', 'properties'],
@@ -556,7 +571,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       '“This compact reference owns her identity.” on Emine al-Noor - Character Core becomes “This Character Core owns her identity.”',
     transformation:
-      'ONE proposal per character: the Character Core upgrade’s own wording rules (“Compact Main CANON reference” → “Main CANON Character Core”; “compact (character) reference” → “Character Core”; on the Art page, “her character reference” → “her Character Core”) applied to the named blocks inside the lock, the Art page first, both pages read live first; any other sentence saying “compact” listed, never edited. Apply (only when the owner switches it) submits the same job, every guard judging it',
+      'ONE proposal per character: the Character Core upgrade’s own wording rules (“Compact Main CANON reference” → “Main CANON Character Core”; “compact (character) reference” → “Character Core”; on the Art page, “her character reference” → “her Character Core”) applied to the named blocks inside the lock, the Art page first, both pages read live first; any other sentence saying “compact” listed, never edited. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['text_punctuation', 'canon'],
     target: 'document',
     changes: [],
@@ -572,7 +587,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       'Iuno - Character Art, its Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture and Aliases empty, gets “Iuno”, “Aela”, “Iunoreuna”, “Vitran” and “Iunoreuna Aela” from her Character Core.',
     transformation:
-      'ONE proposal per page: set_facts of the copyable identity fields (Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture, Aliases; only the rows the page has, never Temporal Scope, Race / Species or Life State) to the identity page’s values, both pages read live first (FIX_STALE when either changed since the audit), the rows checked in the lock, the writes If-Match chained, journalled and read back. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s change is what the canon guard decides',
+      'ONE proposal per page: set_facts of the copyable identity fields (Subject, Canonical Display Name, Family / Surname, Personal / Given Name, Naming Culture, Aliases; only the rows the page has, never Temporal Scope, Race / Species or Life State) to the identity page’s values, both pages read live first (FIX_STALE when either changed since the audit), the rows checked in the lock, the writes If-Match chained, journalled and read back. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['fact', 'canon'],
     target: 'resource',
     changes: ['properties'],
@@ -588,7 +603,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       '“Historical Cultural Reference” on a Culture page, which the owner mapped to “Culture Reference”, becomes “Culture Reference”.',
     transformation:
-      'ONE proposal per page: set_facts of one sidebar field, Reference Type, to the value the owner mapped it to on the Reference Types page (only findings with an approved mapping have a fix), the row read live first and checked in the lock, its write If-Match chained, journalled and read back. The order is the owner’s: approve mappings, then switch to Propose, then Apply. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s change is what the canon guard decides',
+      'ONE proposal per page: set_facts of one sidebar field, Reference Type, to the value the owner mapped it to on the Reference Types page (only findings with an approved mapping have a fix), the row read live first and checked in the lock, its write If-Match chained, journalled and read back. The order is the owner’s: approve mappings, then switch to Propose, then Apply. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['fact', 'canon'],
     target: 'resource',
     changes: ['properties'],
@@ -603,7 +618,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       '“[INDEX] High Humans”, approved as a navigation index on the Index Classification page, becomes “[NAV] High Humans”.',
     transformation:
-      'ONE proposal per index the owner approved on the Index Classification page: one updateResource renaming the prefix only ([INDEX] ↔ [NAV]); the display name, the id, the parent, the tags and every link stay. The page read live first (a name changed since: nothing proposed), checked inside the lock, read back; the proposal shows the name before and after. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s rename is what the canon guard decides. Once T11’s order is approved, out_of_order then re-places a renamed [NAV] first among its siblings, within the caps',
+      'ONE proposal per index the owner approved on the Index Classification page: one updateResource renaming the prefix only ([INDEX] ↔ [NAV]); the display name, the id, the parent, the tags and every link stay. The page read live first (a name changed since: nothing proposed), checked inside the lock, read back; the proposal shows the name before and after. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses. Once T11’s order is approved, out_of_order then re-places a renamed [NAV] first among its siblings, within the caps',
     traits: ['rename', 'canon'],
     target: 'resource',
     changes: ['name'],
@@ -618,7 +633,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       '“[NAV] High Humans” tagged “Species, Navigation” is tagged “Navigation”; “[INDEX] Miyubi Sakura” tagged “CANON, Character” is tagged “Character”.',
     transformation:
-      'ONE proposal per index the owner approved: one updateResource setting its tags to T11’s rule (a [NAV] exactly the navigation tag; an [INDEX] exactly its subject’s primary category; never CANON), through the retag engine’s own write path: a fresh read (a renamed or moved page, or tags changed since, is skipped and recorded), the write judged again inside the lock (never rebased onto a newer array), and the retag read-back (the exact array; name, aliases, parentage, sidebar and every document’s body unchanged). Tags never date a page; taking CANON (or AU) off an index is always the owner’s canonical approval, whatever the mode. Only once the Tagging Standard’s “Navigation and Subject Index Tags” section is published and approved. Apply (only when the owner switches it) submits the same job, every guard judging it',
+      'ONE proposal per index the owner approved: one updateResource setting its tags to T11’s rule (a [NAV] exactly the navigation tag; an [INDEX] exactly its subject’s primary category; never CANON), through the retag engine’s own write path: a fresh read (a renamed or moved page, or tags changed since, is skipped and recorded), the write judged again inside the lock (never rebased onto a newer array), and the retag read-back (the exact array; name, aliases, parentage, sidebar and every document’s body unchanged). Tags never date a page; taking CANON (or AU) off an index is always the owner’s canonical approval, whatever the mode. Only once the Tagging Standard’s “Navigation and Subject Index Tags” section is published and approved. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['tags', 'canon'],
     target: 'resource',
     changes: ['tags'],
@@ -634,7 +649,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       '“[NAV] Government & Institutions” in Cantha, accepted on the Nation Subindexes page as its Government & Administration, becomes “[NAV] Cantha Government & Administration”.',
     transformation:
-      'ONE proposal per subindex the owner accepted or mapped on the Nation Subindexes page (undecided rows wait there; two subindexes for one role are never renamed): one updateResource of the display name to <Nation> <Role> (the short name first), the prefix, the id, the parent, the tags and every link kept. The owner’s decision and the page read live first (either changed since the finding: nothing proposed), checked inside the lock, read back; the proposal shows the name before and after. Apply (only when the owner switches it) submits the same job, every guard judging it: an Authoritative page’s rename is what the canon guard decides',
+      'ONE proposal per subindex the owner accepted or mapped on the Nation Subindexes page (undecided rows wait there; two subindexes for one role are never renamed): one updateResource of the display name to <Nation> <Role> (the short name first), the prefix, the id, the parent, the tags and every link kept. The owner’s decision and the page read live first (either changed since the finding: nothing proposed), checked inside the lock, read back; the proposal shows the name before and after. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['rename', 'canon'],
     target: 'resource',
     changes: ['name'],
@@ -648,7 +663,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
     example:
       'Salahad has no Regions index: “[NAV] Salahad Regions” is made in it, empty, and bound as its Regions.',
     transformation:
-      'ONE proposal per missing category of a Territory entry (never under Lost Realmships or Divine Realms): create_index’s role form makes the empty [NAV] <Territory> <Category> from the “[NAV] AI Navigation” template, in its place by T11’s order with its tags (Conflicts inside the bound Historical Events), refused when the role is bound meanwhile; the role binding is recorded once the job succeeds. Apply (only when the owner switches it) submits the same job, every guard judging it',
+      'ONE proposal per missing category of a Territory entry (never under Lost Realmships or Divine Realms): create_index’s role form makes the empty [NAV] <Territory> <Category> from the “[NAV] AI Navigation” template, in its place by T11’s order with its tags (Conflicts inside the bound Historical Events), refused when the role is bound meanwhile; the role binding is recorded once the job succeeds. Apply (only when the owner switches it) submits the same job directly, canon included (your Apply setting is the approval; F6d follow-up), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['create'],
     target: 'resource',
     changes: [],
@@ -663,6 +678,22 @@ export const CATALOGUE: readonly CodeEntry[] = [
     transformation:
       'none: moving a source to another home is the owner’s judgement (the finding offers ONE move proposal to the nearest allowed home, or “Keep it here”)',
     traits: ['judgement'],
+  }),
+  // ======================================================================== v3 F6d (ADR 0082): default Off, Propose one batch, Apply per page
+  defineCode({
+    code: 'name_nontemplated',
+    source: 'audit',
+    name: 'Templated source name (<Subject> - <Role>)',
+    example:
+      '“[BSRC] Falkenreich Polity Reference”, Subject Falkenreich, Reference Type Polity Reference (role word Polity), becomes “[BSRC] Falkenreich - Polity”.',
+    transformation:
+      'Propose: ONE proposal per run, an item per page; Apply: ONE job per page, read back. Each page is renamed to <Subject> - <Role> (its Subject as written, the role word of its canonical Reference Type in the published vocabulary) through the rename engine (arkona_rename’s path, its page mode): the page re-placed among its siblings, routing lines naming the old name following, plain mentions showing the new name by themselves; the id, the prefix, the tags and every link stay; other text naming the old name and custom mention labels are listed for review, never edited. Only rows the Templated Names page shows as rename: never a page held (no Subject, a type not canonical, a collision with a sibling or with another rename of the run), exempt (an approved specialist type), kept by the owner, or a registered character’s. The page read live first (its name, Subject or Reference Type changed since the finding: nothing done), checked inside the lock. Pages in the order primary category, then name. At Apply each job is direct, an Authoritative page’s rename included (your Apply setting is the approval), on the Review page with Revert; a guard’s refusal still refuses',
+    traits: ['rename', 'canon'],
+    target: 'resource',
+    changes: ['name', 'rank'],
+    automatable: 'propose',
+    applyDirect: true,
+    batch: true,
   }),
   // ======================================================================== v3 F10 (ADR 0078): the chronology, default Propose, Apply allowed
   defineCode({

@@ -90,6 +90,8 @@ export const projectSettingsSchema = z
     checkNationSubindexNames: z.boolean().optional(),
     checkTerritoryCategories: z.boolean().optional(),
     checkCategoryHomes: z.boolean().optional(),
+    /** v3 F6d (ADR 0082): `name_nontemplated` (default on; off, the report is still built). */
+    checkTemplatedNames: z.boolean().optional(),
   })
   .loose();
 
@@ -328,6 +330,14 @@ export const PROJECT_SETTING_KEYS: readonly {
     default: true,
     editable: true,
     help: 'On: category_home_mismatch reports a source whose primary category tag is not allowed in its current home by the pack’s homes, resolved by role. Off: the check reports nothing for this project.',
+  },
+  {
+    key: 'checkTemplatedNames',
+    label: 'Audits: templated source names',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'On: name_nontemplated reports a source whose name is not yet <Subject> - <Role> (its Subject and its Reference Type’s role word), when the rename is known and free. Off: the check reports nothing for this project; the Templated Names page still shows every row.',
   },
   {
     key: 'lmrAuditSplit',

@@ -37,6 +37,7 @@ import { TaggingPage } from './pages/tagging';
 import { ReferenceTypesPage } from './pages/reference-types';
 import { IndexClassificationPage } from './pages/index-classification';
 import { NationSubindexesPage } from './pages/nation-subindexes';
+import { TemplatedNamesPage } from './pages/templated-names';
 import { AutomationPage } from './pages/automation';
 import { WorkstreamsPage } from './pages/workstreams';
 import { EvaluationPanel } from './pages/evaluation';
@@ -105,6 +106,7 @@ export const NAV: NavItem[] = [
   { to: '/index-classification', label: 'Index Classification', group: 'Setup' },
   // v3 F6c (ADR 0080): a nation's subindexes, beside Reference Types and Index Classification.
   { to: '/nation-subindexes', label: 'Nation Subindexes', group: 'Setup' },
+  { to: '/templated-names', label: 'Templated Names', group: 'Setup' },
   { to: '/settings', label: 'Settings', group: 'Setup' },
 ];
 
@@ -162,6 +164,7 @@ export const ROUTES: { path: string; prefix?: boolean; render: (session: Session
   { path: '/reference-types', render: () => <ReferenceTypesPage /> },
   { path: '/index-classification', render: () => <IndexClassificationPage /> },
   { path: '/nation-subindexes', render: () => <NationSubindexesPage /> },
+  { path: '/templated-names', render: () => <TemplatedNamesPage /> },
 ];
 
 /** The Evaluation helper on a page of its own (it is also a panel on Tool calls), open from the start. */

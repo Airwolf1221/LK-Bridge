@@ -27,6 +27,7 @@ import { isLifecycleIndexName } from '../lifecycle/guard.js';
 import { childrenByRank, SnapshotTree } from './snapshot-tree.js';
 import type { UnknownWriteItem } from '../jobs/reconcile.js';
 import type { ReferenceTypeAuditInput } from '../packs/reftypes/service.js';
+import type { TemplatedNamesAuditInput } from './checks/templated-names.js';
 
 /** A lifecycle record or set record that stopped part-way (the audit reports it with its pages). */
 export interface IncompleteRecord {
@@ -132,6 +133,11 @@ export interface AuditContext {
    * their bindings, the role view and the owner's rulings (null: the approved pack carries no nation roles).
    */
   readonly nationTaxonomy?: NationAuditInput | null;
+  /**
+   * v3 F6d (ADR 0082): templated source names: the approved rules, the vocabulary in force, the owner's "Keep this name"
+   * rulings and the project's switch (null: the approved pack carries no templated names).
+   */
+  readonly templatedNames?: TemplatedNamesAuditInput | null;
   /** v3 F4c: every page under Narratives (narrative pages: E2's exemptions), worked out by `makeContext`. */
   readonly narrativeIds?: ReadonlySet<string>;
 }

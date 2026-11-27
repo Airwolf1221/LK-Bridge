@@ -25,6 +25,8 @@ import { OutfitStore } from './art/store.js';
 import { PACK_CHECKS } from './packs/engine/job.js';
 import { addPackTaxonomyEntry, renamePackTaxonomyEntry } from './packs/taxonomy.js';
 import { NationTaxonomyService } from './packs/nations/service.js';
+import { TemplatedNamesService } from './packs/names/service.js';
+import { bridgeTemplatedRenamer, recordTemplatedRename } from './packs/names/rename-fix.js';
 import { ROLE_RECORD_STORE } from './packs/nations/records.js';
 import { bridgeTerritoryCategoryCreator } from './packs/nations/category-fix.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
@@ -241,6 +243,8 @@ export interface Runtime {
   readonly indexClassify: IndexClassifyService;
   /** v3 F6c (ADR 0080): territories, nations and their subindexes (seeding, roles, the report, the checks' input). */
   readonly nationTaxonomy: NationTaxonomyService;
+  /** v3 F6d (ADR 0082): the Templated Names report, the owner's "Keep this name" and the check's input. */
+  readonly templatedNames: TemplatedNamesService;
   /** v3 F6a.1: background work actions start (governance re-checks, "Run audit now"), awaited on stop. */
   readonly background: BackgroundRunner;
   /** v3 F5a (ADR 0067, H10): the reconciliation of writes whose outcome is unknown. */
@@ -965,6 +969,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
   });
   nationRef.current = nationTaxonomy;
+  // v3 F6d (ADR 0082): templated source names: the check's input and the Templated Names report (from each audit run).
+  const templatedNames = new TemplatedNamesService({
+    db: o.db,
+    packs,
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+  });
   const unregisterRoleRecords = engine.registerRecordHandler((job, _step, params) => {
     const r = ((params.body ?? {}) as { record?: Record<string, unknown> }).record ?? {};
     if (
@@ -1016,6 +1028,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     // v3 F6c (ADR 0080): territories, nations and their subindexes (the three checks), and the rename fix's stale check.
     nationTaxonomy: (projectId) => nationTaxonomy.auditInput(projectId),
     nationSubindexDecision: (projectId, pageId) => nationTaxonomy.decisionNow(projectId, pageId),
+    // v3 F6d (ADR 0082): templated source names (name_nontemplated) and the report each run stores for the dashboard.
+    templatedNames: (projectId) => templatedNames.auditInput(projectId),
+    templatedNamesSink: (projectId, meta, rows) => templatedNames.sink(projectId, meta, rows),
     referenceTypeDecision: (projectId, id) => referenceTypes.decisionNow(projectId, id),
     // v3 F4b (ADR 0064): the Contradictory pairs of the consistency check (its facts index over the same snapshots).
     consistency: async (projectId) =>
@@ -1533,6 +1548,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       info: (obj, msg) => log.info(obj, msg),
       warn: (obj, msg) => log.warn(obj, msg),
     },
+    // v3 F6d (ADR 0082): the rename engine's record follows the automation's templated renames.
+    afterBatch: (projectId, req, ids) => recordTemplatedRename(renames, projectId, req, ids),
   });
   const detachAutomation = automation.start();
   automationRef.current = automation;
@@ -1713,6 +1730,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   audits.setCoreUpgrader(bridgeCoreUpgrader(toolDeps));
   // v3 F6c (ADR 0080): the audit's territory_category fix, made through create_index's own role form.
   audits.setTerritoryCategoryCreator(bridgeTerritoryCategoryCreator(toolDeps));
+  // v3 F6d (ADR 0082): the audit's templated_name fix, through the rename engine's page mode (arkona_rename's path).
+  audits.setTemplatedRenamer(bridgeTemplatedRenamer(toolDeps));
   // v3 F4b (ADR 0064, D6): the owner's pick is one proposal, planned with the tool layer (the chronology's row tools).
   consistency.setPicker(bridgePicker(toolDeps));
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
@@ -1839,6 +1858,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     referenceTypes,
     indexClassify,
     nationTaxonomy,
+    templatedNames,
     background,
     outcomes,
     automation,

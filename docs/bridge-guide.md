@@ -1241,6 +1241,21 @@ has one ("Cantha Settlements & Locations", "Jabal al-Noor Military & Technology"
   (`nation_subindex_nonstandard`); a missing category is `territory_category_missing`; a source outside its category's
   homes is `category_home_mismatch`, a move the owner judges. Never rename, move or merge these indexes yourself.
 
+### Templated names
+
+An ordinary source is named **`<Subject> - <Role>`**: its Subject sidebar value exactly as written, and the role word
+of its canonical Reference Type in the published vocabulary (`arkona_reference_types` lists each type with its role
+word: Polity Reference → `Falkenreich - Polity`, Language & Naming Reference → `Shahravi - Language & Naming`). The
+prefix stays (`[BSRC]`, `[BWRK]`, `[BARC]`). An approved specialist type keeps its unique name, and a character's pages
+keep the names the character tools give them.
+
+- **Creating a source:** when its Subject and Reference Type are known, name it by the template. `create_resource` and
+  `arkona_create_owner` say `templatedName` in their result when the name you gave differs; they never refuse it (the
+  audit's `name_nontemplated` catches it later).
+- **Never rename existing sources to the template yourself**, and never with `update_resource`: the owner runs those
+  renames from the Templated Names page and the automation (`name_nontemplated`, through the rename engine). A Subject
+  holding an em dash, or no Subject at all, is held until the Subject is fixed.
+
 ## Many pages at once: query_facts and workstreams
 
 **`query_facts`** returns the same fields of many pages as ONE compact table (`columns` once, then `rows` as arrays;

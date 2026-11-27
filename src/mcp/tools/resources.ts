@@ -99,6 +99,7 @@ import { sidebarFrom } from '../../facts/sidebar.js';
 import { subjectRenameRefusal } from '../../packs/rename/guard.js';
 import { creationCheck } from '../../packs/reftypes/service.js';
 import { categoryFromTags, vocabularyOf } from '../../packs/retag/engine.js';
+import { templatedNameFor } from '../../packs/names/template.js';
 
 export const CREATE_ANNOTATIONS = {
   readOnlyHint: false,
@@ -374,6 +375,34 @@ function referenceTypeCheck(
   if (!rules?.referenceTypes) return null;
   const c = categoryFromTags(tags, vocabularyOf(rules));
   return creationCheck(rules, value, 'primary' in c ? c.primary : null);
+}
+
+/**
+ * v3 F6d (ADR 0082): a new source's templated name (its prefix kept) when the name given differs, from the approved pack
+ * of the project (null: no template known, or the name is the template already).
+ */
+function templatedSuggestion(
+  pd: ProjectDeps,
+  projectId: string,
+  rawName: string,
+  facts: Readonly<Record<string, FactInput>> | undefined,
+  tags: readonly string[],
+): string | null {
+  const rules = pd.services?.referenceTypes?.packFor(projectId)?.approved ?? null;
+  if (!rules?.templatedNames) return null;
+  const factOf = (key: string) => {
+    const e = Object.entries(facts ?? {}).find(([k]) => k.trim().toLowerCase() === key.toLowerCase());
+    return e && typeof e[1] === 'string' && e[1].trim() !== '' ? e[1].trim() : null;
+  };
+  const c = categoryFromTags(tags, vocabularyOf(rules));
+  const display = classifyName(rawName).displayName;
+  const t = templatedNameFor(rules, {
+    displayName: display,
+    subject: factOf(rules.templatedNames.subjectRow),
+    referenceType: factOf('Reference Type'),
+    category: 'primary' in c ? c.primary : null,
+  });
+  return t ? `${rawName.slice(0, rawName.length - display.length)}${t}` : null;
 }
 
 const refusal = (pd: ProjectDeps, code: string, message: string, more: Obj = {}): CreateOutcome => ({
@@ -816,7 +845,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a page from a template',
     access: 'write',
     description:
-      'Creates a page from a template (`template` is required: a name or id, see list_templates), in its alphabetical place. `status` "working" (default): a [BWRK] page under [INDEX] Working (leave `parent` out) or, to build a Working character one page at a time, under that character’s own [INDEX] (`parent` = the index create_character made); any other parent is refused (WORKING_PARENT). "authoritative": a [BSRC] page under `parent`: canon, direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose. Optional `facts` and `links` (as in set_facts) are written in the same job. Characters are create_character, indexes create_index; a page with no template is rare (create_bare_resource, which the owner lists with “Show low-level and rarely used tools”). A page of the same name under the same parent is refused. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 6 writes with a few facts.',
+      'Creates a page from a template (`template` is required: a name or id, see list_templates), in its alphabetical place. `status` "working" (default): a [BWRK] page under [INDEX] Working (leave `parent` out) or, to build a Working character one page at a time, under that character’s own [INDEX] (`parent` = the index create_character made); any other parent is refused (WORKING_PARENT). "authoritative": a [BSRC] page under `parent`: canon, direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose. Optional `facts` and `links` (as in set_facts) are written in the same job. Characters are create_character, indexes create_index; a page with no template is rare (create_bare_resource, which the owner lists with “Show low-level and rarely used tools”). A page of the same name under the same parent is refused. On a pack project a source is named <Subject> - <Role> once the vocabulary is published: when `facts` give its Subject and Reference Type and the name differs, the result says `templatedName` (never a refusal). dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 6 writes with a few facts.',
     inputSchema: z.object({
       name: z
         .string()
@@ -914,11 +943,20 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
             return refusal(pd, 'REFERENCE_TYPE_NOT_IN_VOCABULARY', rtCheck.message ?? '', {
               ...(rtCheck.nearest ? { nearest: rtCheck.nearest } : {}),
             });
+          // v3 F6d (ADR 0082): the templated name, suggested when the name given differs (never a refusal).
+          const templatedName = templatedSuggestion(pd, ctx.projectId, page.rawName, args.facts, tags);
           return finishCreate(cc, [{ ...page, facts: facts.value, tags }], {
             batch: false,
             dryRun: args.dryRun === true,
             extraHead: {
               lifecycleStatus: status,
+              ...(templatedName
+                ? {
+                    templatedName,
+                    templatedNameNote:
+                      'The template <Subject> - <Role> names this source so; the name given is kept (name_nontemplated reports it later). Name it so when you create a source whose Subject and Reference Type are known.',
+                  }
+                : {}),
               ...(rtCheck?.verdict === 'warn'
                 ? {
                     warnings: [

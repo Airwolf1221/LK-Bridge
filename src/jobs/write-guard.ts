@@ -128,6 +128,15 @@ export function combineGuards(...guards: readonly WriteGuard[]): WriteGuard {
 /** The automation engine's principal (`AUTOMATION_PRINCIPAL` in types.ts; kept as a literal to avoid a cycle). */
 const AUTOMATION_PRINCIPAL_ID = 'automation';
 
+/** v3 F6d follow-up: the owner's automation at Apply (the marker on the Automation principal's maintenance origin). */
+function automationApply(principalId: string, origin: Pick<JobOrigin, 'kind' | 'automationApply'>): boolean {
+  return (
+    principalId === AUTOMATION_PRINCIPAL_ID &&
+    origin.kind === 'maintenance' &&
+    origin.automationApply === true
+  );
+}
+
 /** An agent's own principal: neither the bridge's (`system`) nor the automation engine's. */
 function isAgentPrincipal(principalId: string): boolean {
   return principalId !== SYSTEM_PRINCIPAL.principalId && principalId !== AUTOMATION_PRINCIPAL_ID;
@@ -139,19 +148,22 @@ function isAgentPrincipal(principalId: string): boolean {
  *
  * - an agent's request the policy gate allowed (scope `write`) that no approval carries and bridge code did not force
  *   into a proposal;
- * - the owner's confirmed dashboard action (`origin.ownerConfirmed`, the system principal on a dashboard origin).
+ * - the owner's confirmed dashboard action (`origin.ownerConfirmed`, the system principal on a dashboard origin);
+ * - v3 F6d follow-up (the owner's ruling; ADR 0057 decision 5 and ADR 0081 amended): the owner's automation at Apply
+ *   (`origin.automationApply`, the Automation principal on a maintenance origin): the owner's Apply setting is the
+ *   approval. Its codes at Propose force proposals, so they never reach this as `allow`.
  *
- * The automation engine's requests are never direct here: its codes at Propose make proposals, and at Apply the guards
- * judge it as before (ADR 0068). Work at scope `propose` is a proposal at the gate and never reaches this as `allow`.
+ * Work at scope `propose` is a proposal at the gate and never reaches this as `allow`.
  */
 export function directWrite(input: {
   readonly principal: { readonly principalId: string };
-  readonly origin: Pick<JobOrigin, 'kind' | 'approval' | 'approvedBy' | 'ownerConfirmed'>;
+  readonly origin: Pick<JobOrigin, 'kind' | 'approval' | 'approvedBy' | 'ownerConfirmed' | 'automationApply'>;
   readonly gate: 'allow' | 'propose';
 }): boolean {
   if (input.gate !== 'allow') return false;
   if (input.origin.approval !== undefined || input.origin.approvedBy !== undefined) return false;
   if (isAgentPrincipal(input.principal.principalId)) return true;
+  if (automationApply(input.principal.principalId, input.origin)) return true;
   return (
     input.principal.principalId === SYSTEM_PRINCIPAL.principalId &&
     input.origin.kind === 'ui' &&
@@ -168,6 +180,7 @@ export function directWrite(input: {
 export function directJob(job: Pick<JobView, 'principalId' | 'approvedBy' | 'origin'>): boolean {
   if (job.approvedBy !== null || job.origin.canonicalApprovedBy !== undefined) return false;
   if (isAgentPrincipal(job.principalId)) return true;
+  if (automationApply(job.principalId, job.origin)) return true;
   return (
     job.principalId === SYSTEM_PRINCIPAL.principalId &&
     job.origin.kind === 'ui' &&

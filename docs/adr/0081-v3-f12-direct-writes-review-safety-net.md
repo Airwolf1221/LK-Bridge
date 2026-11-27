@@ -228,3 +228,21 @@ Tests: `test/lifecycle/f12-rename-status.test.ts`, `test/lifecycle/f12-lookalike
 `test/unit/confusables.test.ts`, `test/chronology/f12-link.test.ts`, `test/lifecycle/f12-dry-run.test.ts`, the dry run
 at scope write in `test/resources/resources.test.ts` and `test/packs/character.test.ts`; RV2-3, F3 (cr-canon-bypass),
 C2b (canon-lifecycle), and the chronology link tests updated to the new rules.
+
+## Amendment 2 (29 November 2026): the owner's automation at Apply is direct (the owner's ruling, F6d follow-up)
+
+Ruling 1 now reads: a proposal is made only by a connection at scope `propose`, or by the owner's own automation for a
+code at **Propose**. At **Apply** the owner's setting is the approval: the automation's requests are direct, canon and
+lifecycle changes included, as D1 made an agent's at scope `write`. `directWrite` and `directJob` take a third case, the
+Automation principal on a maintenance origin carrying `automationApply` (bridge code only; the engine refuses the marker
+anywhere else, as it refuses `ownerConfirmed`); the guards answer it `allow` or `refuse`, never `propose`, and
+`combineGuards`' fail-closed rule applies to it as to every direct request. Refusals stay (a prefix disagreeing with
+Status, a look-alike value, a lifecycle index): the code pauses for the owner's review and no proposal is made in its
+place (the automation's old "guarded" fallback, a forced proposal of a refused change, is removed). Every Apply write is
+on the Review page with Revert. The governance paragraphs of codes already switched on that still say an Apply of canon
+is a proposal are amended once, through the ordinary paragraph path (as F5b.1's caps wording). Details and tests:
+[ADR 0057 amendment 1](0057-cr-2026-11-r2-owner-decisions.md).
+
+Left as it was (**chosen**, for the owner to confirm): the chronology's own "always proposed" cases at Apply (a change of
+an event's shape, a qualified date, a lapsed table-only mark: ADR 0078) are the chronology's request for the owner's
+confirmation, not a canon or lifecycle guard's verdict, so they still become proposals.

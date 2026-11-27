@@ -68,6 +68,11 @@ export type FixKind =
   | 'territory_category'
   /** v3 F6c: a source moved to the nearest home its primary category allows (`moveResource`; a proposal, never automatic). */
   | 'category_home'
+  /**
+   * v3 F6d (ADR 0082): a source renamed to `<Subject> - <Role>` through the rename engine (arkona_rename's path, its page
+   * mode); stale when the page's name, Subject or Reference Type changed since the finding.
+   */
+  | 'templated_name'
   /** `move_resource`: re-places the page under the same parent, alphabetically. */
   | 'move_resource'
   /** `set_facts`: one fact, only when the right value is unambiguous. */
@@ -123,7 +128,7 @@ export type FixKind =
   /**
    * v3 F6a (ADR 0076): one sidebar field, Reference Type, set to the owner's mapped value through the governed facts path
    * (the check of the row, the If-Match chain, the journal, the read-back); a proposal, or a job when the automation's
-   * Apply asks (every guard judging it: the canon guard decides an Authoritative page's).
+   * Apply asks (a direct job, canon included: the owner's ruling, F6d follow-up; a guard's refusal still refuses).
    */
   | 'reference_type'
   /**
@@ -371,6 +376,13 @@ export const CODES = {
     severity: 'info',
     title: 'A source whose primary category does not live in its current home',
     fix: 'category_home',
+  },
+  // v3 F6d (ADR 0082; design T13 as amended): templated source names (switchable per project).
+  name_nontemplated: {
+    category: 'taxonomy',
+    severity: 'info',
+    title: 'A source is not yet named <Subject> - <Role>',
+    fix: 'templated_name',
   },
   reference_type_category_mismatch: {
     category: 'taxonomy',

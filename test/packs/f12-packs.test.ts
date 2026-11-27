@@ -12,11 +12,12 @@ import { PROJECT } from '../tools/helpers.js';
 import { compactPackage, packWorld, type PackWorld } from './world.js';
 import { fixture } from '../images/world.js';
 
-describe('the seed (arkona-2026-11-28-f12)', () => {
+describe('the seed (arkona-2026-11-28-f12, superseded by F6d’s)', () => {
   it('supersedes F5b.1’s and F6c’s and carries no switches', () => {
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-28-f12');
+    // v3 F6d (ADR 0082): -f6d supersedes -f12 (and keeps its empty settings).
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-29-f6d');
     expect(ARKONA_PACK.supersedes).toEqual(
-      expect.arrayContaining(['arkona-2026-11-28-f5b1', 'arkona-2026-11-27-f6c']),
+      expect.arrayContaining(['arkona-2026-11-28-f12', 'arkona-2026-11-28-f5b1', 'arkona-2026-11-27-f6c']),
     );
     expect(ARKONA_PACK.supersedes).toContain('arkona-2026-11-17-f3-4');
     expect(ARKONA_PACK.rules.settings).toEqual({});
@@ -117,7 +118,7 @@ describe('the pack upgrade drops the switches', () => {
     expect(stored.rules.settings.tools).toBeDefined();
     packs().ensureSeeded();
     const after = packs().get('arkona')!;
-    expect(after.seed).toBe('arkona-2026-11-28-f12');
+    expect(after.seed).toBe('arkona-2026-11-29-f6d');
     expect(after.version).toBe(stored.version + 1);
     expect(after.rules.settings).toEqual({});
     // Offered, never approved here: the owner approves it on the Packs page.

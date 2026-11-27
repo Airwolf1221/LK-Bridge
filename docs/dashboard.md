@@ -329,6 +329,22 @@ confirmation before anything is sent, at most `NATION_SUBINDEX_BULK_MAX` at a ti
 recorded in the audit log. Nothing is renamed here: accepted and mapped rows become
 `nation_subindex_nonstandard` findings in the Audits, which Automation can run (default Off).
 
+## Templated Names (v3 F6d)
+
+In the Setup group, after Nation Subindexes ([ADR 0082](adr/0082-v3-f6d-templated-names.md)). Every source in the AI
+REPOSITORY with the name the template `<Subject> - <Role>` gives it, as the newest audit judged it from the snapshots
+(free; nothing is read from LegendKeeper): the page (linked), its current name, the proposed name, its Subject, its
+Reference Type (and role word), and its status with the reason: **to rename**, **held: collision** (a sibling has the
+name, or another rename would take it too: the other page is named), **held: no Subject** (empty, missing, twice, or
+holding an em dash), **held: type** (the vocabulary not published, the type missing or not canonical yet, or of another
+category), **templated**, **specialist (exempt)**, **kept**. The counts per status are at the top, with the run and the
+pages left out of scope (Narratives, the two archive areas, Working's infrastructure pages, characters' pages).
+
+Filters: status, primary category. Per row: **Keep this name…** (with a reason; it holds until the page's Subject,
+Reference Type or name changes, then the row is judged again) and **Undo**. Both are audited. Nothing is renamed here:
+the renames are `name_nontemplated`'s fix, run from the Automation page (Off by default: Propose for a first batch, then
+Apply).
+
 ### Repository Mappings › Territories and nations (v3 F6c)
 
 The five structural types (Territory, Nation, Divine Realm, Culture family, Religion family): **Seed** each, Territory
@@ -1094,6 +1110,12 @@ Off.
   dashboard and its date, the setting, scope, transformation, verification, concurrency rules and stop conditions);
   nothing runs unless the governance says so. Switching it off amends that paragraph to say so, and when (it is never
   deleted). Each write is on the Review page and can be Reverted; reverting the paragraph switches the code off.
+- **Propose and Apply** (the owner's ruling of the F6d follow-up, amending ADR 0057 decision 5 and ADR 0081): at
+  **Propose** a code makes proposals (canonical ones for canon, which you approve as canon); at **Apply** your setting is
+  the approval: each job runs directly, canon and lifecycle changes included (an Authoritative page's rename, CANON taken
+  off an index), and is on the Review page with Revert. A guard's refusal still refuses (a prefix disagreeing with
+  Status, a look-alike value, a lifecycle index): the code pauses for your review, and nothing is proposed in its
+  place.
 - **Pause all automation**: one click (a brake, for every project); **Resume automation** asks for a confirmation.
   **Run automation now** runs the codes switched on in this project at once. None asks for a fresh code (ADR 0081).
   **Check Repository Automation** reads the governance sources and says whether automation may run (drift, or a

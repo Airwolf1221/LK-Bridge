@@ -173,6 +173,13 @@ export class Watchdog {
   private readonly warned = new Map<number, number>();
   private lag: { max(): number; reset(): void; stop(): void } | null = null;
   private lastTick: number;
+  /**
+   * How late the timer's own last tick ran, beyond its interval (ms). The histogram's sample of a block can still be
+   * pending when the first tick after it runs: that tick's `reset()` then discards it (seen about once in 15 blocks), so
+   * the tick's own lateness, which the block cannot hide, is the floor of the lag (PR 106's CI run).
+   */
+  private tickLateMs = 0;
+  private timerAt: number | null = null;
   private memoryAbove = false;
   private memoryWarnedAt = 0;
   private high: { value: number | null; at: number } | null = null;
@@ -190,7 +197,14 @@ export class Watchdog {
     if (this.timer) return;
     this.lag ??= histogramLag();
     this.lastTick = this.now();
-    this.timer = setInterval(() => this.tick(), this.o.tickMs ?? 1000);
+    const every = this.o.tickMs ?? 1000;
+    this.timerAt = performance.now();
+    this.timer = setInterval(() => {
+      const at = performance.now();
+      this.tickLateMs = Math.max(0, at - (this.timerAt ?? at) - every);
+      this.timerAt = at;
+      this.tick();
+    }, every);
     this.timer.unref();
     if (this.o.thread === true) this.startThread();
   }
@@ -198,6 +212,8 @@ export class Watchdog {
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.timerAt = null;
+    this.tickLateMs = 0;
     this.lag?.stop();
     this.lag = this.o.lag ?? null;
     this.unsubscribe?.();
@@ -238,7 +254,9 @@ export class Watchdog {
 
   private lagCheck(s: WatchdogSettings, running: readonly ActivityView[]): void {
     if (!this.lag) return;
-    const lagMs = Math.round(this.lag.max());
+    // The histogram's longest delay, or the timer's own lateness when the histogram's sample of the block was discarded.
+    const lagMs = Math.round(Math.max(this.lag.max(), this.tickLateMs));
+    this.tickLateMs = 0;
     this.lag.reset();
     if (lagMs <= s.eventLoopLagWarnMs) return;
     const m = (this.o.memory ?? (() => process.memoryUsage()))();

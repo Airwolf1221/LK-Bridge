@@ -140,6 +140,14 @@ export interface RenameInput {
   /** A follow-up: the old name, when the subject already has the new one (what a rename left is planned again). */
   readonly from?: string | undefined;
   readonly lastMajorRevision?: LmrMode | undefined;
+  /**
+   * v3 F6d (ADR 0082): the PAGE mode, for templated names: `subject` is one page (its id) and `newName` its whole new
+   * display name. Only that page is renamed (and re-placed among its siblings); its Subject and every fact stay, no alias
+   * is added, and an Archived page may be renamed (the owner named [BARC] in scope). Routing lines naming the old name
+   * follow; every other occurrence of the old name in another page's text or sidebar, and every custom mention label, is
+   * listed for review only. Every write belongs to ONE item, `page:<id>`.
+   */
+  readonly page?: boolean | undefined;
 }
 
 export interface Issue {
@@ -153,7 +161,7 @@ export interface RenamePlan {
   readonly subject: {
     readonly id: string;
     readonly name: string;
-    readonly kind: 'character' | 'owner' | 'culture' | 'race';
+    readonly kind: 'character' | 'owner' | 'culture' | 'race' | 'page';
     readonly indexId: string | null;
   };
   readonly oldName: string;
@@ -313,15 +321,24 @@ export async function planRename(
   }
   if (!start) return refused(pd, [issue('SUBJECT_NOT_FOUND', `No page ${input.subject}.`)]);
 
-  let kind: RenamePlan['subject']['kind'] = 'owner';
+  const pageMode = input.page === true;
+  let kind: RenamePlan['subject']['kind'] = pageMode ? 'page' : 'owner';
   let identity: TreeNode = start;
   let index: TreeNode | null = null;
   let subjectName: string;
-  const character = ctx.types.characterOfPage(start.id);
-  if (character.ok) {
+  const character = pageMode ? null : ctx.types.characterOfPage(start.id);
+  if (pageMode) {
+    // v3 F6d: the page alone, by its display name.
+    if (start.kind !== 'bsrc' && start.kind !== 'bwrk' && start.kind !== 'barc')
+      return refused(pd, [
+        issue('NOT_A_SOURCE', `${start.rawName} is not a source page: the page mode renames a source only.`),
+      ]);
+    subjectName = start.displayName;
+  } else if (character!.ok) {
     kind = 'character';
-    identity = ctx.tree.node(projectId, character.value.core.id).data ?? start;
-    subjectName = character.value.subject || cleanPrefixes(identity.displayName).name.split(' - ')[0]!.trim();
+    identity = ctx.tree.node(projectId, character!.value.core.id).data ?? start;
+    subjectName =
+      character!.value.subject || cleanPrefixes(identity.displayName).name.split(' - ')[0]!.trim();
     const parent = identity.parentId ? ctx.tree.node(projectId, identity.parentId).data : null;
     if (parent?.kind === 'index' && nameKey(parent.displayName) === nameKey(subjectName)) index = parent;
   } else {
@@ -347,7 +364,7 @@ export async function planRename(
     )
       kind = 'race';
   }
-  if (identity.kind === 'barc')
+  if (identity.kind === 'barc' && !pageMode)
     return refused(pd, [
       issue(
         'SUBJECT_ARCHIVED',
@@ -395,7 +412,7 @@ export async function planRename(
   }
   if (oldName.length < 3)
     return refused(pd, [issue('INVALID_INPUT', `“${oldName}” is too short to find safely in text.`)]);
-  const keepAlias = input.keepOldAsAlias !== false;
+  const keepAlias = !pageMode && input.keepOldAsAlias !== false;
   const renameId = `rn_${randomBytes(8).toString('hex')}`;
 
   // v3 F4a (ADR 0063): the new name's namesakes among the current characters (the subject itself left out), free from
@@ -466,8 +483,8 @@ export async function planRename(
       if (namedFor(c.displayName, oldName)) addSet(c);
     }
   }
-  // Relationships naming the subject anywhere (hosted under another participant's index too).
-  for (const k of ['bsrc', 'bwrk', 'barc'] as const)
+  // Relationships naming the subject anywhere (hosted under another participant's index too). Not in the page mode.
+  for (const k of pageMode ? [] : (['bsrc', 'bwrk', 'barc'] as const))
     for (const n of ctx.tree.byKind(projectId, k).data)
       if (
         / & .+ - /.test(n.displayName) &&
@@ -588,6 +605,8 @@ export async function planRename(
   const verifyParts: ItemPartShape[] = [];
   /** ADR 0058 amendment (D): custom mention labels naming the old name (never written; for review). */
   const customLabels: ReviewOccurrence[] = [];
+  /** v3 F6d: in the page mode, the old name in other pages' text (not a routing line): for review only. */
+  const pageReview: ReviewOccurrence[] = [];
   /** A row's (or a paragraph's) mentions whose custom label names the old name: listed for review, never written. */
   const labelsIn = (
     content: readonly Obj[],
@@ -642,7 +661,9 @@ export async function planRename(
   const identityName = followUp
     ? identity.rawName
     : renamedRaw(identity.rawName, newName, oldName, false, 'new');
-  const rootItem = `name:${identity.id}`;
+  /** v3 F6d: in the page mode every write is the page's ONE item (`page:<id>`), as the automation groups items. */
+  const nameItemId = (id: string) => (pageMode ? `page:${id}` : `name:${id}`);
+  const rootItem = nameItemId(identity.id);
   /** The item every other depends on: the subject's own new name (none in a follow-up: it has it already). */
   const root = (): string[] => (items.some((i) => i.id === rootItem) ? [rootItem] : []);
 
@@ -665,7 +686,7 @@ export async function planRename(
     if (n.parentId)
       renamesUnder.set(n.parentId, [
         ...(renamesUnder.get(n.parentId) ?? []),
-        { id: n.id, to: nextDisplay, item: `name:${n.id}` },
+        { id: n.id, to: nextDisplay, item: nameItemId(n.id) },
       ]);
   }
   const siblingsUnder = new Map<string, PlaceSibling[]>();
@@ -706,7 +727,7 @@ export async function planRename(
     }
     const p2 = nameProblem(nextDisplay, rules);
     if (p2) refusals.push(issue(p2.code, p2.message, { page: { id: n.id, name: n.rawName } }));
-    const item = `name:${n.id}`;
+    const item = nameItemId(n.id);
     nameItemOf.set(n.id, item);
     touch(n.id, item);
     const at = stepNo();
@@ -790,7 +811,7 @@ export async function planRename(
   // 2. Identity facts (each page of the set: Subject, Canonical Display Name, any row naming it; the identity page: name
   // parts as given, the old name in Aliases).
   const aliasesKey = rules.types[0]?.identity.find((x) => x.field === 'aliases')?.key ?? 'Aliases';
-  for (const p of pages) {
+  for (const p of pageMode ? [] : pages) {
     const n = p.node;
     const kv = p.sidebar.find((x) => x.kind === 'keyValue' && textKey(x.title) === textKey(prop));
     if (!kv) continue;
@@ -958,12 +979,35 @@ export async function planRename(
     }
     if (h.unit === 'fact') {
       if (setIds.has(h.pageId)) continue; // the set's own facts (identity facts above)
+      if (pageMode) {
+        // v3 F6d: another page's sidebar naming the old page name: for review only, never written.
+        pageReview.push({
+          kind: 'restatement',
+          part: oldName,
+          page: { id: h.pageId, name },
+          section: `sidebar: ${h.field ?? ''}`.trim(),
+          sentence: h.snippet.slice(0, 300),
+          note: 'the old page name in a sidebar fact: change it by hand if wanted',
+        });
+        continue;
+      }
       if (h.field && tokenFields.has(h.field.trim().toLowerCase())) tokenPages.add(h.pageId);
       else if (!h.field || textKey(h.field) !== textKey(aliasesKey)) factPages.add(h.pageId);
       continue;
     }
     if (!h.documentId) continue;
-    if (ageTables.has(h.documentId)) continue; // chronology rows (below)
+    if (ageTables.has(h.documentId)) {
+      if (pageMode)
+        pageReview.push({
+          kind: 'restatement',
+          part: oldName,
+          page: { id: h.pageId, name },
+          section: 'chronology',
+          sentence: h.snippet.slice(0, 300),
+          note: 'the old page name in a chronology row: change it by hand if wanted',
+        });
+      continue; // chronology rows (below)
+    }
     const k = `${h.pageId}:${h.documentId}`;
     if (!docsToRead.has(k))
       docsToRead.set(k, { pageId: h.pageId, documentId: h.documentId, snippet: h.snippet });
@@ -1047,6 +1091,24 @@ export async function planRename(
               why: `part of another name (“${longer}”): never renamed`,
               snippet: sentenceAround(text, start, start + oldName.length).slice(0, 240),
             });
+            return;
+          }
+          if (pageMode && !routing) {
+            // v3 F6d: the old page name in prose: for review only, never written.
+            pageReview.push({
+              kind: 'restatement',
+              part: oldName,
+              page: { id: pageId, name: pageName },
+              section: section.at(-1) ?? null,
+              sentence: sentenceAround(text, start, start + oldName.length).slice(0, 300),
+              note: 'the old page name in the text: change it by hand if wanted',
+            });
+            return;
+          }
+          if (pageMode) {
+            // v3 F6d: a routing line naming the old page name follows the rename, as part of the page's one item.
+            const sentence = sentenceAround(text, start, start + oldName.length);
+            edits.push({ edit: { kind: 'text', ordinal: k, item: rootItem, sentence }, item: rootItem });
             return;
           }
           // CR-2026-11-R3 (R3-28): a paragraph inside a quote block is a quotation (D1 (a)), as one in quotation marks is.
@@ -1258,7 +1320,7 @@ export async function planRename(
 
   // 5. Chronology: rows naming the subject, each with its timeline event kept in step (the chronology tools' path).
   const chronologyHits = hits.filter((h) => h.documentId && ageTables.has(h.documentId));
-  if (chronologyHits.length > 0 && !chronologyReady) {
+  if (chronologyHits.length > 0 && !chronologyReady && !pageMode) {
     for (const h of chronologyHits)
       notPlanned.push({
         page: { id: h.pageId, name: reader.page(h.pageId)?.rawName ?? h.pageId },
@@ -1266,7 +1328,7 @@ export async function planRename(
         snippet: h.snippet,
       });
   }
-  if (chronologyHits.length > 0 && chronologyReady && pd.services?.chronology) {
+  if (chronologyHits.length > 0 && chronologyReady && pd.services?.chronology && !pageMode) {
     try {
       await planChronology(chronologyHits.map((h) => h.documentId!));
     } catch (e) {
@@ -2072,7 +2134,7 @@ export async function planRename(
             family: kind === 'character' ? plainValue(familyKey) : null,
             aliases: splitAliases(aliasValue),
           }),
-      customLabels,
+      customLabels: [...customLabels, ...pageReview],
     },
   );
 
