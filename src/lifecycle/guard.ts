@@ -1667,7 +1667,8 @@ export class LifecycleGuard implements WriteGuard {
             tool: ch.tool,
             stepIndex: i,
           });
-        else if (against) out.push({ resourceId: rid, page: name(rid), what: 'prefix', ...against, stepIndex: i });
+        else if (against)
+          out.push({ resourceId: rid, page: name(rid), what: 'prefix', ...against, stepIndex: i });
         else if (canon) out.push({ resourceId: rid, page: name(rid), what: 'canon', ...canon, stepIndex: i });
         if (isLifecycleIndexName(c, body.name))
           out.push({

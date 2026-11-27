@@ -55,7 +55,12 @@ describe('a look-alike lifecycle value is refused at every scope, the allowed va
   ] as const) {
     it(`at scope ${scope}: set_facts Status “Authoritаtive” (a Cyrillic а) on an Authoritative page`, async () => {
       const before = valueOf(L.harbour, 'Status');
-      await refused(client(), 'set_facts', { page: L.harbour, facts: { Status: AUTHORITATIVE } }, STATUS_ALLOWED);
+      await refused(
+        client(),
+        'set_facts',
+        { page: L.harbour, facts: { Status: AUTHORITATIVE } },
+        STATUS_ALLOWED,
+      );
       expect(valueOf(L.harbour, 'Status')).toBe(before);
     });
 
