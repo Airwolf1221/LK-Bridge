@@ -37,6 +37,7 @@ import {
 import { VERIFY_STEP } from '../jobs/internal-steps.js';
 import { mapStepRefs, type PlanItem } from '../jobs/items.js';
 import { compareStoredBlocks } from '../jobs/verify-blocks.js';
+import { specFields, type SpecObjectType } from '../lk/spec-fields.js';
 import { stableJson } from '../jobs/sidebar-state.js';
 import { loggedTask, type TaskLogger } from '../maintenance/task-log.js';
 import type { Packs } from '../packs/service.js';
@@ -81,7 +82,11 @@ export interface AutomationDeps {
   /** v3 F6a.1: the runtime's background work: follow-ups this service starts are tracked there. */
   readonly background?: Pick<BackgroundRunner, 'track'> & { readonly signal?: AbortSignal };
   readonly db: Db;
-  readonly engine: Pick<JobEngine, 'submit' | 'internalRead' | 'queries' | 'events' | 'stepRecords' | 'wait'>;
+  readonly engine: Pick<
+    JobEngine,
+    'submit' | 'internalRead' | 'queries' | 'events' | 'stepRecords' | 'wait'
+  > &
+    Partial<Pick<JobEngine, 'recordApiDrift'>>;
   readonly packs: Pick<Packs, 'get' | 'approvedRules' | 'attachment' | 'governance' | 'carryApproval'>;
   readonly audits: Pick<Audits, 'store' | 'proposeFix'>;
   readonly appraisal: Pick<Appraisal, 'appraiseOwner' | 'visualHygiene' | 'proposeFix' | 'reader'>;
@@ -2420,6 +2425,19 @@ export class AutomationService {
     await this.stopCode(projectId, e, `${code} on “${c.pageName}”: ${reason}`.slice(0, 1000));
   }
 
+  /** API drift (a field the spec lacks changed on a read-back): the engine's warning, and the log's, once a day. */
+  private apiDrift(projectId: string, objectType: SpecObjectType, field: string): void {
+    try {
+      if (this.d.engine.recordApiDrift?.(projectId, objectType, field))
+        this.d.log?.warn(
+          { projectId, objectType, field },
+          `API drift: LegendKeeper returns “${field}” on a ${objectType}; the vendored spec does not define it`,
+        );
+    } catch {
+      /* a warning never fails a read-back */
+    }
+  }
+
   /** The read-back: the differences from "identical apart from the change" (empty: verified). */
   private async verify(projectId: string, e: CodeEntry, x: Expectation, pre: Obj): Promise<string[]> {
     const read = (op: string, params: Obj) =>
@@ -2428,11 +2446,17 @@ export class AutomationService {
       );
     const out: string[] = [];
     const allowed = new Set(e.changes ?? []);
-    const compare = (before: Obj, after: Obj) => {
+    const compare = (before: Obj, after: Obj, objectType: SpecObjectType) => {
       const b = stable(before) as Obj;
       const a = stable(after) as Obj;
+      const spec = specFields(objectType);
       for (const k of new Set([...Object.keys(b), ...Object.keys(a)])) {
         if (stableJson(b[k]) === stableJson(a[k])) continue;
+        if (!spec.has(k)) {
+          // A field the vendored spec does not define never fails a page by itself: it is API drift, recorded.
+          this.apiDrift(projectId, objectType, k);
+          continue;
+        }
         if (!allowed.has(k)) out.push(`${k} changed`);
       }
       for (const [k, v] of Object.entries(x.fields))
@@ -2454,7 +2478,7 @@ export class AutomationService {
       if (x.target === 'asset') {
         const after = await read('getAsset', { path: { assetId: x.assetId } });
         if (!isObj(after)) return ['the asset is gone'];
-        compare(pre, after);
+        compare(pre, after, 'Asset');
         return out;
       }
       const res = await read('getResource', { path: { resourceId: x.resourceId } });
@@ -2463,14 +2487,14 @@ export class AutomationService {
       if (x.target === 'document') {
         // The document is compared block by block below; its own entry in the page's document list may move.
         const strip = (r: Obj) => ({ ...r, documents: undefined });
-        compare(strip(resBefore), strip(res));
+        compare(strip(resBefore), strip(res), 'Resource');
         const doc = await read('getDocumentBlocks', {
           path: { resourceId: x.resourceId, documentId: x.documentId },
         });
         if (!isObj(doc) || !Array.isArray(doc.blocks)) return [...out, 'the document is gone'];
         const cmp = compareStoredBlocks(x.blocks, doc.blocks);
         if (!cmp.ok) out.push(...cmp.differences.slice(0, 5).map((d) => `the document differs at ${d.path}`));
-      } else compare(resBefore, res);
+      } else compare(resBefore, res, 'Resource');
     } catch (err) {
       if (err instanceof RunBudgetStop) throw err; // v3 F5b.2: a budget stop is the run's, never a page's
       return [`it could not be read back (${errMessage(err)})`];

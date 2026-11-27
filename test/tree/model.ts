@@ -349,6 +349,8 @@ export class TreeModel {
       tags: [...r.tags],
       aliases: [...r.aliases],
       rank: r.rank,
+      // Live LegendKeeper also reports `pos` on a resource (the vendored spec has only `rank`); it moves with the rank.
+      pos: rankNum(r.rank),
       isHidden: r.isHidden,
       isLocked: r.isLocked,
       ...(r.iconGlyph ? { iconGlyph: r.iconGlyph } : {}),

@@ -199,6 +199,12 @@ const TRAIT_WORDS: Readonly<Record<Trait, string>> = {
 
 const SCOPE_PAGE = 'pages inside the project’s AI REPOSITORY';
 
+/**
+ * Every field LegendKeeper reports for a page's place among its siblings. A code whose change is a sibling move
+ * allows all of them: the spec has `rank` on a Resource, the live API also returns `pos`.
+ */
+export const POSITION_FIELDS = ['rank', 'pos'] as const;
+
 /** The catalogue, in the engine's fixed order (eligible codes first, in the order they run). */
 export const CATALOGUE: readonly CodeEntry[] = [
   // ======================================================================== eligible (for the owner to confirm)
@@ -211,7 +217,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
       'one moveResource placing the page among its siblings by the repository’s ordering rule (alphabetical; inside Narratives the narrative order), under the same parent; nothing else',
     traits: ['order'],
     target: 'resource',
-    changes: ['rank'],
+    changes: [...POSITION_FIELDS],
     automatable: 'mechanical',
   }),
   defineCode({
@@ -247,7 +253,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
       'one updateResource with the dash in the display name replaced as the pack’s name rule replaces it, the prefix kept, re-placed among its siblings if its place changes; a dash in a subject’s name (a rename of the subject) is never done and is skipped',
     traits: ['name_punctuation'],
     target: 'resource',
-    changes: ['name', 'rank'],
+    changes: ['name', ...POSITION_FIELDS],
     automatable: 'mechanical',
   }),
   defineCode({
@@ -690,7 +696,7 @@ export const CATALOGUE: readonly CodeEntry[] = [
       'Propose: ONE proposal per run, an item per page; Apply: ONE job per page, read back. Each page is renamed to <Subject> - <Role> (its Subject as written, the role word of its canonical Reference Type in the published vocabulary) through the rename engine (arkona_rename’s path, its page mode): the page re-placed among its siblings, routing lines naming the old name following, plain mentions showing the new name by themselves; the id, the prefix, the tags and every link stay; other text naming the old name and custom mention labels are listed for review, never edited. Only rows the Templated Names page shows as rename: never a page held (no Subject, a type not canonical, a collision with a sibling or with another rename of the run), exempt (an approved specialist type), kept by the owner, or a registered character’s. The page read live first (its name, Subject or Reference Type changed since the finding: nothing done), checked inside the lock. Pages in the order primary category, then name. At Apply each job is direct, an Authoritative page’s rename included (your Apply setting is the approval), on the Review page with Revert; a guard’s refusal still refuses',
     traits: ['rename', 'canon'],
     target: 'resource',
-    changes: ['name', 'rank'],
+    changes: ['name', ...POSITION_FIELDS],
     automatable: 'propose',
     applyDirect: true,
     batch: true,

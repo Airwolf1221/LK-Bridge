@@ -823,6 +823,17 @@ export class JobsRepo {
 
   // -------------------------------------------------------------------------------- errors
 
+  /** Whether an error with this op, code and path was recorded for the project at or after `since` (resolved or not). */
+  hasErrorSince(projectId: string, opId: string, code: string, path: string, since: number): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM errors WHERE project_id = ? AND op_id = ? AND code = ? AND path = ? AND at >= ? LIMIT 1`,
+        )
+        .get(projectId, opId, code, path, since) !== undefined
+    );
+  }
+
   recordError(e: ErrorInput): ErrorRecordView {
     const path = e.issues?.[0]?.path ?? '';
     const fingerprint = errorFingerprint(e.opId, e.code, path);
