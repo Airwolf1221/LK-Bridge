@@ -3942,6 +3942,37 @@ export class JobEngine {
     return error;
   }
 
+  /**
+   * API drift: LegendKeeper reported a field the vendored spec does not define for an object type (a read-back saw it
+   * change). A warning on the Errors page (`bridge_errors_recent`), once per project, object type and field per day.
+   * Returns whether it was recorded now (false: already recorded today, or it could not be recorded).
+   */
+  recordApiDrift(projectId: string, objectType: string, field: string): boolean {
+    const path = `${objectType}.${field}`;
+    try {
+      const now = this.clock.now();
+      if (this.repo.hasErrorSince(projectId, 'apiDrift', 'API_DRIFT', path, now - 24 * 3_600_000))
+        return false;
+      this.recordError({
+        projectId,
+        opId: 'apiDrift',
+        code: 'API_DRIFT',
+        message:
+          `LegendKeeper returns the field “${field}” on a ${objectType}, which the vendored spec does not define. ` +
+          `A read-back that saw it change did not fail on it; the pages are judged on the spec’s fields.`,
+        issues: [{ path, message: `not in the vendored spec (${objectType})` }],
+        retryable: false,
+        classification: 'upstream',
+        detail: { objectType, field },
+        principalId: AUTOMATION_PRINCIPAL.principalId,
+        profile: AUTOMATION_PRINCIPAL.profile,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private recordError(input: ErrorInput): void {
     try {
       const rec = this.repo.recordError(input);

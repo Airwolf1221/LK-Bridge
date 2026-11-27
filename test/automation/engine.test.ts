@@ -130,6 +130,58 @@ describe('Apply automatically', () => {
     }
   });
 
+  it('out_of_order at Apply moves a page, the read-back sees rank and pos change, and the code stays on', async () => {
+    // Live LegendKeeper reports `pos` beside `rank` on a resource; the mock now does too (both move with the page).
+    const drift = (field: string) =>
+      w.stack.runtime.engine.queries
+        .listErrors(PROJECT, { limit: 100 })
+        .filter((e) => e.code === 'API_DRIFT' && e.message.includes(`“${field}”`));
+    try {
+      await on('out_of_order', 'apply');
+      const run = await a().run(PROJECT, 'manual');
+      const done = items(run.id, 'out_of_order');
+      expect(done.length, JSON.stringify(done)).toBeGreaterThan(0);
+      // (A later finding may be skipped as stale once an earlier move has put its page in place.)
+      expect(done.some((i) => i.outcome === 'applied')).toBe(true);
+      expect(done.some((i) => i.outcome === 'failed')).toBe(false);
+      expect(done.some((i) => i.reasonCode === 'VERIFICATION_FAILED')).toBe(false);
+      expect(a().store.setting(PROJECT, 'out_of_order')?.mode).toBe('apply');
+      // `pos` is not in the vendored spec: it is drift (named, once for the day), never a failed verification.
+      expect(drift('pos')).toHaveLength(1);
+      expect(drift('pos')[0]!.message).toContain('Resource');
+    } finally {
+      await on('out_of_order', 'off');
+    }
+  });
+
+  it('a changed field the spec does not define never fails a page by itself', async () => {
+    const repo = w.repo as any;
+    const view = repo.resourceView.bind(repo) as (r: any) => Record<string, unknown>;
+    let n = 0;
+    const unknownKey = vi.spyOn(repo, 'resourceView').mockImplementation((r: any) => ({
+      ...view(r),
+      shinyNewField: ++n, // changes on every read
+    }));
+    try {
+      await on('lifecycle_tag_not_leading', 'apply');
+      const run = await a().run(PROJECT, 'manual');
+      const done = items(run.id, 'lifecycle_tag_not_leading');
+      expect(done.length).toBeGreaterThan(0);
+      expect(
+        done.every((i) => i.outcome === 'applied'),
+        JSON.stringify(done),
+      ).toBe(true);
+      const logged = w.stack.runtime.engine.queries
+        .listErrors(PROJECT, { limit: 100 })
+        .filter((e) => e.code === 'API_DRIFT' && e.message.includes('shinyNewField'));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]!.message).toContain('Resource');
+    } finally {
+      unknownKey.mockRestore();
+      await on('lifecycle_tag_not_leading', 'off');
+    }
+  });
+
   it('the first failed verification switches the code off, with the reason; its paragraph says so', async () => {
     // A change made in the app between the write and the read-back: the document no longer reads as planned.
     const doc = w.mainOf(P.headingLink);

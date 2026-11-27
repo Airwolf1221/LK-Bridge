@@ -76,7 +76,7 @@ const owned = (w: W, pageId: string): string[] => {
 const CHECK: Record<string, (key: string, b: any, a: any) => void> = {
   out_of_order: (k, b, a) => {
     expect(k).toMatch(/^res:/);
-    expect({ ...a, rank: 0 }).toEqual({ ...b, rank: 0 });
+    expect({ ...a, rank: 0, pos: 0 }).toEqual({ ...b, rank: 0, pos: 0 });
     expect(a.parentId).toBe(b.parentId);
   },
   lifecycle_tag_not_leading: (k, b, a) => {
@@ -91,7 +91,7 @@ const CHECK: Record<string, (key: string, b: any, a: any) => void> = {
   },
   em_dash_name: (k, b, a) => {
     expect(k).toMatch(/^res:/);
-    expect({ ...a, name: 0, rank: 0 }).toEqual({ ...b, name: 0, rank: 0 });
+    expect({ ...a, name: 0, rank: 0, pos: 0 }).toEqual({ ...b, name: 0, rank: 0, pos: 0 });
     expect(a.name).toBe(b.name.replace(/—/g, ' - '));
   },
   em_dash_text: (k, b, a) => {
