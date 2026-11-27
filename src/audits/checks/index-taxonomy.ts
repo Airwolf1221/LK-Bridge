@@ -15,7 +15,7 @@
  */
 import { indexRoleOfName, ROLE_PREFIX } from '../../tree/classify.js';
 import { expectedIndexTags } from '../../packs/indextax/rules.js';
-import type { AuditContext } from '../context.js';
+import { guardedIndexReason, type AuditContext } from '../context.js';
 import type { FindingDraft } from '../types.js';
 
 /** The Index Classification page's row for a page (the dashboard route). */
@@ -33,25 +33,42 @@ export function indexTaxonomyCheck(ctx: AuditContext): FindingDraft[] {
     const page = ctx.model.pages.get(pageId);
     if (!page || page.kind !== 'index') continue;
     const now = indexRoleOfName(page.rawName) ?? 'subject';
+    const guarded = guardedIndexReason(ctx, page);
     if (now !== want.role) {
       const to = `${ROLE_PREFIX[want.role]}${page.displayName}`;
-      out.push({
-        code: 'index_prefix',
-        pageId,
-        message: `“${page.rawName}” is approved as a ${want.role === 'nav' ? 'navigation index ([NAV])' : 'subject index ([INDEX])'}: its prefix becomes ${ROLE_PREFIX[want.role].trim()}, so the page reads “${to}” (its display name, id and links stay).`,
-        evidence: {
-          role: want.role,
-          subject: want.subject,
-          from: page.rawName,
-          to,
-          row: classificationRowLink(pageId),
-        },
-        fix: {
-          kind: 'index_prefix',
-          args: { pageId, name: page.rawName, to, role: want.role },
-          summary: `Rename the prefix of ${page.displayName}: ${page.rawName} → ${to}.`,
-        },
-      });
+      // v3 F5b.2: a page the lifecycle guard always refuses is a finding with no fix (nothing to plan, nothing to skip).
+      if (guarded || guardedIndexReason(ctx, page, to))
+        out.push({
+          code: 'index_prefix',
+          pageId,
+          message: `“${page.rawName}” is approved as a ${want.role === 'nav' ? 'navigation index ([NAV])' : 'subject index ([INDEX])'}, so its prefix should become ${ROLE_PREFIX[want.role].trim()}, but it is ${guarded ?? guardedIndexReason(ctx, page, to)}.`,
+          evidence: {
+            role: want.role,
+            subject: want.subject,
+            from: page.rawName,
+            to,
+            row: classificationRowLink(pageId),
+          },
+          fix: null,
+        });
+      else
+        out.push({
+          code: 'index_prefix',
+          pageId,
+          message: `“${page.rawName}” is approved as a ${want.role === 'nav' ? 'navigation index ([NAV])' : 'subject index ([INDEX])'}: its prefix becomes ${ROLE_PREFIX[want.role].trim()}, so the page reads “${to}” (its display name, id and links stay).`,
+          evidence: {
+            role: want.role,
+            subject: want.subject,
+            from: page.rawName,
+            to,
+            row: classificationRowLink(pageId),
+          },
+          fix: {
+            kind: 'index_prefix',
+            args: { pageId, name: page.rawName, to, role: want.role },
+            summary: `Rename the prefix of ${page.displayName}: ${page.rawName} → ${to}.`,
+          },
+        });
     }
     if (!it.tagsInForce) continue;
     // The owner's ruling (F6b review): under Narratives the narrative tag grammar (Narrative + kind, + AU; ADR 0065)
@@ -60,6 +77,22 @@ export function indexTaxonomyCheck(ctx: AuditContext): FindingDraft[] {
     if (ctx.narrativeIds?.has(pageId)) continue;
     const expected = expectedIndexTags(it.rules, want.role, want.subject);
     if (!expected || sameTags(page.tags, expected)) continue;
+    if (guarded) {
+      out.push({
+        code: 'index_tags',
+        pageId,
+        message: `“${page.rawName}” carries ${page.tags.length > 0 ? page.tags.join(', ') : 'no tags'}; as a ${want.role === 'nav' ? 'navigation index' : 'subject index'} it should carry exactly ${expected.join(', ')}, but it is ${guarded}.`,
+        evidence: {
+          role: want.role,
+          subject: want.subject,
+          current: [...page.tags],
+          expected,
+          row: classificationRowLink(pageId),
+        },
+        fix: null,
+      });
+      continue;
+    }
     out.push({
       code: 'index_tags',
       pageId,

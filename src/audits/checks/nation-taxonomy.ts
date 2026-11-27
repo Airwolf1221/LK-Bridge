@@ -38,7 +38,7 @@ import { homeStateHash } from '../../packs/nations/store.js';
 import type { NationAuditInput } from '../../packs/nations/service.js';
 import { categoryFromTags, vocabularyOf } from '../../packs/retag/engine.js';
 import type { HomeRule } from '../../packs/types.js';
-import { isNarrativePage, type AuditContext } from '../context.js';
+import { guardedIndexReason, isNarrativePage, type AuditContext } from '../context.js';
 import { nameKey, type AuditPage } from '../model.js';
 import type { FindingDraft } from '../types.js';
 
@@ -135,6 +135,25 @@ function subindexNames(ctx: AuditContext, input: NationAuditInput): FindingDraft
       continue;
     const prefix = ROLE_PREFIX[indexRoleOfName(page.rawName) ?? 'subject'];
     const to = `${prefix}${proposed}`;
+    // v3 F5b.2: a page the lifecycle guard always refuses is a finding with no fix.
+    const guarded = guardedIndexReason(ctx, page, to);
+    if (guarded) {
+      out.push({
+        code: 'nation_subindex_nonstandard',
+        pageId: page.id,
+        message: `“${page.rawName}” is ${nation.displayName}’s ${d.role} subindex: its name should become “${to}”, but it is ${guarded}.`,
+        evidence: {
+          nation: { id: nation.id, name: nation.rawName },
+          role: d.role,
+          decision: d.id,
+          from: page.rawName,
+          to,
+          row: subindexRowLink(page.id),
+        },
+        fix: null,
+      });
+      continue;
+    }
     out.push({
       code: 'nation_subindex_nonstandard',
       pageId: page.id,

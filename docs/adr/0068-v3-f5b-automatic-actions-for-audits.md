@@ -342,3 +342,17 @@ pack change; the paragraph upgrade carried without drift, once, the old wording 
 [ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md): a code at Propose still makes one proposal per code, and a
 `propose`-scope connection still proposes; these are now the only sources of proposals. The owner's "Apply fix" on the
 Audits page is one confirmed action (a confirmation dialog, then the job), no longer a proposal to approve next.
+
+## Amendment 4 (28 November 2026, F5b.2): a budget refusal is never a failure, and a guarded page has no fix
+
+1. Every read inside an automation run (the pre-image, the planning reads, the read-back after a write, the
+   chronology's repairs) that the budget refuses is paused and tried again under amendment 2's rules: a wait of at most
+   `AUTOMATION_BUDGET_MAX_WAIT_SECONDS` is slept through (abortable, logged as "paused 33 s for the minute tier"). Past
+   the limit, on the day tier, at the run's time limit or on a stop, the run stops with a budget reason. A budget
+   refusal is never recorded as `VERIFICATION_FAILED`, never a skip, and never trips the switch-off brake. A job's own
+   read-back that could not run (`not_checked`, no differences) is not a mismatch; the automation's own read-back,
+   paced, judges it.
+2. A page the lifecycle guard always refuses to rename or retag (the two lifecycle indexes, the Narratives index, or a
+   rename onto a lifecycle index's name) gets a finding for `index_prefix`, `index_tags` and
+   `nation_subindex_nonstandard` that says what to do by hand and carries no fix, so automation never picks it and the
+   "skipped in a row for the same reason" brake never counts a refusal the planner could have known in advance.
