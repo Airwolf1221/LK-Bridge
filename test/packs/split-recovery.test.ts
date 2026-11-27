@@ -104,10 +104,11 @@ describe('a verification failure: phase 1 stops before phase 2; Resume continues
       putRightSince: true,
       earlier: { status: 'mismatch' },
     });
-    // So the split is verified, and phase 2 is proposed as for any verified split.
+    // So the split is verified, and phase 2 runs as for any verified split (v3 F12: at once, the owner's approval of
+    // the split having asked for it).
     const after = await recordOf(w, done.jobId, (x) => x.state !== 'running' && x.state !== 'stopped');
     expect(after.state).not.toBe('unverified');
-    expect(after.phase2.proposalId).toEqual(expect.any(String));
+    expect(after.phase2.jobId).toEqual(expect.any(String));
     const rep = await split(w, { report: after.id });
     expect(rep.body).toMatchObject({ verified: true });
   });
@@ -147,13 +148,20 @@ describe('a verification failure: Revert', () => {
     // The pages it made, and its index, to ONE deletion proposal; the Biography page is not as the split made it (the
     // block LegendKeeper dropped), so it is kept and listed: the owner decides.
     const rec = await recordOf(w, done.jobId, (x) => x.state === 'reverted');
+    // v3 F12 (ADR 0081): the index the Biography page is in is kept with it (it cannot be deleted with a child).
     expect(rec.revert.deleted.map((p: any) => p.id).sort()).toEqual(
-      [...pages.filter((p: any) => p.id !== bio.id).map((p: any) => p.id), index.id].sort(),
+      [...pages.filter((p: any) => p.id !== bio.id).map((p: any) => p.id)].sort(),
     );
     expect(rec.revert.kept).toEqual([
       { id: bio.id, name: bio.name, why: 'its text changed since the split made it' },
+      { id: index.id, name: index.name, why: 'a page under it is kept' },
     ]);
-    expect(w.stack.runtime.policy.proposals.get(rec.revert.deletionProposalId)!.state).toBe('pending');
+    // v3 F12 (ADR 0081): deleted at once, as part of the owner's Revert (each page checked first).
+    expect(rec.revert.deletionProposalId).toBeNull();
+    const delJob = await settle(w, String(rec.revert.deletionJobId));
+    expect(delJob.status, JSON.stringify(delJob.lastError)).toBe('succeeded');
+    expect(w.repo.live(index.id)).toBeTruthy();
+    expect(w.repo.live(bio.id)).toBeTruthy();
     // Reverted: never resumed.
     const resumed = await w.stack.runtime.resume
       .resume(PROJECT, done.jobId, { kind: 'owner' }, OWNER_ORIGIN)
@@ -184,14 +192,15 @@ describe('a verification failure: Revert', () => {
     expect(done.job.lastError).toMatchObject({ code: 'SPLIT_DESTINATIONS_UNVERIFIED' });
     expect(done.job.lastError!.message).toContain('Scope');
     const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, done.jobId);
-    expect(rv).toMatchObject({ status: 'proposed', deletionProposalId: expect.any(String) });
+    // v3 F12 (ADR 0081): the pages it made are deleted at once, part of the owner's Revert (no second approval).
+    expect(rv).toMatchObject({
+      status: 'proposed',
+      deletionProposalId: null,
+      deletionJobId: expect.any(String),
+    });
     if (rv.status !== 'proposed') return;
-    const del = w.stack.runtime.policy.proposals.get(rv.deletionProposalId!)!;
-    expect(del.state).toBe('pending');
-    expect(del.requiresCanonicalApproval).toBe(true);
-    expect(w.repo.live(lawId)).toBeTruthy();
-    const d = await approveSplit(w, del.id);
-    expect(d.job.status, JSON.stringify(d.job.lastError)).toBe('succeeded');
+    const d = await settle(w, rv.deletionJobId!);
+    expect(d.status, JSON.stringify(d.lastError)).toBe('succeeded');
     expect(w.repo.live(lawId)).toBeFalsy();
     expect(ids(bodyOf(w, S.statutes))).toEqual(statutesBody().map((b) => b.id));
     // Once only.

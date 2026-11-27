@@ -3,15 +3,15 @@
  * switched on one finding code at a time.
  *
  * - **Settings** (`setMode`): per project and code, `off` (the default), `propose` or `apply`; the owner's alone (the
- *   route asks for the step-up); each change journalled with the owner principal, its date and the governance write it
- *   caused. Agents can neither read-modify nor suggest them.
+ *   route; ADR 0081: no fresh code); each change journalled with the owner principal, its date and the governance
+ *   write it caused. Agents can neither read-modify nor suggest them.
  * - **The governance record**: switching a code to Propose or Apply writes its paragraph into Repository Automation's
  *   "Approved Narrow Automations", after the block-id sweep's paragraph (src/automation/governance.ts); switching it off
  *   amends the paragraph. Each write is a block-by-block job (journalled, on the Review page, Revertible), and the pack's
  *   approval of Repository Automation is carried over it (`packs.carryApproval`) once the document reads exactly as
  *   planned, so the pack does not drift and fail closed. Reverting the paragraph switches the code off.
  * - **The engine** (`run`): after the nightly audit (the maintenance job `automation-run`) and on demand ("Run
- *   automation now", with the step-up), each enabled code in the registry's fixed order. Every finding re-checked live
+ *   automation now"), each enabled code in the registry's fixed order. Every finding re-checked live
  *   (FIX_STALE is skipped and recorded); Propose makes ONE proposal per code per run, an item per page; Apply submits one
  *   job per page as the Automation principal at P3, and reads every page back. The caps, the stop conditions and the
  *   brakes are the design's; see ADR 0068.
@@ -856,7 +856,7 @@ export class AutomationService {
   // ============================================================================================ settings
 
   /**
-   * The owner changes a code's setting (the route asks for the step-up). Switching to Propose or Apply needs the pack
+   * The owner changes a code's setting. Switching to Propose or Apply needs the pack
    * current and Repository Automation as approved, and writes the code's paragraph FIRST: nothing is switched on unless
    * the governance says so. Switching off records the setting first (a brake), then amends the paragraph; an amendment
    * that fails is tried again before the next run. Journalled with the owner principal, the date and the governance job.
@@ -992,7 +992,7 @@ export class AutomationService {
     };
   }
 
-  /** The owner resumes a paused code (the route asks for the step-up: it releases a brake). */
+  /** The owner resumes a paused code (it releases a brake). */
   resume(actor: string, projectId: string, code: string): void {
     if (actor !== 'owner') throw new AutomationError('NOT_OWNER', 'Only the owner resumes automation.');
     const s = this.store.setting(projectId, code);
@@ -1007,7 +1007,7 @@ export class AutomationService {
     );
   }
 
-  /** "Pause all automation": one click (a brake); resuming asks for the step-up (the route). */
+  /** "Pause all automation": one click (a brake); resuming releases it. */
   setGlobalPause(actor: string, paused: boolean): void {
     if (actor !== 'owner')
       throw new AutomationError('NOT_OWNER', 'Only the owner pauses or resumes automation.');

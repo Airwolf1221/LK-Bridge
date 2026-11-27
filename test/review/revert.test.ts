@@ -8,8 +8,8 @@
  *   and aliases, a move (back under its old parent, at its old place), and Last Major Revision (back to its old value
  *   where the job set it, left alone otherwise);
  * - an outside edit on one target blocks that target, and the rest needs the owner's confirmation of a partial revert;
- * - a deletion is refused, naming restore_resource; a revert is never reverted; an approved proposal's job is not
- *   reverted here; every revert and refusal is audited as `job.revert`.
+ * - a deletion comes back (v3 F12, ADR 0081: a copy is kept before it); a revert is never reverted; an approved
+ *   proposal's job is not reverted here; every revert and refusal is audited as `job.revert`.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -326,21 +326,29 @@ describe('Last Major Revision (decision B5)', () => {
   });
 });
 
-describe('never reverted', () => {
-  it('a deletion: refused, naming restore_resource', async () => {
-    rt().policy.commands.setRails('owner', profileId, { deletes: false });
+describe('a deletion (v3 F12, ADR 0081: a copy kept first)', () => {
+  it('a deleted page comes back with Revert, audited', async () => {
     const r = await call('delete_resource', { page: 'bk000003', confirm: true });
     expect(r.body.status, r.text).toBe('written');
     const jobId = jobOf(r);
     await waitJob(jobId);
+    expect(w.repo.live('bk000003')).toBeUndefined();
     const rv = await rt().reverts.revert('owner', PROJECT, jobId);
-    expect(rv).toMatchObject({ status: 'refused', code: 'DELETION' });
-    expect((rv as { message: string }).message).toContain('restore_resource');
-    const audit = rt().policy.store.listAudit({ action: 'job.revert', limit: 1 })[0]!;
-    expect(audit.after).toMatchObject({ outcome: 'refused', code: 'DELETION' });
-    rt().policy.commands.setRails('owner', profileId, { deletes: true });
+    expect(rv, JSON.stringify(rv)).toMatchObject({ status: 'submitted' });
+    if (rv.status !== 'submitted') throw new Error('not submitted');
+    const job = await waitJob(rv.revertJobId);
+    expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+    // LegendKeeper's own restore runs as the revert's follow-up, after its job.
+    for (let i = 0; i < 400 && !w.repo.live('bk000003'); i++) await new Promise((res) => setTimeout(res, 25));
+    expect(w.repo.live('bk000003')).toBeDefined();
+    const audit = rt().policy.store.listAudit({ action: 'job.revert', limit: 20 });
+    expect(
+      audit.some((a) => a.target === jobId && (a.after as { outcome?: string })?.outcome === 'submitted'),
+    ).toBe(true);
   });
+});
 
+describe('never reverted', () => {
   it('a job that is still running, or not a direct write, is refused', async () => {
     expect(await rt().reverts.revert('owner', PROJECT, 'job_nope')).toMatchObject({ code: 'JOB_NOT_FOUND' });
   });

@@ -1165,9 +1165,10 @@ export class Appraisal {
    * "Propose a fix": the finding's target re-read live (one read), the finding checked, then ONE ordinary proposal,
    * whatever the caller's scope. The audits' own fixes (sibling order, tags) are handed over to them. Audited.
    *
-   * v3 F3.4 (ADR 0055 decision D): `forceProposal: false` (the pack tool, while the pack's switch says "follow the
-   * agent's scope") lets the appraisal's own fix run at scope `write`, as one job, within every guard and rail; the
-   * audits' fixes stay proposals, as the audits always make them. The default, and the dashboard, is a proposal.
+   * v3 F3.4 (ADR 0055 decision D): `forceProposal: false` lets the appraisal's own fix run as one job within every
+   * guard. v3 F12 (ADR 0081): the pack tool always passes it (the agent's scope decides), and so does the dashboard's
+   * confirmed "Apply fix" (`origin.ownerConfirmed`); the audits' handed-over fixes follow the same rule. The default
+   * (the automation) is a proposal.
    */
   async proposeFix(o: {
     readonly projectId: string;
@@ -1203,11 +1204,19 @@ export class Appraisal {
               fix: `audit:${a.fix}`,
               reads: 1,
             }
-          : {
-              status: 'nothing_to_do',
-              message: 'message' in a ? a.message : 'the fix ran as a job',
-              reads: 1,
-            };
+          : a.status === 'job_submitted'
+            ? {
+                status: 'submitted',
+                jobId: a.jobId,
+                summary: a.summary ?? `audit:${a.fix}`,
+                fix: `audit:${a.fix}`,
+                reads: 1,
+              }
+            : {
+                status: 'nothing_to_do',
+                message: 'message' in a ? a.message : 'the fix ran as a job',
+                reads: 1,
+              };
     } else {
       const settings = this.d.projectSettings(o.projectId);
       // CR-2026-11-R2 (R2-32): a fix is checked against the APPROVED rules; with none approved it is a proposal.

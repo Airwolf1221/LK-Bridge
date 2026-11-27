@@ -15,12 +15,15 @@ vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 
 let w: SnapshotsWorld;
 let c: Client;
+let writer: Client;
 beforeAll(async () => {
   w = await snapshotsWorld({
     env: { LK_TIER_LIMITS: JSON.stringify({ 'key-min': 5000, 'write-min': 2000, 'write-hour': 20000 }) },
     limits: { 'key-min': 5000, 'write-min': 2000, 'write-hour': 20000 },
   });
-  c = await w.stack.connect();
+  // v3 F12 (ADR 0081): the restore is a proposal the owner approves only from a connection at scope propose.
+  c = await w.stack.connect(w.stack.newToken('r3-recreate-proposer', 'propose').token);
+  writer = await w.stack.connect();
 });
 afterAll(async () => w?.close());
 
@@ -56,7 +59,13 @@ describe('a recreate stopped part-way, finished through Resume', () => {
     total = w.events.get(w.d.chronicle)!.length;
     expect(total).toBeGreaterThanOrEqual(3);
     const snap = (await w.stack.runtime.snapshots.full(PROJECT, 'manual')).snapshotId!;
-    await call('delete_resource', { page: S.atlas, confirm: true });
+    const del = await w.stack.call(writer, 'delete_resource', {
+      project: 'test',
+      page: S.atlas,
+      confirm: true,
+    });
+    expect(del.body.status, del.text).toBe('written');
+    await w.stack.runtime.engine.wait(PROJECT, String(del.body.jobId), 30_000);
     w.repo.res.delete(S.atlas); // purged: the id is free again
     w.sidebars.pages.delete(S.atlas);
     const first = proposalOf(

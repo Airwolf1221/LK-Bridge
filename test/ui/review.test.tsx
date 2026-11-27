@@ -2,8 +2,9 @@
 /**
  * v3 F3.4 (ADR 0055): the Review page (agents' direct writes at scope write: the queue, an item's diff, Mark reviewed,
  * Mark all reviewed with the count confirmed), Revert (the targets read live shown first; a partial revert needs a
- * deliberate tick; the password again before anything is sent), the safety rails on Clients & Access, the pack tools'
- * switches on the Packs page, and the Overview's count.
+ * deliberate tick; the password again before anything is sent), the Overview's count, and (v3 F12, ADR 0081) the items
+ * grouped by workstream and connection, Revert only where it can put something back, and the safety rails and the pack
+ * tools' switches gone.
  */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -13,30 +14,22 @@ import { baseRoutes, installApi, profiles, renderApp, useDom, type Call } from '
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
-
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 300_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
-async function reauthenticate(user: ReturnType<typeof userEvent.setup>) {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-}
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const reauthenticate = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
+};
 
 const item = (over: Record<string, unknown> = {}) => ({
   jobId: 'job_direct1',
@@ -147,7 +140,7 @@ describe('the Review page', () => {
 
   it('Revert shows what would be put back, needs a tick for a partial revert, then the password', async () => {
     const user = userEvent.setup();
-    const gate = needsReauth(() => ({ revert: { revertJobId: 'job_revert1', message: 'submitted' } }));
+    const gate = answersAtOnce(() => ({ revert: { revertJobId: 'job_revert1', message: 'submitted' } }));
     const api = installApi({
       ...baseRoutes(),
       ...reviewRoutes(),
@@ -256,14 +249,46 @@ describe('the Overview', () => {
   });
 });
 
-describe('Clients & Access: the safety rails', () => {
-  it('shows each write profile’s rails (the defaults) and saves a change after the password', async () => {
+describe('the Review page, v3 F12 (ADR 0081, D2)', () => {
+  it('groups the items by workstream, then connection, each group with its own Mark reviewed; Revert only where something can be put back', async () => {
     const user = userEvent.setup();
-    const writer = profiles.find((p) => p.scope === 'write') ?? profiles[0]!;
-    const gate = needsReauth((c) => ({
-      profile: { ...writer, rails: (c.body as { rails: unknown }).rails },
-    }));
     const api = installApi({
+      ...baseRoutes(),
+      ...reviewRoutes([
+        item({ workstream: 'Ashgate rewrite', connection: 'Claude' }),
+        item({
+          jobId: 'job_direct2',
+          workstream: 'Ashgate rewrite',
+          connection: 'Claude',
+          revertible: false,
+        }),
+        item({ jobId: 'job_direct3', workstream: null, connection: 'ChatGPT' }),
+      ]),
+      'POST /review/mark': { marked: ['job_direct1', 'job_direct2'] },
+    });
+    renderApp('/ui/review');
+    const ash = await screen.findByRole('region', { name: 'Ashgate rewrite · Claude' });
+    const none = screen.getByRole('region', { name: 'No workstream · ChatGPT' });
+    expect(within(ash).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(none).getAllByRole('listitem')).toHaveLength(1);
+    // Revert shows only on an item something of which can be put back.
+    expect(within(ash).getAllByRole('button', { name: 'Revert…' })).toHaveLength(1);
+    expect(within(none).getAllByRole('button', { name: 'Revert…' })).toHaveLength(1);
+    await user.click(within(ash).getByRole('button', { name: 'Mark reviewed (2)' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Mark 2 items reviewed?');
+    await user.click(within(dialog).getByRole('button', { name: 'Mark reviewed' }));
+    await waitFor(() => expect(api.find('POST', '/review/mark')).toHaveLength(1));
+    expect(api.find('POST', '/review/mark')[0]!.body).toEqual({ ids: ['job_direct1', 'job_direct2'] });
+  });
+});
+
+// v3 F12 (ADR 0081): the safety rails (Clients & Access) and the pack tools' "always propose" switches (Packs) are
+// gone: an agent's scope alone decides. Their tests went with them; these check that neither is offered.
+describe('the safety rails and the tools’ switches are gone (v3 F12)', () => {
+  it('Clients & Access shows no safety rails card', async () => {
+    const writer = profiles.find((p) => p.scope === 'write') ?? profiles[0]!;
+    installApi({
       ...baseRoutes(),
       'GET /clients': {
         profiles: [{ ...writer, scope: 'write' }],
@@ -273,37 +298,14 @@ describe('Clients & Access: the safety rails', () => {
         kinds: ['claude', 'chatgpt', 'claude-code', 'other'],
         scopes: ['read', 'propose', 'write'],
       },
-      [`PUT /clients/profiles/${writer.id}/rails`]: gate.route,
-      'POST /security/reauth': gate.reauth,
     });
     renderApp('/ui/clients');
-    const deletes = await screen.findByRole('switch', { name: `Always propose: Deletes (${writer.label})` });
-    expect(deletes).toBeChecked();
-    expect(
-      screen.getByRole('switch', { name: `Always propose: Renames and moves of pages (${writer.label})` }),
-    ).not.toBeChecked();
-    expect(
-      screen.getByRole('spinbutton', { name: `Bulk threshold, in pages (${writer.label})` }),
-    ).toHaveValue(10);
-    await user.click(
-      screen.getByRole('switch', { name: `Always propose: Renames and moves of pages (${writer.label})` }),
-    );
-    await user.click(screen.getByRole('button', { name: `Save rails for ${writer.label}` }));
-    await user.click(
-      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save the rails' }),
-    );
-    await reauthenticate(user);
-    await screen.findByText('Rails saved.');
-    expect(api.find('PUT', `/clients/profiles/${writer.id}/rails`).at(-1)!.body).toEqual({
-      rails: { deletes: true, bulk: true, bulkPages: 10, renamesMoves: true, assets: true },
-      confirm: true,
-    });
+    expect(await screen.findAllByText(writer.label)).not.toHaveLength(0);
+    expect(screen.queryByRole('heading', { name: /Safety rails/ })).toBeNull();
+    expect(screen.queryByRole('switch', { name: /Always propose/ })).toBeNull();
   });
-});
 
-describe('Packs: the tools’ switches', () => {
-  it('shows each write tool’s switch and saves a change as a new version after the password', async () => {
-    const user = userEvent.setup();
+  it('the Packs page shows no tool switches', async () => {
     const pack = {
       id: 'arkona',
       name: 'Arkona',
@@ -316,35 +318,12 @@ describe('Packs: the tools’ switches', () => {
       seed: ARKONA_PACK.seed,
       attachments: [],
       tools: ['arkona_create_character', 'arkona_add_character_art'],
-      toolModes: [
-        { tool: 'arkona_create_character', mode: 'propose', source: 'switch' },
-        { tool: 'arkona_add_character_art', mode: 'scope', source: 'switch' },
-      ],
       versions: [],
     };
-    const gate = needsReauth(() => ({ pack: { ...pack, version: 6 } }));
-    const api = installApi({
-      ...baseRoutes(),
-      'GET /packs': { packs: [pack] },
-      'PUT /packs/arkona/tools': gate.route,
-      'POST /security/reauth': gate.reauth,
-    });
+    installApi({ ...baseRoutes(), 'GET /packs': { packs: [pack] } });
     renderApp('/ui/packs');
-    const create = await screen.findByRole('switch', { name: 'Always propose: arkona_create_character' });
-    expect(create).toBeChecked();
-    expect(
-      screen.getByRole('switch', { name: 'Always propose: arkona_add_character_art' }),
-    ).not.toBeChecked();
-    await user.click(create);
-    await user.click(screen.getByRole('button', { name: 'Save tool switches' }));
-    await user.click(
-      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save as a new version' }),
-    );
-    await reauthenticate(user);
-    await screen.findByText('Saved as a new version: approve it to use it.');
-    expect(api.find('PUT', '/packs/arkona/tools').at(-1)!.body).toEqual({
-      tools: { arkona_create_character: 'scope' },
-      confirm: true,
-    });
+    expect(await screen.findAllByText(/Arkona/)).not.toHaveLength(0);
+    expect(screen.queryByRole('switch', { name: /Always propose/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save tool switches' })).toBeNull();
   });
 });

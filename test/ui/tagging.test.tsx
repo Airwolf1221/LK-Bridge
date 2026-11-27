@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * v3 F3f (ADR 0060) on the dashboard: the Tagging page, in the Repository group. The audit's pages with their arrays,
- * rationale and disposition; picked corrections proposed as ONE batch after a confirmation; a hold's owner
+ * rationale and disposition; picked corrections applied as ONE batch after a confirmation (v3 F12: one job); a hold's owner
  * classification from the closed list, after a confirmation and the password again; the batches and reconciliations.
  */
 import { screen, waitFor, within } from '@testing-library/react';
@@ -11,7 +11,6 @@ import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers'
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const POLICY = { packId: 'arkona', version: 7, label: 'v1.8', digest: 'ab'.repeat(32), sources: [] };
 const RUN = {
   id: 'rtg_0123456789abcdef',
@@ -109,20 +108,14 @@ const hold = {
   classification: null,
 };
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 300_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
@@ -131,7 +124,7 @@ const routes = (over: Record<string, unknown> = {}) => ({
   'GET /tagging': overview,
   [`GET /tagging/runs/${RUN.id}`]: { run: RUN, total: 1, pages: [correction] },
   'GET /tagging/holds': { run: RUN, holds: [hold] },
-  'POST /tagging/batches': { batch: { id: 'rtb_2' }, proposalId: 'prop_new', jobId: null },
+  'POST /tagging/batches': { batch: { id: 'rtb_2' }, proposalId: null, jobId: 'job_new' },
   ...over,
 });
 
@@ -145,7 +138,7 @@ describe('the Tagging page', () => {
     expect(await screen.findByText(/pack arkona version 7/)).toBeInTheDocument();
   });
 
-  it('shows each page’s arrays and rationale, and proposes the picked corrections as ONE batch after a confirmation', async () => {
+  it('shows each page’s arrays and rationale, and applies the picked corrections as ONE batch after a confirmation (v3 F12: one job)', async () => {
     const api = installApi(routes());
     const user = userEvent.setup();
     renderApp('/ui/tagging');
@@ -158,10 +151,11 @@ describe('the Tagging page', () => {
     expect(row).toHaveTextContent('CANON, Polity');
     expect(row).toHaveTextContent('Status Authoritative');
     await user.click(within(row).getByRole('checkbox'));
-    await user.click(screen.getByRole('button', { name: 'Propose the picked corrections (1)' }));
+    await user.click(screen.getByRole('button', { name: 'Apply the picked corrections (1)…' }));
     const confirm = await screen.findByRole('alertdialog');
-    expect(confirm).toHaveTextContent(/ONE proposal/);
-    await user.click(within(confirm).getByRole('button', { name: 'Propose the batch' }));
+    expect(confirm).toHaveTextContent(/ONE job, at once/);
+    expect(api.find('POST', '/tagging/batches')).toHaveLength(0);
+    await user.click(within(confirm).getByRole('button', { name: 'Apply the batch' }));
     await waitFor(() => expect(api.find('POST', '/tagging/batches')).toHaveLength(1));
     expect(api.find('POST', '/tagging/batches')[0]!.body).toEqual({
       runId: RUN.id,
@@ -171,7 +165,7 @@ describe('the Tagging page', () => {
   });
 
   it('a hold is classified from the closed list after a confirmation and the password again', async () => {
-    const gate = needsReauth(() => ({
+    const gate = answersAtOnce(() => ({
       classification: { pageId: 'rttwo001', primary: 'Culture', specialist: 'Language' },
     }));
     const api = installApi(
@@ -193,9 +187,7 @@ describe('the Tagging page', () => {
     await user.click(within(card).getByRole('button', { name: 'Classify' }));
     const confirm = await screen.findByRole('alertdialog');
     await user.click(within(confirm).getByRole('button', { name: 'Classify' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-    await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull(); // ADR 0081: no step-up
     await screen.findByText(/Classified: the next audit uses it\./);
     expect(api.find('POST', '/tagging/classify').at(-1)!.body).toEqual({
       pageId: 'rttwo001',

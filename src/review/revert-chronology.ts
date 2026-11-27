@@ -49,6 +49,10 @@ export interface ChronologyAccess {
   /** The calendar the bridge last read, or null (then it is read: `listCalendars`). */
   calendar(projectId: string, calendarId?: string): Calendar | null;
   remember(projectId: string, definition: Obj): Calendar;
+  /** v3 F12 follow-up: the bridge's links between rows and events (a link-only change's Revert checks its own). */
+  readonly store?: {
+    links(projectId: string, tableDocumentId?: string): readonly { rowId: string; eventId: string }[];
+  };
 }
 
 const same = (r: AgeRow, t: { description: string; date: string; kcy: string }) =>
@@ -100,6 +104,64 @@ export async function planChronology(
     cal = ch.remember(projectId, def);
   }
   const record = t.record;
+
+  // v3 F12 follow-up (ADR 0081 amendment 1, decision 3): a link-only change: its link taken off, while it is still the
+  // one the change recorded (the row paired with that event); no LegendKeeper write.
+  if (t.linkOnly) {
+    const l = t.linkOnly;
+    if (!ch.store) return notRevertible(t, 'the chronology’s links cannot be read on this bridge');
+    const now = ch.store.links(projectId, l.tableDocumentId).find((x) => x.rowId === l.rowId);
+    if (!now) return nothing(t, 'the row is no longer linked to an event');
+    if (now.eventId !== l.eventId)
+      return changed(t, 'the row has been linked to another event since', [
+        {
+          path: `${l.age} row ${l.rowId}`,
+          expected: `linked to ${l.eventId}`,
+          actual: `linked to ${now.eventId}`,
+        },
+      ]);
+    const built = buildJob({
+      tool: 'job_revert',
+      config,
+      target: { writes: [], unlink: { tableDocumentId: l.tableDocumentId, rowId: l.rowId } },
+      writes: [],
+      ctx: {
+        rowBlocks: {},
+        exactEvents: true,
+        tableIds: {},
+        mainTableId: '',
+        rows: {},
+        counts: {},
+        lanes: {},
+        events: {},
+      },
+      record: {
+        requestKey: `${REVERT_TOOL}:${io.jobId}`,
+        ages: record.ages,
+        summary: `Revert of: ${record.summary}`.slice(0, 500),
+      },
+    });
+    return {
+      check: {
+        key: t.key,
+        kind: t.kind,
+        page: t.page,
+        what: t.what,
+        state: 'ready',
+        detail: 'the link between the row and the event taken off',
+      },
+      // No LegendKeeper write, so no check or verify of one: the record's begin and complete (which takes the link off).
+      steps: built.steps
+        .filter((s) => s.op === 'bridge.record')
+        .map((s) =>
+          s.journalOperation
+            ? { ...s, journalOperation: { ...s.journalOperation, revertOf: io.jobId, target: t.key } }
+            : s,
+        ),
+      resources: [resourceId],
+      documents: built.holdDocuments,
+    };
+  }
 
   // The documents as they are now.
   const tables = new Map<string, AgeTable>();

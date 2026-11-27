@@ -6,25 +6,30 @@
  * - ATK-07: pinned governance sections are matched by the FIRST heading of that name (src/packs/sections.ts:57-64), so a
  *   second section under a pinned heading is neither refused at approval nor reported as a pinned change; docs/packs.md
  *   says "A pinned section must be unambiguous";
- * - ATK-10: `promoteNation` (moving an Authoritative page) stays a canonical proposal with the tool switched to follow
- *   the scope;
+ * - ATK-10: `promoteNation` (moving an Authoritative page) at scope write is one direct job on the owner's Review page
+ *   (v3 F12, ADR 0081; it was a canonical proposal), and Revert puts the Reference back;
  * - ATK-11: `promoteNation`'s run-time re-check (`present`: the Reference is still where the plan saw it) is not run
- *   again after a hold between the job's check and its first write (the root cause of ATK-05).
+ *   again after a hold between the job's check and its first write (the root cause of ATK-05); the package comes from
+ *   a connection at scope propose and is approved as canon.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockRequest } from '../../contract/mock-lk.js';
 import { LIFECYCLE } from '../../resources/world.js';
 import { O, ownerText, ownersWorld, PINNED, type OwnersWorld } from '../../packs/owners-world.js';
 import { approve } from '../../packs/world.js';
+import type { ToolCall } from '../../tools/helpers.js';
 import { PROJECT, err, liveNamed, writeAgent } from './helpers.js';
 
 let w: OwnersWorld;
 let agent: Awaited<ReturnType<typeof writeAgent>>;
+let proposer: (name: string, args: Record<string, unknown>) => Promise<ToolCall>;
 /** Pauses writes on the n-th read of the Tagging Standard's blocks after arming. */
 let armed: { seen: number; at: number } | null = null;
 beforeAll(async () => {
   w = await ownersWorld({ toolModes: 'seed' });
   agent = await writeAgent(w);
+  const pc = await w.stack.connect(w.stack.newToken('r2-owners-proposer', 'propose').token);
+  proposer = (name, args) => w.stack.call(pc, name, args);
   w.overrides.set(new RegExp(`/docs/${w.governanceDocs.tagging}/blocks$`), (req: MockRequest) => {
     if (armed && req.method === 'GET' && ++armed.seen === armed.at) {
       armed = null;
@@ -61,11 +66,13 @@ describe('ATK-02: a racial group named "Archived" with its character navigation 
     });
     // Set-up corrected (CR-2026-11-R2, the guard half of R2-11): no lifecycle marker declares a page given a lifecycle
     // index's name any more, so the package is refused when it is captured (POLICY_DENIED), as the same create through
-    // lk_api_write is (CR-15); nothing is proposed. Were an ordinary proposal captured, its approval is checked as before.
+    // lk_api_write is (CR-15). Were an ordinary proposal captured, its approval is checked as before; v3 F12 (ADR 0081):
+    // at scope write a package runs directly, and the job is checked the same way.
     if (r.body.status === 'proposal_captured') {
       expect(r.body.requiresCanonicalApproval ?? false).toBe(false);
       await approve(w, String(r.body.proposalId));
-    } else expect(err(r).code, r.text).toBe('POLICY_DENIED');
+    } else if (typeof r.body.jobId === 'string') await engine().wait(PROJECT, r.body.jobId, 30_000);
+    else expect(err(r).code, r.text).toBe('POLICY_DENIED');
     const decoys = liveNamed(w, '[INDEX] Archived')
       .filter((x) => x.id !== LIFECYCLE.archived)
       .map((x) => ({ id: x.id, parent: w.repo.res.get(x.parentId!)?.name }));
@@ -134,19 +141,51 @@ const institution = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('promoteNation', () => {
-  it('ATK-10: with arkona_create_owner switched to follow the scope, a Working owner that promotes a nation is still a canonical proposal', async () => {
-    packs().commands.setToolModes('owner', 'arkona', { arkona_create_owner: 'scope' });
-    await packs().commands.approve('owner', 'arkona');
-    const r = await agent('arkona_create_owner', institution({ status: 'working', name: 'Court of Shells' }));
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.requiresCanonicalApproval).toBe(true);
-    policy().commands.reject('owner', String(r.body.proposalId), 'test');
-    packs().commands.setToolModes('owner', 'arkona', { arkona_create_owner: 'propose' });
-    await packs().commands.approve('owner', 'arkona');
+  it('ATK-10: at scope write, a Working owner that promotes a nation is one direct job on Review; Revert puts it all back', async () => {
+    const tarim = structuredClone(w.repo.res.get(O.tarim)!);
+    const before = new Set([...w.repo.res.values()].filter((x) => x.deletedAt === null).map((x) => x.id));
+    try {
+      const r = await agent(
+        'arkona_create_owner',
+        institution({ status: 'working', name: 'Court of Shells' }),
+      );
+      expect(r.body.status, r.text).not.toBe('proposal_captured');
+      const job = await engine().wait(PROJECT, String(r.body.jobId), 30_000);
+      expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+      expect(
+        w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).some((i) => i.jobId === job.id),
+      ).toBe(true);
+      expect(w.repo.res.get(O.tarim)!.parentId).not.toBe(tarim.parentId);
+      // The owner reverts it: the Reference back where it was, the pages the job made deleted again.
+      const preview = await w.stack.runtime.reverts.preview(PROJECT, job.id);
+      expect(
+        preview.targets.filter((t) => t.state !== 'ready' && t.state !== 'nothing_to_do'),
+        JSON.stringify(preview.targets),
+      ).toEqual([]);
+      const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, job.id);
+      expect(rv.status, JSON.stringify(rv)).toBe('submitted');
+      if (rv.status === 'submitted') {
+        const done = await engine().wait(PROJECT, rv.revertJobId, 30_000);
+        expect(
+          done.status,
+          `${JSON.stringify(done.lastError)} ${JSON.stringify(preview.targets.map((t) => [t.kind, t.what, t.state]))}`,
+        ).toBe('succeeded');
+      }
+      expect(w.repo.res.get(O.tarim)!.parentId).toBe(tarim.parentId);
+    } finally {
+      // Whatever the revert left, the world as it was for ATK-11 (by hand, as in the app).
+      const t = w.repo.res.get(O.tarim)!;
+      if (t.parentId !== tarim.parentId) w.repo.outside.move(O.tarim, tarim.parentId);
+      if (t.name !== tarim.name) w.repo.outside.rename(O.tarim, tarim.name);
+      w.repo.outside.setTags(O.tarim, tarim.tags);
+      const made = [...w.repo.res.values()].filter((x) => x.deletedAt === null && !before.has(x.id));
+      for (const m of made.reverse()) if (w.repo.live(m.id)) w.repo.outside.delete(m.id);
+      await w.stack.runtime.tree.sweep(PROJECT);
+    }
   });
 
   it('ATK-11: the approved package is held after its check; the owner moves the Reference meanwhile: the job must stop (NATION_REFERENCE_MOVED)', async () => {
-    const r = await agent('arkona_create_owner', institution());
+    const r = await proposer('arkona_create_owner', institution());
     expect(r.body.status, r.text).toBe('proposal_captured');
     const id = String(r.body.proposalId);
     // The owner approves as canon; the job's check reads the governance (writes are paused right after) and finds the

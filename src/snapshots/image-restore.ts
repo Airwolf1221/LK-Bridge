@@ -22,7 +22,7 @@ import type { AssetPlan } from '../assets/plan.js';
 import { ImageServiceError, type ImageService } from '../images/service.js';
 import type { ImageUploadRow } from '../images/store.js';
 import type { TreeService } from '../tree/index.js';
-import type { JobEngine, JobOrigin, StepSpec } from '../jobs/index.js';
+import { SYSTEM_PRINCIPAL, type JobEngine, type JobOrigin, type StepSpec } from '../jobs/index.js';
 import { replaceUrls, stripVersions, type LibraryPiece } from './canonical.js';
 import type { Reader } from './capture.js';
 import { RestoreError, type PlanNote } from './restore.js';
@@ -74,6 +74,15 @@ export interface ImageRestoreInput {
   readonly snapshotId: string;
   readonly assetId: string;
   readonly updateReferences: boolean;
+  /**
+   * v3 F12 (ADR 0081, D3): what the journal knew of the asset when it was deleted (Revert of an agent's delete): its name,
+   * folder and URL, used where no snapshot's library holds it (the kept bytes alone then).
+   */
+  readonly known?: {
+    readonly name?: string | null;
+    readonly folderId?: string | null;
+    readonly url?: string | null;
+  };
 }
 
 export interface ImageReference {
@@ -89,8 +98,13 @@ export interface ImageReference {
 }
 
 export type ImageRestoreResult = {
-  readonly status: 'proposal_captured';
-  readonly proposalId: string;
+  /**
+   * v3 F12 (ADR 0081): `submitted` (with `jobId`) when it runs at once: the owner confirmed it on the dashboard, or an
+   * agent at scope `write` asked for it; `proposal_captured` at scope `propose`.
+   */
+  readonly status: 'proposal_captured' | 'submitted';
+  readonly proposalId?: string;
+  readonly jobId?: string;
   readonly canonical?: { readonly reason: string };
   readonly old: Obj;
   /**
@@ -136,14 +150,19 @@ async function findOld(d: ImageRestoreDeps, input: ImageRestoreInput) {
     }
   }
   let sha = asset?.sha256 ?? null;
-  const url = asset?.name ?? null;
+  const url = asset?.name ?? input.known?.url ?? null;
   if (!sha) {
     const kept = d.images.store.keptRefs(input.projectId, input.assetId)[0];
     if (kept) {
       sha = kept.sha256;
-      name ??= kept.name;
-      folderId ??= kept.folderId;
+      name ??= kept.name ?? input.known?.name ?? null;
+      folderId ??= kept.folderId ?? input.known?.folderId ?? null;
     }
+  }
+  // v3 F12 (ADR 0081, D3): what the journal recorded just before the delete (Revert's), the surest record of where it was.
+  if (input.known) {
+    name = input.known.name ?? name;
+    folderId = input.known.folderId ?? folderId;
   }
   if (!sha)
     throw new RestoreError(
@@ -181,12 +200,12 @@ async function findOld(d: ImageRestoreDeps, input: ImageRestoreInput) {
  * from the snapshot, found or created when the restore is approved; the library's root when it was there (or when its
  * folder is gone and its path is not known, which the notes say).
  */
-function destinationFor(
+async function destinationFor(
   d: ImageRestoreDeps,
   projectId: string,
   old: { readonly folderId: string | null; readonly folderPath: readonly string[] | null },
   notes: PlanNote[],
-): Pick<AssetPlan, 'wouldCreate' | 'destination'> {
+): Promise<Pick<AssetPlan, 'wouldCreate' | 'destination'>> {
   const root = { wouldCreate: [], destination: { path: [], folderId: null, exists: true } };
   const planned = (folder: string | readonly string[]) => {
     const r = d.images.plan(projectId, { folder });
@@ -194,6 +213,19 @@ function destinationFor(
     return r.plan;
   };
   if (old.folderId !== null && d.folderLive(projectId, old.folderId)) return planned(old.folderId);
+  // v3 F12 (ADR 0081, D3): a folder the asset tree does not hold (not built yet, or made since it was last read) is
+  // read live once: when it is there, the image goes into it as it is.
+  if (old.folderId !== null) {
+    const live = (await d.read('getAsset', { path: { assetId: old.folderId } }).catch(() => undefined)) as
+      Obj | undefined;
+    if (isObj(live) && String(live.type).toUpperCase() === 'FOLDER' && typeof live.deletedAt !== 'string') {
+      const name = str(live.name);
+      return {
+        wouldCreate: [],
+        destination: { path: name ? [name] : [old.folderId], folderId: old.folderId, exists: true },
+      };
+    }
+  }
   if (old.folderId !== null && old.folderPath && old.folderPath.length > 0) {
     const plan = planned(old.folderPath);
     if (plan.wouldCreate.length > 0)
@@ -287,7 +319,7 @@ export async function restoreImage(
   };
 
   const notes: PlanNote[] = [];
-  const dest = destinationFor(d, input.projectId, old, notes);
+  const dest = await destinationFor(d, input.projectId, old, notes);
   const path = dest.destination.path;
   const creates = dest.wouldCreate.map((c) => c.path.join(' / '));
   if (o.dryRun)
@@ -446,7 +478,7 @@ async function proposeRestore(
     });
   }
   const where = path.length > 0 ? path.join(' / ') : 'the library’s root';
-  const summary = `restore_snapshot: image “${placed.name}” back as a new asset in ${where}${creates.length ? ` (making ${creates.join(', ')})` : ''}, uploaded from the bridge’s server when approved${updated ? `, and ${refs.reduce((n, r) => n + r.documents.length, 0)} reference(s) updated to its new URL` : ''}`;
+  const summary = `restore_snapshot: image “${placed.name}” back as a new asset in ${where}${creates.length ? ` (making ${creates.join(', ')})` : ''}, uploaded from the bridge’s server when it runs${updated ? `, and ${refs.reduce((n, r) => n + r.documents.length, 0)} reference(s) updated to its new URL` : ''}`;
   const imageView = { stagedId: row.id, name: placed.name, path, creates };
   const r = await d.engine.submit({
     kind: 'batch_ops',
@@ -457,7 +489,11 @@ async function proposeRestore(
     origin,
     title: summary.slice(0, 300),
     internal: true,
-    forceProposal: true,
+    // v3 F12 (ADR 0081): a proposal only at scope `propose` (the gate) or for the bridge's own unconfirmed request.
+    ...((origin.principal === undefined || origin.principal.principalId === SYSTEM_PRINCIPAL.principalId) &&
+    origin.ownerConfirmed !== true
+      ? { forceProposal: true }
+      : {}),
     stagedPlacement: true,
     proposal: {
       summary: summary.slice(0, 500),
@@ -491,12 +527,14 @@ async function proposeRestore(
       ],
     },
   });
-  if (!('proposalId' in r) || typeof r.proposalId !== 'string')
-    throw new RestoreError('NOT_PROPOSED', 'The restore was not captured as a proposal; nothing was done.');
+  const proposalId = 'proposalId' in r && typeof r.proposalId === 'string' ? r.proposalId : null;
+  const jobId = !proposalId && 'jobId' in r && typeof r.jobId === 'string' ? r.jobId : null;
+  if (!proposalId && !jobId)
+    throw new RestoreError('NOT_PROPOSED', 'The restore was neither run nor proposed; nothing was done.');
   // The staged image follows its placement (ADR 0049 decision 10): placed, and its server copy removed, once the job has
   // made its asset, even when a relink after it failed.
   d.images.store.updateUpload(input.projectId, row.id, {
-    placementProposalId: r.proposalId,
+    ...(jobId ? { placementJobId: jobId } : { placementProposalId: proposalId! }),
     intended: {
       ...(row.intended ?? {}),
       placing: { name: placed.name, path, folderId: dest.destination.folderId, assetStep: placed.assetStep },
@@ -506,9 +544,9 @@ async function proposeRestore(
   const now = d.svc.o.now();
   d.svc.o.db
     .prepare(
-      `INSERT INTO snapshot_restores (id, project_id, page_id, page_name, snapshot_id, scope, mode, document_id, proposal_id, state,
-         follow_up, requested_by, summary, plan, created_at, updated_at)
-       VALUES (?, ?, '*', ?, ?, 'image', NULL, ?, ?, 'proposed', NULL, ?, ?, ?, ?, ?)`,
+      `INSERT INTO snapshot_restores (id, project_id, page_id, page_name, snapshot_id, scope, mode, document_id, proposal_id,
+         job_id, state, follow_up, requested_by, summary, plan, created_at, updated_at)
+       VALUES (?, ?, '*', ?, ?, 'image', NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)`,
     )
     .run(
       `rst_${randomBytes(8).toString('hex')}`,
@@ -516,7 +554,9 @@ async function proposeRestore(
       old.name,
       input.snapshotId,
       input.assetId,
-      r.proposalId,
+      proposalId,
+      jobId,
+      jobId ? 'running' : 'proposed',
       origin.principal?.principalId ?? 'owner',
       summary,
       JSON.stringify({ stagedId: row.id, assetStep: placed.assetStep, references: refs.length, updated }),
@@ -525,8 +565,9 @@ async function proposeRestore(
     );
   const canonical = (r as { canonical?: { reason: string } }).canonical;
   return {
-    status: 'proposal_captured',
-    proposalId: r.proposalId,
+    status: jobId ? 'submitted' : 'proposal_captured',
+    ...(proposalId ? { proposalId } : {}),
+    ...(jobId ? { jobId } : {}),
     ...(canonical ? { canonical } : {}),
     old: oldView,
     image: imageView,

@@ -12,6 +12,7 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthServices } from '../auth/services.js';
+import { stepUpWindowInWords } from '../auth/owner.js';
 import { AdminHttpError, sendError } from './http.js';
 
 /** The CSRF token purpose for the dashboard. Distinct from `logout` and the consent screens. */
@@ -46,8 +47,9 @@ export function isBackgroundRequest(req: FastifyRequest): boolean {
 }
 
 /**
- * ADR 0062: whether this request's session stepped up within the last 10 minutes (the authenticator code, or the
- * password when no authenticator is set up). Read without counting as a use (the guard has already counted it).
+ * ADR 0062, ADR 0081: whether this request's session stepped up within the window (`AUTH_STEP_UP_WINDOW_SECONDS`, 12
+ * hours by default: the authenticator code, or the password when no authenticator is set up). Read without counting as
+ * a use (the guard has already counted it).
  */
 export function hasStepUp(s: AuthServices, req: FastifyRequest): boolean {
   const session = s.owner.peekSession(sessionTokenOf(req));
@@ -55,9 +57,12 @@ export function hasStepUp(s: AuthServices, req: FastifyRequest): boolean {
 }
 
 /**
- * OPS2: sensitive actions (adding, replacing or removing a key; the password; the authenticator) need the owner to have
- * stepped up on this session within the last 10 minutes (ADR 0062: the authenticator code, or the password when no
- * authenticator is set up), even when signed in. Throws 403 `REAUTH_REQUIRED` otherwise. Returns the session token.
+ * ADR 0081 (the owner, 26 November 2026: "A code at sign-in is enough"): only the credential changes need a fresh
+ * authenticator code on this session, within the window (`AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours by default; the
+ * password when no authenticator is set up), even when signed in: the password, the authenticator and its recovery
+ * codes, connections (creating, revoking, a scope changed), OAuth clients and personal access tokens, and adding,
+ * replacing or removing a key or other credential. Nothing else calls this. Throws 403 `REAUTH_REQUIRED` otherwise.
+ * Returns the session token. The routes that call it are listed, each by name, in test/auth/stepup-inventory.test.ts.
  */
 export function requireReauth(s: AuthServices, req: FastifyRequest): string {
   const token = sessionTokenOf(req);
@@ -65,7 +70,7 @@ export function requireReauth(s: AuthServices, req: FastifyRequest): string {
     throw new AdminHttpError(
       403,
       'REAUTH_REQUIRED',
-      'Confirm it is you first (your authenticator code, or your password without one): this action needs a fresh check, within the last 10 minutes.',
+      `Confirm it is you first (your authenticator code, or your password without one): a change to a password, key, token or connection needs a fresh check, within the last ${stepUpWindowInWords(s.owner.stepUpWindowSeconds)}.`,
     );
   }
   return token;

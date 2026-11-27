@@ -2,7 +2,7 @@
 /**
  * v3 F5b (ADR 0068, H5): the settings and the governance record, against the REAL stack on the mock LegendKeeper.
  *
- * - Only the owner changes a setting, with the step-up; agents are refused (and have no tool for it); every change is
+ * - Only the owner changes a setting (ADR 0081: no fresh code); agents are refused (and have no tool for it); every change is
  *   journalled with the owner principal, its date and the governance write it caused.
  * - Switching a code on writes its paragraph into Repository Automation's "Approved Narrow Automations", after the
  *   sweep's paragraph, in the sweep's form; switching it off amends that paragraph (never deleted).
@@ -38,20 +38,20 @@ const today = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/London',
 }).format(new Date());
 
-describe('the settings: the owner’s alone, with the step-up, journalled', () => {
-  it('a change without the step-up is refused (403 REAUTH_REQUIRED) and changes nothing', async () => {
+describe('the settings: the owner’s alone, journalled (ADR 0081: no fresh code)', () => {
+  it('a session not stepped up is not asked for a step-up (its other checks still apply)', async () => {
     owner.expire();
-    const r = await owner.post('/automation/codes/blank_paragraphs', { mode: 'apply', confirm: true });
-    expect(r.status).toBe(403);
-    expect(r.json.error.code).toBe('REAUTH_REQUIRED');
+    const r = await owner.post('/automation/codes/no_such_code', { mode: 'apply', confirm: true });
+    expect([r.status, r.json.error.code]).toEqual([400, 'NOT_ELIGIBLE']);
     expect(a().store.mode(PROJECT, 'blank_paragraphs')).toBe('off');
     expect(managed('blank_paragraphs')).toEqual([]);
   });
 
-  it('even switching off asks (every setting change is the owner’s action with the step-up)', async () => {
+  it('switching off (already off) is not asked either', async () => {
     owner.expire();
     const r = await owner.post('/automation/codes/blank_paragraphs', { mode: 'off', confirm: true });
-    expect(r.status).toBe(403);
+    expect(r.json?.error?.code).not.toBe('REAUTH_REQUIRED');
+    expect(managed('blank_paragraphs')).toEqual([]);
   });
 
   it('agents are refused: the service refuses any actor but the owner, and no MCP tool changes a setting', async () => {

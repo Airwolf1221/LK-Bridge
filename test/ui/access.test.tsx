@@ -413,7 +413,7 @@ describe('old connections (ADR 0033)', () => {
   });
 });
 
-describe('CR-2026-11-R2 (R2-50): a raise asks for the password when the bridge says so', () => {
+describe('CR-2026-11-R2 (R2-50), ADR 0081: a scope change asks for the password when the bridge says so', () => {
   it('a scope raise refused with REAUTH_REQUIRED opens the password dialog and is sent again', async () => {
     let confirmed = false;
     const api = installApi({

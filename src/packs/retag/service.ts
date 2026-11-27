@@ -12,7 +12,7 @@
  *   inside the page's lock (re-checked there), and an independent read-back. Last Major Revision is never set (tags are
  *   excluded, ADR 0051). Resume and Revert work as for any approved package (ADR 0058, ADR 0055).
  * - **Owner classification** (the Holds tab): the owner's choice of category for an "uncertain category" hold, stored
- *   and used by every later audit; re-authenticated and audited by the dashboard. Agents only suggest.
+ *   and used by every later audit; audited by the dashboard. Agents only suggest.
  * - **Reconciliation**: a named record across batches; resuming it audits what remains afresh and proposes the next
  *   batch. A page whose inputs changed in the snapshots since its verdict is stale, never current truth.
  */
@@ -104,10 +104,7 @@ export class RetagError extends Error {
 
 export interface RetagDeps {
   readonly db: Db;
-  readonly packs: Pick<
-    Packs,
-    'get' | 'attachment' | 'lifecycleRules' | 'strictToolMode' | 'governance' | 'store'
-  >;
+  readonly packs: Pick<Packs, 'get' | 'attachment' | 'lifecycleRules' | 'governance' | 'store'>;
   readonly appraisal: Pick<Appraisal, 'reader' | 'freshness'>;
   /** The template the bridge recorded for a page (the tree's), or null. */
   readonly templateOf: (projectId: string, pageId: string) => string | null;
@@ -164,7 +161,6 @@ export interface ApplyPlan {
   readonly labels: string[];
   readonly items: PlanItem[];
   readonly title: string;
-  readonly mode: 'propose' | 'scope';
 }
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
@@ -752,7 +748,6 @@ export class RetagService {
       labels,
       items,
       title: `Retag ${pages.length} page${pages.length === 1 ? '' : 's'} (deterministic corrections of audit ${run.id})`,
-      mode: this.d.packs.strictToolMode(pack.id, APPLY_TOOL),
     };
   }
 
@@ -800,14 +795,15 @@ export class RetagService {
       readonly reconciliationId?: string | null;
       /**
        * v3 F5b (ADR 0068), the automation engine only: its priority (P3), and whether the batch is ONE proposal
-       * (`propose`) or the owner's recorded approval of "Apply automatically" lets it run directly (`direct`, never
-       * from an agent: the pack's switch decides for everyone else).
+       * (`propose`) or the owner's recorded approval of "Apply automatically" lets it run directly (`direct`). v3 F12
+       * (ADR 0081): for everyone else the caller's scope decides (an agent: direct at `write`; the dashboard's batch
+       * runs at once, confirmed by the owner).
        */
       readonly priority?: 'P1' | 'P3';
       readonly mode?: 'propose' | 'direct';
     },
   ): Promise<{ batch: Batch; proposalId: string | null; jobId: string | null; summary: string | null }> {
-    const propose = o.mode === 'propose' || (o.mode !== 'direct' && plan.mode === 'propose');
+    const propose = o.mode === 'propose';
     const r = await this.d.engine.submit({
       kind: 'batch_ops',
       project: o.projectId,
@@ -1201,7 +1197,7 @@ export class RetagService {
    * add the tag, keeping the sentence's structure. `dryRun` reads the section (one read) and returns the paragraph
    * before and after; otherwise ONE job of the bridge's (one `replaceBlock` of that paragraph, If-Match the version
    * read), journalled and revertible. Once it has run, the governance check offers the pack's new version for approval.
-   * Owner only (the route asks for the step-up); audited `retag.allow_everywhere`.
+   * Owner only; audited `retag.allow_everywhere`.
    */
   async allowEverywhere(
     actor: string,

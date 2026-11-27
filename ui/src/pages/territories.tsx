@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Badge, Button, ErrorNote, Loading, useAction, useConfirm } from '../components';
 import { useProjectApi, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 
 /**
@@ -93,7 +92,6 @@ export function StructuralTypesCard() {
 
 function TypeRow({ t, onChanged, onOpen }: { t: TypeStatus; onChanged: () => void; onOpen: () => void }) {
   const api = useProjectApi();
-  const withReauth = useReauth();
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const [last, setLast] = useState<SeedResult | null>(null);
@@ -114,10 +112,7 @@ function TypeRow({ t, onChanged, onOpen }: { t: TypeStatus; onChanged: () => voi
     }).then((ok) => {
       if (!ok) return;
       void run(
-        () =>
-          withReauth(() =>
-            api.post<{ result: SeedResult }>(`/registry/structural/${t.kind}/${mode}`, { confirm: true }),
-          ),
+        () => api.post<{ result: SeedResult }>(`/registry/structural/${t.kind}/${mode}`, { confirm: true }),
         mode === 'seed' ? `${t.singular} seeded.` : 'Added.',
       ).then((x) => {
         if (x) {

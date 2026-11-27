@@ -1,8 +1,7 @@
 /**
- * R2-PACKS ATK-24 (HELD expected): the pack and appraisal admin routes cannot be used by an agent, and the owner's
- * switch change needs a fresh re-authentication (src/admin/routes/packs.ts:113-121 `requireReauth`). An agent's
- * personal access token (scope write) is sent as a bearer token, with no owner cookie; then the owner's own session
- * with its re-authentication expired.
+ * R2-PACKS ATK-24 (HELD expected): the pack and appraisal admin routes cannot be used by an agent. An agent's personal
+ * access token (scope write) is sent as a bearer token, with no owner cookie. (The pack tools' switches and their route
+ * were removed in v3 F12, ADR 0081, with the test of the switch's re-authentication.)
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PatService } from '../../../src/auth/pats.js';
@@ -30,19 +29,10 @@ afterAll(async () => {
   await s?.close();
 });
 
-const expire = () =>
-  s.db
-    .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
-
-describe('ATK-24: the switch and the fix routes are the owner’s, re-authenticated', () => {
-  it('an agent’s bearer token cannot change a switch, approve the pack, or propose an appraisal fix', async () => {
+describe('ATK-24: the pack and the fix routes are the owner’s', () => {
+  it('an agent’s bearer token cannot approve the pack or propose an appraisal fix', async () => {
     const v0 = s.runtime.packs.get('arkona')!.version;
     const asAgent = { cookie: null, csrf: null, authorization: `Bearer ${pat}` } as const;
-    const tools = await s.call('PUT', '/api/admin/packs/arkona/tools', {
-      ...asAgent,
-      body: { tools: { arkona_create_character: 'scope' }, confirm: true },
-    });
     const approve = await s.call('POST', '/api/admin/packs/arkona/approve', {
       ...asAgent,
       body: { confirm: true },
@@ -52,23 +42,9 @@ describe('ATK-24: the switch and the fix routes are the owner’s, re-authentica
       body: { confirm: true, project: 'test' },
     });
     expect({
-      tools: tools.status >= 400,
       approve: approve.status >= 400,
       fix: fix.status >= 400,
       version: s.runtime.packs.get('arkona')!.version,
-    }).toEqual({ tools: true, approve: true, fix: true, version: v0 });
-  });
-
-  it('the owner’s session without a fresh re-authentication cannot change a switch', async () => {
-    const v0 = s.runtime.packs.get('arkona')!.version;
-    expire();
-    const r = await s.put('/api/admin/packs/arkona/tools', {
-      tools: { arkona_create_character: 'scope' },
-      confirm: true,
-    });
-    expect({ status: r.status, version: s.runtime.packs.get('arkona')!.version }).toEqual({
-      status: 403,
-      version: v0,
-    });
+    }).toEqual({ approve: true, fix: true, version: v0 });
   });
 });

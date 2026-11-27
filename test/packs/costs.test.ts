@@ -91,14 +91,15 @@ it('reads and writes per typical package', async () => {
   // LegendKeeper changes one sidebar row per request, so a page's facts are most of its writes (a Compact Reference
   // has 17 rows). The job re-reads the governance (the drift check in the lock), lists the places for the in-job
   // CHARACTER_EXISTS, then per page: the copy, its rows, its text, its tags and Last Major Revision, and the verify.
+  // v3 F12 (ADR 0081): each row update after the first reads its rows for the pre-image Revert needs.
   expect(got).toEqual({
     'compact, dry run: plan': [4, 0],
     'compact, Working: plan': [4, 0],
-    'compact, Working: job': [20, 19],
+    'compact, Working: job': [35, 19],
     'developed, Working: Core, Biography, Relationship: plan': [8, 0],
-    'developed, Working: Core, Biography, Relationship: job': [57, 46],
+    'developed, Working: Core, Biography, Relationship: job': [88, 46],
     'add an Art page with 1 image (target, Working): plan': [7, 0],
     // CR-2026-11-R2 (R2-14): +1, the character's existing index read inside the lock (where the Working page lands).
-    'add an Art page with 1 image (target, Working): job': [29, 16],
+    'add an Art page with 1 image (target, Working): job': [37, 16],
   });
 });

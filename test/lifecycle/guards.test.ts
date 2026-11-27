@@ -2,9 +2,9 @@
 /**
  * The guards of the page lifecycle (v2 C2c, ADR 0035):
  *
- * - always canonical: at scope `write` each lifecycle tool is a canonical proposal, the ordinary Approve is refused, and
+ * - canonical at scope `propose`: each lifecycle tool is a canonical proposal, the ordinary Approve is refused, and
  *   the guards run again at execution (a page changed after capture conflicts; approved work without the lifecycle
- *   marker is refused);
+ *   marker is refused); v3 F12 (ADR 0081): at scope `write` the lifecycle tools are direct;
  * - the side routes (Part 3, owner): set_facts, lk_api_write (updatePropertyRow), a rename and a move are each refused,
  *   naming the tool to use; an agent's body can never carry the marker.
  */
@@ -12,7 +12,7 @@ import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
 import { facts } from '../resources/world.js';
-import { accept, L, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
+import { L, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
 
 let w: LifecycleWorld;
 let writer: Client;
@@ -32,14 +32,14 @@ beforeAll(async () => {
 });
 afterAll(async () => w.close());
 
-describe('always the owner’s canonical approval', () => {
-  it('each tool is a canonical proposal at scope write and at scope propose; the ordinary Approve is refused', async () => {
+describe('at scope propose, always the owner’s canonical approval', () => {
+  it('each tool is a canonical proposal at scope propose; the ordinary Approve is refused', async () => {
     const before = writes().length;
     const cases: [Client, string, Record<string, unknown>][] = [
-      [writer, 'archive_page', { page: 'Old Harbour' }],
+      [proposer, 'archive_page', { page: 'Old Harbour' }],
       [proposer, 'archive_page', { page: 'Tide Tables' }],
-      [writer, 'move_to_working', { page: 'Harbour Guild' }],
-      [writer, 'promote_page', { page: 'Sky Ferry', destination: 'Kumikas' }],
+      [proposer, 'move_to_working', { page: 'Harbour Guild' }],
+      [proposer, 'promote_page', { page: 'Sky Ferry', destination: 'Kumikas' }],
     ];
     for (const [c, tool, args] of cases) {
       const r = await call(c, tool, args);
@@ -58,7 +58,7 @@ describe('always the owner’s canonical approval', () => {
   });
 
   it('checked again at execution: a page changed after capture conflicts, and nothing is written', async () => {
-    const r = await call(writer, 'archive_page', { page: 'Old Harbour' });
+    const r = await call(proposer, 'archive_page', { page: 'Old Harbour' });
     const id = String(r.body.proposalId);
     // Someone renames the page in the app before the owner approves.
     w.repo.res.get(L.harbour)!.name = '[BSRC] Old Harbour (renamed)';
@@ -76,7 +76,7 @@ describe('always the owner’s canonical approval', () => {
   });
 
   it('approved work without the lifecycle marker is refused at execution (the marker is bridge code’s alone)', async () => {
-    const r = await call(writer, 'move_to_working', { page: 'Harbour Guild' });
+    const r = await call(proposer, 'move_to_working', { page: 'Harbour Guild' });
     const id = String(r.body.proposalId);
     // Tampered in the database: the stored job options lose the marker.
     const row = w.stack.db.prepare('SELECT job_options FROM proposals WHERE id = ?').get(id) as {
@@ -178,9 +178,10 @@ describe('the side routes are refused, naming the tool to use', () => {
     expect(w.repo.live(L.ferry)!.name).toBe('[BWRK] Cloud Ferry');
   });
 
-  it('the lifecycle tools themselves pass the guards (accepted as canon)', async () => {
-    const r = await accept(w, await call(writer, 'archive_page', { page: 'Tide Tables' }));
+  it('the lifecycle tools themselves pass the guards (direct at scope write, F12)', async () => {
+    const r = await call(writer, 'archive_page', { page: 'Tide Tables' });
     expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
+    expect(r.body.jobId).toEqual(expect.any(String));
     expect(w.stack.runtime.lifecycle.store.latest(PROJECT, L.tides, ['archive'])).toMatchObject({
       state: 'complete',
     });

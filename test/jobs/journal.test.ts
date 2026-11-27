@@ -25,7 +25,7 @@ const asAgent: JobOrigin = {
 };
 
 describe('every write is journalled', () => {
-  it('records creates, inserts and patches with who, what and when, and no pre-image', async () => {
+  it('records creates, inserts and patches with who, what and when; only the patch keeps a pre-image', async () => {
     h = await harness();
     const { resourceId, documentId } = h.model.seedResource('r1', {
       blocks: [{ id: 'p1', kind: 'paragraph', content: [{ text: 'a' }] }],
@@ -75,8 +75,16 @@ describe('every write is journalled', () => {
       });
       expect(typeof x.jobId).toBe('string');
       expect(x.at).toBeGreaterThan(0);
-      expect(x.preImage).toBeNull();
     }
+    // A create and an insert keep no pre-image. v3 F12 (ADR 0081): the pre-image Revert needs: an updateBlock now
+    // keeps the block as it was before the patch.
+    expect(entries.find((x) => x.opId === 'createResource')!.preImage).toBeNull();
+    expect(entries.find((x) => x.opId === 'insertBlock')!.preImage).toBeNull();
+    expect(entries.find((x) => x.opId === 'updateBlock')!.preImage).toMatchObject({
+      id: 'p1',
+      kind: 'paragraph',
+      content: [{ text: 'a' }],
+    });
     // The created resource is the target (its client-chosen id), and also the resource the write touched.
     const create = entries.find((x) => x.opId === 'createResource')!;
     const newId = (created.value as { result: { id: string } }).result.id;
@@ -90,7 +98,7 @@ describe('every write is journalled', () => {
     expect(entries.find((x) => x.opId === 'updateBlock')!.targetId).toBe('p1');
   });
 
-  it('keeps the pre-image for destructive writes only, and marks a refused write not_applied', async () => {
+  it('keeps the pre-image for destructive writes, and marks a refused write not_applied', async () => {
     h = await harness();
     const { resourceId, documentId } = h.model.seedResource('r1', {
       blocks: [{ id: 'p1', kind: 'paragraph', content: [{ text: 'a' }] }],

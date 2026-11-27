@@ -6,6 +6,9 @@
  * only the Core and the index; the lifecycle guard judges the index's move and never its descendants; the proposal lists
  * only the index's direct children ("keep their state"), not the pages below them; and nothing checks the index's
  * subtree at approval (ADR 0036 decision 5: an approval covers only what it listed).
+ *
+ * F12 (ADR 0081): at scope `write` the promote is direct (no proposal, no gap before an approval); the gap between
+ * capture and approval exists only for a `propose`-scope connection, so the late-page case is checked there.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -16,8 +19,12 @@ import { accept, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from '../lifec
 
 let w: LifecycleWorld;
 let client: Client;
+/** F12 (ADR 0081): a propose-scope connection, for the canonical proposal and its approval. */
+let proposer: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
+const propose = (tool: string, args: Record<string, unknown>) =>
+  w.stack.call(proposer, tool, { project: 'test', ...args });
 const LIMITS = {
   'key-min': 5000,
   'write-min': 2000,
@@ -29,6 +36,7 @@ const LIMITS = {
 beforeAll(async () => {
   w = await lifecycleWorld({ env: { LK_TIER_LIMITS: JSON.stringify(LIMITS) }, limits: LIMITS });
   client = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('rv2-drag-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 
@@ -67,7 +75,7 @@ describe('RV2-2: promote_page of one Core drags unlisted Working pages into cano
     ).toBe(true);
   });
 
-  it('a [BWRK] page added under the character index after the proposal is not dragged into canon by the approval', async () => {
+  it('at scope propose, a [BWRK] page added under the character index after the proposal is not dragged into canon by the approval', async () => {
     const s = await seedSet(w, 'working');
     // Only the Core and an empty Art index under the root at capture: move Portraits out first (an ordinary move
     // within the Working area), so the proposal's flag lists only the Art index.
@@ -76,8 +84,8 @@ describe('RV2-2: promote_page of one Core drags unlisted Working pages into cano
     );
     // E4: and the empty Art index too, so only the Core is under the character's index at capture.
     expect((await call('move_resource', { page: s.art, to: LIFECYCLE.working })).body.status).toBe('written');
-    const r = await call('promote_page', { page: s.core, destination: 'locs0001' });
-    expect(r.body.status, r.text).toBe('proposal_captured');
+    const r = await propose('promote_page', { page: s.core, destination: 'locs0001' });
+    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     // After capture, before approval: a Working specialist page is made under the character's index (C2d.1).
     w.repo.seed({
       id: 'rv2late1',
@@ -97,5 +105,22 @@ describe('RV2-2: promote_page of one Core drags unlisted Working pages into cano
       !(done.body.status === 'written' && !inWorking('rv2late1')),
       `${done.text}\n→ ${w.repo.live('rv2late1')?.name} now under ${w.repo.live('rv2late1')?.parentId}`,
     ).toBe(true);
+  });
+
+  it('at scope write, promoting the Core alone (only it under the index) is direct: written at once, no approval', async () => {
+    const s = await seedSet(w, 'working');
+    expect((await call('move_resource', { page: s.portraits, to: LIFECYCLE.working })).body.status).toBe(
+      'written',
+    );
+    expect((await call('move_resource', { page: s.art, to: LIFECYCLE.working })).body.status).toBe('written');
+    const r = await call('promote_page', { page: s.core, destination: 'locs0001' });
+    expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
+    expect(r.body.requiresCanonicalApproval).toBeUndefined();
+    expect(typeof r.body.jobId).toBe('string');
+    expect(w.repo.live(s.core)!.name).toBe(`[BSRC] ${s.name} - Character Core`);
+    // The index moved with the Core; the pages moved out before it stay in the Working area.
+    expect(w.repo.live(s.root)!.parentId).toBe('locs0001');
+    expect(inWorking(s.portraits)).toBe(true);
+    expect(inWorking(s.art)).toBe(true);
   });
 });

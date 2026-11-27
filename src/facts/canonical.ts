@@ -27,7 +27,7 @@ import type {
   WriteGuardVerdict,
 } from '../jobs/write-guard.js';
 import { SYSTEM_PRINCIPAL, type OpParams } from '../jobs/types.js';
-import { ownerForcedProposal } from '../jobs/write-guard.js';
+import { canonAccepted, ownerForcedProposal } from '../jobs/write-guard.js';
 import { classifyName } from '../tree/classify.js';
 import type { RestoreSet } from '../lifecycle/deleted.js';
 import { canonConfigFrom, factKey, factValueKey, type CanonicalRule } from './rules.js';
@@ -778,6 +778,9 @@ export class CanonicalGuard implements WriteGuard {
         : `the protected canonical facts could not be checked (${unchecked[0]!.why}), so this needs the owner’s canonical approval`;
     // The owner's canonical approval of this very proposal: the protected changes are what was accepted as canon.
     if (isCanonicalApproval(input.origin.approval)) return { decision: 'allow' };
+    // v3 F12 (ADR 0081): an agent at scope `write`, or the owner's confirmed dashboard action, makes it directly (on the
+    // owner's Review page, with Revert): allow, never a proposal. Its refusals above still refuse.
+    if (input.direct === true) return { decision: 'allow' };
     const first = changes[0]?.stepIndex ?? unchecked[0]?.i ?? 0;
     const opId = input.items[Math.max(0, first)]?.op ?? 'operation';
     if (input.origin.approval !== undefined) {
@@ -850,7 +853,7 @@ export class CanonicalGuard implements WriteGuard {
    * the records and LegendKeeper say now (a page the tree holds may have been deleted with it since the entry check).
    */
   private async restoreInLock(input: WriteGuardInLock): Promise<void> {
-    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    if (canonAccepted(input.job)) return;
     const project = input.job.projectId;
     const rules = this.rules(project);
     const rid = input.params.path?.resourceId;
@@ -923,7 +926,7 @@ export class CanonicalGuard implements WriteGuard {
    * Authoritative since the entry check).
    */
   private async renameInLock(input: WriteGuardInLock): Promise<void> {
-    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    if (canonAccepted(input.job)) return;
     if (!renames(input.params)) return;
     const project = input.job.projectId;
     const rules = this.rules(project);
@@ -1021,7 +1024,7 @@ export class CanonicalGuard implements WriteGuard {
     if (input.opId === 'restoreResource') return this.restoreInLock(input);
     if (input.opId === 'updateResource') return this.renameInLock(input);
     if (!SIDEBAR_WRITE_OPS.has(input.opId)) return; // a template copy is checked at entry (the template is not locked)
-    if (input.job.origin.canonicalApprovedBy !== undefined) return; // approved as canon (checked at entry)
+    if (canonAccepted(input.job)) return; // approved as canon (checked at entry)
     const rules = this.rules(input.job.projectId);
     if (rules.length === 0) return;
     const rid = input.params.path?.resourceId;
@@ -1030,6 +1033,18 @@ export class CanonicalGuard implements WriteGuard {
     const ref = { jobId: input.job.id, stepNo: input.step.stepNo };
     // The one property the write touches, as it is now: the read made in the lock, or one more read.
     let prop: SidebarProperty | undefined;
+    // A row write whose If-Match the engine chained from this job's own previous write (or its bridge.expect check):
+    // LegendKeeper's If-Match refuses it if the rows changed since. CR-2026-11 (CR-08): only such a chain; a version
+    // the CALLER gave proves nothing about what the entry check judged (a step before it may have failed), so that
+    // write is read and judged here like any other. Checked before the read the lock made: since v3 F12 a row write
+    // keeps a pre-image (its rows read in the lock), which must not turn a chained write into a judged one (one more
+    // read of the whole sidebar per row).
+    if (
+      input.params.ifMatch !== undefined &&
+      input.opId.endsWith('PropertyRow') &&
+      input.step.options.ifMatchFrom !== undefined
+    )
+      return;
     if (input.opId === 'createProperty') {
       prop = undefined;
     } else if (input.current) {
@@ -1040,16 +1055,6 @@ export class CanonicalGuard implements WriteGuard {
       } else if (c.entity && typeof c.entity === 'object') {
         prop = sidebarFrom([c.entity])[0];
       }
-    } else if (
-      input.params.ifMatch !== undefined &&
-      input.opId.endsWith('PropertyRow') &&
-      input.step.options.ifMatchFrom !== undefined
-    ) {
-      // A row write whose If-Match the engine chained from this job's own previous write (or its bridge.expect check):
-      // LegendKeeper's If-Match refuses it if the rows changed since. CR-2026-11 (CR-08): only such a chain; a version
-      // the CALLER gave proves nothing about what the entry check judged (a step before it may have failed), so that
-      // write is read and judged here like any other.
-      return;
     } else if (pid) {
       const got = await input.read('getProperty', { path: { resourceId: rid, propertyId: pid } });
       prop = got ? sidebarFrom([got])[0] : undefined;
@@ -1097,7 +1102,7 @@ export class CanonicalGuard implements WriteGuard {
    * entry check (an edit in the app) is not deleted without canonical approval. The pages under it were judged at entry.
    */
   private async deleteInLock(input: WriteGuardInLock): Promise<void> {
-    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    if (canonAccepted(input.job)) return;
     const rules = this.rules(input.job.projectId).filter(
       (r) => r.kind === 'delete' || r.kind === 'deleteKind',
     );
@@ -1160,7 +1165,7 @@ export class CanonicalGuard implements WriteGuard {
    * entry check, by the same request or in the app).
    */
   private async copyInLock(input: WriteGuardInLock): Promise<void> {
-    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    if (canonAccepted(input.job)) return;
     const body = (input.params.body ?? {}) as { templateId?: unknown; includeChildren?: unknown };
     if (body.includeChildren !== true || typeof body.templateId !== 'string') return;
     const rules = this.rules(input.job.projectId);
@@ -1190,7 +1195,7 @@ export class CanonicalGuard implements WriteGuard {
 
   /** v2 C2c: a document delete, judged again inside its lock on the page's facts as they are now. */
   private async deleteDocumentInLock(input: WriteGuardInLock): Promise<void> {
-    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    if (canonAccepted(input.job)) return;
     const rules = this.rules(input.job.projectId).filter((r) => r.kind === 'deleteDocument');
     const rid = input.params.path?.resourceId;
     const did = input.params.path?.documentId;

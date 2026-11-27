@@ -2,20 +2,19 @@ import { Fragment, useState } from 'react';
 import { ApiError, api } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { useApi } from '../hooks';
-import { useReauth } from '../reauth';
 import type { PackGovernance, PackHomeRule, PackOwners, PackView, PacksResponse } from '../types';
 
 /**
  * Packs (v3 F3a, ADR 0050): each setting pack's rules, read-only (they are data, versioned; the token
  * maps below make a new version), the governance sources the rules were derived from with the versions the owner
- * approved, the projects the pack is attached to (and its template ids there), and its versions. Two changes, each asking
- * for the step-up (ADR 0062): **Approve this pack version** (records every governance source's document version, read now)
+ * approved, the projects the pack is attached to (and its template ids there), and its versions. Two changes (ADR 0081: no
+ * fresh code): **Approve this pack version** (records every governance source's document version, read now)
  * and **Save token maps** (race and culture → tag token: a new version, which then waits for approval). Until the
  * current version is approved and every source is as approved, the pack's tools compute no tags (fail closed).
  *
  * ADR 0052 amendment (16 November 2026): when a pinned section cannot be found (an approval refused with
  * GOVERNANCE_SECTION_MISSING, or a governance check after a page renamed a pinned heading), each missing heading is shown
- * beside a picker of that page's actual headings, in order with their levels. **Re-map** (password again, audited) makes
+ * beside a picker of that page's actual headings, in order with their levels. **Re-map** (audited) makes
  * a new version holding the new mapping, which the owner then approves with the rest of the version.
  */
 const STATE_TONE: Record<PackGovernance['state'], 'ok' | 'warn' | 'bad'> = {
@@ -61,7 +60,6 @@ export function PacksPage() {
 
 function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }) {
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [gov, setGov] = useState<PackGovernance | null>(null);
   const check = () =>
@@ -84,14 +82,14 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/approve`, { confirm: true }),
-          ).catch((e: unknown) => {
-            // A pinned heading not found: show the governance as read, with the picker for each missing heading.
-            if (e instanceof ApiError && e.code === 'GOVERNANCE_SECTION_MISSING' && e.extra.governance)
-              setGov(e.extra.governance as PackGovernance);
-            throw e;
-          }),
+          api
+            .post<{ governance: PackGovernance }>(`/packs/${pack.id}/approve`, { confirm: true })
+            .catch((e: unknown) => {
+              // A pinned heading not found: show the governance as read, with the picker for each missing heading.
+              if (e instanceof ApiError && e.code === 'GOVERNANCE_SECTION_MISSING' && e.extra.governance)
+                setGov(e.extra.governance as PackGovernance);
+              throw e;
+            }),
         `${pack.name} version ${pack.version} approved.`,
       ).then((x) => {
         if (x) setGov(x.governance);
@@ -133,18 +131,9 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
             ? `version ${approved.version} by ${approved.by}, ${new Date(approved.at).toISOString()}`
             : 'not yet'}
         </dd>
-        <dt>{pack.toolModes ? 'Any other tool' : 'Every package is a proposal'}</dt>
-        <dd>
-          {pack.toolModes
-            ? pack.rules.settings.alwaysPropose
-              ? 'always propose'
-              : 'follows the agent’s scope'
-            : pack.rules.settings.alwaysPropose
-              ? 'yes (the pack’s first weeks)'
-              : 'no'}
-        </dd>
+        <dt>At scope write</dt>
+        <dd>every tool runs directly (on the Review page, with Revert); at scope propose, a proposal</dd>
       </dl>
-      {pack.toolModes && pack.toolModes.length > 0 && <ToolSwitches pack={pack} onChanged={onChanged} />}
       <div className="row-actions">
         <Button variant="primary" busy={busy} onClick={approve}>
           Approve this pack version
@@ -257,7 +246,7 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
 
 /**
  * ADR 0052 amendment: each pinned heading the page no longer has, beside a picker of the page's actual headings (in order,
- * indented by level). Re-mapping asks for a confirmation and the password again; the new mapping is a new version.
+ * indented by level). Re-mapping asks for a confirmation; the new mapping is a new version.
  */
 function PinRemap({
   pack,
@@ -322,7 +311,6 @@ function RemapRow({
   onRemapped: (g: PackGovernance) => void;
 }) {
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [to, setTo] = useState('');
   const outline = source.outline ?? [];
@@ -340,14 +328,12 @@ function RemapRow({
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/sections`, {
-              source: source.key,
-              from: heading,
-              to,
-              confirm: true,
-            }),
-          ),
+          api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/sections`, {
+            source: source.key,
+            from: heading,
+            to,
+            confirm: true,
+          }),
         `Pinned heading re-mapped: approve version ${pack.version + 1} to use it.`,
       ).then((x) => {
         if (x) onRemapped(x.governance);
@@ -394,7 +380,6 @@ const toMap = (rows: Row[]) =>
 
 function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void }) {
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [race, setRace] = useState<Row[]>(() => toRows(pack.rules.tags.race));
   const [culture, setCulture] = useState<Row[]>(() => toRows(pack.rules.tags.culture));
@@ -416,21 +401,19 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.put(`/packs/${pack.id}/tokens`, {
-              race: toMap(race),
-              culture: toMap(culture),
-              ...(pack.rules.retag
-                ? {
-                    excludedRoutineTags: routine
-                      .split('\n')
-                      .map((x) => x.trim())
-                      .filter((x) => x !== ''),
-                  }
-                : {}),
-              confirm: true,
-            }),
-          ),
+          api.put(`/packs/${pack.id}/tokens`, {
+            race: toMap(race),
+            culture: toMap(culture),
+            ...(pack.rules.retag
+              ? {
+                  excludedRoutineTags: routine
+                    .split('\n')
+                    .map((x) => x.trim())
+                    .filter((x) => x !== ''),
+                }
+              : {}),
+            confirm: true,
+          }),
         'Token maps saved: approve the new version to use them.',
       ).then(onChanged);
     });
@@ -681,85 +664,5 @@ function Owners({ pack, owners }: { pack: PackView; owners: PackOwners }) {
         </table>
       </div>
     </details>
-  );
-}
-
-/**
- * v3 F3.4 (ADR 0055 decision D): each write tool's switch. "Always propose": every package of it is a proposal whatever
- * the agent's scope. Off: it follows the agent's scope (direct at scope write, where the agent's safety rails still
- * apply; canon and lifecycle changes stay proposals). Saving makes a new pack version, approved as usual.
- */
-function ToolSwitches({ pack, onChanged }: { pack: PackView; onChanged: () => void }) {
-  const modes = pack.toolModes ?? [];
-  const [draft, setDraft] = useState<Record<string, 'propose' | 'scope'>>(() =>
-    Object.fromEntries(modes.map((t) => [t.tool, t.mode])),
-  );
-  const { run, busy } = useAction();
-  const confirm = useConfirm();
-  const withReauth = useReauth();
-  const changes = modes.filter((t) => draft[t.tool] !== t.mode);
-  const save = async () => {
-    const ok = await confirm({
-      title: `Change ${changes.length} tool switch${changes.length === 1 ? '' : 'es'}?`,
-      message: (
-        <>
-          <ul>
-            {changes.map((t) => (
-              <li key={t.tool}>
-                <span className="mono">{t.tool}</span>:{' '}
-                {draft[t.tool] === 'propose' ? 'always propose' : 'follow the agent’s scope'}
-              </li>
-            ))}
-          </ul>
-          <p>This makes a new pack version. Until you approve it, every package is refused.</p>
-        </>
-      ),
-      confirmLabel: 'Save as a new version',
-    });
-    if (!ok) return;
-    const done = await run(
-      () =>
-        withReauth(() =>
-          api.put(`/packs/${encodeURIComponent(pack.id)}/tools`, {
-            tools: Object.fromEntries(changes.map((t) => [t.tool, draft[t.tool]])),
-            confirm: true,
-          }),
-        ),
-      'Saved as a new version: approve it to use it.',
-    );
-    if (done) onChanged();
-  };
-  return (
-    <div className="tool-switches">
-      <h3>Tools at scope write</h3>
-      <p className="muted small-text">
-        Always propose: every package is a proposal for you, whatever the agent’s scope. Off: the tool follows
-        the agent’s scope (at scope write it runs directly, under the agent’s safety rails; canon and
-        lifecycle changes stay proposals).
-      </p>
-      <ul className="plain">
-        {modes.map((t) => (
-          <li key={t.tool}>
-            <label className="inline">
-              <input
-                type="checkbox"
-                role="switch"
-                aria-label={`Always propose: ${t.tool}`}
-                checked={draft[t.tool] === 'propose'}
-                onChange={(e) => setDraft({ ...draft, [t.tool]: e.target.checked ? 'propose' : 'scope' })}
-              />{' '}
-              <span className="mono">{t.tool}</span>{' '}
-              <span className="muted small-text">
-                {draft[t.tool] === 'propose' ? 'always propose' : 'follows the agent’s scope'}
-                {t.source === 'default' ? ' (the pack’s default)' : ''}
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
-      <Button busy={busy} disabled={changes.length === 0} onClick={() => void save()}>
-        Save tool switches
-      </Button>
-    </div>
   );
 }

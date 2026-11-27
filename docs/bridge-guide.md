@@ -13,16 +13,17 @@ tasks come first and the reference after. The last section, **Operations**, list
 2. **Read, then write, and pass the version you read back.** `write_page` takes `baseVersion` (from `read_document`);
    `set_facts` takes `baseFactsVersion` (from `get_resource`). A stale version writes nothing. Never write a page you have not read.
 3. **Never retry a write that came back `proposal_captured`, `queued` or `waiting_budget`.** It is not lost. Follow a job
-   with `bridge_job_status`, a proposal with `bridge_proposal_status`. After a refusal, do the one step the message names, once.
-4. **Canon and lifecycle belong to the owner.** Making a page canon, archiving it, bringing it back or deleting an
-   Authoritative page is always a proposal for the owner, whatever your scope. New pages are
-   **Working** until the owner promotes them.
+   with `bridge_job_status`. At scope `propose`, every write becomes a proposal: follow it with `bridge_proposal_status`,
+   never resubmit. After a refusal, do the one step the message names, once.
+4. **Write directly at your connection's scope.** Canon and lifecycle changes (`promote_page`, `archive_page`, CANON,
+   deleting pages) are direct too, and every change is on the owner's Review page with Revert: make them only when the
+   owner has asked for them in this conversation, and say what you changed.
 5. **Do not invent.** Names and ids come from `search`, `browse_repository_tree` and `get_resource`; dates from
    `calendar_date`; operation ids from the Operations list. A name that matches several pages is never guessed: pass the id.
 
-**A question about a subject → `arkona_brief` first** (free; items labelled by lifecycle); then `search` and `read_document` only for what it points to.
+**A question about a subject → `arkona_brief` first** (free); then `search` and `read_document` only for what it points to.
 
-**Every character intake and rename → `arkona_name_check`** (namesakes and the naming culture; never a guessed culture).
+**Every character intake and rename → `arkona_name_check`** (namesakes; never a guessed culture).
 
 **A character at a date → `arkona_as_of`; changing a date → `arkona_consistency` first** (free; never picks a value).
 
@@ -56,7 +57,7 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 | Check a character's name before an intake or rename | `arkona_name_check` (free; never infers)                    | guessing a culture from the name              |
 | Choose or check a Reference Type                    | `arkona_reference_types` (the vocabulary; free)             | inventing a type                              |
 | Make an index, or tell [NAV] from [INDEX]           | `create_index` `role`; `arkona_index_classify` (free)       | guessing a role from the name                 |
-| Rename an Arkona character or owner everywhere      | `arkona_rename` (one proposal, item by item)                | `update_resource`, `write_page` page by page  |
+| Rename an Arkona character or owner everywhere      | `arkona_rename` (one job, item by item)                     | `update_resource`, `write_page` page by page  |
 | Split an Arkona owner into several owners           | `arkona_split_appraisal`, `arkona_split_owner`              | `write_page` and the create tools by hand     |
 | Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact`             | reading every page yourself                   |
 | Make any other page                                 | `create_resource` (template), `create_index` for a category | `create_bare_resource` (rare)                 |
@@ -75,9 +76,8 @@ subject everywhere; `update_resource` refuses it (`USE_ARKONA_RENAME`).
 | Know what happened to a proposal or job             | `bridge_proposal_status`, `bridge_job_status`               | repeating the write                           |
 | Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations            |                                               |
 
-**What your scope means.** `read` shows read tools only. At `propose` a write becomes a **proposal** the owner decides
-on the dashboard; nothing is written. `write` writes directly, except rule 4's always-proposal changes and
-`restore_snapshot`. `bridge_info` says which you have.
+**What your scope means.** `read`: read tools only. `propose`: every write is a **proposal** the owner decides on.
+`write`: every write is direct, on the owner's Review page. `bridge_info` says which.
 
 **Sections to ask for** (`get_bridge_guide` with `section`; a near miss is matched loosely when the match is clear):
 
@@ -98,7 +98,7 @@ on the dashboard; nothing is written. `write` writes directly, except rule 4's a
 - `Audit findings`
 - `Budgets, jobs and proposals`
 - `Canon and approval`
-- `At write scope` (what is direct, what is still a proposal)
+- `At write scope` (what is direct; deletes kept recoverable)
 - `When the low-level tools are right`
 - `Reference`, and under it `What the bridge is`, `Projects`, `The repository tree`, `The tools you are shown`,
   `When something goes wrong`
@@ -283,8 +283,7 @@ new pages are fixed in the proposal.
 **New pages are Working by default.** Every page create takes `status`: `"working"` (the default) makes a `[BWRK]`
 page under `[INDEX] Working` (leave `parent` out) or, with `parent`, under an `[INDEX]` page inside a Working set (a
 Working character's own index, below), with Status `Working` and the `Working` tag; `"authoritative"` makes a `[BSRC]`
-page in its normal place (give `parent`), with Status `Authoritative` and the `CANON` tag, and is always a proposal for the
-owner. Write new material as Working; the owner promotes it.
+page in its normal place (give `parent`), with Status `Authoritative` and the `CANON` tag: canon, so at scope `write` it is made directly (on the owner's Review page, with Revert: only when the owner asked for it in this conversation), at scope `propose` it is a proposal. Write new material as Working unless the owner asks for canon.
 
 **A character, step by step** (the usual task):
 
@@ -366,11 +365,10 @@ naming the projects they work on). The Arkona pack has twenty-one tools. Ask for
 
 - **Preview first, then one proposal.** `dryRun: true` (or `preview: true`) writes nothing and returns the whole plan:
   pages, places, templates, facts, tags, links, images, warnings and refusals. Fix what it refuses, tell the person about
-  any warning that is a judgement call, then call again without `dryRun`. With the tool's switch at "always propose"
-  (the default of the creation tools, set by the owner on the Packs page) that call is **one proposal** for the owner,
-  whatever your scope; `arkona_add_character_art` follows your scope by default (its section says what that means).
-  Never resubmit a proposal: follow it with `bridge_proposal_status`. Once approved it runs as one job,
-  which checks again before its first write that nothing it relies on changed meanwhile, and verifies what it wrote.
+  any warning that is a judgement call, then call again without `dryRun`. At scope `write` that call runs as **one job**
+  (on the owner's Review page, with Revert); at scope `propose` it is **one proposal** (never resubmit it: follow it
+  with `bridge_proposal_status`). The job checks again before its first write that nothing it relies on changed
+  meanwhile, and verifies what it wrote.
 - **Tags are computed, never typed.** A canon page leads with `CANON`, or with `AU` when it belongs to an alternate
   universe (Continuity Type AU: the owner's ruling of 16 November 2026); a Working page leads with `Working`. A tag you
   type is refused (`TAG_NOT_ALLOWED`); one the rules hold back is reported (`heldTags`).
@@ -502,10 +500,10 @@ Narratives pages are ordered Story Map first, then by number (Act 10 after Act 9
 `Narrative`, their kind, and `AU` in an AU's story. They are **never canon evidence**: the briefs and the consistency
 check never read them.
 
-**Moving a page into or out of Narratives is always a proposal**, at every scope and on every route (`move_resource`,
-the low-level tools, a create, copy or restore there by any tool but the narrative ones): canonical when a page of it
-carries a lifecycle prefix, a status tag or a lifecycle Status, which it would lose or regain. Never move canon into a
-story, or a chapter out into the repository; tell the owner instead. No page may take a narrative index's name
+**Moving a page into or out of Narratives** (by `move_resource`, the low-level tools, or a create, copy or restore there
+by any tool but the narrative ones) is the owner's decision: at scope `write` it is made directly (on the owner's Review page, with Revert: only when the owner asked for it in this conversation), at scope `propose` it is a proposal (canonical when a page of it carries a lifecycle
+prefix, a status tag or a lifecycle Status, which it would lose or regain). Never move canon into a story, or a chapter
+out into the repository, unless the owner asks. No page may take a narrative index's name
 (Narratives, Continuities, Main CANON). A page in Narratives that still carries a lifecycle prefix is canon filed in the
 wrong place: it stays canon evidence, the audit reports it (`narrative_lifecycle_page`), and the writing tools leave its
 story alone (`NARRATIVE_LIFECYCLE_PAGE`, naming the page) until the owner moves it out.
@@ -537,9 +535,10 @@ markdown, baseVersion? }`**: saves the prose (the Fiction Writing Reference, 32B
 → the **Question Gate** (ask the plan's questions; record the answers; close the gate) → **draft** → `arkona_chapter_save`
 → `arkona_chapter_check` (what the chapter says against canon at its date: `Contradicts canon`, `Not in canon
 (candidate)`, `Unestablished in canon`) → `arkona_promote_from_chapter` for the lore the owner should see. A story's
-inventions stay fiction until the owner accepts them: promotion makes **canon proposals** (a character, a page, a fact
-or a text) whatever your scope; you supply the content; the chapter is cited in the proposal's note; never promote by
-yourself, and never treat silence as acceptance. Fix a `Contradicts canon` item in the chapter, not in canon.
+inventions stay fiction until the owner accepts them: promotion makes **new canon** (a character, a page, a fact or a
+text), directly at scope `write` (on the owner's Review page) and as proposals at scope `propose`; you supply the
+content; the chapter is cited in the job's note; promote only what the owner asked for in this conversation, and never
+treat silence as acceptance. Fix a `Contradicts canon` item in the chapter, not in canon.
 
 A field a template lacks is never invented: a value you give for one is refused (`TEMPLATE_MISMATCH`, naming it);
 others are skipped and listed (`fieldsNotOnTemplate`). The nightly audit's `narrative` category reports structure,
@@ -559,11 +558,10 @@ page by page, and none of the checks. The tool never rewrites a page that exists
 **Preview first, then one proposal.** `dryRun: true` (or `preview: true`) writes nothing and returns the whole plan: the
 page tree (names, parents, positions), each page's template, facts, tags, Dependencies and Related Sources, the asset
 folders, every dash replaced, the tag slots held back, the warnings and the refusals. Fix what it refuses, tell the person
-about any warning that is a judgement call, then call again without `dryRun`. With the tool's switch at its default
-("always propose", the owner's on the Packs page) that call is **one proposal** for the owner, whatever your scope
-(`status: "authoritative"` makes it a canonical one). Never resubmit it: follow it with
-`bridge_proposal_status`. Once approved it runs as one job, and the verify reads back the six identity fields one by
-one, the tags in order, every template row, each page's place, each link and each image.
+about any warning that is a judgement call, then call again without `dryRun`. At scope `write` that call runs as **one
+job** (on the owner's Review page, with Revert); at scope `propose` it is **one proposal** (`status: "authoritative"`
+makes it a canonical one; never resubmit it: follow it with `bridge_proposal_status`). The job's verify reads back the
+six identity fields one by one, the tags in order, every template row, each page's place, each link and each image.
 
 **The package.**
 
@@ -714,7 +712,8 @@ exists: edit those with `write_page` and `set_facts`.
   Reference Type. A sibling of the same name is refused (`OWNER_EXISTS`).
 - `home`: **required**, the index the page goes in, by name, id or path (`"Salahad / Salahad Polities"`). See below.
 - `status`: `"working"` (the default) drafts `[BWRK] …` under `[INDEX] Working`, to promote into its home later;
-  `"authoritative"` makes canon in its home (a canonical proposal).
+  `"authoritative"` makes canon in its home (direct at scope `write`, on the owner's Review page: only when the owner
+  asked; a canonical proposal at `propose`).
 - `referenceType`, `scope` and `temporalScope`: **required** (`OWNER_FACTS_INCOMPLETE` names a missing one: ask the
   owner). Subject is the name; Status, Continuity Type, Continuity and Inheritance follow from `status` and `continuity`
   (`"Main"`, the default, or an alternate universe's name, which makes the page AU); `supersedes` is "None" unless given;
@@ -889,11 +888,10 @@ otherwise). Sources: `staged_id` (staged with no destination), `upload_id` (from
 
 **Proposal or job.** The tool follows its switch in the pack, which the owner sets on the Packs page; its default is
 "follow the scope". At scope `propose` the call is ONE proposal for the owner. At scope `write` it runs as a job (direct:
-the owner reviews it afterwards), except that making a new Authoritative Art page (a canon character's), or upgrading an
-Authoritative Compact Reference to its Core, is a **canonical proposal** the owner accepts as canon; the owner's safety
-rails can make it a proposal too (`proposedBecause` says why). So adding to an existing Art page at scope `write` is
-direct. When the owner sets the tool to "always propose", every call is one proposal whatever your scope. Never resubmit
-a proposal (`proposal_captured`): follow it with `bridge_proposal_status`; follow a job with `bridge_job_status`.
+the owner reviews it afterwards on the Review page, and can revert it), a new Authoritative Art page or a Core upgrade
+included (canon: make those only when the owner asked for them in this conversation). At scope `propose` it is a
+proposal (a canonical one for a new Authoritative Art page or a Core upgrade). Never resubmit a proposal
+(`proposal_captured`): follow it with `bridge_proposal_status`; follow a job with `bridge_job_status`.
 
 **When it runs.** One job: the page and the upgrade, the folders and moves, the uploads, the Art page's one write, the
 outfit records, the sidebar, then the read-back. A failed image never fails the rest: it is withdrawn (its blocks left
@@ -969,9 +967,9 @@ cases; A3: proven breakage, review candidates). Each names the rule it comes fro
 evidence class and its **`followUp`**:
 
 - `fix`: a deterministic repair. Call `arkona_appraisal_fix { "findingId": "…" }` **only when the person asks for it**. It
-  re-reads the page, checks the finding still holds (`FIX_STALE` otherwise: nothing is proposed) and makes **one
-  proposal** for the owner, whatever your scope: nothing changes until the owner approves. Never resubmit it: follow it
-  with `bridge_proposal_status`.
+  re-reads the page, checks the finding still holds (`FIX_STALE` otherwise: nothing is written) and makes the fix: one
+  job at scope `write` (on the owner's Review page, with Revert), one proposal at scope `propose` (never resubmit it:
+  follow it with `bridge_proposal_status`).
 - `judgement`: there is no single right repair. It names the tool you would use and what has to be decided: ask the
   owner, never guess (a Purpose section needs the subject's purpose from the owner or its sources).
 - `none`: report only.
@@ -987,8 +985,9 @@ page, at most 25 pages): use it only when the person needs what changed since th
 ### Arkona renames
 
 `arkona_rename` renames an Arkona **character** (name any page of its set) or **owner** (a culture, a polity, a place, a
-race) **everywhere it is named**, as ONE **canonical proposal** for the owner, whatever your scope: a rename changes how
-canon names its subject, so it is never made at once and never routed round. The owner approves it whole or item by item.
+race) **everywhere it is named**, as ONE job at scope `write` (on the owner's Review page, with Revert) or ONE
+**canonical proposal** at scope `propose`, which the owner approves whole or item by item. A rename changes how canon
+names its subject: make it only when the owner asked for it in this conversation, and never route round the tool.
 
 **What you supply.**
 
@@ -1100,15 +1099,16 @@ owners becomes the character's Character Core in the same proposal (its id, text
 section about one other character not going to a relationship owner, and a block citing a universal owner moving into
 a character's page.
 
-**What happens.** ONE **canonical proposal**, whatever your scope; never resubmit it. The owner approves it whole or
-destination by destination: a destination left out keeps its sections in the source (nothing is lost). **Phase 1** (one
+**What happens.** ONE job at scope `write` (on the owner's Review page, with Revert; only when the owner asked for the
+split), ONE **canonical proposal** at scope `propose` (never resubmit it), which the owner approves whole or destination
+by destination: a destination left out keeps its sections in the source (nothing is lost). **Phase 1** (one
 job) makes and extends the owners with every block moved **verbatim, its id kept**, checks that each destination holds
 what it receives **before anything leaves the source**, then takes the blocks out of the source with their summaries,
 writes the index lines and the remapped Dependencies, dates Last Major Revision by the owner's rule, and **verifies** with
 a direct re-read (every original block in exactly one place). If any of it fails, the job stops before phase 2: the
 owner resumes or reverts it on the dashboard. **Phase 2**, with `retire: true`, once phase 1 has verified and nothing was
-left out: the bridge proposes archiving the source with `archive_page`, a separate canonical proposal. The split never
-deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it, and
+left out: the source is archived with `archive_page`'s plan, with no second approval (as you, for a direct split, on the
+Review page; as the owner's confirmed action, for a split the owner approved). The split never deletes the source. `arkona_split_owner { "report": "<split, proposal or job id>" }` (free) says what became of it, and
 its `verified` is the job's own verification: a job that ran to its end but read back a difference leaves the split
 `unverified` (nothing is retired; tell the owner, who looks at the job's differences). Its `nextSteps` (also in the dry
 run and the proposal) list what is still owed afterwards, each with its tool: tell the owner, and do each only when asked. A
@@ -1124,7 +1124,8 @@ states the plan's reads and the job's estimate.
 ### Arkona retagging
 
 The Controlled Native Tagging Standard is the policy; the pack holds a derived translation of it, approved by the
-owner. Three rules: **audit first; holds go to the owner; the apply is always a proposal.** Never retag a page by hand
+owner. Three rules: **audit first; holds go to the owner; apply only what the owner asked for** (directly at scope
+`write`, on the Review page; a proposal at scope `propose`). Never retag a page by hand
 with `update_resource` (and never add or remove `CANON`, `AU`, `Working` or `Archived`: those are the lifecycle tools').
 
 **1. Audit: `arkona_retag_audit { "under": "…" }`** (or `page`, or `all: true`). Read-only and free (the snapshots;
@@ -1148,8 +1149,8 @@ page at a time with `runId` and `filter`.
 only a suggestion: the owner classifies on the dashboard's Tagging page, and the next audit uses it.
 
 **2. Apply: `arkona_retag_apply { "runId": "rtg_…", "pages": ["…"] }`**: deterministic corrections of that run only, at
-most 25 pages. ONE proposal whatever your scope (each page an item the owner can leave out); never resubmit it. When the
-owner approves, the job first checks the policy is still the audit's (otherwise it stops: "policy changed since the
+most 25 pages. ONE job at scope `write` (on the owner's Review page, with Revert), ONE proposal at scope `propose` (each
+page an item the owner can leave out; never resubmit it). The job first checks the policy is still the audit's (otherwise it stops: "policy changed since the
 audit; audit again"), then for each page reads it fresh: a page whose tags changed since the audit is **conflicted** and
 skipped (never rebased), one whose facts changed is **held**, one already right is **already compliant**, one gone is
 **inaccessible**; the rest are written and read back (the tags exactly; each page document's body by its version;
@@ -1270,7 +1271,10 @@ deliberately left out (and why), what waits for the owner's judgement, and what 
 - **Move:** `move_resource` `{ page, to }`. Within a lifecycle area it is an ordinary move ([below](#the-page-lifecycle)).
 - **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
   lists every page removed). To retire a page, use `archive_page`, not a delete. Deleting an Authoritative page is protected
-  canon. **Undo a delete:** `restore_resource` `{ page: "<id>" }` (the id is in the delete's result and in the journal).
+  canon (direct at scope `write`, only when the owner asked for it). Before the delete the bridge keeps a restorable copy
+  of the page and every page under it (refused, `DELETE_COPY_FAILED`, when it cannot), so the owner's Revert brings them
+  back. **Undo a delete yourself:** `restore_resource` `{ page: "<id>" }` (the id is in the delete's result and in the
+  journal).
 - **Maps, timelines, boards (the documents themselves):** `create_document`, `update_document` (settings only) and
   `delete_document`.
 
@@ -1291,9 +1295,10 @@ The owner may list indexes whose pages are Authoritative **without** `CANON` (fo
 a page beneath one is `[BSRC]` and `Authoritative` with no `CANON` tag, and the tools below, and creates with
 `status: "authoritative"`, add none there. Do not add `CANON` to such a page yourself.
 
-**Four tools change a page's state, and nothing else can.** Each one is always a proposal that only the owner can
-accept as canon, whatever your scope: you get `proposal_captured` with `requiresCanonicalApproval`. Never retry it;
-follow it with `bridge_proposal_status`. `dryRun: true` shows the whole plan (new name and place, every fact before and
+**Four tools change a page's state, and nothing else can.** At scope `write` each runs directly, on the owner's Review
+page with Revert: use one only when the owner asked for it in this conversation, and say what you changed. At scope
+`propose` you get `proposal_captured` with `requiresCanonicalApproval`: never retry it; follow it with
+`bridge_proposal_status`. `dryRun: true` shows the whole plan (new name and place, every fact before and
 after, the tags, the archive note) and proposes nothing.
 
 - **`archive_page`** `{ page }`: retires an Authoritative or Working page to `[INDEX] Archived` as `[BARC]`, adds a
@@ -1414,8 +1419,8 @@ The full list of forms is in docs/chronology.md.
   already agrees answers `nothing_to_do`. `description` may be the row's opening words (at least 20 characters, the
   start of exactly one row of that date); no such row is `ROW_NOT_FOUND`. If several events could be the row's it
   refuses (`PAIRING_AMBIGUOUS`) naming each candidate's name, date and id: tell the person, then pass `event_id` to pair
-  it with one (an event that already agrees is linked, with no LegendKeeper write: a proposal for the owner at every
-  scope, since it changes what the check pairs; once approved the choice is remembered),
+  it with one (an event that already agrees is linked, with no LegendKeeper write: at scope write directly, on the
+  owner's Review page, whose Revert takes the link off; at scope propose a proposal; the choice is then remembered),
   or `create_new: true` to make a new event instead. Use it for what the chronology check
   reports (a row without an event, a row and event that disagree about the date). A repair that turns a range event
   into a single date, or the reverse, is refused (`SHAPE_CHANGE_UNCONFIRMED`, saying `range → single day`) until you
@@ -1428,7 +1433,7 @@ The full list of forms is in docs/chronology.md.
 
 If a table row and its event no longer agree, the other tools refuse (`CHRONOLOGY_DRIFT`): repair it with
 `sync_timeline_event` (the nightly chronology check, and the check a few minutes after a table edit, report it; the
-owner's automation proposes or makes the repair, and the dashboard offers "Propose a fix"). If a
+owner's automation proposes or makes the repair, and the dashboard offers "Apply fix"). If a
 change stops part-way, send **the same request again**: it does only what is left; other changes of that age wait for it
 (`CHRONOLOGY_INCOMPLETE`). Before the owner has confirmed the chronology, the tools refuse
 (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on an Authoritative page.
@@ -1548,8 +1553,8 @@ page's earlier states are there to compare and bring back.
 - **`snapshot_diff`**: what changed in a document, the sidebar or the settings between a snapshot and now (a few reads), or
   between two snapshots (free).
 - **`restore_snapshot`**: brings back a page's documents, its sidebar, one document, a deleted page, or a deleted image.
-  **It is always a proposal, whatever your scope:** nothing is written until the owner approves it; never retry it, follow
-  it with `bridge_proposal_status`. Check with `dryRun: true` first: the plan shows the diff and everything it cannot
+  At scope `write` it runs directly (on the owner's Review page, with Revert: only when the owner asked for it in this
+  conversation); at scope `propose` it is a proposal: never retry it, follow it with `bridge_proposal_status`. Check with `dryRun: true` first: the plan shows the diff and everything it cannot
   restore. Say so to the person: blocks the API cannot show (`unsupported`) and inline icons that are no longer on the
   page are **lost**, a page that holds inline icons now is restored block by block around them (they stay as they are), a restored image is a **new asset with a new URL** (ask whether the pages that showed the old one
   should be updated: `updateReferences`), and a restore never changes a page's lifecycle state (use the lifecycle tools
@@ -1567,9 +1572,9 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
 
 - **A finding is a report, not an instruction, and it may be out of date.** It says which snapshot it came from and how
   old that is; edits made since are not in it. Read the page (`get_resource`, `read_document`) before you change anything.
-- **Fix through the ordinary tools** (`set_facts`, `move_resource`, `write_page`, `update_resource`…); they go to
-  proposals as usual. You cannot run, edit or acknowledge an audit: the owner does, on the dashboard, which also offers
-  "Propose a fix" for some findings.
+- **Fix through the ordinary tools** (`set_facts`, `move_resource`, `write_page`, `update_resource`…); they follow
+  your connection's scope as usual (direct at `write`, on the owner's Review page; proposals at `propose`). You cannot
+  run, edit or acknowledge an audit: the owner does, on the dashboard, which also offers "Apply fix" for some findings.
 - **Leave lifecycle and canon findings to the owner** (`lifecycle_*`, a Status or tag that disagrees with a prefix or a
   place). The lifecycle tools refuse an inconsistent page; the owner decides which signal is right. Never edit a page's
   prefix, Status or status tag to make a finding go away.
@@ -1609,9 +1614,7 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
   `write` (one the owner did not approve) can be resumed with `bridge_job_resume { "jobId": "…" }`: its own check runs
   again first, no step that succeeded runs again, and a step that is no longer safe is refused with its reason. Work the
   owner approved is resumed by the owner only, and so is a job the owner cancelled (`CANCELLED_BY_OWNER`: the cancel
-  stands; tell the person). Your safety rails are judged again on the steps left: if one now covers a step, the rest
-  becomes one proposal for the owner (`proposal_captured`): follow it with `bridge_proposal_status`, never resume or
-  redo it. Resume once, then follow the job; never loop on a refusal.
+  stands; tell the person). Resume once, then follow the job; never loop on a refusal.
 - You cannot approve your own proposals, change your scope, or see other connections' jobs.
 
 ## Canon and approval
@@ -1621,57 +1624,42 @@ Some changes are **protected canon**. By default:
 - setting a page's `Status` to `Authoritative`, or changing it from `Authoritative` to anything else;
 - changing an existing `Continuity Type` or `Continuity` (for example `CANON` to `AU`, or one AU to another). Setting
   them where they are empty, as on a new page, is fine;
-- **deleting** a page whose `Status` is `Authoritative` (with `cascade`, any page under it that is). Restoring a deleted
-  page needs no approval;
-- **deleting** an Archived `[BARC]` page, and deleting a map, timeline or board of an Authoritative page (two rules the
-  owner can switch off per project);
+- **deleting** a page whose `Status` is `Authoritative` (with `cascade`, any page under it that is);
+- **deleting** an Archived `[BARC]` page, and deleting a map, timeline or board of an Authoritative page;
 - **every lifecycle change**: creating an Authoritative page, and `archive_page`, `unarchive_page`, `move_to_working`
   and `promote_page`.
 
-**No connection can make these changes on its own, whatever its scope.** A write that would make one (through
-`set_facts`, `lk_api_write`, `lk_api_batch` or any other tool) becomes a **proposal**: the result is
-`proposal_captured` with `requiresCanonicalApproval: true` and the `reason`, and nothing is written. Only the owner can
-accept it, with a separate "Approve and accept as canon". Never retry such a write or look for another way to make it:
-tell the person it is waiting for the owner, and follow it with `bridge_proposal_status`.
+**At scope `write` you make them directly**, like any other change, and each is on the owner's Review page with
+Revert. They are the owner's decisions, so make one only when the owner has asked for it in this conversation, and say
+what you changed. The bridge still refuses what is not valid (a prefix that disagrees with Status, a status tag in the
+wrong place, a Status change outside the lifecycle tools), naming the right tool.
 
-**An approval covers only what it listed.** The owner approves exactly the pages a proposal shows. If, by the time it
-runs, a page it would touch was added (for example a new page under a page being deleted with `cascade`, or under a set
-being archived), removed or moved, it does not run: the proposal becomes `conflicted` and nothing is written. Read the
-pages again and propose afresh.
+**At scope `propose`** such a write is a proposal that only the owner can accept, with "Approve and accept as canon":
+the result is `proposal_captured` with `requiresCanonicalApproval: true` and the `reason`. Never retry it; follow it
+with `bridge_proposal_status`. An approval covers only what it listed: a page added, removed or moved before it runs
+makes it `conflicted`, and nothing is written. Read the pages again and propose afresh.
 
 ## At write scope
 
-Your connection's scope is set by the owner. At scope `propose` every write is a proposal. At scope `write` ordinary
-changes are **made at once**: page text, facts and links, chronology events, names, tags and aliases, new Working pages,
-image placements. The owner **reviews them afterwards** on the bridge's Review page and can revert a job from its
-journal, so write as carefully as you would for a proposal: read first, pass the version you read, change only what
-was asked.
+Your connection's scope is set by the owner. At scope `write` **every change is made at once**: page text, facts and
+links, chronology events, names, tags and aliases, moves, new pages, packages, renames and splits, restores, canon and
+lifecycle changes, and deletes. The owner **reviews them afterwards** on the bridge's Review page and can revert any job,
+so write as carefully as you would for a proposal: read first, pass the version you read, change only what was asked.
 
-**Still a proposal at scope `write`:**
+**Deletes are recoverable.** Before any delete (a page with every page under it, a document, an asset), the bridge keeps
+a restorable copy, and Revert brings it back: a page by LegendKeeper's own restore while it still holds it, otherwise
+made again from the copy (with a new id); an asset uploaded again from its kept bytes. A copy that cannot be taken
+refuses the delete (`DELETE_COPY_FAILED`): nothing is deleted; tell the person.
 
-- protected canon and every lifecycle change ([Canon and approval](#canon-and-approval)), always;
-- whatever the owner's **safety rails** on your profile keep for approval. By default: **deletes** (pages, documents,
-  timeline events and lanes, map features, assets, calendars, sidebar and infobox properties, board shapes, and replacing
-  a board's content or a calendar whole; through `lk_api_*`, also every block, row or list entry removed), **a job that
-  touches more than 10 pages** (a copy with its children counts every page it copies, a restore every page it brings
-  back), and **asset deletes and moves**; the owner can also keep renames and moves of pages. The result is
-  `proposal_captured` with `proposedBecause`, for example `proposed because: bulk change (14 pages > 10)`;
-- a chronology link you choose (`sync_timeline_event` with `event_id`), a restore that may bring back an Authoritative
-  page (`restore_resource` of a page deleted with others), and **any rename of an Authoritative page**, even one that
-  keeps `[BSRC]`: canonical or ordinary proposals at every scope;
-- a setting pack's package (`arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship`), unless the
-  owner switched the tool to follow your scope;
-- a rename with `arkona_rename`: always ONE canonical proposal (the bulk rail does not apply to it: the owner reads it
-  item by item);
-- `restore_snapshot`, always.
+**Still refused for agents:** member administration (`inviteMember`, `removeMember`, `revokeInvite`), which no Revert can
+undo; the owner does it in the LegendKeeper app. **Still a proposal at scope `write`:** a chronology link you choose on
+its own (`sync_timeline_event` with `event_id` on an event that already agrees), which has no Revert yet.
 
-**Never route round a rail.** Do not split a bulk change into smaller jobs, rename instead of deleting, or reach the
-same change through `lk_api_*`: tell the person the change is waiting for the owner, and follow it with
-`bridge_proposal_status`. Never retry a write that returned `proposal_captured`.
+**At scope `propose`** every write becomes a proposal: `proposal_captured`. Follow it with `bridge_proposal_status`,
+and never resubmit it.
 
-The rails are judged when your request arrives; a job already accepted runs as accepted. The owner's emergency brake is
-your scope: lowered, your queued jobs stop before their next write. A page is never moved under `templates`
-(`TEMPLATES_DESTINATION`), whatever your scope.
+The owner's emergency brake is your scope: lowered, your queued jobs stop before their next write. A page is never
+moved under `templates` (`TEMPLATES_DESTINATION`), whatever your scope.
 
 ## When the low-level tools are right
 

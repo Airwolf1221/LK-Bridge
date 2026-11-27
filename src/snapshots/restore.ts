@@ -1,6 +1,6 @@
 /**
- * Restores (v2 E1a, ADR 0042; PLAN-v2 4.11): always proposals, at every scope (the tool and the dashboard submit with
- * `forceProposal`), planned here from a snapshot's pieces and the page as it is now, and run by the ordinary machinery:
+ * Restores (v2 E1a, ADR 0042; PLAN-v2 4.11): direct at scope write and as the owner's confirmed action, a proposal at
+ * scope propose (v3 F12, ADR 0081; formerly always proposals, submitted with `forceProposal`), planned here from a snapshot's pieces and the page as it is now, and run by the ordinary machinery:
  * the page's job-level lock and its documents', the compare-and-swap inside the lock (If-Match for page blocks and boards,
  * a check of the features, lanes and events as planned for maps and timelines, which LegendKeeper does not version), the
  * verify step, journal pre-images, and every guard (canon, lifecycle, an approval covering only what it listed).

@@ -2,6 +2,8 @@
 /**
  * Adversarial review: ways an agent can make a protected canonical change WITHOUT the owner's "Approve and accept as
  * canon". Each test asserts the SAFE behaviour; a failing test is a confirmed bypass. Every attack has its own pages.
+ * v3 F12 (ADR 0081): at scope `write` a protected change is direct, so the agent here is at scope `propose`, where a
+ * protected change must still become a CANONICAL proposal (one an ordinary Approve cannot run).
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -33,6 +35,8 @@ const proposedOrRefused = (body: Record<string, unknown>, text: string) => {
 
 let w: FactsWorld;
 let writer: Client;
+/** A connection at scope write, for the pages an attack needs to exist first (made directly, as any writer can). */
+let setup: Client;
 let mark = 0;
 const writesSince = () => w.sidebars.requests.slice(mark).filter((x) => x.method !== 'GET');
 const rowId = (page: string, key: string) => w.sidebars.rows(page).find((r) => r.key === key)!.id;
@@ -70,7 +74,8 @@ beforeAll(async () => {
       ]),
     ]);
   }
-  writer = await w.stack.connect();
+  writer = await w.stack.connect(w.stack.newToken('cr-canon-propose', 'propose').token);
+  setup = await w.stack.connect();
 });
 afterAll(async () => w.close());
 beforeEach(() => {
@@ -191,7 +196,7 @@ describe('F2: a mention run’s read-only `name` (and a label-less mention) is j
     realNames();
     try {
       // The agent makes a page named exactly “Authoritative” (no fact is written; nothing guards a name)…
-      const target = await w.stack.call(writer, 'lk_api_write', {
+      const target = await w.stack.call(setup, 'lk_api_write', {
         operationId: 'createResource',
         params: { body: { id: 'authpg01', name: 'Authoritative' } },
       });
@@ -216,7 +221,7 @@ describe('F2: a mention run’s read-only `name` (and a label-less mention) is j
     const page = PAGES.f2c[0];
     realNames();
     try {
-      const target = await w.stack.call(writer, 'lk_api_write', {
+      const target = await w.stack.call(setup, 'lk_api_write', {
         operationId: 'createResource',
         params: { body: { id: 'draftpg1', name: 'Draft' } },
       });
@@ -232,7 +237,7 @@ describe('F2: a mention run’s read-only `name` (and a label-less mention) is j
       // CR-2026-11 (CR-11): a page mention in a protected fact is itself a protected change (and refused for Status).
       proposedOrRefused(point.body, point.text);
       // A rename is no sidebar write: the canon guard never looks at it.
-      const rename = await w.stack.call(writer, 'lk_api_write', {
+      const rename = await w.stack.call(setup, 'lk_api_write', {
         operationId: 'updateResource',
         params: { path: { resourceId: 'draftpg1' }, body: { name: 'Authoritative' } },
       });
@@ -276,13 +281,25 @@ describe('F3: Unicode look-alike keys and values are not normalised', () => {
     ],
   ];
   for (const [label, key, value] of cases) {
-    it(`a new row (${label}) is judged as Status Authoritative`, async () => {
+    // v3 F12 follow-up (ADR 0081 amendment 1, decision 2): a disguised VALUE is an invalid value, refused outright (the
+    // allowed values listed); a disguised KEY with the plain value is Status Authoritative, as before.
+    const disguisedValue = value !== 'Authoritative';
+    it(`a new row (${label}) is ${disguisedValue ? 'refused as a look-alike of Authoritative' : 'judged as Status Authoritative'}`, async () => {
       const page = PAGES.f3o[0];
       const r = await w.stack.call(writer, 'lk_api_write', {
         operationId: 'createPropertyRow',
         params: { path: { resourceId: page, propertyId: kvId(page) }, body: { key, text: value } },
       });
-      expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
+      if (disguisedValue) {
+        expect(r.body.error?.code, r.text).toBe('POLICY_DENIED');
+        expect(r.body.error?.message, r.text).toMatch(
+          /only looks like “Authoritative”.*not an allowed value/,
+        );
+      } else
+        expect(r.body, r.text).toMatchObject({
+          status: 'proposal_captured',
+          requiresCanonicalApproval: true,
+        });
       expect(writesSince()).toHaveLength(0);
     });
   }

@@ -1,22 +1,21 @@
 /**
  * The Packs page (v3 F3a, ADR 0050; docs/dashboard.md › Packs): each setting pack's rules (read-only in F3a), its
  * governance sources with the versions the owner approved, its attachments (projects, served, template ids) and its
- * versions. Two changes, each with a fresh re-authentication and audited by the pack service: **approve this pack version**
+ * versions. Two changes, each audited by the pack service (ADR 0081: no fresh code): **approve this pack version**
  * (the current rules, with each governance source's document version read now and recorded), and the **token maps**
  * (race and culture → tag token), which make a new version that waits for approval.
  *
  * - `GET /packs`: every pack, as stored (no LegendKeeper request).
  * - `GET /packs/:id/governance`: the governance sources read now (one read each), with drift recorded.
- * - `POST /packs/:id/approve` `{ confirm: true }` (re-authenticated).
- * - `PUT /packs/:id/tokens` `{ race?, culture?, excludedRoutineTags?, confirm: true }` (re-authenticated; v3 F3f adds
+ * - `POST /packs/:id/approve` `{ confirm: true }`.
+ * - `PUT /packs/:id/tokens` `{ race?, culture?, excludedRoutineTags?, confirm: true }` (v3 F3f adds
  *   the Tagging Standard's Excluded Routine Tags).
- * - `POST /packs/:id/sections` `{ source, from, to, confirm: true }` (re-authenticated; ADR 0052 amendment): re-maps a
+ * - `POST /packs/:id/sections` `{ source, from, to, confirm: true }` (ADR 0052 amendment): re-maps a
  *   pinned heading of a governance source to one of the document's actual headings. A new version, waiting for approval.
  */
 import * as z from 'zod';
 import { PackError } from '../../packs/types.js';
 import type { Packs } from '../../packs/service.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, type Register } from './util.js';
 
@@ -37,14 +36,6 @@ const remapBody = z
     source: z.string().min(1).max(40),
     from: z.string().min(1).max(200),
     to: z.string().trim().min(1).max(200),
-    confirm: z.literal(true),
-  })
-  .strict();
-
-/** v3 F3.4 (ADR 0055 decision D): the per-tool switches (`propose`: always a proposal; `scope`: the agent's scope). */
-const toolsBody = z
-  .object({
-    tools: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), z.enum(['propose', 'scope'])),
     confirm: z.literal(true),
   })
   .strict();
@@ -96,7 +87,6 @@ export const registerPacks: Register = (api, ctx) => {
   });
 
   api.post('/packs/:id/approve', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(idParam, req.params);
     parseInput(z.object({ confirm: z.literal(true) }).strict(), req.body);
     return guarded(async () => {
@@ -106,7 +96,6 @@ export const registerPacks: Register = (api, ctx) => {
   });
 
   api.post('/packs/:id/sections', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(idParam, req.params);
     const b = parseInput(remapBody, req.body);
     return guarded(async () => {
@@ -119,19 +108,7 @@ export const registerPacks: Register = (api, ctx) => {
     });
   });
 
-  /** v3 F3.4: a write tool's "always propose" switch; a new pack version, approved as usual (re-authenticated). */
-  api.put('/packs/:id/tools', async (req) => {
-    requireReauth(ctx.deps.services, req);
-    const { id } = parseInput(idParam, req.params);
-    const b = parseInput(toolsBody, req.body);
-    return guarded(() => {
-      packs(ctx).commands.setToolModes('owner', id, b.tools);
-      return { pack: packs(ctx).view(id) };
-    });
-  });
-
   api.put('/packs/:id/tokens', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(idParam, req.params);
     const b = parseInput(tokensBody, req.body);
     return guarded(() => {

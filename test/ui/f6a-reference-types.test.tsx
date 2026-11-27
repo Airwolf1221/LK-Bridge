@@ -11,7 +11,6 @@ import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers'
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const CATEGORIES = [
   {
     category: 'Culture',
@@ -103,27 +102,21 @@ const response = {
   now: Date.now(),
 };
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed || (c.body as { dryRun?: boolean } | undefined)?.dryRun === true
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 600_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
-const passwordDialog = async (user: ReturnType<typeof userEvent.setup>) => {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const passwordDialog = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
 };
 
 const rowEl = async (value: string) =>
@@ -151,7 +144,7 @@ describe('the Reference Types page', () => {
   });
 
   it('Accept: a confirmation, then the step-up', async () => {
-    const gate = needsReauth(() => ({ decision: { id: 'rtd_1' } }));
+    const gate = answersAtOnce(() => ({ decision: { id: 'rtd_1' } }));
     const api = installApi({
       ...baseRoutes(),
       'GET /reference-types': response,
@@ -176,7 +169,7 @@ describe('the Reference Types page', () => {
   });
 
   it('Edit: the picker offers the category’s canonical values, or a new one with its role word', async () => {
-    const gate = needsReauth(() => ({ decision: { id: 'rtd_2' } }));
+    const gate = answersAtOnce(() => ({ decision: { id: 'rtd_2' } }));
     const api = installApi({
       ...baseRoutes(),
       'GET /reference-types': response,
@@ -218,7 +211,7 @@ describe('the Reference Types page', () => {
       'A Reference Type names the page’s role, from a closed list per primary category.',
       'Culture: Culture Reference (Culture); Language & Naming Reference (Language & Naming).',
     ];
-    const gate = needsReauth((c) =>
+    const gate = answersAtOnce((c) =>
       (c.body as { dryRun?: boolean }).dryRun
         ? {
             dryRun: true,
@@ -254,7 +247,7 @@ describe('the Reference Types page', () => {
   });
 
   it('v3 F6a.1: Accept all sends the ids of the whole filter’s confident rows, at most bulkMax, in one request', async () => {
-    const gate = needsReauth(() => ({
+    const gate = answersAtOnce(() => ({
       accepted: 2,
       skipped: 0,
       remaining: 0,

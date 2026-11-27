@@ -2,8 +2,9 @@
 /**
  * v3 F3e (ADR 0059): the dashboard's side of a split. On the Proposals page each destination says what leaving it out
  * means, on the item once unticked and again in the confirmation, BEFORE the owner approves (D6). On the job page of a
- * split's phase 1 (approved by the owner) Revert is offered, says that the pages it made go to ONE deletion proposal,
- * and, when nothing had left the source, only proposes deleting them. A stopped phase 1 is named as a split.
+ * split's phase 1 (approved by the owner) Revert is offered and, when nothing had left the source, only deletes the pages
+ * it made (v3 F12, ADR 0081: at once, by a job, part of the owner's confirmed Revert; no deletion proposal). A stopped
+ * phase 1 is named as a split.
  */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -12,31 +13,24 @@ import { baseRoutes, installApi, job, renderApp, step, useDom, type Call } from 
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const SOURCE = '[BSRC] Zahra al-Rashid - Character Reference';
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 300_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
 
-async function reauthenticate(user: ReturnType<typeof userEvent.setup>) {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
-}
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const reauthenticate = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
+};
 
 const dest = (key: string, label: string, sections: string) => ({
   id: `dest:${key}`,
@@ -151,13 +145,16 @@ describe('a split’s phase 1 on its job page', () => {
     lastResumedBy: null,
   };
 
-  it('names the split where it stopped, and Revert only proposes deleting the pages it made', async () => {
-    const gate = needsReauth(() => ({
+  it('names the split where it stopped, and Revert only deletes the pages it made (at once, by a job)', async () => {
+    const message =
+      'Nothing of job job_sp had left the source, so there is nothing to put back: the pages it made are being deleted (job job_del), each only while it is as the split made it.';
+    const gate = answersAtOnce(() => ({
       revert: {
         status: 'proposed',
-        deletionProposalId: 'prop_del',
+        deletionProposalId: null,
+        deletionJobId: 'job_del',
         targets: [],
-        message: 'Nothing of job job_sp had left the source: the pages it made are proposed for deletion.',
+        message,
       },
     }));
     const api = installApi({
@@ -198,12 +195,12 @@ describe('a split’s phase 1 on its job page', () => {
     await user.click(screen.getByRole('button', { name: 'Revert…' }));
     const dialog = await screen.findByRole('alertdialog');
     expect(dialog).toHaveTextContent('Revert this split?');
-    expect(dialog).toHaveTextContent('The 7 pages it made go to ONE deletion proposal');
-    await user.click(within(dialog).getByRole('button', { name: 'Propose deleting them' }));
+    expect(dialog).toHaveTextContent('The 7 pages it made are deleted');
+    expect(dialog).toHaveTextContent('a copy is kept first');
+    expect(dialog).not.toHaveTextContent(/proposal/i);
+    await user.click(within(dialog).getByRole('button', { name: 'Delete them' }));
     await reauthenticate(user);
-    await screen.findByText(
-      'Nothing of job job_sp had left the source: the pages it made are proposed for deletion.',
-    );
+    await screen.findByText(message);
     expect(api.find('POST', '/jobs/job_sp/revert').at(-1)!.body).toEqual({
       confirm: true,
       confirmPartial: false,

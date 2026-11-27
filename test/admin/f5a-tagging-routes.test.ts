@@ -1,8 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies */
 /**
- * v3 F5a (ADR 0067, H2 and H4): the Tagging page's new routes and ADR 0062's rule. "Keep this tag here" and "Approve all
- * these batches" ask for the step-up; "Allow this tag everywhere" asks for it except as a dry run; withdrawing a ruling
- * is one click (a tightening); agents have no route to any of them (their tool only suggests).
+ * v3 F5a (ADR 0067, H2 and H4): the Tagging page's new routes. ADR 0081: none asks for a fresh authenticator code
+ * ("Keep this tag here", "Approve all these batches", "Allow this tag everywhere" and withdrawing a ruling); agents have
+ * no route to any of them (their tool only suggests).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
@@ -43,10 +43,12 @@ const setReauth = (at: number) =>
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
     .run(at, s.services.sessionHash(s.sessionToken));
 const stepUp = () => setReauth(Math.floor(Date.now() / 1000));
-const expire = () => setReauth(Math.floor(Date.now() / 1000) - 601);
+/** No step-up on the session at all (ADR 0081: none of these routes asks for one). */
+const expire = () => setReauth(0);
+const asked = (r: { json?: { error?: { code?: string } } }) => r.json?.error?.code === 'REAUTH_REQUIRED';
 
 describe('the F5a Tagging routes', () => {
-  it('"Keep this tag here" asks for the step-up', async () => {
+  it('"Keep this tag here" needs no step-up', async () => {
     expire();
     const r = await s.post('/api/admin/tagging/keep-here', {
       pageId: 'pg1',
@@ -54,8 +56,7 @@ describe('the F5a Tagging routes', () => {
       reason: 'x',
       confirm: true,
     });
-    expect(r.status).toBe(403);
-    expect(r.json.error.code).toBe('REAUTH_REQUIRED');
+    expect(asked(r), JSON.stringify(r.json)).toBe(false);
   });
 
   it('withdrawing a ruling is one click', async () => {
@@ -65,30 +66,27 @@ describe('the F5a Tagging routes', () => {
     expect(r.json.removed).toBe(false);
   });
 
-  it('"Allow this tag everywhere": a dry run needs no step-up; the edit asks', async () => {
+  it('"Allow this tag everywhere": neither a dry run nor the edit needs a step-up', async () => {
     expire();
     const dry = await s.post('/api/admin/tagging/allow-everywhere', { tag: 'Lore', dryRun: true });
     expect(dry.status).not.toBe(403);
     // This world's Tagging Standard is not a page of the project as named: refused, nothing written.
     expect(dry.json.error.code).toMatch(/SOURCE_ELSEWHERE|SECTION_NOT_READABLE|RETAG_UNAVAILABLE/);
     const edit = await s.post('/api/admin/tagging/allow-everywhere', { tag: 'Lore', confirm: true });
-    expect(edit.status).toBe(403);
-    expect(edit.json.error.code).toBe('REAUTH_REQUIRED');
+    expect(asked(edit), JSON.stringify(edit.json)).toBe(false);
     const unconfirmed = await s.post('/api/admin/tagging/allow-everywhere', { tag: 'Lore' });
     expect(unconfirmed.json.error.code).toBe('CONFIRM_REQUIRED');
   });
 
-  it('"Approve all these batches" asks for the step-up, and takes retag batches only', async () => {
+  it('"Approve all these batches" needs no step-up, and takes retag batches only', async () => {
     expire();
-    const r = await s.post('/api/admin/tagging/approve-batches', { proposalIds: ['prop_x'], confirm: true });
-    expect(r.status).toBe(403);
-    stepUp();
     const notBatch = await s.post('/api/admin/tagging/approve-batches', {
       proposalIds: ['prop_x'],
       confirm: true,
     });
     expect(notBatch.status).toBe(400);
     expect(notBatch.json.error.code).toBe('NOT_A_RETAG_BATCH');
+    stepUp();
   });
 
   it('"Apply all corrections" of a run that is not there is refused before anything is proposed', async () => {

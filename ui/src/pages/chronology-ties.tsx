@@ -6,7 +6,8 @@
  *   new event** button ("none of these").
  * - An event in a tie (or a refused delete of one) shows each candidate row with **Pair with this row**.
  *
- * Each button makes one ordinary proposal for the owner to approve, as every "Propose a fix" does.
+ * Each button asks for the owner's confirmation and then runs at once as one job, as every "Apply fix" does (v3 F12,
+ * ADR 0081).
  */
 import { ApiError } from '../api';
 import { Button } from '../components';

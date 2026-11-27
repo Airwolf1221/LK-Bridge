@@ -2044,7 +2044,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Repair the timeline event of a chronology table row',
     access: 'write',
     description:
-      'Repairs drift for ONE chronology table row, with the TABLE as the authority: creates the row’s missing timeline event, or corrects the paired event’s minutes, detail, shape and link to match. It never touches the table or the Main count, and renames an event only to keep a date tail the bridge wrote in step with the row’s Date cell. Name the row with `row` (its date plus its description or its opening words, at least 20 characters; or its row_id). Use it for what the chronology check reports (row_without_event, date_mismatch, event_in_tie) or CHRONOLOGY_DRIFT. A row whose event already agrees answers "nothing to do". If several events could be its pair it is refused (PAIRING_AMBIGUOUS) with every candidate’s name, date and id: pass `event_id` to pair it with one (an event that already agrees is then linked to the row, no LegendKeeper write: a link is a proposal at every scope), or `create_new: true` to make a new event instead. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 6 to 7 reads and 1 write (a link: no write).',
+      'Repairs drift for ONE chronology table row, with the TABLE as the authority: creates the row’s missing timeline event, or corrects the paired event’s minutes, detail, shape and link to match. It never touches the table or the Main count, and renames an event only to keep a date tail the bridge wrote in step with the row’s Date cell. Name the row with `row` (its date plus its description or its opening words, at least 20 characters; or its row_id). Use it for what the chronology check reports (row_without_event, date_mismatch, event_in_tie) or CHRONOLOGY_DRIFT. A row whose event already agrees answers "nothing to do". If several events could be its pair it is refused (PAIRING_AMBIGUOUS) with every candidate’s name, date and id: pass `event_id` to pair it with one (an event that already agrees is then linked to the row, no LegendKeeper write: direct at scope write, on the owner’s Review page, whose Revert takes the link off), or `create_new: true` to make a new event instead. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 6 to 7 reads and 1 write (a link: no write).',
     inputSchema: z.object({
       row: syncRowArg,
       event_id: z
@@ -2159,11 +2159,13 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
             head: plan.head,
             markdown: plan.markdown,
             dryRun: args.dryRun,
-            // v3 F2.1: a link is a bridge-side record with no LegendKeeper write; it changes what the check pairs,
-            // repairs and offers to delete, so it is a proposal, and done it answers `linked`. CR-2026-11-R2 (R2-08): at
-            // every scope: at scope write its job holds only the bridge's own steps, which the Review page (ADR 0055
-            // decision A) never lists, so a direct link was one change the owner never saw (ADR 0057 decision 3).
-            ...(plan.action === 'link' ? { writtenStatus: 'linked', forceProposal: true } : {}),
+            // v3 F2.1: a link is a bridge-side record with no LegendKeeper write; done it answers `linked`. v3 F12
+            // follow-up (ADR 0081 amendment 1, decision 3): direct at scope write, on the owner's Review page, whose Revert
+            // takes the link off; a proposal at scope propose (asked for here: its job holds only the bridge's own steps,
+            // which the gate never turns into one), or from automation at Propose (its own).
+            ...(plan.action === 'link'
+              ? { writtenStatus: 'linked', ...(mctx.scope === 'propose' ? { forceProposal: true } : {}) }
+              : {}),
           });
         });
       }),

@@ -34,21 +34,12 @@ async function setup(): Promise<string> {
 const call = (name: string, args: Record<string, unknown>) =>
   w!.stack.call(c, name, { project: 'test', ...args });
 
-async function approve(r: { body: Record<string, unknown> }, asCanon = true) {
-  expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
-  const id = String(r.body.proposalId);
-  const pol = w!.stack.runtime.policy;
-  if (asCanon) await pol.commands.approveAsCanon('owner', id);
-  else await pol.commands.approve('owner', id);
-  for (
-    let i = 0;
-    i < 400 && !['executed', 'failed', 'conflicted'].includes(pol.proposals.get(id)!.state);
-    i++
-  )
-    await new Promise((res) => setTimeout(res, 20));
-  const p = pol.proposals.get(id)!;
-  const job = p.jobId ? w!.stack.runtime.engine.queries.getJob(PROJECT, p.jobId) : null;
-  return { state: p.state, lastError: job?.lastError };
+/** v3 F12 (ADR 0081): at scope write a restore runs at once as one job; how it ended (a failure names its job). */
+async function ran(r: { body: Record<string, unknown> }) {
+  const id = (r.body.jobId ?? (r.body.error as { jobId?: string } | undefined)?.jobId) as string | undefined;
+  expect(id, JSON.stringify(r.body)).toBeTruthy();
+  const job = await w!.stack.runtime.engine.wait(PROJECT, id!, 30_000);
+  return { state: job.status, lastError: job.lastError };
 }
 
 /** The page deleted and purged, then recreated from the snapshot alone. */
@@ -61,14 +52,14 @@ async function recreate(snap: string) {
     scope: 'deleted',
     mode: 'recreate',
   });
-  return approve(r);
+  return ran(r);
 }
 
 describe('restore and recreate write icons in the write form', () => {
   it('recreate: a page read as "fas fa-book", a pin as "fas fa-flag" and an event as "far fa-star" are written as book, flag and star', async () => {
     const snap = await setup();
     const res = await recreate(snap);
-    expect(res.state, JSON.stringify(res.lastError)).toBe('executed');
+    expect(res.state, JSON.stringify(res.lastError)).toBe('succeeded');
     // Only bare names went to LegendKeeper; none was refused, so nothing was dropped.
     expect(w!.repo.iconWrites.sort()).toEqual(['book', 'flag', 'star']);
     expect(w!.repo.live(S.atlas)!.iconGlyph).toBe('fas fa-book');
@@ -81,7 +72,7 @@ describe('restore and recreate write icons in the write form', () => {
     const snap = await setup();
     w!.repo.refusedIcons.add('book').add('flag').add('star');
     const res = await recreate(snap);
-    expect(res.state, JSON.stringify(res.lastError)).toBe('executed');
+    expect(res.state, JSON.stringify(res.lastError)).toBe('succeeded');
     const page = w!.repo.live(S.atlas)!;
     expect(page.name).toBe('[BSRC] Atlas of Snapshots');
     expect(page.iconGlyph ?? null).toBeNull();
@@ -113,7 +104,7 @@ describe('restore and recreate write icons in the write form', () => {
       scope: 'deleted',
       mode: 'recreate',
     });
-    const res = await approve(r);
+    const res = await ran(r);
     expect(res.state).toBe('failed');
   });
 
@@ -131,8 +122,8 @@ describe('restore and recreate write icons in the write form', () => {
         scope: 'document',
         document,
       });
-      const res = await approve(r, false);
-      expect(res.state, JSON.stringify(res.lastError)).toBe('executed');
+      const res = await ran(r);
+      expect(res.state, JSON.stringify(res.lastError)).toBe('succeeded');
     }
     expect(w!.repo.iconWrites.sort()).toEqual(['flag', 'star']);
     // Written as the bare name; read back in the read form, as snapshotted.

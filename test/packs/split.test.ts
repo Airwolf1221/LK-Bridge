@@ -478,7 +478,8 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 
   it('the costs, measured: the proposal’s capture and the job', () => {
     expect(cost).toEqual(COSTS.zahra);
-    // The preview's estimate: the job's writes exactly, its reads within about a tenth (175 estimated, 159 made).
+    // The preview's estimate: the job's writes exactly; its reads 175 estimated, 209 made (159 before v3 F12's
+    // pre-image reads, which the estimate does not count).
     expect(proposal.cost).toMatchObject({ planReads: 10, job: { reads: 175, writes: cost.writes } });
   });
 
@@ -502,7 +503,8 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
     expect(w.repo.live(S.zahra)!.parentId).toBe(C.qishen);
     expect(linksOf(w, P.nadiraBio)).toContain(S.zahra);
     expect(linksOf(w, P.nadiraBio)).not.toContain(pages.rel!.id);
-    // The pages it made (and the index) go to ONE deletion proposal, children first.
+    // The pages it made (and the index) are deleted, children first: v3 F12 (ADR 0081), at once, part of the owner's
+    // Revert (each checked first), no second approval.
     const rec = await recordOf(w, jobId, (r) => r.state === 'reverted');
     expect(rec.revert.kept).toEqual([]);
     const index = named(w, '[INDEX] Zahra al-Rashid')!;
@@ -510,13 +512,9 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
       [...Object.values(pages).map((p) => p.id), index.id].sort(),
     );
     expect(rec.revert.deleted.at(-1).id).toBe(index.id);
-    const del = w.stack.runtime.policy.proposals.get(rec.revert.deletionProposalId)!;
-    expect(del.state).toBe('pending');
-    expect(del.requiresCanonicalApproval).toBe(true);
-    // Nothing is deleted until the owner approves it.
-    for (const p of Object.values(pages)) expect(w.repo.live(p.id), p.name).toBeTruthy();
-    const d = await approveSplit(w, del.id);
-    expect(d.job.status, JSON.stringify(d.job.lastError)).toBe('succeeded');
+    expect(rec.revert.deletionProposalId).toBeNull();
+    const d = await settle(w, String(rec.revert.deletionJobId));
+    expect(d.status, JSON.stringify(d.lastError)).toBe('succeeded');
     for (const p of Object.values(pages)) expect(w.repo.live(p.id), p.name).toBeFalsy();
     expect(w.repo.live(index.id)).toBeFalsy();
     // Reverted once: never again, and never resumed.
@@ -530,8 +528,11 @@ describe('arkona_split_owner: phase 1 on a character monolith (the source surviv
 /** The costs, measured (pinned: a change is a cost change to state). */
 const COSTS = {
   // CR-2026-11-R3 (R3-66): + the Core upgrade (her rename and Reference Type; the two templates read at the capture).
-  zahra: { capture: 26, requests: 248, writes: 89 },
-  statutes: { capture: 12, requests: 84, writes: 22 },
+  // v3 F12 (ADR 0081): the pre-image Revert needs: every sidebar row write (updatePropertyRow) now reads its property's
+  // rows first, inside the lock, where a row write chained on the previous one's version read nothing (248 → 298 and
+  // 84 → 97 requests; the writes are the same).
+  zahra: { capture: 26, requests: 298, writes: 89 },
+  statutes: { capture: 12, requests: 97, writes: 22 },
 };
 
 describe('arkona_split_owner: phase 2 on an owner with two domains (the source retired)', () => {
@@ -594,19 +595,18 @@ describe('arkona_split_owner: phase 2 on an owner with two domains (the source r
     }
   });
 
-  it('phase 2 (D2): once phase 1 verified, a SEPARATE canonical archive_page proposal; never a delete', async () => {
-    const rec = await recordOf(w, String(proposal.proposalId), (r) => r.state === 'retiring');
-    const p2 = w.stack.runtime.policy.proposals.get(rec.phase2.proposalId)!;
-    expect(p2.state).toBe('pending');
-    expect(p2.requiresCanonicalApproval).toBe(true);
-    expect(p2.id).not.toBe(proposal.proposalId);
-    const detail = JSON.stringify(w.stack.runtime.policy.proposals.detail(p2.id));
-    expect(detail).toContain('archive_page');
-    expect(detail).not.toContain('deleteResource');
-    // Not archived until the owner approves it.
-    expect(w.repo.live(S.statutes)!.name).toBe('[BSRC] Ostrand Statutes and Rites - General Source');
-    const done = await approveSplit(w, p2.id);
-    expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
+  it('phase 2 (D2): once phase 1 verified, a SEPARATE archive_page job; never a delete', async () => {
+    // v3 F12 (ADR 0081): the owner's approval of a split that retires its source asked for it, so it runs at once.
+    const rec = await recordOf(
+      w,
+      String(proposal.proposalId),
+      (r) => r.state === 'retiring' || r.state === 'retired',
+    );
+    expect(rec.phase2.proposalId).toBeUndefined();
+    const done = await settle(w, String(rec.phase2.jobId));
+    expect(done.status, JSON.stringify(done.lastError)).toBe('succeeded');
+    expect(done.origin.tool).toBe('archive_page');
+    expect(done.steps.map((x) => x.opId)).not.toContain('deleteResource');
     const after = w.repo.live(S.statutes)!;
     expect(after.name).toMatch(/^\[BARC\] Ostrand Statutes and Rites/);
     expect(after.deletedAt ?? null).toBeNull();
@@ -615,7 +615,8 @@ describe('arkona_split_owner: phase 2 on an owner with two domains (the source r
 
   it('the costs, measured', () => {
     expect(cost).toEqual(COSTS.statutes);
-    // 58 reads estimated, 62 made; the writes exactly.
+    // 58 reads estimated, 75 made (62 before v3 F12's pre-image reads, which the estimate does not count); the writes
+    // exactly.
     expect(proposal.cost).toMatchObject({ planReads: 6, job: { reads: 58, writes: cost.writes } });
   });
 });

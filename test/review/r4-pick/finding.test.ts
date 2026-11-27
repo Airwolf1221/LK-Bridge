@@ -10,7 +10,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
-  approveAndWait,
+  pickDone,
   coreOf,
   findingOf,
   heading,
@@ -59,7 +59,8 @@ afterAll(async () => {
 
 /** An agent's direct write at scope write (the default connection, rails off), then its change snapshot. */
 async function agentSetsFacts(page: string, facts: Record<string, string>) {
-  const c = await w.stack.connect();
+  // v3 F12: the world's own agent is at scope propose; this one is at scope write, where its edit is direct.
+  const c = await w.stack.connect(w.stack.newToken('r4-pick-writer', 'write').token);
   const r = await w.stack.call(c, 'set_facts', { project: 'test', page, facts });
   expect(r.isError, r.text).toBe(false);
   await w.stack.runtime.snapshots.settled();
@@ -83,7 +84,7 @@ describe('the finding changed after the owner saw it', () => {
       expect(r.json.value, `the owner picked “4A 300” and the bridge proposed “${r.json.value}”`).toBe(
         '4A 300',
       );
-      const done = await approveAndWait(w, String(r.json.proposalId));
+      const done = await pickDone(w, r.json);
       void done;
     }
     expect(textOf(w, 'tessreg1', 'tessp1')).not.toContain('4A 931');
@@ -127,7 +128,7 @@ describe('typed values (“must read, whole, as one date of the calendar”)', (
   it('PK-55 a value holding a line break (“4A\\n105”): refused, or written without the break', async () => {
     const r = await typed('4A\n105', XENA);
     if (r.status === 200) {
-      const done = await approveAndWait(w, String(r.json.proposalId));
+      const done = await pickDone(w, r.json);
       expect(done.job?.status).toBe('succeeded');
       expect(textOf(w, 'xenareg1', 'xenap1')).not.toMatch(/\n/);
       expect(rowText(w, coreOf(XENA), 'Temporal Scope')).not.toMatch(/\n/);

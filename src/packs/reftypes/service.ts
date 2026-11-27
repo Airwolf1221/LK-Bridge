@@ -7,7 +7,7 @@
  *   pages, the suggestion (by rules only: src/packs/reftypes/suggest.ts) and its status (`canonical`, `mapped`,
  *   `specialist`, `rejected`, `open`). Coverage is stated as `query_facts` states it: a stale or missing read is shown,
  *   never silently skipped.
- * - **The owner's decisions** (dashboard only, the step-up, audited): accept, edit (another canonical value, or a new
+ * - **The owner's decisions** (dashboard only, audited): accept, edit (another canonical value, or a new
  *   one added to the category with its role word), reject, keep as specialist; bulk accept; undo before applied.
  * - **Publish** the vocabulary to Source Formatting's "Reference Type Vocabulary" (under "Sidebar Metadata"): ONE job of
  *   the bridge's (`replaceDocumentBlocks`, If-Match the version read, journalled, verified); publishing again replaces

@@ -3,7 +3,7 @@
  * as the chronology tools keep them, against the mock chronology (the real server, MCP, policy, engine and the
  * chronology's own checkers): an added event and row deleted and the Main count put back; a changed description put
  * back; a changed date put back, the row moved back to its old place; an outside edit to the row blocks the revert; a
- * deletion is never reverted.
+ * deleted event (v3 F12, ADR 0081: a direct delete at scope write) comes back with its row.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -12,7 +12,6 @@ import { chronologyWorld, type ChronologyWorld } from '../chronology/world.js';
 
 let w: ChronologyWorld;
 let client: Client;
-let profileId: string;
 const FOURTH = 'Fourth Arkonan Age';
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
@@ -31,7 +30,6 @@ beforeAll(async () => {
     limits: { 'key-min': 5000, 'write-min': 2000 },
   });
   const t = w.stack.newToken('chronology-writer', 'write');
-  profileId = t.profileId;
   client = await w.stack.connect(t.token);
 });
 afterAll(async () => w.close());
@@ -143,8 +141,9 @@ describe('Revert of a chronology change', () => {
     expect(w.rows(FOURTH)).toEqual(before);
   });
 
-  it('a deleted event is never reverted', async () => {
-    rt().policy.commands.setRails('owner', profileId, { deletes: false });
+  it('a deleted event comes back with Revert (v3 F12, ADR 0081)', async () => {
+    const rowsBefore = w.rows(FOURTH);
+    const namesBefore = eventNames();
     const r = await call('delete_timeline_event', {
       event: { date: 'Kumikas 4th, 4A 881', description: 'The gates of Ashgate are shut at dusk' },
       confirm: true,
@@ -152,14 +151,16 @@ describe('Revert of a chronology change', () => {
     expect(r.body.status, r.text).toBe('written');
     const jobId = jobOf(r);
     await waitJob(jobId);
-    const rv = await rt().reverts.revert('owner', PROJECT, jobId);
-    expect(rv).toMatchObject({ status: 'refused', code: 'DELETION' });
-    rt().policy.commands.setRails('owner', profileId, { deletes: true });
+    expect(eventNames()).not.toEqual(namesBefore);
+    const done = await revert(jobId);
+    expect(done.status, JSON.stringify(done.lastError)).toBe('succeeded');
+    expect(eventNames()).toEqual(namesBefore);
+    expect(w.rows(FOURTH).length).toBe(rowsBefore.length);
   });
 });
 
 describe('operation_id at scope write (ADR 0055 decision F)', () => {
-  it('a delete the rail made a proposal is the same proposal when the request is sent again', async () => {
+  it('a direct delete is the same job when the request is sent again', async () => {
     const made = await call('create_timeline_event', {
       date: 'Kumikas 6th, 4A 881',
       name: 'Lanterns lit',
@@ -171,18 +172,13 @@ describe('operation_id at scope write (ADR 0055 decision F)', () => {
       call('delete_timeline_event', {
         event: { date: 'Kumikas 6th, 4A 881', description: 'The lanterns of Ashgate are lit' },
         confirm: true,
-        operation_id: 'rail-repeat-1',
+        operation_id: 'delete-repeat-1',
       });
     const first = await ask();
-    expect(first.body.status, first.text).toBe('proposal_captured');
-    expect(first.body.proposedBecause).toMatch(/^proposed because: deletes? \(/);
+    expect(first.body.status, first.text).toBe('written');
+    await waitJob(jobOf(first));
     const again = await ask();
-    expect(again.body).toMatchObject({ repeated: true, proposalId: String(first.body.proposalId) });
-    expect(
-      rt()
-        .policy.proposals.list({ project: PROJECT, state: 'pending' })
-        .map((p) => p.id),
-    ).toEqual([String(first.body.proposalId)]);
-    rt().policy.commands.reject('owner', String(first.body.proposalId), 'test');
+    expect(again.body, again.text).toMatchObject({ repeated: true, jobId: jobOf(first) });
+    expect(rt().policy.proposals.list({ project: PROJECT, state: 'pending' })).toEqual([]);
   });
 });

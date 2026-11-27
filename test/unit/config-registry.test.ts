@@ -194,6 +194,8 @@ describe('the registry agrees with the schemas', () => {
       SNAPSHOT_KEEP_FULL_DAYS: [30, 1, 3650],
       SNAPSHOT_KEEP_WEEKLY: [8, 0, 520],
       SNAPSHOT_KEEP_DAYS: [30, 1, 3650],
+      // v3 F12 (ADR 0081): added after F8.
+      DELETE_COPY_RETENTION_DAYS: [90, 1, 3650],
       SNAPSHOT_SOFT_DELETE_DAYS: [30, 1, 3650],
       JOURNAL_RETENTION_DAYS: [30, 1, 3650],
       JOURNAL_MAX_BYTES: [2147483648, 1048576, null],
@@ -218,6 +220,7 @@ describe('the registry agrees with the schemas', () => {
       AUTH_REFRESH_FAMILY_MAX_SECONDS: [7776000, 3600, 63072000],
       AUTH_CODE_TTL_SECONDS: [300, 30, 600],
       AUTH_SESSION_TTL_SECONDS: [2592000, 300, 2592000],
+      AUTH_STEP_UP_WINDOW_SECONDS: [43200, 300, 604800],
       AUTH_REFRESH_GRACE_SECONDS: [10, 0, 60],
       AUTH_CIMD_TIMEOUT_MS: [4000, 100, 8000],
       AUTH_CIMD_MAX_BYTES: [8192, 512, 65536],

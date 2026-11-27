@@ -36,6 +36,7 @@ import { compareStoredBlocks } from '../jobs/verify-blocks.js';
 import { BLOCKWISE_CHECK, blocksHash, planBlockwise, withoutVersions } from '../pages/blockwise.js';
 import { blockwiseJob, validateBlockOp } from '../pages/blockwise-job.js';
 import { DEFAULT_STAGING_FOLDER } from '../images/service.js';
+import type { EntityFollowUp } from './entity-undo.js';
 import type {
   BlockTarget,
   FactsTarget,
@@ -102,6 +103,12 @@ export interface TargetPlan {
     /** The asset's file URL, as the plan's read gave it (the copy is downloaded from it). */
     readonly url: unknown;
   };
+  /**
+   * v3 F12 (ADR 0081, D3): the bridge-side part of reverting a deletion LegendKeeper can no longer undo itself, once the
+   * revert job has succeeded: a page (and the pages under it) made again from the copy kept before the delete, or an
+   * asset uploaded again from its kept bytes.
+   */
+  readonly followUp?: EntityFollowUp;
 }
 
 /** The reads a plan makes (system principal, P1; a 404 is `exists: false`). */
@@ -869,7 +876,7 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
     // deletion proposed to the owner. The job only checks, inside its lock, that the asset is as the placement left it.
     return ready(
       t,
-      'its file goes back to the Staging page (kept on the bridge’s server), and deleting the placed image from the library is proposed to you; nothing is written to the staging folder',
+      'its file goes back to the Staging page (kept on the bridge’s server), and the placed image is deleted from the library by the same Revert (a job of its own); nothing is written to the staging folder',
       [check],
       {
         assets: [t.assetId],

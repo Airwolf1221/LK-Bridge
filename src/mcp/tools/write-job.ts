@@ -16,7 +16,7 @@ import { EXPECT_STEP, MAX_STEP_CHECKS, VERIFY_STEP } from '../../jobs/internal-s
 import type { ProposalExtras } from '../../jobs/policy.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import { finish } from './repo.js';
-import { errorFromThrown, errorResult, mcpOrigin, railBody, render, type ProjectDeps } from './shape.js';
+import { errorFromThrown, errorResult, mcpOrigin, reasonBody, render, type ProjectDeps } from './shape.js';
 
 const WAIT_MS = 25_000;
 
@@ -139,7 +139,7 @@ export async function runWriteJob(
       ...(r.canonical
         ? { requiresCanonicalApproval: true, reason: r.canonical.reason, hint: CANON_HINT }
         : r.proposedBecause
-          ? railBody(r)
+          ? reasonBody(r)
           : { hint: PROPOSAL_HINT }),
     };
     return { result: finish(pd, mctx, tool, body, spec.preview), body, proposalId: r.proposalId };

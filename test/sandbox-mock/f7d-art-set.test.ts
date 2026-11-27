@@ -3,10 +3,9 @@
  * sandbox check (test/sandbox/f7d-art-set.ts, D0 to D4) against the faithful mock with its asset host, through the same
  * runtime and harness as the owner's run: every item passes, and the throwaway character is gone.
  *
- * Step 0 of F10 (25 November 2026): the world keeps the pack's SEED switches (`toolModes: 'seed'`), as the live pack
- * has them (`arkona_add_character_art: 'scope'`), so D3's proposal comes from its `propose`-scope principal and D3b's
- * direct job from its `write`-scope one. Before, the mock's pack had the tool at "always propose", so D3 passed here
- * and failed live with "not one proposal".
+ * Step 0 of F10 (25 November 2026): D3's proposal comes from its `propose`-scope principal and D3b's direct job from
+ * its `write`-scope one. v3 F12 (ADR 0081): the pack's per-tool switches are gone, so the agent's scope alone decides
+ * (the switch this file asserted went with them).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { formatArtSetReport, runArtSetCheck } from '../sandbox/f7d-art-set.js';
@@ -24,11 +23,6 @@ describe('f7d-art-set on the mock', () => {
   let on: OnMock;
   beforeAll(async () => {
     w = makeFaithful(await ownersWorld({ toolModes: 'seed' }));
-    // The live pack's switch, asserted so the mock cannot drift from it again.
-    expect(
-      w.stack.runtime.packs.view('arkona')?.toolModes.find((t) => t.tool === 'arkona_add_character_art')
-        ?.mode,
-    ).toBe('scope');
     // The Character Art template as the test world's has it (the identity copies among its rows).
     w.sidebars.page(TPL.art, [
       SidebarModel.kv(

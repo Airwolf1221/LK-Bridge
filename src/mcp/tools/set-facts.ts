@@ -25,11 +25,13 @@ import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.j
 import { defineTool } from './define.js';
 import { finish, liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
 import {
-  railBody,
+  reasonBody,
   errorFromThrown,
   errorResult,
   mcpOrigin,
   projectArg,
+  protectedDryRun,
+  protectedDryRunText,
   render,
   withProject,
   type ProjectDeps,
@@ -154,7 +156,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
     title: 'Set facts and links',
     access: 'write',
     description:
-      'Changes a page’s sidebar FACTS (the key-value rows of PROPERTIES) and LINKS (collections such as Dependencies and Related Sources). Page text is write_page; name, tags and aliases are update_resource. `facts` maps a key to a plain string, { "markdown": "…" } (inline Markdown and [[mentions]]) or null to remove the row; keys match without case and keep their place, new template facts go in template order, others at the bottom. `links` maps a collection title to { add, remove }: page names or ids, or { page, document }. Read the page first with get_resource and pass its factsVersion as baseFactsVersion whenever a value rests on what you read: if the sidebar changed since, nothing is written (VERSION_CONFLICT: read again, redo). Change all the facts you need in ONE call. dryRun shows the plan. Protected canon is always a proposal the owner accepts as canon, whatever your scope (setting Status to or from Authoritative; changing an existing Continuity Type or Continuity): never retry it or route around it; lifecycle changes use promote_page, archive_page and move_to_working. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Example: { "page": "Asagiri Miyabi", "facts": { "Scope": "Shrine maiden", "Sister": { "markdown": "[[Asagiri Kaede]]" }, "Old Note": null }, "links": { "Dependencies": { "add": ["Fourth Age - Table"] } }, "baseFactsVersion": "fv2_…", "project": "test" }. Cost: about 4 reads, then 1 write per fact and per collection changed.',
+      'Changes a page’s sidebar FACTS (the key-value rows of PROPERTIES) and LINKS (collections such as Dependencies and Related Sources). Page text is write_page; name, tags and aliases are update_resource. `facts` maps a key to a plain string, { "markdown": "…" } (inline Markdown and [[mentions]]) or null to remove the row; keys match without case and keep their place, new template facts go in template order, others at the bottom. `links` maps a collection title to { add, remove }: page names or ids, or { page, document }. Read the page first with get_resource and pass its factsVersion as baseFactsVersion whenever a value rests on what you read: if the sidebar changed since, nothing is written (VERSION_CONFLICT: read again, redo). Change all the facts you need in ONE call. dryRun shows the plan. Protected canon (setting Status to or from Authoritative; changing an existing Continuity Type or Continuity) is direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose; lifecycle changes use promote_page, archive_page and move_to_working. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Example: { "page": "Asagiri Miyabi", "facts": { "Scope": "Shrine maiden", "Sister": { "markdown": "[[Asagiri Kaede]]" }, "Old Note": null }, "links": { "Dependencies": { "add": ["Fourth Age - Table"] } }, "baseFactsVersion": "fv2_…", "project": "test" }. Cost: about 4 reads, then 1 write per fact and per collection changed.',
     inputSchema: z.object({
       page: pageRef.describe('Page name or id (inside the AI REPOSITORY).'),
       facts: z
@@ -325,13 +327,11 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         }
-        const canonical =
-          canon.length > 0
-            ? {
-                requiresCanonicalApproval: true,
-                protectedChanges: canon.map((c) => c.text),
-              }
-            : {};
+        // v3 F12 follow-up: what the protected part does at the caller's scope (direct at write, a proposal at propose).
+        const canonical = protectedDryRun(
+          mctx.scope,
+          canon.map((c) => c.text),
+        );
         const { parts } = planCounts(plan);
         const preview = () => ({ page, summary: parts.join(', ') });
         if (args.dryRun === true) {
@@ -347,7 +347,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
               ...canonical,
               message:
                 canon.length > 0
-                  ? 'Dry run: nothing was written. This change touches protected canon, so it would become a proposal that only the owner can accept as canon.'
+                  ? `Dry run: nothing was written. This change touches protected canon. ${protectedDryRunText(mctx.scope)}`
                   : 'Dry run: nothing was written and nothing was proposed.',
             },
             preview,
@@ -403,10 +403,10 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
                     reason: r.canonical.reason,
                     hint:
                       'This change touches protected canon, so it was NOT made: it waits for the owner, who alone can accept it as canon. ' +
-                      'This happens whatever your scope. Never retry it or work around it; tell the user, and follow it with bridge_proposal_status.',
+                      'Your connection’s scope is "propose". Never retry it or work around it; tell the user, and follow it with bridge_proposal_status.',
                   }
                 : r.proposedBecause
-                  ? railBody(r)
+                  ? reasonBody(r)
                   : {
                       hint:
                         'The change needs the owner’s approval and was NOT made. The owner sees this plan; if the sidebar changes before approval, ' +

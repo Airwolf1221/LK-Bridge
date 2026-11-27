@@ -298,10 +298,10 @@ describe('the Chronology page', () => {
     expect(api.find('POST', '/chronology/check')[0]!.body).toEqual({ confirm: true, project: 'baisheng' });
   });
 
-  it('offers "Propose a fix" on a row without an event and on a date mismatch only, and makes one proposal for the owner', async () => {
+  it('offers "Apply fix…" on a row without an event and on a date mismatch only; confirmed, it runs as one job (v3 F12)', async () => {
     const api = installApi(
       routes({
-        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_42', summary: 'x' },
+        'POST /chronology/propose-fix': { status: 'job_submitted', jobId: 'job_42', summary: 'x' },
       }),
     );
     const user = userEvent.setup();
@@ -309,9 +309,13 @@ describe('the Chronology page', () => {
     const table = await screen.findByRole('table', { name: 'Findings' });
     expect(table).toHaveTextContent('Row and event disagree about the date');
     // Two fixable findings (a row without an event, a date mismatch); the wrong link has none.
-    const buttons = within(table).getAllByRole('button', { name: 'Propose a fix' });
+    const buttons = within(table).getAllByRole('button', { name: 'Apply fix…' });
     expect(buttons).toHaveLength(2);
     await user.click(buttons[1]!);
+    // The dialog says what it does; nothing is sent until the owner confirms.
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('It runs at once as one job');
+    expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(0);
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply fix' }));
     await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
     expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
       confirm: true,
@@ -319,12 +323,12 @@ describe('the Chronology page', () => {
       age: 'Age of Dawn',
       rowId: 'rowflood',
     });
-    expect(await screen.findByText(/Proposal prop_42 is waiting on the Proposals page/)).toBeInTheDocument();
-    // The proposal is the owner's to approve: the button is gone for that row, not for the other.
-    expect(within(table).getAllByRole('button', { name: 'Propose a fix' })).toHaveLength(1);
+    expect(await screen.findByText(/Applying: job job_42 \(on the Jobs page\)/)).toBeInTheDocument();
+    // The fix is under way: the button is gone for that row, not for the other.
+    expect(within(table).getAllByRole('button', { name: 'Apply fix…' })).toHaveLength(1);
   });
 
-  it('offers "Propose a fix" on a count mismatch with a Main row (v2 E5 hotfix), and none without one', async () => {
+  it('offers "Apply fix…" on a count mismatch with a Main row (v2 E5 hotfix), and none without one', async () => {
     const findings = [
       {
         kind: 'count_mismatch',
@@ -343,8 +347,8 @@ describe('the Chronology page', () => {
       routes({
         'GET /chronology/check': { ...checkJson, last: { ...checkJson.last, findings } },
         'POST /chronology/propose-fix': {
-          status: 'proposal_captured',
-          proposalId: 'prop_43',
+          status: 'job_submitted',
+          jobId: 'job_43',
           summary: 'Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline events 336)',
         },
       }),
@@ -352,9 +356,10 @@ describe('the Chronology page', () => {
     const user = userEvent.setup();
     renderApp('/ui/chronology');
     const table = await screen.findByRole('table', { name: 'Findings' });
-    const buttons = within(table).getAllByRole('button', { name: 'Propose a fix' });
+    const buttons = within(table).getAllByRole('button', { name: 'Apply fix…' });
     expect(buttons).toHaveLength(1);
     await user.click(buttons[0]!);
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply fix' }));
     await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
     expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
       confirm: true,
@@ -362,7 +367,7 @@ describe('the Chronology page', () => {
       age: 'Fourth Arkonan Age',
       kind: 'count',
     });
-    expect(await screen.findByText(/Proposal prop_43 is waiting on the Proposals page/)).toBeInTheDocument();
+    expect(await screen.findByText(/Applying: job job_43/)).toBeInTheDocument();
   });
 
   it('lists the changes with journal links, and marks an incomplete one resolved', async () => {
@@ -419,7 +424,7 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
     markedAt: Date.now() - 60_000,
   };
 
-  it('an event without a row offers its deletion and shows the nearest rows; the proposal deletes only the event', async () => {
+  it('an event without a row offers its deletion and shows the nearest rows; confirmed, the job deletes only the event', async () => {
     const api = installApi(
       routes({
         'GET /chronology/check': withFindings([
@@ -434,7 +439,7 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
           }),
         ]),
         'GET /chronology/table-only': { project: checkJson.project, marks: [] },
-        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_50', summary: 'x' },
+        'POST /chronology/propose-fix': { status: 'job_submitted', jobId: 'job_50', summary: 'x' },
       }),
     );
     const user = userEvent.setup();
@@ -443,7 +448,10 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
     expect(within(table).getByTestId('nearest-rows')).toHaveTextContent(
       'Nearest rows: 4A 881 - 4A 900: The Quiet Years; Kumikas 3rd, 4A 881: Ashgate falls to the Isar host',
     );
-    await user.click(within(table).getByRole('button', { name: 'Propose deleting the event' }));
+    await user.click(within(table).getByRole('button', { name: 'Delete the event…' }));
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete the event' }),
+    );
     await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
     expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
       confirm: true,
@@ -468,7 +476,7 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
           }),
         ]),
         'GET /chronology/table-only': { project: checkJson.project, marks: [] },
-        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_51', summary: 'x' },
+        'POST /chronology/propose-fix': { status: 'job_submitted', jobId: 'job_51', summary: 'x' },
       }),
     );
     const user = userEvent.setup();
@@ -476,16 +484,16 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
     const table = await screen.findByRole('table', { name: 'Findings' });
     expect(within(table).getByTestId('shape-change')).toHaveTextContent('range → single day');
     expect(table).toHaveTextContent('Paired by the same start.');
-    // Cancelled: nothing is proposed.
-    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    // Cancelled: nothing is sent.
+    await user.click(within(table).getByRole('button', { name: 'Apply fix…' }));
     let dialog = screen.getByRole('alertdialog');
     expect(dialog).toHaveTextContent('range → single day');
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(0);
     // Confirmed: the request says the owner confirmed the change of shape.
-    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    await user.click(within(table).getByRole('button', { name: 'Apply fix…' }));
     dialog = screen.getByRole('alertdialog');
-    await user.click(within(dialog).getByRole('button', { name: 'Propose the change' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply the change' }));
     await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
     expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
       confirm: true,
@@ -532,13 +540,14 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
                   },
                 },
               }
-            : { status: 'proposal_captured', proposalId: `prop_6${posts}`, summary: 'x' },
+            : { status: 'job_submitted', jobId: `job_6${posts}`, summary: 'x' },
       }),
     );
     const user = userEvent.setup();
     renderApp('/ui/chronology');
     const table = await screen.findByRole('table', { name: 'Findings' });
-    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    await user.click(within(table).getByRole('button', { name: 'Apply fix…' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply fix' }));
     const tie = await within(table).findByTestId('tie-choices');
     expect(tie).toHaveTextContent('“Mehrana returns…” (Selyros 40th, 4A 605, n4nl9rud)');
     expect(within(tie).getAllByRole('button', { name: 'Use this event' })).toHaveLength(2);
@@ -547,6 +556,7 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
     expect(await screen.findByText(/could be its own: “Mehrana returns…”/)).toBeInTheDocument();
     const second = tie.querySelector('[data-candidate="eother01"]') as HTMLElement;
     await user.click(within(second).getByRole('button', { name: 'Use this event' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(2));
     expect(api.find('POST', '/chronology/propose-fix')[1]!.body).toEqual({
       confirm: true,
@@ -555,7 +565,7 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
       rowId: 'kvqam7yc',
       eventId: 'eother01',
     });
-    expect(await within(table).findByText(/Proposal prop_62 is waiting/)).toBeInTheDocument();
+    expect(await within(table).findByText(/Applying: job job_62/)).toBeInTheDocument();
     expect(within(table).queryByTestId('tie-choices')).toBeNull();
   });
 
@@ -585,14 +595,16 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
                   },
                 },
               }
-            : { status: 'proposal_captured', proposalId: 'prop_70', summary: 'x' },
+            : { status: 'job_submitted', jobId: 'job_70', summary: 'x' },
       }),
     );
     const user = userEvent.setup();
     renderApp('/ui/chronology');
     const table = await screen.findByRole('table', { name: 'Findings' });
-    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    await user.click(within(table).getByRole('button', { name: 'Apply fix…' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply fix' }));
     await user.click(await within(table).findByRole('button', { name: 'Make a new event' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(2));
     expect(api.find('POST', '/chronology/propose-fix')[1]!.body).toEqual({
       confirm: true,
@@ -626,19 +638,20 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
           }),
         ]),
         'GET /chronology/table-only': { project: checkJson.project, marks: [] },
-        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_71', summary: 'x' },
+        'POST /chronology/propose-fix': { status: 'job_submitted', jobId: 'job_71', summary: 'x' },
       }),
     );
     const user = userEvent.setup();
     renderApp('/ui/chronology');
     const table = await screen.findByRole('table', { name: 'Findings' });
     expect(table).toHaveTextContent('Event in a tie');
-    expect(within(table).queryByRole('button', { name: 'Propose deleting the event' })).toBeNull();
+    expect(within(table).queryByRole('button', { name: 'Delete the event…' })).toBeNull();
     const tie = within(table).getByTestId('tie-choices');
     expect(within(tie).getAllByRole('button', { name: 'Pair with this row' })).toHaveLength(2);
     expect(within(tie).queryByRole('button', { name: 'Make a new event' })).toBeNull();
     const row = tie.querySelector('[data-candidate="kvqam7yc"]') as HTMLElement;
     await user.click(within(row).getByRole('button', { name: 'Pair with this row' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
     expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
       confirm: true,

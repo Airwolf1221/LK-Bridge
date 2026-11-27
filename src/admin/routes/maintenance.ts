@@ -2,7 +2,6 @@
  * Maintenance Jobs page API (chunk 6, docs/maintenance.md). Every change goes through the owner commands
  * (`runtime.maintenance.commands`), which audit it and emit a `policy` event; a route only validates and calls.
  */
-import { requireReauth } from '../guard.js';
 import * as z from 'zod';
 import { BlockIdSweepError, SWEEP_JOB_ID, type BlockIdSweep } from '../../blockids/index.js';
 import { AdminHttpError } from '../http.js';
@@ -23,9 +22,6 @@ function sweepCall<T>(sweep: BlockIdSweep | null, fn: (s: BlockIdSweep) => T): T
     throw e;
   }
 }
-
-/** v2 E4 (RV1-4): the maintenance jobs that keep the backups (switching one off needs re-authentication). */
-const PROTECTING_JOBS = /^(snapshot-|offsite)/;
 
 export const registerMaintenance: Register = (api, ctx) => {
   const { maintenance } = ctx.deps.runtime;
@@ -48,16 +44,14 @@ export const registerMaintenance: Register = (api, ctx) => {
     return { dryRun: await sweepCall(maintenance.blockIds, (s) => s.dryRun(p.id)) };
   });
 
-  /** The owner's override of the sandbox check: setting it needs re-authentication; both ways are audited. */
+  /** The owner's override of the sandbox check: both ways are audited (ADR 0081: no fresh code). */
   api.put(`${SWEEP}/override`, (req) => {
     const body = parseInput(z.object({ on: z.boolean() }).strict(), req.body);
-    if (body.on) requireReauth(ctx.deps.services, req);
     return { prerequisite: sweepCall(maintenance.blockIds, (s) => s.setOverride('owner', body.on)) };
   });
 
   /** The most documents one run does (1 to 500; default 20). Audited. */
   api.put(`${SWEEP}/limit`, (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting (how many documents a run writes)
     const body = parseInput(z.object({ maxPerRun: z.unknown() }).strict(), req.body);
     return { maxPerRun: sweepCall(maintenance.blockIds, (s) => s.setMaxPerRun('owner', body.maxPerRun)) };
   });
@@ -77,22 +71,17 @@ export const registerMaintenance: Register = (api, ctx) => {
   });
 
   api.post('/maintenance/:id/enable', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const { id } = parseInput(params, req.params);
     return { job: cmd.enable('owner', id) };
   });
 
   api.post('/maintenance/:id/disable', (req) => {
     const { id } = parseInput(params, req.params);
-    // v2 E4 (RV1-4; ADR 0046 decision 3): switching off a job that keeps the backups (the snapshots, their verify and
-    // retention, the off-site copy) needs the owner's re-authentication; other jobs stay one click.
-    if (PROTECTING_JOBS.test(id)) requireReauth(ctx.deps.services, req);
     return { job: cmd.disable('owner', id) };
   });
 
   /** `schedule: null` restores the default. The schedule itself is validated by the scheduler. */
   api.put('/maintenance/:id/schedule', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const { id } = parseInput(params, req.params);
     const body = parseInput(
       z.object({ schedule: z.unknown() }).refine((b) => b.schedule !== undefined, 'schedule is required'),

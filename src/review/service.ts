@@ -88,6 +88,15 @@ export interface ReviewItem {
   readonly textChanges?: readonly TextChange[];
   readonly reviewed: { readonly at: number; readonly by: string; readonly via: string } | null;
   readonly revert: RevertSummary | null;
+  /** v3 F12 (ADR 0081, D2): the workstream the job belongs to (its origin's), for the page's grouping; null: none. */
+  readonly workstream: string | null;
+  /** v3 F12 (ADR 0081, D2): which assistant's connection made it (`Claude`, `ChatGPT`, else the connection's name). */
+  readonly connection: string;
+  /**
+   * v3 F12 (ADR 0081, D2): whether anything the job wrote has a Revert path (the card shows Revert only then); from the
+   * job's own record, no LegendKeeper read.
+   */
+  readonly revertible: boolean;
 }
 
 export interface ReviewDetail extends ReviewItem {
@@ -116,6 +125,14 @@ function summaryOf(
     if (said) return { summary: said, ...(title ? { agentTitle: title } : {}) };
   }
   return { summary: title };
+}
+
+/** v3 F12 (ADR 0081): the assistant behind a connection, by its name (or its OAuth client's), for grouping. */
+export function connectionOf(name: string, client: string | undefined): string {
+  const s = `${name} ${client ?? ''}`.toLowerCase();
+  if (s.includes('chatgpt') || s.includes('openai')) return 'ChatGPT';
+  if (s.includes('claude') || s.includes('anthropic')) return 'Claude';
+  return name;
 }
 
 /** The tool a job was made by (its origin's), for an agent's job. */
@@ -155,7 +172,9 @@ export class ReviewService {
     if (job.principalId === SYSTEM_PRINCIPAL.principalId || job.approvedBy !== null) return false;
     if (job.origin.approval !== undefined || job.kind === 'paginate_all') return false;
     const full = this.d.engine.queries.getJob(job.projectId, job.id);
-    if (!full?.steps.some((s) => s.opKind !== 'read')) return false;
+    // v3 F12 follow-up: a chronology change that only records a link has no LegendKeeper write, only the bridge's own
+    // record (`bridge.record`): it changes what the check pairs from then on, so it is on the Review page too.
+    if (!full?.steps.some((s) => s.opKind !== 'read' || s.opId === 'bridge.record')) return false;
     this.store.record({
       jobId: job.id,
       projectId: job.projectId,
@@ -391,7 +410,19 @@ export class ReviewService {
           ? { at: row.reviewedAt, by: row.reviewedBy ?? 'owner', via: row.reviewedVia ?? 'review' }
           : null,
       revert: this.latestRevert(row.projectId, row.jobId),
+      workstream: typeof job.origin.workstream === 'string' ? job.origin.workstream : null,
+      connection: connectionOf(names.get(row.principalId)?.name ?? row.principalId, job.origin.client),
+      revertible: this.revertible(row.projectId, row.jobId),
     };
+  }
+
+  /** v3 F12: whether any target of the job has a Revert path (a write that goes with another counts with it). */
+  private revertible(projectId: string, jobId: string): boolean {
+    try {
+      return (this.targets(projectId, jobId) ?? []).some((t) => t.kind !== 'none');
+    } catch {
+      return true; // when it cannot be told, Revert's own preview says
+    }
   }
 
   private optionsOf(projectId: string, jobId: string): Obj {

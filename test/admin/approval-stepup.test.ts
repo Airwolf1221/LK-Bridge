@@ -1,10 +1,11 @@
 /**
- * CR-2026-11-R4 (ADR 0062 decision 5 and amendment 1; the review's SE-05 to SE-12): approving a proposal asks for the
- * step-up when the rail that made it a proposal (its recorded reason) is the deletes, bulk or assets rail, or cannot be
- * read, and when its operations, judged by the rails' own rules with the proposal's recorded tool, hit a guarded rail:
- * a low-level tool's removals (a block deleted, a list write that drops an entry, read live) count, a high-level tool's
- * do not, and a member removed counts. A session that stepped up within the window is not judged. The proposals here
- * are made by scope, not by a rail, as an agent at scope `propose` makes them (the review's are made by the rails).
+ * ADR 0081 (the owner, 26 November 2026: "A code at sign-in is enough"): approving a proposal never asks for a fresh
+ * authenticator code, whatever it does and however it came to be proposed. The cases are those CR-2026-11-R4 made ask
+ * (ADR 0062 decision 5 and amendment 1; the review's SE-05 to SE-12): a block deleted through a low-level tool, a list
+ * write that drops an entry (read live), a recorded reason naming the deletes, bulk or assets rail (or one that cannot
+ * be read), a member or an invite removed, more than 10 pages; each is approved here by a session signed in but not
+ * stepped up, through every approval route (one, "Approve selected" in bulk, and a decision over a filter). The
+ * session's other checks (Origin, CSRF) are unchanged and tested elsewhere.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { systemClock } from '../../src/lk/index.js';
@@ -26,6 +27,7 @@ const seed = (id: string) => ({
 });
 const deletes = seed('r4pagea');
 const lists = seed('r4pageb');
+const viaBatch = seed('r4pagec');
 
 let s: AdminStack;
 beforeAll(async () => {
@@ -57,66 +59,92 @@ async function proposal(tag: string, tool: string, steps: unknown[], reason?: st
   return r.proposalId!;
 }
 
-/** Whether approving asks for the step-up (403 REAUTH_REQUIRED); otherwise the approval's status. */
-async function asks(id: string): Promise<boolean | number> {
+const code = (r: { json: unknown }) => (r.json as { error?: { code?: string } } | undefined)?.error?.code;
+
+/** Approves without a step-up; returns the status, or `'asked'` when the bridge asked for one (never, now). */
+async function approve(id: string): Promise<number | 'asked'> {
   setReauth(null);
   const r = await s.post(`/api/admin/proposals/${id}/approve`, {});
-  return r.status === 403 && (r.json as { error?: { code?: string } }).error?.code === 'REAUTH_REQUIRED'
-    ? true
-    : r.status;
+  return code(r) === 'REAUTH_REQUIRED' ? 'asked' : r.status;
 }
+
+const state = (id: string) => s.runtime.policy.proposals.get(id)!.state;
 
 const pathOf = (p: { resourceId: string; documentId: string }) => ({
   resourceId: p.resourceId,
   documentId: p.documentId,
 });
 
-describe("approving a proposal: the rails' rules, with the proposal's own tool and reason", () => {
-  it('a block deleted through a low-level tool asks; the same through a high-level tool does not', async () => {
-    const del = [{ op: 'deleteBlock', params: { path: { ...pathOf(deletes), blockId: deletes.b2 } } }];
-    expect(await asks(await proposal('lowlevel delete', 'lk_op_deleteBlock', del))).toBe(true);
-    expect(await asks(await proposal('batch delete', 'lk_api_batch', del))).toBe(true);
-    expect(await asks(await proposal('page write', 'write_page', del))).toBe(200);
-  });
-
-  it('a low-level list write asks only when it drops an entry held now (read live)', async () => {
-    const replace = (blocks: unknown[]) => [
-      { op: 'replaceDocumentBlocks', params: { path: pathOf(lists), body: { blocks } } },
+describe('approving a proposal never asks for a fresh code (ADR 0081)', () => {
+  it('a block deleted through a low-level tool, and through lk_api_batch', async () => {
+    const del = (p: typeof deletes) => [
+      { op: 'deleteBlock', params: { path: { ...pathOf(p), blockId: p.b2 } } },
     ];
-    const dropped = replace([{ id: lists.b1, kind: 'paragraph', content: [{ text: 'First' }] }]);
-    const kept = replace([
-      { id: lists.b1, kind: 'paragraph', content: [{ text: 'First, edited' }] },
-      { id: lists.b2, kind: 'paragraph', content: [{ text: 'Second' }] },
-    ]);
-    expect(await asks(await proposal('drops', 'lk_api_write', dropped))).toBe(true);
-    expect(await asks(await proposal('keeps', 'lk_api_write', kept))).toBe(200);
+    expect(await approve(await proposal('lowlevel delete', 'lk_op_deleteBlock', del(deletes)))).toBe(200);
+    expect(await approve(await proposal('batch delete', 'lk_api_batch', del(viaBatch)))).toBe(200);
   });
 
-  it("the recorded reason: the deletes rail's, or one that cannot be read, asks; the renames-and-moves rail's alone does not", async () => {
+  it('a low-level list write that drops an entry', async () => {
+    const dropped = [
+      {
+        op: 'replaceDocumentBlocks',
+        params: {
+          path: pathOf(lists),
+          body: { blocks: [{ id: lists.b1, kind: 'paragraph', content: [{ text: 'First' }] }] },
+        },
+      },
+    ];
+    expect(await approve(await proposal('drops', 'lk_api_write', dropped))).toBe(200);
+  });
+
+  it("whatever the recorded reason: the deletes, bulk or assets rail's, or one that cannot be read", async () => {
     const harmless = [{ op: 'createResource', params: { body: { name: 'r4 harmless' } } }];
-    for (const [reason, expected] of [
-      ['proposed because: delete (1 block)', true],
-      ['proposed because: bulk change (14 pages > 10)', true],
-      ['proposed because: asset delete', true],
-      ['proposed because: the safety rails could not be judged (timeout)', true],
-      ['something else', true],
-      ['proposed because: rename of a page (“A” → “B”); moves of 2 pages', 200],
-    ] as const)
-      expect(await asks(await proposal(`reason ${reason}`, 'r4_tool', harmless, reason)), reason).toBe(
-        expected,
+    for (const reason of [
+      'proposed because: delete (1 block)',
+      'proposed because: bulk change (14 pages > 10)',
+      'proposed because: asset delete',
+      'proposed because: the safety rails could not be judged (timeout)',
+      'something else',
+      'proposed because: rename of a page (“A” → “B”); moves of 2 pages',
+    ])
+      expect(await approve(await proposal(`reason ${reason}`, 'r4_tool', harmless, reason)), reason).toBe(
+        200,
       );
   });
 
-  it('a member or an invite removed asks; a session stepped up within the window is not judged', async () => {
+  it('a member or an invite removed', async () => {
     const remove = await proposal('member', 'lk_api_write', [
       { op: 'removeMember', params: { path: { userId: 'r4member01' } } },
     ]);
     const invite = await proposal('invite', 'lk_api_write', [
       { op: 'revokeInvite', params: { path: { inviteId: 'r4invite01' } } },
     ]);
-    expect([await asks(remove), await asks(invite)]).toEqual([true, true]);
-    setReauth(Math.floor(Date.now() / 1000));
-    const r = await s.post(`/api/admin/proposals/${remove}/approve`, {});
-    expect(r.status, r.text).toBe(200);
+    expect([await approve(remove), await approve(invite)]).toEqual([200, 200]);
+  });
+
+  it('"Approve selected" in bulk and a decision over a filter, of a delete and of more than 10 pages', async () => {
+    const pageDelete = (id: string) => [{ op: 'deleteResource', params: { path: { resourceId: id } } }];
+    const eleven = Array.from({ length: 11 }, (_, i) => ({
+      op: 'createResource',
+      params: { body: { name: `r4 eleven ${i}` } },
+    }));
+    const a = await proposal('bulk delete', 'r4_tool', pageDelete('r4gone00001'));
+    const b = await proposal('bulk eleven', 'r4_tool', eleven);
+    setReauth(null);
+    const bulk = await s.post('/api/admin/proposals/bulk', { action: 'approve', ids: [a, b] });
+    expect([bulk.status, code(bulk)], bulk.text).toEqual([200, undefined]);
+    expect([state(a), state(b)].every((x) => x !== 'pending')).toBe(true);
+
+    const c = await proposal('matching delete', 'r4_matching_tool', pageDelete('r4gone00002'));
+    const matching = await s.post('/api/admin/proposals/bulk-matching', {
+      action: 'approve',
+      filter: { state: 'pending', tool: 'r4_matching_tool' },
+      expect: 1,
+      confirm: true,
+    });
+    expect([matching.status, code(matching)], matching.text).toEqual([200, undefined]);
+    expect(state(c)).not.toBe('pending');
+    // Nothing stepped the session up meanwhile.
+    expect(s.services.owner.peekSession(s.sessionToken)?.reauthAt ?? null).toBeNull();
   });
 });

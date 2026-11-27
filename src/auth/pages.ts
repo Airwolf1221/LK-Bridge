@@ -283,6 +283,8 @@ export interface ConsentStepUpView {
   readonly need: StepUpToConfirm;
   /** The authenticator is set up: its code (or a recovery code) is asked; otherwise the password. */
   readonly totp: boolean;
+  /** ADR 0081: how long a step-up lasts, in words ("12 hours": `AUTH_STEP_UP_WINDOW_SECONDS`). */
+  readonly window: string;
   /** Why the last attempt was refused (a wrong code, too many attempts). */
   readonly error?: string;
 }
@@ -327,7 +329,7 @@ export function renderConsentStepUp(v: ConsentStepUpView): string {
 <div class="box warn" role="note"><strong>${why.headline}</strong>
 <p>${why.detail}</p></div>
 ${v.error ? `<p class="err" role="alert">${escapeHtml(v.error)}</p>` : ''}
-<p class="muted">As on the dashboard, a change that lets a connection do more needs ${v.totp ? 'your authenticator code' : 'your password'}, checked within the last 10 minutes. Nothing has been changed yet. The connection you are approving goes to ${escapeHtml(v.redirectHost)}.</p>
+<p class="muted">As on the dashboard, a change that lets a connection do more needs ${v.totp ? 'your authenticator code' : 'your password'}, checked within the last ${escapeHtml(v.window)}. Nothing has been changed yet. The connection you are approving goes to ${escapeHtml(v.redirectHost)}.</p>
 <form method="post" action="${escapeHtml(v.action)}">
 <input type="hidden" name="request_id" value="${escapeHtml(v.requestId)}">
 <input type="hidden" name="csrf_token" value="${escapeHtml(v.csrf)}">

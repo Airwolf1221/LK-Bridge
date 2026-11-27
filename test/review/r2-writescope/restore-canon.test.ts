@@ -4,8 +4,8 @@
  * a canonical proposal"). LegendKeeper's restoreResource "restores a deleted resource together with every descendant
  * deleted by the same operation" (spec), which the mock tree models (a shared deletedAt).
  *
- * Every test asserts the SAFE behaviour: an Authoritative page does not come back without the owner's canonical
- * approval, whether it is restored on its own or with the page it was deleted under.
+ * v3 F12 (ADR 0081): at scope `write` a restore of canon is direct: the Authoritative page comes back at once, whether
+ * restored on its own or with the page it was deleted under, and the job is on the owner's Review page (with Revert).
  */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -28,24 +28,25 @@ afterAll(async () => w?.close());
 
 const call = (tool: string, args: Record<string, unknown>) => w.stack.call(a.client, tool, args);
 
+const onReview = (jobId: string) =>
+  w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).some((i) => i.jobId === jobId);
+
 describe('restoring canon', () => {
-  it('C1-control: Old Harbour deleted on its own in the app, restored through lk_api_write: a canonical proposal', async () => {
+  it('C1-control: Old Harbour deleted on its own in the app, restored through lk_api_write: directly, on Review', async () => {
     w.repo.res.get(S.harbour)!.deletedAt = new Date().toISOString();
     await w.stack.runtime.tree.sweep(PROJECT);
     const r = await call('lk_api_write', {
       operationId: 'restoreResource',
       params: { path: { resourceId: S.harbour } },
     });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.requiresCanonicalApproval, r.text).toBe(true);
-    expect(w.repo.live(S.harbour)).toBeUndefined();
-    w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
-    // Back as it was, by hand in the app, for the next test.
-    w.repo.res.get(S.harbour)!.deletedAt = null;
-    await w.stack.runtime.tree.sweep(PROJECT);
+    expect(r.body.status, r.text).toBe('succeeded');
+    const jobId = String(r.body.jobId);
+    expect((await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000)).status).toBe('succeeded');
+    expect(w.repo.live(S.harbour)).toBeDefined();
+    expect(onReview(jobId)).toBe(true);
   });
 
-  it('C1: [INDEX] Locations deleted with its pages in the app, restored with restore_resource: Old Harbour (Authoritative) only with canonical approval', async () => {
+  it('C1: [INDEX] Locations deleted with its pages in the app, restored with restore_resource: Old Harbour (Authoritative) back directly, on Review', async () => {
     w.repo.outside.delete(S.locations);
     expect(w.repo.live(S.harbour)).toBeUndefined();
     await w.stack.runtime.tree.sweep(PROJECT);
@@ -55,12 +56,12 @@ describe('restoring canon', () => {
         operationId: 'restoreResource',
         params: { path: { resourceId: S.locations } },
       });
-    expect(
-      {
-        canonical: r.body.status === 'proposal_captured' && r.body.requiresCanonicalApproval === true,
-        harbourBack: w.repo.live(S.harbour) !== undefined,
-      },
-      r.text,
-    ).toEqual({ canonical: true, harbourBack: false });
+    expect(r.body.status, r.text).not.toBe('proposal_captured');
+    const jobId = String(r.body.jobId);
+    expect((await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000)).status, r.text).toBe('succeeded');
+    expect({ harbourBack: w.repo.live(S.harbour) !== undefined, onReview: onReview(jobId) }, r.text).toEqual({
+      harbourBack: true,
+      onReview: true,
+    });
   });
 });

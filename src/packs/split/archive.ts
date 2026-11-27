@@ -8,6 +8,11 @@
  * forced proposal (ADR 0042): the dashboard's origin with the system principal. The canonical guard makes it a canonical
  * proposal (it refuses the bridge any protected change of its own), so nothing is archived until the owner approves it.
  * The plan's reads go the same way: no MCP connection made them.
+ *
+ * v3 F12 (ADR 0081): no second approval. A split an agent at scope `write` made directly retires its source as that
+ * agent (`because.as`, phase 1's origin): the gate asks its scope now (a proposal at `propose`), the guards let its
+ * lifecycle change through as direct, and it is on the owner's Review page with Revert. A split the owner approved
+ * retires its source at once too, as the owner's confirmed action (the approval asked for it: `retire`).
  */
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/types.js';
 import type { McpToolContext } from '../../mcp/server.js';
@@ -33,13 +38,24 @@ export function bridgeArchiver(deps: ToolDeps): Archiver {
   return async (projectId, pageId, because) => {
     const sel = deps.selector.select(projectId, 'write');
     if (!sel.ok) return { ok: false, code: sel.error.code, message: sel.error.message };
-    const origin: JobOrigin = {
-      kind: 'ui',
-      client: 'dashboard',
-      tool: 'archive_page',
-      detail: because.detail,
-      principal: SYSTEM_PRINCIPAL,
-    };
+    const asAgent = because.as;
+    const origin: JobOrigin = asAgent
+      ? {
+          kind: asAgent.kind,
+          ...(asAgent.client !== undefined ? { client: asAgent.client } : {}),
+          tool: 'archive_page',
+          detail: because.detail,
+          ...(asAgent.principal ? { principal: asAgent.principal } : {}),
+          ...(asAgent.workstream !== undefined ? { workstream: asAgent.workstream } : {}),
+        }
+      : {
+          kind: 'ui',
+          client: 'dashboard',
+          tool: 'archive_page',
+          detail: because.detail,
+          principal: SYSTEM_PRINCIPAL,
+          ownerConfirmed: true,
+        };
     const engine = new Proxy(deps.engine, {
       get(t, k) {
         const v = Reflect.get(t, k) as unknown;
@@ -71,7 +87,6 @@ export function bridgeArchiver(deps: ToolDeps): Archiver {
       ...(b.holdDocument ? { holdDocument: b.holdDocument } : {}),
       ...(b.holdAlso ? { holdAlso: b.holdAlso } : {}),
       lifecycle: b.marker,
-      forceProposal: true,
       internal: true,
       proposal: {
         operations: [b.operation],
@@ -81,6 +96,7 @@ export function bridgeArchiver(deps: ToolDeps): Archiver {
     });
     if ('proposalId' in r && typeof r.proposalId === 'string')
       return { ok: true, proposalId: r.proposalId, summary };
+    if ('jobId' in r && typeof r.jobId === 'string') return { ok: true, jobId: r.jobId, summary };
     return { ok: false, code: 'NOT_PROPOSED', message: 'The archive was not captured as a proposal.' };
   };
 }

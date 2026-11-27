@@ -8,19 +8,18 @@
  *   before pages are made and material copied?
  * - SP-40: retiring a source while part of a divided section (and the preamble) stays: the owner is warned that it is
  *   archived with the source (SPLIT_RETIRED_CONTENT).
- * - SP-41: phase 1 reverted while phase 2's archive proposal still waits: approving it later does not archive the
- *   source that holds the material again.
+ * - SP-41: phase 2 no longer waits as a proposal (v3 F12, ADR 0081: one job at once, the owner's confirmed follow-up
+ *   of an approved phase 1): the source is archived, and a Revert of phase 1 is then refused whole (the archive note
+ *   changed the source), nothing reverted.
  * - SP-42 (control): a second split of the same source while the first is pending is refused.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { splitWorld, statutesBody, type SplitWorld } from '../../packs/split-world.js';
 import { statutesSplit } from '../../packs/split-inputs.js';
-import { approveSplit, intercept, recordOf, split, type Obj } from '../../packs/split-helpers.js';
-import { holders, ownerRevert, para, propose, reverted, S, setBody } from './helpers.js';
+import { approveSplit, intercept, recordOf, settle, split, type Obj } from '../../packs/split-helpers.js';
+import { ownerRevert, para, propose, S, setBody } from './helpers.js';
 
 vi.setConfig({ testTimeout: 300_000, hookTimeout: 300_000 });
-
-const ALL = statutesBody().map((b) => b.id);
 
 describe('SP-39 (modelled): an inline icon in a block that stays', () => {
   let w: SplitWorld;
@@ -110,7 +109,7 @@ describe('SP-40: what stays in a source that is retired', () => {
   });
 });
 
-describe('SP-41: phase 1 reverted while phase 2 waits', () => {
+describe('SP-41: phase 2 at once, then phase 1 reverted', () => {
   let w: SplitWorld;
   beforeAll(async () => {
     w = await splitWorld();
@@ -118,33 +117,26 @@ describe('SP-41: phase 1 reverted while phase 2 waits', () => {
   });
   afterAll(() => w?.close());
 
-  it('SP-41 approving the waiting archive proposal after phase 1 was reverted does not archive the source', async () => {
+  it('SP-41 phase 2 archives the source as one job (no proposal); a Revert of phase 1 is then refused whole', async () => {
     const p = await propose(w, statutesSplit());
     const done = await approveSplit(w, p.proposalId);
     expect(done.job.status, JSON.stringify(done.job.lastError)).toBe('succeeded');
     const rec = await recordOf(w, done.jobId, (x) => x.state === 'retiring');
-    const archiveId = String(rec.phase2.proposalId);
-    expect(w.stack.runtime.policy.proposals.get(archiveId)!.state).toBe('pending');
-    // The owner reverts phase 1 (nothing changed since): the material goes back to the source.
+    expect(rec.phase2.proposalId).toBeUndefined();
+    const phase2 = await settle(w, String(rec.phase2.jobId));
+    expect(phase2.status, JSON.stringify(phase2.lastError)).toBe('succeeded');
+    expect(phase2.origin.ownerConfirmed).toBe(true);
+    expect(w.repo.live(S.statutes)!.name).toMatch(/^\[BARC\]/);
+    // The owner reverts phase 1: refused whole (the archive note changed the source), nothing reverted.
+    const writes = w.requests().writes;
     const out = await ownerRevert(w, done.jobId);
-    expect(out.rv.status, JSON.stringify(out.rv)).toBe('submitted');
-    expect(out.job?.status).toBe('succeeded');
-    await reverted(w, done.jobId);
-    expect(ALL.filter((id) => !holders(w, id).some((h) => h.pageId === S.statutes))).toEqual([]);
-    // The archive proposal made for phase 2 is still there; the owner approves it from the Proposals page.
-    const pending = w.stack.runtime.policy.proposals.get(archiveId)!.state;
-    let outcome = `the archive proposal is ${pending}`;
-    if (pending === 'pending') {
-      const a = await approveSplit(w, archiveId).catch((e: unknown) => ({ error: e }));
-      outcome +=
-        'job' in a
-          ? `; approved: job ${a.job.status} (${a.job.lastError?.code ?? '-'}: ${String(a.job.lastError?.message ?? '').slice(0, 160)})`
-          : `; approval refused (${String(a.error)})`;
-    }
-    const archived = /^\[BARC\]/.test(w.repo.live(S.statutes)?.name ?? '');
-    // SAFE: the source that holds the material again is not archived by the split's stale phase 2.
-    expect({ archived }, outcome).toEqual({ archived: false });
-    expect(pending, outcome).toBe('pending');
+    expect(out.rv, JSON.stringify(out.rv).slice(0, 600)).toMatchObject({
+      status: 'refused',
+      code: 'SPLIT_REVERT_NOT_WHOLE',
+    });
+    expect((out.rv as { message: string }).message).toMatch(/unarchive it first/);
+    expect(w.requests().writes).toBe(writes);
+    expect(w.repo.live(S.statutes)!.name).toMatch(/^\[BARC\]/);
   });
 });
 

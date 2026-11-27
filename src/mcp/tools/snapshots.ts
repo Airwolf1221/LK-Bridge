@@ -7,7 +7,7 @@
  * - `snapshot_diff` (R): the Markdown diff of a document or a sidebar between a snapshot and the page now (a few reads),
  *   or between two snapshots (free).
  * - `restore_snapshot` (W): a page's documents, its sidebar, one document, or a deleted page, back to a chosen snapshot.
- *   ALWAYS a proposal, at every scope (`write` included): the owner approves it on the dashboard. `dryRun` shows the plan.
+ *   Direct at scope `write` (on the owner's Review page, with Revert); a proposal at scope `propose` (v3 F12). `dryRun` shows the plan.
  */
 import * as z from 'zod';
 import { mcpOrigin } from '../../policy/mcp.js';
@@ -30,6 +30,18 @@ import { RestoreError, type RestoreEstimate } from '../../snapshots/restore.js';
 import { diffText } from '../../snapshots/diff.js';
 import { historyOf, pieceFilterOf, pieceNow, pieceThen } from '../../snapshots/history.js';
 import { imageRestoreDeps, restoreImage } from '../../snapshots/image-restore.js';
+import { describeJob } from './write-job.js';
+
+/** A restore job's steps by their operation (its result lists what was and was not written, by these). */
+const stepLabels = (pd: ProjectDeps, jobId: string): string[] =>
+  (pd.engine.stepRecords(pd.project.id, jobId) ?? []).map((st) => BRIDGE_LABEL[st.opId] ?? st.opId);
+/** The bridge's own steps, as the job result names them (not writes). */
+const BRIDGE_LABEL: Readonly<Record<string, string>> = {
+  'bridge.expect': 'check',
+  'bridge.verify': 'verify',
+  'bridge.record': 'check',
+  'bridge.lmr': 'check',
+};
 
 const ID_ONLY = /^(lk:\/\/resources\/)?([a-z][0-9a-z]{5,31})$/;
 
@@ -73,7 +85,7 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
     title: 'List the snapshots of a page',
     access: 'read',
     description:
-      'Lists the bridge’s own snapshots of a page (or its sidebar, settings or one document), newest first: when, the kind (full: nightly, which also catches edits made in the app; change: after a bridge write) and which pieces changed. A deleted page is found by its id. Next: snapshot_diff to see a change, restore_snapshot to propose bringing one back. Cost: none.',
+      'Lists the bridge’s own snapshots of a page (or its sidebar, settings or one document), newest first: when, the kind (full: nightly, which also catches edits made in the app; change: after a bridge write) and which pieces changed. A deleted page is found by its id. Next: snapshot_diff to see a change, restore_snapshot to bring one back. Cost: none.',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('The page: a name or id (a deleted page: its id).'),
       piece: pieceArg,
@@ -137,7 +149,7 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
             hint:
               h.count === 0
                 ? 'The bridge holds no snapshot of this page yet (the nightly full snapshot takes every page; every bridge write takes a change snapshot).'
-                : 'snapshot_diff shows what changed; restore_snapshot proposes bringing a snapshot back (the owner approves it).',
+                : 'snapshot_diff shows what changed; restore_snapshot brings a snapshot back (direct at scope write, a proposal at scope propose).',
           },
           pd,
         );
@@ -246,10 +258,10 @@ function estimateLine(e: RestoreEstimate): Record<string, unknown> {
 function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
   return defineTool({
     name: 'restore_snapshot',
-    title: 'Propose a restore from a snapshot',
+    title: 'Restore from a snapshot',
     access: 'write',
     description:
-      'Proposes bringing back a page’s documents (scope "page"), its sidebar ("sidebar"), one document ("document", with `document`), a deleted page with its content ("deleted") or a deleted image ("image") as they were at a snapshot (list_snapshots). Use it to undo a mistake, not to edit: to change a page, write it. ALWAYS a proposal, whatever your scope: nothing is written until the owner approves; never retry it, follow it with bridge_proposal_status. dryRun shows the plan, the diff and what cannot be restored exactly (unsupported blocks, inline icons, board pages): tell the person. A restored image is a NEW asset with a new URL (updateReferences: true also updates the pages that showed the old one). A restore never changes a page’s lifecycle state. Cost to plan: 1 to 2 reads plus the documents’ own.',
+      'Brings back a page’s documents (scope "page"), its sidebar ("sidebar"), one document ("document", with `document`), a deleted page with its content ("deleted") or a deleted image ("image") as they were at a snapshot (list_snapshots). Use it to undo a mistake, not to edit: to change a page, write it. Direct at scope write (on the owner’s Review page, with Revert: only when the owner asked for it in this conversation); a proposal at scope propose, written only when the owner approves: never retry a proposal, follow it with bridge_proposal_status. dryRun shows the plan, the diff and what cannot be restored exactly (unsupported blocks, inline icons, board pages): tell the person. A restored image is a NEW asset with a new URL (updateReferences: true also updates the pages that showed the old one). A restore never changes a page’s lifecycle state. Cost to plan: 1 to 2 reads plus the documents’ own.',
     inputSchema: z.object({
       page: z
         .string()
@@ -371,7 +383,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
             ...(plan.followUp
               ? {
                   followUp:
-                    'once it has run, a second proposal brings the page’s content back to the snapshot',
+                    'once it has run, a second stage brings the page’s content back to the snapshot (a second proposal at scope "propose")',
                 }
               : {}),
             reads: plan.reads,
@@ -394,6 +406,11 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
           const origin = mcpOrigin(mctx, 'restore_snapshot');
           const r = await restores.propose(input, origin, origin.principal?.principalId ?? 'unknown', plan);
           if (r.status === 'nothing_to_do') return render({ status: 'nothing_to_do', ...view }, pd);
+          // v3 F12 (ADR 0081): at scope `write` the restore runs directly (on the owner's Review page, with Revert).
+          if (r.status === 'submitted') {
+            const job = await pd.engine.wait(pd.project.id, r.jobId, 25_000);
+            return describeJob(pd, job, stepLabels(pd, job.id), { ...view, restoreId: r.restoreId }).result;
+          }
           return render(
             {
               status: 'proposal_captured',
@@ -401,7 +418,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
               ...view,
               ...canonicalBody(
                 r,
-                'A restore is always a proposal (whatever your scope): nothing was written.',
+                'At your connection’s scope ("propose") a restore is a proposal: nothing was written.',
               ),
             },
             pd,
@@ -457,13 +474,18 @@ async function imageScope(
       { ...(args.dryRun ? { dryRun: true } : {}) },
     );
     if (r.status === 'dry_run') return render({ ...r, scope: 'image' }, pd);
+    // v3 F12 (ADR 0081): at scope `write` it runs directly (on the owner's Review page).
+    if (r.status === 'submitted' && r.jobId) {
+      const job = await pd.engine.wait(pd.project.id, r.jobId, 25_000);
+      return describeJob(pd, job, stepLabels(pd, job.id), { ...r, scope: 'image' }).result;
+    }
     return render(
       {
         ...r,
         scope: 'image',
         ...canonicalBody(
           r,
-          'A restore is always a proposal (whatever your scope): the image waits on the bridge’s server, and nothing is sent to LegendKeeper until the owner approves.',
+          'At your connection’s scope ("propose") a restore is a proposal: the image waits on the bridge’s server, and nothing is sent to LegendKeeper until the owner approves.',
         ),
       },
       pd,

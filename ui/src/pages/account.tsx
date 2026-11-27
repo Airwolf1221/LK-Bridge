@@ -14,13 +14,14 @@ import {
 import { fmtTime } from '../format';
 import { useApi, useNow } from '../hooks';
 import { QrCode } from '../qr';
-import { useReauth } from '../reauth';
+import { useReauth, windowInWords } from '../reauth';
 import type { SecurityInfo } from '../types';
 
 /**
  * The owner's account (OPS2, ADR 0062): the sessions (30 days from their last use) and "Sign out everywhere", the
- * password, the authenticator app and its recovery codes, and the encrypted secret store's state. Every sensitive change
- * asks for the step-up (the authenticator code, or the password without one) if the last is over ten minutes old. Two
+ * password, the authenticator app and its recovery codes, and the encrypted secret store's state. ADR 0081: the changes
+ * to the password, the authenticator, keys, tokens and connections ask for the step-up (the authenticator code, or the
+ * password without one) if the last is older than the window the bridge reports (12 hours by default). Two
  * things are shown once and never again: the authenticator secret while it is being set up, and recovery codes.
  */
 export function AccountPage() {
@@ -40,8 +41,8 @@ export function AccountPage() {
       <p className="muted">
         Signed in as <strong>{d.username}</strong>.{' '}
         {until
-          ? `You confirmed it is you for sensitive changes until ${fmtTime(until)}.`
-          : `Sensitive changes (keys, raising a scope, settings, pack approvals, deletes and bulk changes) ask for ${d.totp.enabled ? 'an authenticator code' : 'your password'} again.`}
+          ? `You confirmed it is you for changes to passwords, keys, tokens and connections until ${fmtTime(until)}.`
+          : `Changes to your password, authenticator, keys, tokens and connections ask for ${d.totp.enabled ? 'an authenticator code' : 'your password'} again, which then lasts ${windowInWords(d.reauth.windowSeconds)}. Nothing else does.`}
       </p>
       <SessionsCard info={d} />
       {!d.totp.enabled && (

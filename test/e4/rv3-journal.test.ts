@@ -20,19 +20,12 @@ afterEach(async () => {
 const call = (name: string, args: Record<string, unknown>) =>
   w!.stack.call(c, name, { project: 'test', ...args });
 
-async function approve(r: ToolCall) {
-  expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
-  const id = String(r.body.proposalId);
-  const pol = w!.stack.runtime.policy;
-  await pol.commands.approve('owner', id);
-  for (
-    let i = 0;
-    i < 400 && !['executed', 'failed', 'conflicted'].includes(pol.proposals.get(id)!.state);
-    i++
-  )
-    await new Promise((res) => setTimeout(res, 20));
-  const p = pol.proposals.get(id)!;
-  return { state: p.state, jobId: p.jobId! };
+/** v3 F12 (ADR 0081): at scope write a restore is direct, one job (on the Review page); its job. */
+async function ran(r: ToolCall) {
+  expect(r.body.status, JSON.stringify(r.body)).toBe('written');
+  const jobId = String(r.body.jobId);
+  const job = await w!.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
+  return { state: job.status, jobId };
 }
 
 it('RV3-6: a timeline restore journals what its updateEvent and updateLane overwrote', async () => {
@@ -59,8 +52,8 @@ it('RV3-6: a timeline restore journals what its updateEvent and updateLane overw
     scope: 'document',
     document: 'Chronicle',
   });
-  const res = await approve(r);
-  expect(res.state).toBe('executed');
+  const res = await ran(r);
+  expect(res.state).toBe('succeeded');
   const j = w.stack.runtime.engine.queries.journalLookup(PROJECT, {
     jobId: res.jobId,
     includePreImage: true,
@@ -98,8 +91,8 @@ it('RV3-6b: a map restore journals the feature its updateFeature overwrote (upda
     scope: 'document',
     document: 'Map',
   });
-  const res = await approve(r);
-  expect(res.state).toBe('executed');
+  const res = await ran(r);
+  expect(res.state).toBe('succeeded');
   const j = w.stack.runtime.engine.queries.journalLookup(PROJECT, {
     jobId: res.jobId,
     includePreImage: true,

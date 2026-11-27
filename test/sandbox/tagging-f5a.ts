@@ -20,8 +20,8 @@
  *   the owner; only the probe's own pages snapshotted (R4.1);
  * - **T3** the audit: the first page is a correction, CANON, Law, Cosmology (Cosmology kept after the grammar, not an
  *   exception);
- * - **T4** the apply: one proposal, approved as the owner would; its job writes the array, reads it back, and the page
- *   read live holds exactly CANON, Law, Cosmology;
+ * - **T4** the apply, confirmed as the owner does on the Tagging page (v3 F12, ADR 0081: one job at once, no proposal);
+ *   its job writes the array, reads it back, and the page read live holds exactly CANON, Law, Cosmology;
  * - **T5** "Keep this tag here" on the second page: the audit finds it compliant;
  * - **T6** its tags changed (reordered, with the raw client): the ruling lapses and the audit shows the exception again.
  *
@@ -29,6 +29,7 @@
  * timeout (test/sandbox/steps.ts), and again from the test file's `afterAll`; the report names what must be deleted by
  * hand. Cost: about 12 writes and 25 reads.
  */
+import { ownerConfirmedOrigin } from '../../src/admin/routes/util.js';
 import { ProjectStore } from '../../src/projects/index.js';
 import type { RawLk } from './f4b-probe.js';
 import { deleteProbe } from './f4b-probe.js';
@@ -202,25 +203,25 @@ export async function runTaggingCheck(
 
     const ok4 = await check(
       'T4',
-      'the apply: one proposal, approved; the page read live holds exactly the array',
+      'the apply: one job, confirmed by the owner (v3 F12); the page read live holds exactly the array',
       async () => {
         const plan = rt.retag.planApply({ projectId: pid, runId, pageIds: [page.cosmology] });
         const sub = await rt.retag.submitApply(plan, {
           projectId: pid,
-          origin: { kind: 'ui', client: 'owner', tool: 'tagging.sandbox' },
+          origin: ownerConfirmedOrigin('tagging.sandbox'),
           actor: 'owner',
         });
-        if (!sub.proposalId) throw new Error('the apply was not a proposal');
-        await rt.policy.commands.approve('owner', sub.proposalId);
+        if (sub.proposalId || !sub.jobId) throw new Error('the confirmed apply did not run as one job');
+        const jobId = sub.jobId;
         const end = Date.now() + 10 * 60_000;
-        let state = '';
+        let status = '';
         while (Date.now() < end) {
-          state = rt.policy.proposals.get(sub.proposalId)?.state ?? '';
-          if (['executed', 'failed', 'conflicted'].includes(state)) break;
+          status = rt.engine.queries.getJob(pid, jobId)?.status ?? '';
+          if (['succeeded', 'failed', 'cancelled'].includes(status)) break;
           await new Promise((r) => setTimeout(r, 500));
         }
-        if (state !== 'executed') throw new Error(`the proposal ended ${state}`);
-        const b = rt.retag.store.batchByProposal(sub.proposalId)!;
+        if (status !== 'succeeded') throw new Error(`the job ended ${status}`);
+        const b = rt.retag.store.batchByJob(pid, jobId)!;
         const disp = b.dispositions?.[page.cosmology];
         if (disp?.outcome !== 'applied' || disp.verified !== true)
           throw new Error(`disposition ${JSON.stringify(disp ?? null)}`);

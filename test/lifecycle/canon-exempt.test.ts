@@ -11,7 +11,7 @@ import { canonExemptionOf, LifecycleError } from '../../src/lifecycle/index.js';
 import { ROOT } from '../discover/world.js';
 import { facts, SidebarModel, T } from '../resources/world.js';
 import { PROJECT } from '../tools/helpers.js';
-import { accept, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
+import { LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
 
 const D = { refs: 'desref01', nest: 'desnest1', fiction: 'fiction1', plot: 'plotwrk1' } as const;
 
@@ -92,11 +92,10 @@ describe('the setting', () => {
 
 describe('the lifecycle tools beneath Design References', () => {
   it('promote_page: [BSRC], Status Authoritative and the Continuity Type rules as usual, but no CANON', async () => {
-    const r = await call('promote_page', { page: D.plot, destination: D.nest });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    expect(JSON.stringify(r.body.flags)).toMatch(/Authoritative without CANON/);
-    const done = await accept(w, r);
+    // F12 (ADR 0081): at scope write the lifecycle tools are direct (a job on the Review page).
+    const done = await call('promote_page', { page: D.plot, destination: D.nest });
     expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(JSON.stringify(done.body.flags)).toMatch(/Authoritative without CANON/);
     expect(live(D.plot)).toMatchObject({ name: '[BSRC] Story Planning Workflow', parentId: D.nest });
     expect(live(D.plot).tags).toEqual([]);
     expect(facts(w, D.plot)).toEqual(
@@ -105,9 +104,7 @@ describe('the lifecycle tools beneath Design References', () => {
   });
 
   it('archive_page from there is not refused, removes nothing it did not find and adds Archived', async () => {
-    const r = await call('archive_page', { page: D.fiction });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured' });
-    const done = await accept(w, r);
+    const done = await call('archive_page', { page: D.fiction });
     expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
     expect(live(D.fiction)).toMatchObject({ parentId: LIFECYCLE.archived });
     expect(live(D.fiction).tags).toEqual(['craft', 'Archived']);
@@ -119,9 +116,7 @@ describe('the lifecycle tools beneath Design References', () => {
   });
 
   it('unarchive_page back beneath Design References: Archived removed, no CANON added', async () => {
-    const r = await call('unarchive_page', { page: D.fiction });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured' });
-    const done = await accept(w, r);
+    const done = await call('unarchive_page', { page: D.fiction });
     expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
     expect(live(D.fiction)).toMatchObject({
       name: '[BSRC] Arkona - Fiction Writing Reference',
@@ -143,11 +138,8 @@ describe('the lifecycle tools beneath Design References', () => {
       status: 'authoritative',
       tags: ['CANON', 'craft'],
     });
-    expect(bare.body, bare.text).toMatchObject({
-      status: 'proposal_captured',
-      requiresCanonicalApproval: true,
-    });
-    expect((await accept(w, bare)).body).toMatchObject({ status: 'written' });
+    expect(bare.body, bare.text).toMatchObject({ status: 'written' });
+    expect(bare.body).not.toHaveProperty('requiresCanonicalApproval');
     expect(live(bare.body.pages[0].id).tags).toEqual(['craft']);
 
     const fromTemplate = await call('create_resource', {
@@ -156,8 +148,7 @@ describe('the lifecycle tools beneath Design References', () => {
       parent: D.refs,
       status: 'authoritative',
     });
-    expect(fromTemplate.body, fromTemplate.text).toMatchObject({ status: 'proposal_captured' });
-    expect((await accept(w, fromTemplate)).body).toMatchObject({ status: 'written' });
+    expect(fromTemplate.body, fromTemplate.text).toMatchObject({ status: 'written' });
     expect(live(fromTemplate.body.pages[0].id).tags).not.toContain('CANON');
 
     const many = await call('create_many_resources', {
@@ -167,8 +158,7 @@ describe('the lifecycle tools beneath Design References', () => {
         { key: 'b', name: 'Harbour Lore', template: T.general, parent: 'locs0001', status: 'authoritative' },
       ],
     });
-    expect(many.body, many.text).toMatchObject({ status: 'proposal_captured' });
-    expect((await accept(w, many)).body).toMatchObject({ status: 'written' });
+    expect(many.body, many.text).toMatchObject({ status: 'written' });
     const pages = many.body.pages as { name: string; id: string }[];
     const byName = Object.fromEntries(pages.map((p) => [p.name, p.id]));
     expect(live(byName['[BSRC] Pacing']).tags).not.toContain('CANON');
@@ -179,7 +169,7 @@ describe('the lifecycle tools beneath Design References', () => {
       parent: 'locs0001',
       status: 'authoritative',
     });
-    expect((await accept(w, outside)).body).toMatchObject({ status: 'written' });
+    expect(outside.body, outside.text).toMatchObject({ status: 'written' });
     expect(live(outside.body.pages[0].id).tags).toEqual(['CANON']);
   });
 });

@@ -76,7 +76,15 @@ import {
 } from './lifecycle.js';
 import { NARRATIVE_NO_LIFECYCLE, NARRATIVE_NO_LIFECYCLE_MESSAGE } from '../../narrative/scope.js';
 import { liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
-import { errorResult, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
+import {
+  errorResult,
+  protectedDryRun,
+  protectedDryRunText,
+  render,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 
 type Obj = Record<string, unknown>;
@@ -1016,9 +1024,8 @@ async function planSet(
               ...head,
               status: 'dry_run',
               steps: labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l)),
-              requiresCanonicalApproval: true,
-              message:
-                'Dry run: nothing was written and nothing was proposed. Run without dryRun to propose it: one proposal for the whole set, which always needs the owner’s canonical approval.',
+              ...protectedDryRun(mctx.scope, [`${tool} changes the lifecycle state of a whole set`]),
+              message: `Dry run: nothing was written and nothing was proposed. ${protectedDryRunText(mctx.scope, 'the whole set (one job)')}`,
             },
             pd,
           ),
@@ -1053,7 +1060,8 @@ async function planSet(
         },
         head: {
           ...head,
-          setId: 'assigned when the change runs (bridge_proposal_status, then bridge_job_status, show it)',
+          setId:
+            'assigned when the change runs: bridge_job_status shows it (for a proposal, bridge_proposal_status first)',
         },
         preview: () => ({ set }),
       });

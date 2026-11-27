@@ -15,8 +15,8 @@ import type {
 /**
  * v3 F5b (ADR 0068, H5): the Automation page. Every finding code whose fix the bridge fully determines, with its plain
  * name, an example, the one transformation, its setting (Off, Propose automatically, Apply automatically: the owner's,
- * with the step-up), its last run and what it did or skipped. "Pause all automation" is one click (a brake); resuming,
- * a setting change and "Run automation now" ask for the step-up. Each switch is recorded in Repository Automation's
+ * ADR 0081: no fresh authenticator code), its last run and what it did or skipped. "Pause all automation" is one click (a
+ * brake), as are resuming, a setting change and "Run automation now". Each switch is recorded in Repository Automation's
  * "Approved Narrow Automations" before it takes effect.
  */
 
@@ -59,8 +59,7 @@ export function AutomationPage() {
     if (
       !(await confirm({
         title: 'Resume automation?',
-        message:
-          'The codes switched on run again after the next nightly audit. This releases a brake, so it asks you to confirm it is you.',
+        message: 'The codes switched on run again after the next nightly audit.',
         confirmLabel: 'Resume',
       }))
     )
@@ -135,7 +134,7 @@ export function AutomationPage() {
           <>
             <p>
               <Badge tone="ok">Running</Badge> {on.length} code{on.length === 1 ? '' : 's'} switched on in
-              this project. Pausing is one click; resuming asks you to confirm it is you.
+              this project. Pausing and resuming are one click each.
             </p>
             <Button variant="danger" onClick={() => void pauseAll()} busy={busy}>
               Pause all automation
@@ -241,7 +240,7 @@ function CodeRow({ code: c, now, onChanged }: { code: AutomationCode; now: numbe
     const message =
       mode === 'off'
         ? `“${c.name}” stops running. Repository Automation’s paragraph for it is amended to say it was switched off today (it is never deleted).`
-        : `“${c.name}” is set to ${MODE_LABEL[mode]}. Your approval is first written into Repository Automation’s “Approved Narrow Automations”, after the block-id sweep’s paragraph: the code, its scope, its one transformation (${c.transformation}), the verification, the concurrency rules and the stop conditions. This needs you to confirm it is you.`;
+        : `“${c.name}” is set to ${MODE_LABEL[mode]}. Your approval is first written into Repository Automation’s “Approved Narrow Automations”, after the block-id sweep’s paragraph: the code, its scope, its one transformation (${c.transformation}), the verification, the concurrency rules and the stop conditions.`;
     if (
       !(await confirm({
         title: `${MODE_LABEL[mode]}: ${c.name}?`,

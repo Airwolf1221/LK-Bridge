@@ -424,20 +424,42 @@ export function runResultBody(
 
 /**
  * v2 C2a: the agent-facing part of a captured proposal: when the write touches protected canon, that it needs the
- * owner's canonical approval (whatever the scope), and why.
+ * owner's canonical approval, and why (v3 F12: only at scope `propose`; at `write` canon changes are direct).
  */
+/**
+ * v3 F12 follow-up (the owner, 27 November 2026; ADR 0081 amendment 1, decision 4): what a dry run says of a protected
+ * (canon or lifecycle) change, at the caller's scope. At scope write it runs directly and appears on the owner's Review
+ * page (no `requiresCanonicalApproval`); at scope propose it becomes a proposal only the owner can accept as canon.
+ */
+export function protectedDryRun(
+  scope: string | undefined,
+  changes: readonly string[],
+): Record<string, unknown> {
+  if (changes.length === 0) return {};
+  return scope === 'propose'
+    ? { requiresCanonicalApproval: true, protectedChanges: changes, atYourScope: 'a canonical proposal' }
+    : { protectedChanges: changes, atYourScope: 'runs directly, on the owner’s Review page' };
+}
+
+/** The dry run's sentence for a protected change (see `protectedDryRun`). `what`: the change ("it", "the delete"). */
+export function protectedDryRunText(scope: string | undefined, what = 'it'): string {
+  return scope === 'propose'
+    ? `At your connection’s scope (propose) ${what} becomes a proposal only the owner can accept as canon.`
+    : `At your connection’s scope (write) ${what} runs directly and appears on the owner’s Review page, with Revert: make it only when the owner has asked for it in this conversation, and say what you changed.`;
+}
+
 export function canonicalBody(
   r: { readonly canonical?: { readonly reason: string }; readonly proposedBecause?: string },
   lead = 'The change needs the owner’s approval and was not made.',
 ): Record<string, unknown> {
-  if (!r.canonical && r.proposedBecause) return railBody(r);
+  if (!r.canonical && r.proposedBecause) return reasonBody(r);
   if (r.canonical) {
     return {
       requiresCanonicalApproval: true,
       reason: r.canonical.reason,
       hint:
-        'This touches protected canon, so it was NOT made and waits for the owner, who alone can accept it as canon (whatever your scope). ' +
-        'Never retry it or work around it; tell the user, and follow it with bridge_proposal_status.',
+        'This touches protected canon. Your connection’s scope is "propose", so it was NOT made: it waits for the owner, who ' +
+        'alone can accept it as canon. Never retry it or work around it; tell the user, and follow it with bridge_proposal_status.',
     };
   }
   return {
@@ -446,17 +468,16 @@ export function canonicalBody(
 }
 
 /**
- * v3 F3.4 (ADR 0055): what an agent at scope `write` is told when its profile's safety rail (deletes, bulk changes,
- * renames and moves, asset deletes and moves) made a write a proposal.
+ * What an agent is told when a write became a proposal for a stated reason (`proposedBecause`): today a page moved into
+ * or out of Narratives at scope `propose`. v3 F12 (ADR 0081): the safety rails that also gave a reason are gone.
  */
-export const RAIL_HINT =
-  'Your scope is "write", but the owner keeps this kind of change for approval (a safety rail on your profile), so it was NOT made: ' +
-  'it waits for the owner. Never retry it, and never split it up or take another route to get round the rail; tell the user, ' +
-  'and follow it with bridge_proposal_status.';
+export const REASON_HINT =
+  'This needs the owner’s approval for the reason given, so it was NOT made: it waits for the owner. Never retry it, and ' +
+  'never split it up or take another route round it; tell the user, and follow it with bridge_proposal_status.';
 
-/** v3 F3.4: the rail's reason and the hint, when a safety rail made the write a proposal; else nothing. */
-export function railBody(r: { readonly proposedBecause?: string }): Record<string, unknown> {
-  return r.proposedBecause ? { proposedBecause: r.proposedBecause, hint: RAIL_HINT } : {};
+/** The reason and the hint, when the write became a proposal for a stated reason; else nothing. */
+export function reasonBody(r: { readonly proposedBecause?: string }): Record<string, unknown> {
+  return r.proposedBecause ? { proposedBecause: r.proposedBecause, hint: REASON_HINT } : {};
 }
 
 // ------------------------------------------------------------------------------------------------ summaries

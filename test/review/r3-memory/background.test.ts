@@ -81,6 +81,8 @@ describe('R3-65: memory over hours of background work and agent traffic', () => 
       const rt: any = w.stack.runtime;
       const call = (client: Client, name: string, args: Record<string, unknown>) =>
         client.callTool({ name, arguments: { project: 'test', ...args } });
+      // v3 F12: the world's own agent is at scope propose; this traffic is an agent's at scope write (direct edits).
+      const token = w.stack.newToken('r3-memory-agent', 'write').token;
       let n = 0;
       let writeErrors = 0;
       const round = async () => {
@@ -89,7 +91,7 @@ describe('R3-65: memory over hours of background work and agent traffic', () => 
         const client = new Client({ name: 'r3-memory', version: '1.0.0' });
         await client.connect(
           new StreamableHTTPClientTransport(new URL(`${w.stack.base}/mcp`), {
-            requestInit: { headers: { authorization: `Bearer ${w.stack.token}` } },
+            requestInit: { headers: { authorization: `Bearer ${token}` } },
           }),
         );
         try {

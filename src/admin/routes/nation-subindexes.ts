@@ -2,17 +2,17 @@
  * v3 F6c (ADR 0080; docs/dashboard.md › Nation Subindexes, › Repository Mappings › Territories and nations):
  *
  * - `GET /nation-subindexes`: the report (filtered, paged), the counts, the nations, the roles and variants;
- * - `POST /nation-subindexes/decide` (the step-up; audited `nationsubindex.decide`): accept, map to a role, keep as a
+ * - `POST /nation-subindexes/decide` (audited `nationsubindex.decide`): accept, map to a role, keep as a
  *   specialist subindex, or not a subindex;
- * - `POST /nation-subindexes/map-all` (the step-up; audited `nationsubindex.map_all`): the mapping for every nation's
+ * - `POST /nation-subindexes/map-all` (audited `nationsubindex.map_all`): the mapping for every nation's
  *   child of that exact name, ONE transaction, at most NATION_SUBINDEX_BULK_MAX rows;
- * - `POST /nation-subindexes/accept-all` (the step-up; audited `nationsubindex.accept_all`): every undecided row matched
+ * - `POST /nation-subindexes/accept-all` (audited `nationsubindex.accept_all`): every undecided row matched
  *   by a role name or an approved variant, with no collision and an approved classification (the GET counts them first);
  *   one request, batched with yields, one rebuild at the end, at most NATION_SUBINDEX_BULK_MAX;
- * - `POST /nation-subindexes/undo` (the step-up; audited `nationsubindex.undo`): until the rename is applied;
+ * - `POST /nation-subindexes/undo` (audited `nationsubindex.undo`): until the rename is applied;
  * - `GET /registry/structural`: the five structural types' state; `GET /registry/structural/:kind`: one type's entries
- *   and role bindings; `POST /registry/structural/:kind/seed` and `/add-missing` (the step-up; audited);
- * - `POST /audits/findings/:id/keep-home` (the step-up; audited `audits.keep_home`): "Keep it here" for a
+ *   and role bindings; `POST /registry/structural/:kind/seed` and `/add-missing` (audited);
+ * - `POST /audits/findings/:id/keep-home` (audited `audits.keep_home`): "Keep it here" for a
  *   `category_home_mismatch` page, until its tags or parent change.
  *
  * Every report route awaits `prepare` first (the cached bases brought up to date in chunks that yield), so no request
@@ -25,7 +25,6 @@ import {
   type NationTaxonomyService,
 } from '../../packs/nations/service.js';
 import { TAXONOMY_KINDS } from '../../registry/types.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectFor, projectParam, type Register } from './util.js';
 
@@ -104,7 +103,6 @@ export const registerNationSubindexes: Register = (api, ctx) => {
   });
 
   api.post('/nation-subindexes/decide', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -132,7 +130,6 @@ export const registerNationSubindexes: Register = (api, ctx) => {
   });
 
   api.post('/nation-subindexes/map-all', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -165,11 +162,10 @@ export const registerNationSubindexes: Register = (api, ctx) => {
   });
 
   /**
-   * "Accept all matched" (the step-up; audited `nationsubindex.accept_all`): the ids the GET counted (or every acceptable
+   * "Accept all matched" (audited `nationsubindex.accept_all`): the ids the GET counted (or every acceptable
    * row of the filter), ONE request, batched with yields, at most NATION_SUBINDEX_BULK_MAX; idempotent.
    */
   api.post('/nation-subindexes/accept-all', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -206,7 +202,6 @@ export const registerNationSubindexes: Register = (api, ctx) => {
   });
 
   api.post('/nation-subindexes/undo', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({ project: projectParam, pageId: z.string().min(1).max(64), confirm: z.literal(true) })
@@ -265,7 +260,6 @@ export const registerNationSubindexes: Register = (api, ctx) => {
 
   for (const mode of ['seed', 'add-missing'] as const)
     api.post(`/registry/structural/:kind/${mode}`, async (req) => {
-      requireReauth(ctx.deps.services, req);
       const { kind } = parseInput(z.object({ kind: z.enum(TAXONOMY_KINDS) }), req.params);
       const b = parseInput(z.object({ project: projectParam, confirm: z.literal(true) }).strict(), req.body);
       const p = projectFor(ctx, req, b.project);
@@ -278,7 +272,6 @@ export const registerNationSubindexes: Register = (api, ctx) => {
   // ------------------------------------------------------------------------------------- keep it here
 
   api.post('/audits/findings/:id/keep-home', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: z.coerce.number().int().min(1) }), req.params);
     const b = parseInput(
       z

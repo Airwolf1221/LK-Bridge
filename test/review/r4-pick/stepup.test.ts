@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- parsed JSON */
 /**
- * CR-2026-11-R4 pass 2: who can make a pick, and who can make it run (ADR 0064 D6.1, D6.3, D6.4; ADR 0062). The pick is
- * the owner's step-up action on the dashboard; approving a pick of more than 10 pages asks for the step-up too; agents
- * only suggest. The attempts: a pick without the step-up, with an expired one, with another session's, without the
- * CSRF token, from another Origin or site, with an agent's token; the approval of an 11-page pick without the step-up
- * through every approval route; agents' suggestions that look like picks or instructions at each scope, and every MCP
- * route an agent has. Each test asserts the safe behaviour: refused, and nothing proposed, approved or written.
+ * CR-2026-11-R4 pass 2: who can make a pick, and who can make it run (ADR 0064 D6.1, D6.3, D6.4). The pick is the
+ * owner's action on the dashboard; agents only suggest. ADR 0081 (the owner, 26 November 2026: "A code at sign-in is
+ * enough"): neither the pick nor the approval of a pick of more than 10 pages asks for a fresh code any more (ADR 0062
+ * had asked for one); PK-42 to PK-44 and PK-47 now assert that, and (v3 F12) a pick runs at once as one job. The attempts that must still be refused: a pick
+ * without the CSRF token, from another Origin or site, with an agent's token; agents' suggestions that look like picks
+ * or instructions at each scope, and every MCP route an agent has: refused, and nothing proposed, approved or written.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ADMIN_CSRF_PURPOSE } from '../../../src/admin/guard.js';
@@ -17,6 +17,7 @@ import {
   ownerClient,
   para,
   pick,
+  pickDone,
   PROJECT,
   proposalCount,
   r4World,
@@ -105,37 +106,35 @@ const coreSide = async () => {
   return { f, side: v.find((x) => x.page.id === coreOf(OPAL))!.key as string };
 };
 
-describe('the pick is the owner’s step-up action (ADR 0062)', () => {
-  it('PK-42 without the step-up: 403 REAUTH_REQUIRED, nothing proposed', async () => {
-    const { f, side } = await coreSide();
+/** ADR 0081: no pick answer is a step-up refusal; a side the dashboard never showed is refused for that, nothing made. */
+const notAsked = (r: { status: number; json: Record<string, any> }) =>
+  expect([r.status, r.json.error?.code]).toEqual([400, 'SIDE_NOT_FOUND']);
+
+describe('the pick is the owner’s action (ADR 0081: no fresh code)', () => {
+  it('PK-42 without the step-up: not asked for one, nothing proposed', async () => {
+    const { f } = await coreSide();
     const before = proposalCount(w);
-    const r = await ownerClient(w).post(pickPath(f.id), { confirm: true, side });
-    expect(r.status).toBe(403);
-    expect(r.json.error.code).toBe('REAUTH_REQUIRED');
+    notAsked(await ownerClient(w).post(pickPath(f.id), { confirm: true, side: 'not-a-side-shown' }));
     expect(proposalCount(w)).toBe(before);
   });
 
-  it('PK-43 with a step-up eleven minutes old: refused', async () => {
-    const { f, side } = await coreSide();
+  it('PK-43 with a step-up over 12 hours old: not asked for one either', async () => {
+    const { f } = await coreSide();
     const o = ownerClient(w);
     const before = proposalCount(w);
     o.reauth();
-    w.stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = reauth_at - 660').run();
-    const r = await o.post(pickPath(f.id), { confirm: true, side });
-    expect(r.status).toBe(403);
-    expect(r.json.error.code).toBe('REAUTH_REQUIRED');
+    w.stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = reauth_at - 43260').run();
+    notAsked(await o.post(pickPath(f.id), { confirm: true, side: 'not-a-side-shown' }));
     expect(proposalCount(w)).toBe(before);
   });
 
-  it('PK-44 with the step-up done on another session: refused on this one', async () => {
-    const { f, side } = await coreSide();
+  it('PK-44 with the step-up done on another session only: not asked on this one', async () => {
+    const { f } = await coreSide();
     const mine = ownerClient(w);
     const other = ownerClient(w);
     other.reauth();
     const before = proposalCount(w);
-    const r = await mine.post(pickPath(f.id), { confirm: true, side });
-    expect(r.status).toBe(403);
-    expect(r.json.error.code).toBe('REAUTH_REQUIRED');
+    notAsked(await mine.post(pickPath(f.id), { confirm: true, side: 'not-a-side-shown' }));
     expect(proposalCount(w)).toBe(before);
   });
 
@@ -170,38 +169,16 @@ describe('the pick is the owner’s step-up action (ADR 0062)', () => {
     expect(proposalCount(w)).toBe(before);
   });
 
-  it('PK-47 approving an 11-page pick without the step-up: refused by approve, approve selected, approve-as-canon and bulk', async () => {
+  it('PK-47 an 11-page pick runs at once as ONE job, with no fresh code (ADR 0081; v3 F12: no proposal to approve)', async () => {
     const f = findingOf(w, PRIA.name, 'consistency_birth');
     const v = await valuesOf(w, f);
+    const before = proposalCount(w);
     const r = await pick(w, f, { side: v[0]!.key });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(r.json.items).toHaveLength(11);
-    const id = String(r.json.proposalId);
-    const fresh = ownerClient(w);
-    const whole = await fresh.post(`/proposals/${id}/approve?project=test`, {});
-    expect(whole.status).toBe(403);
-    // Two pages only (fewer than the rail's 10): still the whole proposal's size that counts.
-    const two = await fresh.post(`/proposals/${id}/approve?project=test`, {
-      items: (r.json.items as any[]).slice(0, 2).map((i) => i.id),
-    });
-    expect(two.status).toBe(403);
-    expect(two.json.error.code).toBe('REAUTH_REQUIRED');
-    const canon = await fresh.post(`/proposals/${id}/approve-as-canon?project=test`, { confirm: true });
-    expect(canon.status).toBe(403);
-    const bulk = await fresh.post('/proposals/bulk?project=test', { action: 'approve', ids: [id] });
-    expect(bulk.status).toBe(403);
-    expect(w.stack.runtime.policy.proposals.get(id)!.state).toBe('pending');
-    // Control: with the step-up it is approved.
-    fresh.reauth();
-    const ok = await fresh.post(`/proposals/${id}/approve?project=test`, {});
-    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
-    // Let its job finish before the next attempt counts LegendKeeper writes.
-    for (let i = 0; i < 1500; i++) {
-      const p = w.stack.runtime.policy.proposals.get(id)!;
-      const job = p.jobId ? w.stack.runtime.engine.queries.getJob(PROJECT, p.jobId) : undefined;
-      if (job && ['succeeded', 'failed', 'cancelled'].includes(job.status)) break;
-      await new Promise((res) => setTimeout(res, 20));
-    }
+    // Its job finishes before the next attempt counts LegendKeeper writes.
+    expect((await pickDone(w, r.json)).state).toBe('executed');
+    expect(proposalCount(w)).toBe(before);
   });
 });
 
@@ -237,7 +214,8 @@ describe('agents suggest, never pick (ADR 0064 D6.4)', () => {
       reason: instruction,
     });
     expect(asProposer.isError, asProposer.text).toBe(false);
-    const wc = await w.stack.connect();
+    const writer = w.stack.newToken('r4-writer', 'write');
+    const wc = await w.stack.connect(writer.token);
     const asWriter = await w.stack.call(wc, 'arkona_consistency_suggest', {
       project: 'test',
       findingId: f.evidence.consistencyId,
@@ -260,27 +238,32 @@ describe('agents suggest, never pick (ADR 0064 D6.4)', () => {
     expect(proposalCount(w)).toBe(before);
   });
 
-  it('PK-50 no MCP tool approves or picks: none is listed, and reading the pick’s proposal leaves it pending', async () => {
+  it('PK-50 no MCP tool approves or picks: none is listed, and an agent cannot reach the owner’s pick', async () => {
     const { f } = await coreSide();
     const v = await valuesOf(w, f);
+    const before = proposalCount(w);
     const r = await pick(w, f, { side: v[0]!.key });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    const id = String(r.json.proposalId);
+    // v3 F12: the owner's confirmed pick is one job at once, with no proposal for anyone to approve.
+    const done = await pickDone(w, r.json);
+    expect(proposalCount(w)).toBe(before);
     const c = await w.stack.connect();
     const names = (await c.listTools()).tools.map((x) => x.name);
     expect(names.filter((n) => /approve|pick|consent/i.test(n))).toEqual([]);
-    // An agent cannot even read the owner's pick (it is not its proposal), let alone decide it.
-    const status = await w.stack.call(c, 'bridge_proposal_status', { project: 'test', proposalId: id });
+    // An agent cannot read the owner's pick as a proposal of its own.
+    const status = await w.stack.call(c, 'bridge_proposal_status', {
+      project: 'test',
+      proposalId: done.jobId,
+    });
     expect(status.isError ? status.text : 'read').toMatch(/No proposal|read/);
     // The low-level tools reach LegendKeeper's operations only, never the bridge's own approval.
     const low = await w.stack.call(c, 'lk_api_write', {
       project: 'test',
       operationId: 'approveProposal',
-      params: { proposalId: id },
+      params: { proposalId: done.jobId },
     });
     expect(low.isError).toBe(true);
-    expect(w.stack.runtime.policy.proposals.get(id)!.state).toBe('pending');
-    expect(w.stack.runtime.policy.proposals.get(id)!.jobId ?? null).toBeNull();
+    expect(proposalCount(w)).toBe(before);
   });
 });
 

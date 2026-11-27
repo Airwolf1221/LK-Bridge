@@ -9,7 +9,7 @@
  * - page text: the second revert job's check fails, but its `failed` row is the newest, so the Review page shows the
  *   revert as failed although the job was reverted, and Revert is offered again;
  * - an image placement (the revert job writes nothing in LegendKeeper): BOTH revert jobs succeed, the staged record is
- *   restaged twice and the owner gets two proposals to delete the same asset.
+ *   restaged twice and the placed asset is deleted twice (v3 F12, ADR 0081: by a job after the revert, no proposal).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { blocksHash } from '../../../src/pages/blockwise.js';
@@ -67,7 +67,7 @@ describe('two reverts of one image placement at once', () => {
     w = undefined;
   });
 
-  it('exactly one is submitted, and the owner gets ONE proposal to delete the placed asset', async () => {
+  it('exactly one is submitted, and ONE job deletes the placed asset', async () => {
     w = await imagesWorld();
     const c = await w.stack.connect();
     const call = (args: Record<string, unknown>) =>
@@ -88,27 +88,29 @@ describe('two reverts of one image placement at once', () => {
     const assetId = row.assetId!;
     await rt.engine.wait(PROJECT, jobId, 25_000);
 
-    const pendingDeletes = () =>
-      rt.policy.proposals
-        .list({ project: PROJECT, state: 'pending' })
-        .filter((p) =>
-          (rt.policy.proposals.detail(p.id)?.ops ?? []).some(
-            (o) =>
-              o.op === 'deleteAsset' &&
-              (o.params as { path?: { assetId?: string } }).path?.assetId === assetId,
-          ),
-        ).length;
+    const deletionJobs = () =>
+      rt.policy.store
+        .listAudit({ action: 'job.revert', limit: 50 })
+        .filter((x) => x.target === jobId && (x.after as { outcome?: string } | null)?.outcome === 'images')
+        .flatMap((x) => (x.after as { images?: { deletionJobId: string | null }[] }).images ?? [])
+        .filter((im) => typeof im.deletionJobId === 'string').length;
+    const before = w.stack.mock.calls.length;
     const [a, b] = await Promise.all([
       rt.reverts.revert('owner', PROJECT, jobId),
       rt.reverts.revert('owner', PROJECT, jobId),
     ]);
     for (const x of [a, b])
       if (x.status === 'submitted') await rt.engine.wait(PROJECT, x.revertJobId, 25_000);
-    await until(() => pendingDeletes() >= 1);
-    await until(() => pendingDeletes() >= 2, 1500); // give a second follow-up time to appear, if there is one
-    expect({ statuses: [a.status, b.status].sort(), deletionProposals: pendingDeletes() }).toEqual({
+    await until(() => deletionJobs() >= 1);
+    await until(() => deletionJobs() >= 2, 1500); // give a second follow-up time to appear, if there is one
+    await until(() => !w!.assets.assets.has(assetId));
+    const deletes = w.stack.mock.calls
+      .slice(before)
+      .filter((c) => c.method === 'DELETE' && c.path.includes(`/assets/${assetId}`)).length;
+    expect({ statuses: [a.status, b.status].sort(), deletionJobs: deletionJobs(), deletes }).toEqual({
       statuses: ['refused', 'submitted'],
-      deletionProposals: 1,
+      deletionJobs: 1,
+      deletes: 1,
     });
   });
 });

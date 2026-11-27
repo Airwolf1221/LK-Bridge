@@ -43,7 +43,8 @@ beforeAll(async () => {
       ]),
     ]);
   }
-  client = await w.stack.connect();
+  // F12 (ADR 0081): at scope write these changes are direct; the proposals this file approves come from scope propose.
+  client = await w.stack.connect(w.stack.newToken('bulk-canon-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 

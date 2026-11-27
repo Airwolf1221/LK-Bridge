@@ -92,8 +92,8 @@ describe('all or nothing', () => {
   });
 
   it('a target that changes between the preview and the request drops out of a confirmed partial revert', async () => {
-    // A job with three targets: aliases (ready), a move to another index (ready) and a document it made (never
-    // revertible: Revert never deletes what a job made).
+    // A job with three targets: aliases (ready), a move to another index (ready) and a document it made (v3 F12: deleted
+    // again by Revert while untouched; here renamed in the app since, so it is kept: changed).
     const page = 'bk000004';
     const res = () => w.repo.live(page)!;
     const r = await call('lk_api_batch', {
@@ -118,14 +118,17 @@ describe('all or nothing', () => {
     const done = await rt().engine.wait(PROJECT, jobId, 25_000);
     expect(done.status, JSON.stringify(done.lastError)).toBe('succeeded');
     expect(res().parentId).toBe('grp00003');
-    // The owner's preview: two targets ready, one that cannot be reverted. The dashboard therefore asks "Revert the
+    // Someone renames the document the job made, in the app: Revert keeps it.
+    const made = w.repo.liveDocs(res()).find((d) => d.name === 'Notes')!;
+    made.name = 'Notes (kept)';
+    // The owner's preview: two targets ready, one that is not reverted. The dashboard therefore asks "Revert the
     // other 2 anyway (a partial revert)" and, confirmed, sends confirmPartial: true.
     const preview = await rt().reverts.preview(PROJECT, jobId);
     const seen = preview.targets
       .filter((t) => t.state === 'ready')
       .map((t) => t.key)
       .sort();
-    expect(seen).toEqual([`move:${page}`, `resource:${page}`]);
+    expect(seen, JSON.stringify(preview.targets)).toEqual([`move:${page}`, `resource:${page}`]);
     expect(preview.notReverted).toBe(1);
     // While the owner re-authenticates, someone moves the page again in the app.
     w.repo.outside.move(page, 'grp00005');

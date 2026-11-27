@@ -32,14 +32,24 @@ import {
   SYSTEM_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
   type JobView,
+  type LifecycleMarker,
   type OpParams,
   type StepSpec,
 } from '../jobs/types.js';
+import { classifyName } from '../tree/index.js';
 import { compareStoredBlocks } from '../jobs/verify-blocks.js';
 import { withoutVersions } from '../pages/blockwise.js';
 import type { PolicyStore } from '../policy/store.js';
 import type { ImageService } from '../images/service.js';
 import { planChronology, type ChronologyAccess } from './revert-chronology.js';
+import {
+  entityCheck,
+  entityPlanParts,
+  entityStillAsPlanned,
+  planEntityUndo,
+  type EntityFollowUp,
+  type EntityUndo,
+} from './entity-undo.js';
 import {
   isStagingName,
   notRevertible,
@@ -89,7 +99,7 @@ export interface RevertPreview {
   /** Targets that would not (changed since, gone, not revertible): a revert of the rest needs `confirmPartial`. */
   readonly notReverted: number;
   /**
-   * v3 F3e (ADR 0059): a split's phase 1: the pages it made, which go to ONE deletion proposal once the revert has run
+   * v3 F3e (ADR 0059): a split's phase 1: the pages it made, which go to ONE deletion job once the revert has run
    * (or at once, when nothing else needs putting back).
    */
   readonly split?: {
@@ -110,10 +120,12 @@ export type RevertResult =
   | {
       /**
        * v3 F3e (ADR 0059): a split's phase 1 that stopped before anything left its source: nothing to put back, so no
-       * revert job; the pages it made go to ONE deletion proposal for the owner.
+       * revert job; the pages it made are deleted. v3 F12 (ADR 0081): at once, as part of the owner's confirmed Revert
+       * (`deletionJobId`), each only while it is as the split made it.
        */
       readonly status: 'proposed';
       readonly deletionProposalId: string | null;
+      readonly deletionJobId: string | null;
       readonly targets: readonly TargetCheck[];
       readonly message: string;
     }
@@ -138,10 +150,25 @@ export interface RevertDeps {
     | 'registerAsyncChecker'
     | 'registerChecker'
     | 'stepRecords'
-  >;
+  > &
+    Partial<Pick<JobEngine, 'jobOptions'>>;
   readonly review: ReviewService;
   readonly policy: Pick<PolicyStore, 'audit'>;
   readonly now: () => number;
+  /**
+   * v3 F12 (ADR 0081, D3): a deleted page (with the pages under it, as its copy kept them) made again from the copy,
+   * parents first, each under its new parent; what changed (the new ids) and the pages that linked to the old ones.
+   */
+  readonly recreatePages?: (projectId: string, snapshotId: string, rootId: string) => Promise<Obj>;
+  /** v3 F12 (ADR 0081, D3): a deleted document back by LegendKeeper's own restore (else where its copy is). */
+  readonly restoreDocument?: (
+    projectId: string,
+    resourceId: string,
+    documentId: string,
+    snapshotId: string | null,
+  ) => Promise<Obj>;
+  /** v3 F12 (ADR 0081, D3): a deleted asset uploaded again from its kept bytes (a new asset, same folder and name). */
+  readonly reuploadAsset?: (projectId: string, assetId: string, before: Obj) => Promise<Obj>;
   readonly chronology?: ChronologyAccess;
   /**
    * v3 F3.4 (ADR 0055 decision B5): the staged images, to put a reverted placement's file back into the bridge's server
@@ -151,7 +178,7 @@ export interface RevertDeps {
   /**
    * v3 F3e (ADR 0059): a split's phase 1 is revertible although the owner approved it (the design: "phase 1 can be
    * reverted, putting the moved content back and removing what it created"): the pages it made are not reverted by the
-   * job but go to ONE deletion proposal once it has succeeded (`afterRevert`).
+   * job but go to ONE deletion job once it has succeeded (`afterRevert`).
    */
   readonly splits?: {
     isPhase1(projectId: string, jobId: string): boolean;
@@ -159,12 +186,12 @@ export interface RevertDeps {
     isReverted?(projectId: string, jobId: string): boolean;
     /** CR-2026-11-R3 (R3-09): whether phase 2 archived the source (its archive note changed the source's text). */
     isRetired?(projectId: string, jobId: string): boolean;
-    /** How many pages a split's phase 1 made (its deletion proposal's pages, at most). */
+    /** How many pages a split's phase 1 made (its deletion job's pages, at most). */
     pagesMade?(projectId: string, jobId: string): number;
     /**
      * CR-2026-11-R3 (R3-66): the source a split's phase 1 upgraded from its Compact Character Reference to its Character
      * Core (renaming an Authoritative page is canon, ADR 0057 decision 5, which the bridge never does on its own): its name
-     * and Reference Type are put back by the deletion proposal of the pages the split made, not by the revert job.
+     * and Reference Type are put back by the deletion job of the pages the split made, not by the revert job.
      */
     coreUpgrade?(
       projectId: string,
@@ -174,7 +201,11 @@ export interface RevertDeps {
       projectId: string,
       jobId: string,
       revertJobId: string | null,
-    ): Promise<{ readonly deletionProposalId: string | null; readonly problem?: string } | null>;
+    ): Promise<{
+      readonly deletionProposalId: string | null;
+      readonly deletionJobId?: string | null;
+      readonly problem?: string;
+    } | null>;
   };
   /**
    * v3 F3f (ADR 0060): other owner-approved jobs Revert applies to (a retag apply batch: its tags restored exactly, each
@@ -203,8 +234,10 @@ interface ImageNote {
   readonly name: string | null;
   /** The copy of its file in the bridge's server staging (made before the job). */
   readonly copy: { readonly sha256: string; readonly bytes: number };
-  /** The proposal to delete the placed asset (once the job has succeeded). */
+  /** The proposal to delete the placed asset (before v3 F12; kept for the records made then). */
   readonly deletionProposalId?: string | null;
+  /** v3 F12 (ADR 0081): the job deleting the placed asset (once the revert has succeeded), part of the owner's Revert. */
+  readonly deletionJobId?: string | null;
   /** Why the follow-up did not happen, if it did not. */
   readonly problem?: string;
 }
@@ -363,9 +396,14 @@ export class RevertService {
         blocksByDoc.set(t.documentId, [...(blocksByDoc.get(t.documentId) ?? []), t]);
         continue;
       }
-      // v3 F3e (ADR 0059): what a split made is not reverted here: once the revert has run, those pages go to ONE
-      // deletion proposal (each only while it is exactly as the split made it).
-      if (split && t.kind === 'none' && t.creation === true) {
+      // v3 F3e (ADR 0059): what a split made is not reverted here: once the revert has run, those pages are deleted by the
+      // split's own follow-up (each only while it is exactly as the split made it; v3 F12: a job, no longer a proposal).
+      // Since F12 a page a job made is a generic target (and what it wrote on it is covered by that target).
+      const splitMade =
+        (t.kind === 'none' &&
+          (t.creation === true || t.coveredBy?.startsWith('entity:resource:') === true)) ||
+        (t.kind === 'entity' && t.undo.entity === 'resource' && t.undo.action === 'create');
+      if (split && splitMade) {
         plans.push({
           check: {
             key: t.key,
@@ -373,7 +411,7 @@ export class RevertService {
             page: t.page,
             what: t.what,
             state: 'nothing_to_do',
-            detail: `${t.what}: made by the split; proposed for deletion once the revert has run (only while it is as the split made it)`,
+            detail: `${t.what}: made by the split; deleted once the revert has run (only while it is as the split made it)`,
           },
         });
         continue;
@@ -387,7 +425,7 @@ export class RevertService {
             page: t.page,
             what: t.what,
             state: 'nothing_to_do',
-            detail: `${t.what}: ${upgrade!.from} became ${upgrade!.to} with the split; it is put back (with its Reference Type) by the deletion proposal of the pages the split made, which the owner approves as canon`,
+            detail: `${t.what}: ${upgrade!.from} became ${upgrade!.to} with the split; it is put back (with its Reference Type) by the deletion of the pages the split made, which runs once the revert has (your confirmed action)`,
           },
         });
         continue;
@@ -416,7 +454,53 @@ export class RevertService {
         return planChronology(t, io, projectId, this.d.chronology);
       case 'block':
         return planBlocks([t], io).then((x) => x[0]!);
+      case 'entity': {
+        // v3 F12 (ADR 0081, D2 and D3): every other write kind, by the generic undo.
+        const out = await planEntityUndo(t.undo, io, {
+          tool: REVERT_TOOL,
+          revertOf: io.jobId,
+          target: t.key,
+          ...(t.page ? { page: t.page } : {}),
+        });
+        const parts = entityPlanParts(t.undo, out, t.page?.name ?? t.what, REVERT_CHECKER);
+        const check: TargetCheck = {
+          key: t.key,
+          kind: t.kind,
+          page: t.page,
+          what: t.what,
+          state: t.laterWrite && out.state === 'ready' ? 'changed' : out.state,
+          detail:
+            t.laterWrite && out.state === 'ready'
+              ? `changed since by a later job (${t.laterWrite}); an outside edit is never overwritten`
+              : out.detail,
+          ...(out.differences && out.differences.length > 0 ? { differences: out.differences } : {}),
+          ...(t.undo.action === 'delete' ? { deletion: true } : {}),
+        };
+        if (check.state !== 'ready') return { check };
+        // A follow-up alone (nothing for the job to write): the job still checks the target first, inside its lock.
+        const steps =
+          parts.steps ?? (out.followUp ? [entityCheck(t.undo, t.page?.name ?? t.what, REVERT_CHECKER)] : []);
+        return {
+          check,
+          steps,
+          ...(parts.resources ? { resources: parts.resources } : {}),
+          ...(parts.documents ? { documents: parts.documents } : {}),
+          ...(out.followUp ? { followUp: out.followUp } : {}),
+        };
+      }
       case 'none':
+        // v3 F12: a write that goes with another target (a page the job made, deleted again), or changed nothing.
+        if (t.coveredBy)
+          return {
+            check: {
+              key: t.key,
+              kind: t.kind,
+              page: t.page,
+              what: t.what,
+              state: 'nothing_to_do',
+              detail: t.reason,
+            },
+          };
         return notRevertible(t, t.reason, {
           ...(t.deletion ? { deletion: true } : {}),
           instead: t.instead ?? null,
@@ -511,7 +595,7 @@ export class RevertService {
     const readyKeys = readyPlans.map((p) => p.check.key).sort();
     if (readyPlans.length === 0) {
       // v3 F3e (ADR 0059): a split's phase 1 that stopped before anything left the source made pages and nothing else
-      // to put back: those pages go to ONE deletion proposal (each only while it is as the split made it).
+      // to put back: those pages go to ONE deletion job (each only while it is as the split made it).
       const splits = this.d.splits;
       const splitMade =
         splits?.isPhase1(projectId, jobId) === true &&
@@ -519,23 +603,24 @@ export class RevertService {
       if (splits && splitMade && others.length === 0) {
         const out = await splits.afterRevert(projectId, jobId, null);
         this.d.policy.audit('owner', 'job.revert', jobId, undefined, {
-          outcome: 'proposed',
-          deletionProposal: out?.deletionProposalId ?? null,
+          outcome: 'deleting',
+          deletionJob: out?.deletionJobId ?? null,
           targets: summary(),
         });
         return {
           status: 'proposed',
-          deletionProposalId: out?.deletionProposalId ?? null,
+          deletionProposalId: null,
+          deletionJobId: out?.deletionJobId ?? null,
           targets,
-          message: out?.deletionProposalId
-            ? `Nothing of job ${jobId} had left the source, so there is nothing to put back: the pages it made are proposed for deletion (proposal ${out.deletionProposalId}), for the owner to approve.`
-            : `Nothing of job ${jobId} had left the source, and none of the pages it made could be proposed for deletion${out?.problem ? ` (${out.problem})` : ' (each changed since, or is gone)'}.`,
+          message: out?.deletionJobId
+            ? `Nothing of job ${jobId} had left the source, so there is nothing to put back: the pages it made are being deleted (job ${out.deletionJobId}), each only while it is as the split made it.`
+            : `Nothing of job ${jobId} had left the source, and none of the pages it made could be deleted${out?.problem ? ` (${out.problem})` : ' (each changed since, or is gone)'}.`,
         };
       }
       if (others.length > 0 && others.every((c) => c.deletion === true))
         return refuse(
           'DELETION',
-          `Job ${jobId} deleted what it changed, and a deletion is never reverted: use restore_resource (a page) or the journal’s pre-images (bridge_journal_lookup with jobId ${jobId}).`,
+          `Job ${jobId} deleted what it changed, and no record of it was kept (a delete from before F12): use restore_resource (a page) or the journal’s pre-images (bridge_journal_lookup with jobId ${jobId}).`,
         );
       if (others.length === 0)
         return refuse('NOTHING_TO_REVERT', `Everything job ${jobId} changed is already as it was before it.`);
@@ -636,6 +721,9 @@ export class RevertService {
       }
     }
 
+    // v3 F12 (ADR 0081): a lifecycle change (now direct at scope `write`) goes back as it came: the revert declares each
+    // page's way back to the state its name had before the job (the lifecycle guard allows exactly that).
+    const lifecycleBack = this.lifecycleBack(projectId, jobId, jobTargets);
     // ONE job, every lock held for the whole run. CR-2026-11-R2 (R2-20): every target's check runs first, in one go, before
     // the first write (and again if the job takes its locks back before anything is sent): a target changed since is
     // caught before ANY target is written, so a revert stays all or nothing.
@@ -651,16 +739,19 @@ export class RevertService {
         steps,
         onError: 'stop',
         priority: 'P1',
+        // v3 F12 (ADR 0081): the owner's confirmed action (canon put back included), as every Revert is.
         origin: {
           kind: 'ui',
           client: 'dashboard',
           tool: REVERT_TOOL,
           detail: `revert:${jobId}`,
           principal: SYSTEM_PRINCIPAL,
+          ownerConfirmed: true,
         },
         title: `Revert of job ${jobId}`,
         internal: true,
         lastMajorRevision: 'skip',
+        ...(lifecycleBack ? { lifecycle: lifecycleBack } : {}),
         ...(resources.length > 0
           ? {
               holdLock: { resourceId: resources[0]! },
@@ -698,7 +789,17 @@ export class RevertService {
         jobId,
         jobIdOfRevert,
         partial ? 1 : 0,
-        JSON.stringify({ targets, images }),
+        JSON.stringify({
+          targets,
+          images,
+          ...(readyPlans.some((p) => p.followUp)
+            ? {
+                followUps: readyPlans
+                  .filter((p) => p.followUp)
+                  .map((p) => ({ key: p.check.key, ...p.followUp! })),
+              }
+            : {}),
+        }),
         this.d.now(),
       );
     this.shown.delete(reservationKey(projectId, jobId));
@@ -719,9 +820,43 @@ export class RevertService {
         (keptLmr.size > 0 ? `; Last Major Revision left as it is (the edit that set it stays)` : '') +
         `. Every target is checked again inside the job before anything is written.` +
         (images.length > 0
-          ? ` Once it succeeds, ${images.length === 1 ? 'the placed image goes' : `the ${images.length} placed images go`} back to the Staging page (${images.length === 1 ? 'its file is' : 'their files are'} already copied to the bridge’s server), and deleting ${images.length === 1 ? 'it' : 'them'} from the library is proposed to you on the Proposals page.`
+          ? ` Once it succeeds, ${images.length === 1 ? 'the placed image goes' : `the ${images.length} placed images go`} back to the Staging page (${images.length === 1 ? 'its file is' : 'their files are'} already copied to the bridge’s server), and ${images.length === 1 ? 'it is' : 'they are'} deleted from the library (${images.length === 1 ? 'its bytes' : 'their bytes'} kept first).`
+          : '') +
+        (readyPlans.some((p) => p.followUp)
+          ? ` Once it succeeds, what LegendKeeper can no longer undo itself is brought back from its copy (a page made again, with a new id; an asset uploaded again).`
           : '') +
         ` The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold everything as it was, if you need to go further.`,
+    };
+  }
+
+  /**
+   * v3 F12 (ADR 0081): the lifecycle marker of a revert of a lifecycle job: the same pages, each back to the state its name
+   * had before the job (`[BSRC]` Authoritative, `[BWRK]` Working, `[BARC]` Archived); undefined for any other job.
+   */
+  private lifecycleBack(
+    projectId: string,
+    jobId: string,
+    targets: readonly Target[],
+  ): LifecycleMarker | undefined {
+    const marker = (
+      this.d.engine.jobOptions?.(projectId, jobId) as { lifecycle?: LifecycleMarker } | undefined
+    )?.lifecycle;
+    if (!marker) return undefined;
+    const stateOf = (name: unknown): 'authoritative' | 'working' | 'archived' | null => {
+      if (typeof name !== 'string') return null;
+      const k = classifyName(name).kind;
+      return k === 'bsrc' ? 'authoritative' : k === 'bwrk' ? 'working' : k === 'barc' ? 'archived' : null;
+    };
+    const pages = marker.pages.map((p) => {
+      const t = targets.find((x) => x.kind === 'resource' && x.resourceId === p.id);
+      const before = t?.kind === 'resource' ? stateOf((t.before as { name?: unknown }).name) : null;
+      return { id: p.id, to: before };
+    });
+    return {
+      tool: REVERT_TOOL,
+      canonical: marker.canonical,
+      reason: `puts back what ${marker.tool} changed (job ${jobId})`,
+      pages,
     };
   }
 
@@ -772,12 +907,18 @@ export class RevertService {
           }
         : {}),
     });
-    let note: { targets?: unknown; images?: ImageNote[] };
+    let note: { targets?: unknown; images?: ImageNote[]; followUps?: (EntityFollowUp & { key: string })[] };
     try {
-      note = JSON.parse(row.targets) as { targets?: unknown; images?: ImageNote[] };
+      note = JSON.parse(row.targets) as typeof note;
     } catch {
       note = {};
     }
+    // v3 F12 (ADR 0081, D3): the deletions LegendKeeper can no longer undo itself, brought back from their copies.
+    if (state === 'succeeded' && (note.followUps ?? []).length > 0)
+      this.follow(
+        'bringing back what a revert restores from its copies',
+        this.afterFollowUps(row.id, row.project_id, row.job_id, note.followUps!),
+      );
     const notes = note.images ?? [];
     if (state !== 'succeeded') {
       // The revert did not go ahead: the copies of the images' files are not wanted.
@@ -790,7 +931,7 @@ export class RevertService {
         'putting a revert’s images back on the Staging page',
         this.afterImages(row.id, row.project_id, row.job_id, note, notes),
       );
-    // v3 F3e (ADR 0059): a split's phase 1 reverted: the pages it made go to ONE deletion proposal.
+    // v3 F3e (ADR 0059): a split's phase 1 reverted: the pages it made go to ONE deletion job.
     if (this.d.splits?.isPhase1(row.project_id, row.job_id))
       this.follow(
         'proposing the deletion of a reverted split’s pages',
@@ -812,9 +953,10 @@ export class RevertService {
 
   /**
    * v3 F3.4 (ADR 0055 decision B5): once a revert job has succeeded, each image placement it reverted goes back on the
-   * Staging page (its staged record, from the copy of its file on the bridge's server), and deleting the placed asset is
-   * proposed to the owner: ONE proposal per image, by the bridge, never run without the owner's approval. Nothing is
-   * written to LegendKeeper here, and nothing to its staging folder. Recorded with the revert and audited.
+   * Staging page (its staged record, from the copy of its file on the bridge's server), and the placed asset is deleted:
+   * v3 F12 (ADR 0081), one job per image at once, part of the owner's confirmed Revert (the delete keeps the asset's
+   * bytes first, as every asset delete does). Nothing is written to its staging folder. Recorded with the revert and
+   * audited.
    */
   private async afterImages(
     revertId: number,
@@ -842,14 +984,19 @@ export class RevertService {
           ],
           onError: 'stop',
           priority: 'P1',
-          origin: { kind: 'ui', client: 'dashboard', tool: REVERT_TOOL, detail: `revert:${jobId}` },
+          origin: {
+            kind: 'ui',
+            client: 'dashboard',
+            tool: REVERT_TOOL,
+            detail: `revert:${jobId}`,
+            ownerConfirmed: true,
+          },
           title: summary.slice(0, 300),
-          forceProposal: true,
           proposal: { summary },
         });
-        const proposalId = 'proposalId' in r && typeof r.proposalId === 'string' ? r.proposalId : null;
-        if (!proposalId) throw new Error('the deletion was not captured as a proposal');
-        done.push({ ...im, deletionProposalId: proposalId });
+        const deletionJobId = 'jobId' in r && typeof r.jobId === 'string' ? r.jobId : null;
+        if (!deletionJobId) throw new Error('the deletion did not run');
+        done.push({ ...im, deletionJobId });
       } catch (e) {
         const problem = e instanceof Error ? e.message : String(e);
         this.d.log?.warn(
@@ -858,7 +1005,7 @@ export class RevertService {
         );
         // Not back on the Staging page: the copy of its file is not wanted (kept while a staged record uses it).
         await this.dropCopies([im]);
-        done.push({ ...im, deletionProposalId: null, problem });
+        done.push({ ...im, deletionJobId: null, problem });
       }
     }
     try {
@@ -873,10 +1020,64 @@ export class RevertService {
       images: done.map((im) => ({
         assetId: im.assetId,
         stagedId: im.stagedId,
-        deletionProposalId: im.deletionProposalId ?? null,
+        deletionJobId: im.deletionJobId ?? null,
         ...(im.problem ? { problem: im.problem } : {}),
       })),
     });
+  }
+
+  /**
+   * v3 F12 (ADR 0081, D3): each deletion LegendKeeper can no longer undo itself, once the revert job has succeeded: a
+   * page made again (with the pages under it) from the copy kept before the delete, or an asset uploaded again from its
+   * kept bytes (pages relinked where unchanged). Each outcome is recorded with the revert and audited.
+   */
+  private async afterFollowUps(
+    revertId: number,
+    projectId: string,
+    jobId: string,
+    followUps: readonly (EntityFollowUp & { key: string })[],
+  ): Promise<void> {
+    const done: Obj[] = [];
+    for (const f of followUps) {
+      try {
+        if (f.kind === 'recreate_pages') {
+          if (!this.d.recreatePages) throw new Error('the snapshot restores are not available here');
+          done.push({
+            key: f.key,
+            kind: f.kind,
+            ...(await this.d.recreatePages(projectId, f.snapshotId, f.rootId)),
+          });
+        } else if (f.kind === 'restore_document') {
+          if (!this.d.restoreDocument) throw new Error('LegendKeeper’s restore is not available here');
+          done.push({
+            key: f.key,
+            kind: f.kind,
+            ...(await this.d.restoreDocument(projectId, f.resourceId, f.documentId, f.snapshotId)),
+          });
+        } else {
+          if (!this.d.reuploadAsset) throw new Error('the image pipeline is not available here');
+          done.push({
+            key: f.key,
+            kind: f.kind,
+            ...(await this.d.reuploadAsset(projectId, f.assetId, f.before)),
+          });
+        }
+      } catch (e) {
+        this.d.log?.warn({ err: e, jobId, followUp: f.kind }, 'a revert’s follow-up failed');
+        done.push({ key: f.key, kind: f.kind, problem: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    try {
+      const row = this.d.db.prepare('SELECT targets FROM job_reverts WHERE id = ?').get(revertId) as
+        { targets: string } | undefined;
+      const note = row ? (JSON.parse(row.targets) as Obj) : {};
+      this.d.db
+        .prepare('UPDATE job_reverts SET targets = ? WHERE id = ?')
+        .run(JSON.stringify({ ...note, followUpsDone: done }), revertId);
+    } catch {
+      // the audit row below says what happened
+    }
+    this.d.policy.audit('system', 'job.revert', jobId, undefined, { outcome: 'follow_ups', followUps: done });
   }
 
   /** Removes the copies of images' files made for a revert that did not go ahead. */
@@ -972,6 +1173,20 @@ const revertChecker: RegisteredChecker = async (ctx) => {
     const place = (ctx.input as { place?: ResourceTarget['place'] }).place;
     return { differences: [...resourceDiffs(input.fields ?? {}, live), ...placeDiffs(place, live)] };
   }
+  // v3 F12 (ADR 0081): a generic undo's target, planned again inside the lock (its state must be what the plan saw).
+  if (input.kind === 'entity') {
+    const undo = (ctx.input as { undo?: EntityUndo }).undo;
+    if (!undo)
+      return { differences: [{ path: ctx.label, expected: 'a revert target', actual: 'nothing to check' }] };
+    const differences = await entityStillAsPlanned(undo, {
+      jobId: '',
+      read: async (op, params) => {
+        const r = await ctx.read(op, params);
+        return { exists: r.exists, body: r.body };
+      },
+    });
+    return { differences: [...differences] };
+  }
   if (input.kind === 'asset' && input.assetId) {
     const r = await ctx.read('getAsset', { path: { assetId: input.assetId } });
     if (!r.exists) return { differences: [{ path: ctx.label, expected: 'present', actual: '(gone)' }] };
@@ -1044,7 +1259,7 @@ const resourceOf = (t: Target): string | null =>
 
 /**
  * CR-2026-11-R3 (R3-66): a target of the source a split upgraded to its Character Core, without the upgrade (its new name,
- * its Reference Type row), which the deletion proposal puts back; null when nothing else of it is left to revert.
+ * its Reference Type row), which the deletion job puts back; null when nothing else of it is left to revert.
  */
 function withoutUpgrade(t: Target, u: { readonly from: string; readonly to: string }): Target | null {
   if (t.kind === 'resource') {

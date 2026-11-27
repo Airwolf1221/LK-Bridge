@@ -10,6 +10,7 @@ import type { Db } from '../db/open.js';
 import {
   BudgetExhaustedError,
   LkOperationError,
+  SYSTEM_PRINCIPAL,
   type JobEngine,
   type JobOrigin,
   type JobView,
@@ -221,8 +222,14 @@ export interface Chronology {
     actor: string,
     projectId: string,
     fix: ChronologyFix,
+    /**
+     * v3 F12 (ADR 0081): `ownerConfirmed`, the owner's "Apply fix" confirmed on the dashboard: the fix runs at once as
+     * one job (`job_submitted`), no proposal.
+     */
+    o?: { readonly ownerConfirmed?: boolean },
   ): Promise<
     | { readonly status: 'proposal_captured'; readonly proposalId: string; readonly summary: string | null }
+    | { readonly status: 'job_submitted'; readonly jobId: string; readonly summary: string | null }
     | { readonly status: 'nothing_to_do'; readonly message: string }
   >;
   /**
@@ -1042,7 +1049,7 @@ export function createChronology(d: ChronologyDeps): Chronology {
     };
   };
 
-  const proposeFix: Chronology['proposeFix'] = async (actor, projectId, fix) => {
+  const proposeFix: Chronology['proposeFix'] = async (actor, projectId, fix, opts) => {
     const p = await planFix(projectId, fix, 'P1');
     if (p.nothing !== undefined) return { status: 'nothing_to_do', message: p.nothing };
     // v2 E6 (ADR 0048): a repair that turns a range into a single date (or the reverse) is never one click.
@@ -1057,6 +1064,22 @@ export function createChronology(d: ChronologyDeps): Chronology {
         `This fix would change the ${p.age.name} event “${plan.event?.name.slice(0, 80) ?? ''}”: ${plan.shapeChange} (the row says “${plan.row.dateText}”). Check that the row and the event are the same chronology event, then confirm the change. Nothing was proposed.`,
         { shapeChange: plan.shapeChange, rowId: plan.row.id, eventId: plan.event?.id ?? null },
       );
+    }
+    if (opts?.ownerConfirmed === true) {
+      const r = await capture(actor, projectId, {
+        ...p,
+        proposed: false,
+        origin: {
+          kind: 'ui',
+          client: 'owner',
+          tool: 'chronology_apply_fix',
+          principal: SYSTEM_PRINCIPAL,
+          ownerConfirmed: true,
+        },
+      });
+      if (r.status !== 'job_submitted')
+        throw new ChronologyError('NOT_SUBMITTED', 'The fix did not run; nothing was done.');
+      return r;
     }
     const r = await capture(actor, projectId, { ...p, proposed: true });
     if (r.status !== 'proposal_captured')

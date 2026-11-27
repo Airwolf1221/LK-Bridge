@@ -71,8 +71,6 @@ export interface Env {
   readonly roots: Roots & { readonly narratives: NNode };
   readonly view: NView & { treeNode(id: string): TreeNode | null };
   readonly packId: string;
-  /** The pack's switch for this tool is `propose` (the owner tightened it): every write is a proposal. */
-  readonly forceProposal: boolean;
   readonly converter: FromMarkdownContext;
 }
 
@@ -128,7 +126,6 @@ export function openEnv(pd: ProjectDeps, mctx: McpToolContext, tool: string): R<
       roots: roots as Roots & { narratives: NNode },
       view,
       packId,
-      forceProposal: packs.strictToolMode(packId, tool) === 'propose',
       converter,
     },
   };

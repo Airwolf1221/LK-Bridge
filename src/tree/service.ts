@@ -1021,10 +1021,20 @@ export class TreeService {
       this.scheduleRetries(RETRY_FIRST_MS);
       return;
     }
+    // v3 F12 (ADR 0081): before a delete is applied (which takes the page's whole stored subtree out), the job's deferred
+    // re-reads are made, so a page the same job moved out from under it (a Revert moves pages back, then deletes the
+    // pages it made) has left that subtree first and keeps its node, its template included. The same reads, earlier.
     const ids = targetIds(r.opId, r.params, r.value);
     // While the job re-reads, the retry loop leaves this step's row alone (it would re-read the same thing).
     if (pending) this.rereading.add(pending.id);
     try {
+      if (TREE_OPS[r.opId] === 'delete')
+        await this.flushDeferred({
+          projectId: r.projectId,
+          jobId: r.jobId,
+          priority: r.priority,
+          signal: r.signal ?? new AbortController().signal,
+        });
       const ok = await this.reread(r.projectId, r.opId, ids, flagsOf(r.opId, r.params), {
         priority: r.priority,
         jobId: r.jobId,

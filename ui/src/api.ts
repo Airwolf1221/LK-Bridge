@@ -109,7 +109,8 @@ async function request<T>(
   try {
     return await send<T>(method, path, body, binary, mark, signal);
   } catch (e) {
-    // ADR 0062: any change may need the step-up; ask once, then send it again (the owner has just confirmed it).
+    // ADR 0062, ADR 0081: a credential change needs the step-up (no other route answers REAUTH_REQUIRED); ask once,
+    // then send it again (the owner has just confirmed it).
     if (!(e instanceof ApiError && e.code === 'REAUTH_REQUIRED') || !apiConfig.onReauthRequired) throw e;
     await apiConfig.onReauthRequired();
     return send<T>(method, path, body, binary, isOwn(false), signal);

@@ -1,8 +1,8 @@
 /**
  * Running one package (v3 F3a, ADR 0050; v3 F3b, ADR 0052): the pack looked up and its attachment checked, the
  * governance read, the plan made, then a preview (a dry run, or any refusal with everything the plan found) or ONE job,
- * which is a proposal whatever the caller's scope while the pack's `alwaysPropose` is on (its first weeks), and a
- * canonical one when it makes canon or moves an Authoritative page. Every pack tool plans its own way (a character
+ * which follows the caller's scope (v3 F12, ADR 0081: direct at `write`, canon included, on the owner's Review page; a
+ * proposal at `propose`, a canonical one when it makes canon or moves an Authoritative page). Every pack tool plans its own way (a character
  * package, an owner, a relationship, art) and finishes here, through exactly the same engine; tests call these functions
  * directly for a type defined only in test data (the dummy type).
  */
@@ -26,7 +26,7 @@ import { textKey } from './engine/text.js';
 import { coreNeed, coreTextWords, isOwnerRole, ownersInIndex } from './engine/core.js';
 import { GENERIC_HOOK, hookFor } from './hooks.js';
 import type { GovernanceStatus } from './service.js';
-import { packToolMode, type Pack, type PackAttachment } from './types.js';
+import type { Pack, PackAttachment } from './types.js';
 import { creationCheck } from './reftypes/service.js';
 import { categoryFromTags, vocabularyOf } from './retag/engine.js';
 
@@ -373,8 +373,11 @@ export async function finishPackage(
     const body = {
       status: 'dry_run',
       ...preview,
+      // v3 F12 follow-up (ADR 0081 amendment 1, decision 4): what it will be at the caller's scope.
       message:
-        'Dry run: nothing was written and nothing was proposed. Call again without dryRun to propose it (one proposal for the owner).',
+        mctx.scope === 'propose'
+          ? 'Dry run: nothing was written and nothing was proposed. Call again without dryRun to make it: at your connection’s scope (propose) ONE proposal for the owner.'
+          : 'Dry run: nothing was written. Call again without dryRun to make it: at your connection’s scope (write) ONE job that runs directly and appears on the owner’s Review page, with Revert (make it only when the owner has asked for it in this conversation, and say what you changed).',
     };
     return finish(pd, mctx, o.tool, body, () => ({ pages: plan.pages.length, summary: job!.summary }));
   }
@@ -429,8 +432,7 @@ export async function finishPackage(
             }
           : {}),
         ...(j.marker ? { lifecycle: j.marker } : {}),
-        // v3 F3.4 (ADR 0055 decision D): the tool's switch: always a proposal, or the agent's scope.
-        forceProposal: packToolMode(pack.rules, o.tool) === 'propose',
+        // v3 F12 (ADR 0081): the agent's scope decides (direct at `write`, a proposal at `propose`); no switch.
         stagedPlacement: plan.images.length > 0,
         // v3 F3b with ADR 0051: the same override reaches the engine (whose own planner leaves this job alone while
         // it has Last Major Revision steps of its own).

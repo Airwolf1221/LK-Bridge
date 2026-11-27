@@ -23,8 +23,6 @@ import {
   errorResult,
   mcpOrigin,
   projectArg,
-  RAIL_HINT,
-  railBody,
   render,
   withProject,
   type ProjectDeps,
@@ -91,7 +89,7 @@ const actorOf = (mctx: McpToolContext, tool: string): string =>
   mcpOrigin(mctx, tool).principal?.principalId ?? 'agent';
 
 const READ_ONLY =
-  'Nothing was written. Deterministic corrections can be proposed with arkona_retag_apply { runId, pages } (at most the batch size, ONE proposal for the owner). Holds go to the owner: tell them, and suggest a classification with a reason if you can (suggest: { page, primary, specialist?, reason }); only the owner classifies, on the Tagging page. Exceptions are the owner’s judgement. Never retag by hand with update_resource.';
+  'Nothing was written. Deterministic corrections can be proposed with arkona_retag_apply { runId, pages } (at most the batch size, ONE job at scope write, on the owner’s Review page with Revert). Holds go to the owner: tell them, and suggest a classification with a reason if you can (suggest: { page, primary, specialist?, reason }); only the owner classifies, on the Tagging page. Exceptions are the owner’s judgement. Never retag by hand with update_resource.';
 
 export function retagTools(deps: ToolDeps): McpToolProvider[] {
   const listed = () => deps.services?.packs?.toolListed('arkona') ?? false;
@@ -318,7 +316,7 @@ export function retagTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Apply deterministic tag corrections (Arkona pack, a proposal)',
       access: 'write',
       description:
-        'The Arkona pack: the Tagging Standard’s separately approved, guarded apply. Takes ONLY deterministic corrections from a stored arkona_retag_audit run (`runId` and the page ids, `pages`), at most the pack’s batch size (25): ONE proposal for the owner, each page an item they can leave out (always a proposal by the pack’s switch, whatever your scope). Holds and exceptions can never be applied (RETAG_NOT_DETERMINISTIC). Status and lifecycle tags are never added or removed: an existing status tag may only move to the front. ' +
+        'The Arkona pack: the Tagging Standard’s separately approved, guarded apply. Takes ONLY deterministic corrections from a stored arkona_retag_audit run (`runId` and the page ids, `pages`), at most the pack’s batch size (25): ONE job at scope write (on the owner’s Review page, with Revert), ONE proposal at scope propose, each page an item the owner can leave out. Holds and exceptions can never be applied (RETAG_NOT_DETERMINISTIC). Status and lifecycle tags are never added or removed: an existing status tag may only move to the front. ' +
         'When the owner approves, the job first compares the policy (pack version and digest, and its governance) with the audit’s: changed, the whole job stops (“policy changed since the audit; audit again”). Then per page: a fresh read (a page whose tags differ in any way from the audit’s current array is conflicted, skipped and recorded, never rebased onto the newer array; facts changed since: held; already the proposed array: already compliant; gone: inaccessible), the write inside the page’s lock, and an independent read-back (the exact array in order; name, aliases, parentage and sidebar unchanged; each page document’s body at the same version, and each board, map and timeline document’s content, read before and after). Last Major Revision is never set (tags are not a major revision). Resume and Revert work as for any package. ' +
         '`reconciliation: "<name>"` instead: a fresh audit of what remains of that reconciliation, then its next batch proposed. Never resubmit a captured proposal: follow it with bridge_proposal_status. ' +
         'Cost: none to propose (the run is stored); the job, when approved: 3 reads for the governance, then per page 3 reads (the fresh read, the in-lock read, the read-back), 2 more for each page or board document, 4 for each map and 6 or more for each timeline (its content before and after) and 1 write.',
@@ -436,13 +434,7 @@ export function retagTools(deps: ToolDeps): McpToolProvider[] {
                     from: p.current,
                     to: p.proposed,
                   })),
-                  hint:
-                    plan.mode === 'scope'
-                      ? RAIL_HINT
-                      : 'ONE proposal for the owner, each page an item; NOT applied. Never resubmit it; follow it with bridge_proposal_status.',
-                  ...(plan.mode === 'scope'
-                    ? railBody({ proposedBecause: 'the owner’s scope or safety rails' })
-                    : {}),
+                  hint: 'Your connection’s scope is "propose", so this is ONE proposal for the owner, each page an item; NOT applied. Never resubmit it; follow it with bridge_proposal_status.',
                   cost: 'none until approved',
                 },
                 pd,

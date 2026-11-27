@@ -69,7 +69,7 @@ const reauth = () =>
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
+    .run(null, s.services.sessionHash(s.sessionToken)); // ADR 0081: no step-up at all (none of these routes asks)
 
 describe('the Packs page API', () => {
   it('lists the pack as stored: rules, governance sources, attachments, tools, versions', async () => {
@@ -103,13 +103,9 @@ describe('the Packs page API', () => {
     expect(r.json.governance.sources.map((x: { current: string }) => x.current)).toEqual(['v1', 'v1', 'v1']);
   });
 
-  it('approving needs a fresh re-authentication; then it records the versions, audited', async () => {
+  it('approving needs no fresh code (ADR 0081); it records the versions, audited', async () => {
     expire();
-    const refused = await s.post('/api/admin/packs/arkona/approve', { confirm: true });
-    expect(refused.status).toBe(403);
-    expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
     expect(s.audit('pack.approve')).toEqual([]);
-    reauth();
     const noConfirm = await s.post('/api/admin/packs/arkona/approve', {});
     expect(noConfirm.status).toBe(400);
     const ok = await s.post('/api/admin/packs/arkona/approve', { confirm: true });
@@ -134,14 +130,8 @@ describe('the Packs page API', () => {
     expect(s.audit('pack.approve')).toHaveLength(2);
   });
 
-  it('saving the token maps needs re-authentication, makes a new version (audited) that waits for approval', async () => {
+  it('saving the token maps needs no fresh code, makes a new version (audited) that waits for approval', async () => {
     expire();
-    const refused = await s.put('/api/admin/packs/arkona/tokens', {
-      race: { Starborn: 'Starborn' },
-      confirm: true,
-    });
-    expect(refused.status).toBe(403);
-    reauth();
     const bad = await s.put('/api/admin/packs/arkona/tokens', { culture: { Foo: 'None' }, confirm: true });
     expect(bad.status).toBe(400);
     expect(bad.json.error.code).toBe('INVALID_TOKEN');
@@ -155,7 +145,7 @@ describe('the Packs page API', () => {
     expect(g.json.governance.state).toBe('rules_changed');
   });
 
-  it('ADR 0052 amendment: a missing pinned heading is refused with the page’s outline; re-mapping it needs re-authentication, is audited, and the new version approves', async () => {
+  it('ADR 0052 amendment: a missing pinned heading is refused with the page’s outline; re-mapping it needs no fresh code, is audited, and the new version approves', async () => {
     const h = (id: string, level: number, text: string) => ({
       id,
       kind: 'heading',
@@ -192,11 +182,7 @@ describe('the Packs page API', () => {
       confirm: true,
     };
     expire();
-    const noReauth = await s.post('/api/admin/packs/arkona/sections', body);
-    expect(noReauth.status).toBe(403);
-    expect(noReauth.json.error.code).toBe('REAUTH_REQUIRED');
     expect(s.audit('pack.remap_section')).toEqual([]);
-    reauth();
     const noConfirm = await s.post('/api/admin/packs/arkona/sections', { ...body, confirm: undefined });
     expect(noConfirm.status).toBe(400);
     const notThere = await s.post('/api/admin/packs/arkona/sections', { ...body, to: 'Approved' });

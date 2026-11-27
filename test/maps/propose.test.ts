@@ -4,7 +4,7 @@
  * nothing; approved, it runs with the bridge's own compare-and-swap inside the lock, which refuses what changed since the
  * plan (the feature, the folder, the image the pixels were chosen on, a cascade's contents) and sends nothing. And canon
  * (ADR 0036 decision 6, option (a)): feature edits on an Authoritative page go straight through at scope `write`; only
- * deleting the whole map document is canonical.
+ * deleting the whole map document is canonical (a canonical proposal at scope `propose`; direct at `write` since v3 F12).
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -344,11 +344,18 @@ describe('canon: feature edits are ordinary edits (ADR 0036 decision 6, option (
     expect(w.features(w.md.canonMap)).toHaveLength(0);
   });
 
-  it('deleting the whole map document of an Authoritative page is canonical: a proposal only the owner can accept as canon', async () => {
-    const r = await write('delete_document', { page: 'Canon Atlas', document: 'Canon map', confirm: true });
+  it('deleting the whole map document of an Authoritative page is canonical: at scope propose a proposal only the owner can accept as canon', async () => {
+    const r = await as(proposer)('delete_document', { ...CANON, confirm: true });
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     // nothing was deleted
     expect(w.docType(w.md.canonMap)).toBe('map');
+    w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'kept');
+  });
+
+  it('at scope write (v3 F12, ADR 0081) the same delete is direct, as a job on the Review page', async () => {
+    const r = await write('delete_document', { ...CANON, confirm: true });
+    expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
+    expect(r.body).not.toHaveProperty('requiresCanonicalApproval');
   });
 });
 

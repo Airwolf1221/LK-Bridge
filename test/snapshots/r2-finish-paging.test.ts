@@ -25,19 +25,11 @@ afterAll(async () => w?.close());
 const call = (name: string, args: Record<string, unknown>) =>
   w.stack.call(c, name, { project: 'test', ...args });
 
-async function approve(r: ToolCall) {
-  expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
-  const id = String(r.body.proposalId);
-  const pol = w.stack.runtime.policy;
-  if (pol.proposals.get(id)!.requiresCanonicalApproval) await pol.commands.approveAsCanon('owner', id);
-  else await pol.commands.approve('owner', id);
-  for (
-    let i = 0;
-    i < 3000 && !['executed', 'failed', 'conflicted'].includes(pol.proposals.get(id)!.state);
-    i++
-  )
-    await new Promise((res) => setTimeout(res, 20));
-  return pol.proposals.get(id)!.state;
+/** v3 F12 (ADR 0081): at scope write a restore runs at once as one job; how it ended (a failure names its job). */
+async function ran(r: ToolCall) {
+  const id = (r.body.jobId ?? (r.body.error as { jobId?: string } | undefined)?.jobId) as string | undefined;
+  expect(id, JSON.stringify(r.body)).toBeTruthy();
+  return (await w.stack.runtime.engine.wait(PROJECT, id!, 60_000)).status;
 }
 
 it('a finish reads every page of a timeline’s events: none is made twice, and it completes', async () => {
@@ -61,7 +53,6 @@ it('a finish reads every page of a timeline’s events: none is made twice, and 
   w.repo.res.delete(S.atlas); // purged: the id is free again
   w.sidebars.pages.delete(S.atlas);
   const args = { page: S.atlas, snapshot: snap, scope: 'deleted', mode: 'recreate' };
-  const first = await call('restore_snapshot', args);
   // The recreate stops at its 110th event: 109 are made.
   let posted = 0;
   w.stack.mock.inject((x) => x.method === 'POST' && /\/events\/?$/.test(x.path) && ++posted === 110, {
@@ -69,13 +60,14 @@ it('a finish reads every page of a timeline’s events: none is made twice, and 
     status: 400,
     code: 'VALIDATION_ERROR',
   });
-  expect(await approve(first)).toBe('failed');
+  const first = await call('restore_snapshot', args);
+  expect(await ran(first)).toBe('failed');
   const chronicle = () => w.repo.liveDocs(w.repo.live(S.atlas)!).find((d) => d.name === 'Chronicle')!;
   expect((w.events.get(chronicle().id) ?? []).length).toBe(109);
 
   await w.stack.runtime.tree.sweep(PROJECT);
   const again = await call('restore_snapshot', args);
-  expect(await approve(again)).toBe('executed');
+  expect(await ran(again)).toBe('succeeded');
   const made = (w.events.get(chronicle().id) ?? []).map((e) => `${String(e.name)}@${String(e.start)}`);
   expect(new Set(made).size, 'no event is made twice').toBe(made.length);
   expect(made.length, 'every event of the snapshot, once').toBe(total);

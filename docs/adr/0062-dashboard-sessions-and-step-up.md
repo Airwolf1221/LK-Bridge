@@ -205,3 +205,11 @@ stepped up, before the proposal is approved, so the approval of that `lk_api_wri
 through within the step-up's window); and, for the owner's decisions, SE-51 (`test/review/r4-sessions/misc.test.ts`),
 SE-13 and SE-14 (`routes-inventory.test.ts`: the routes that now ask) and `test/policy/member-admin.test.ts` (a member
 removal at entry).
+
+## Amendment 2: the step-up only for credentials (26 November 2026, v3 F12)
+
+[ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md) D5: sign-in is unchanged; the fresh code is asked only for
+the password, the authenticator, the recovery codes, connections and their scope, MCP tokens, API keys and the off-site
+credentials (the list is `test/auth/stepup-routes.ts`, kept by the route inventory test). Approvals, resumes, retries,
+Revert, settings and the rest no longer ask. The window is the setting `AUTH_STEP_UP_WINDOW_SECONDS` (default 43,200,
+12 hours), replacing the 10-minute constant `REAUTH_WINDOW_SECONDS`. A lowering of scope now asks too (ADR 0057 decision 1 had it one click).

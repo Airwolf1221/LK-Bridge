@@ -31,18 +31,17 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 
 ## Scopes
 
-| Scope     | Reads | Writes (every non-read operation)                                                                                                                                                                              |
-| --------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`    | allow | denied: `PolicyDeniedError` saying the connection is read-only and that the owner can change it                                                                                                                |
-| `propose` | allow | captured as a proposal; the agent gets `{ status: 'proposal_captured', proposalId, summary }`                                                                                                                  |
-| `write`   | allow | run, within every existing guard (read-only mode, pause, If-Match, unsupported blocks, cascade, etc.); the profile's [safety rails](#write-scope-review-revert-and-safety-rails-v3-f34) keep some for approval |
+| Scope     | Reads | Writes (every non-read operation)                                                                                                                                                                                                                     |
+| --------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`    | allow | denied: `PolicyDeniedError` saying the connection is read-only and that the owner can change it                                                                                                                                                       |
+| `propose` | allow | captured as a proposal; the agent gets `{ status: 'proposal_captured', proposalId, summary }`                                                                                                                                                         |
+| `write`   | allow | run directly, within every existing guard (read-only mode, pause, If-Match, unsupported blocks, cascade, etc.), canon and lifecycle included; on the owner's Review page with Revert ([F12](#write-scope-direct-writes-review-and-revert-v3-f34-f12)) |
 
 - Member and invite administration (`inviteMember`, `removeMember`, `revokeInvite`) is refused for every agent, at any
   scope, unless `LK_ALLOW_MEMBER_ADMIN=true`: by the engine's guard (`MEMBER_ADMIN_DISABLED`), after the gate, and at
-  proposal capture (so it is never captured). With it on, a member or an invite taken away (`removeMember`,
-  `revokeInvite`) is a delete for the deletes rail, at entry and at approval (CR-2026-11-R4; ADR 0066 part B, question
-  10, the owner's): at scope `write` it is a proposal, `proposed because: delete (1 project member)`, while the rail is on
-  (the default); `inviteMember` runs as before.
+  proposal capture (so it is never captured). Since F12 the policy gate also refuses it for every agent whatever that
+  setting says (it has no Revert: the owner does it in the LegendKeeper app), so the setting no longer
+  lets an agent do it.
 - **Uploads are not proposable (v1).** At scope `propose`, `lk_upload_image`, and raw `createImageUpload` /
   `createImageAsset` calls through `lk_api_write` or `lk_api_batch`, are refused before anything is sent, with a
   message that uploads need scope `write` and that the owner can raise the profile's scope. (A proposal would have to
@@ -57,7 +56,7 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 - **Asset deletes keep their bytes (v2 D3).** Every `deleteAsset`, by any route and at any scope, first downloads the
   asset's file into the bridge's kept-bytes store (a folder's: its children's), referenced from the journal's
   pre-image; if that fails the delete is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner allows that one asset on the
-  Staging page (re-authenticated). The binary upload endpoint's capabilities (`prepare_image_upload`) are covered in ADR
+  Staging page. The binary upload endpoint's capabilities (`prepare_image_upload`) are covered in ADR
   0041's threat review: scope `write` or `propose`, read again when the file arrives, rate-limited and audited.
 - The `system` principal (internal and dashboard work) is always allowed, except on an MCP origin, where it could only
   mean a tool forgot to pass the caller: denied.
@@ -182,6 +181,10 @@ be rejected". `bulkReject` follows the same rule.
 
 ## Protected canonical facts (v2 C2a)
 
+> **v3 F12 ([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)).** For an agent at scope `write`, a change this guard protects (a protected fact, CANON, deleting or renaming an Authoritative page)
+> runs directly (on the owner's Review page, with Revert); refusals stay refusals. Below, "a canonical proposal" is
+> what such a request becomes at scope `propose`, or for the bridge's own work that the owner has not confirmed.
+
 **The rule** (decided by the owner; PLAN-v2 10.3 as refined): canon never changes without the owner's explicit
 canonical approval, by any route. It is configuration, per project (Projects page, _Canon_; audited as
 `project.set_canonical_rules`), a list of rules seeded with these defaults:
@@ -290,8 +293,8 @@ on every path (`delete_resource`, `lk_api_write`, `lk_api_batch`, `lk_op_deleteR
   listed and read again (CR-2026-11), so a page made Authoritative, or moved under it, since the entry check (in the
   app, or by another job while this one waited) is not deleted without canonical approval. A cascade of N pages costs
   about 4N reads in all (a listing and a sidebar read per page, at entry and in the lock);
-- under scope `write` it becomes a canonical proposal, as for a protected fact change; "Approve and accept as canon"
-  runs it.
+- under scope `write` it runs directly for an agent, a copy kept first (F12); at scope `propose` it is a canonical
+  proposal, as for a protected fact change, which "Approve and accept as canon" runs.
 
 The rule shows in the dashboard's Canon section with the others and is edited there (kind "deleting a page with these
 values"); migration 1500 added it once to every project that stores its own rule list. The Status of the pages the
@@ -331,6 +334,10 @@ No MCP tool can change a scope, approve or reject a proposal, or create or revok
 
 ## The page lifecycle guard (v2 C2c)
 
+> **v3 F12 ([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)).** For an agent at scope `write`, a lifecycle change this guard judges (promote, archive, unarchive, move to Working)
+> runs directly (on the owner's Review page, with Revert); refusals stay refusals. Below, "a canonical proposal" is
+> what such a request becomes at scope `propose`, or for the bridge's own work that the owner has not confirmed.
+
 Lifecycle changes (Authoritative, Working, Archived; [tools.md](tools.md#the-page-lifecycle-v2-c2c), ADR 0035) happen
 **only** through `archive_page`, `unarchive_page`, `move_to_working`, `promote_page` and the creation tools' `status`.
 A second engine guard, beside the canon guard and combined with it (src/lifecycle/guard.ts), judges every request and
@@ -356,8 +363,19 @@ Since CR-2026-11 the guard reads a prefix as a reader sees it: in any case, with
 spaces or invisible characters before it, in fullwidth or look-alike letters (`[barc] X`, `［BARC］ X` and `[BАRC] X`
 with a Cyrillic А are all `[BARC]`). A template copy given no name is judged by the template's name, and a copy's Status
 is judged whether or not the caller gave the copy an id. A page made `[BSRC]` (Authoritative) by a create or a rename
-that no creation tool or lifecycle tool declares is not refused but becomes a **canonical proposal**, at every scope, as
+that no creation tool or lifecycle tool declares is not refused but becomes a **canonical proposal** (at scope `propose`; direct for an agent at `write`, F12), as
 an Authoritative create through the creation tools is (CR-2026-11, CR-16; ADR 0036 decision 1, accepted by the owner).
+
+**A rename whose prefix would disagree with Status is refused** (the owner, 27 November 2026; [ADR 0081 amendment
+1](adr/0081-v3-f12-direct-writes-review-safety-net.md#amendment-1-the-owners-decisions-of-27-november-2026)), at every
+scope, at entry and inside the lock: taking `[BSRC]` off a page whose Status is Authoritative (use `archive_page` or
+`move_to_working`), or putting `[BSRC]` on a page whose Status is not Authoritative (use `promote_page`). A rename that
+keeps `[BSRC]`, or puts it back on a page whose Status is Authoritative, is not refused.
+
+**A look-alike lifecycle value is refused** (the same amendment): a Status or Continuity Type value that only looks like
+an allowed one (Unicode's confusables, UTS #39: `Authoritаtive` with a Cyrillic а, a zero-width space inside) is an
+invalid value, refused at every scope and by every route with the allowed values listed; no marker carries one through.
+Case alone is no disguise.
 
 **The status tags (C2d, ADR 0036 decision 7, accepted by the owner on 11 November 2026).** The lifecycle settings' three
 status tags are compared without case, invisible characters and look-alikes (the same fold as keys and prefixes). A
@@ -385,8 +403,8 @@ caller's `If-Match` is judged.
 **The tools' own steps** pass through a **lifecycle marker** on the job (`BatchSubmit.lifecycle`): set only by bridge
 code, never parsed from an agent's request, stored with the job and with the proposal's job options, and naming exactly
 the pages, prefixes, Status values and places the job may change. A marker that does not cover a change is refused like
-a side route. A marker of the four lifecycle tools also makes the request a **canonical proposal at every scope**, which
-only "Approve and accept as canon" runs; approved work that should carry a marker and does not (a tampered proposal) is
+a side route. A marker of the four lifecycle tools also makes the request a **canonical proposal** at scope `propose` (direct for an
+agent at `write`, F12), which only "Approve and accept as canon" runs; approved work that should carry a marker and does not (a tampered proposal) is
 refused at execution and nothing is written. The creation tools' marker covers only the new pages' prefixes, Status and
 place.
 
@@ -413,12 +431,12 @@ lists them once more (for a set, the job's own first check does). A page added, 
 the proposal **`conflicted`** (nothing written), whatever tool made it: the conflict names the pages. More than 500
 pages under one page is refused at capture (delete or copy them in parts).
 
-## Re-authentication for the canon rules and the lifecycle settings (C2d, ADR 0036 decision 4)
+## Saving the canon rules and the lifecycle settings (C2d, ADR 0036 decision 4; ADR 0081)
 
 Saving the canon rules (`PUT /projects/:name/canon`: any change, a rule switched off and `rules: []` included) and
-saving the lifecycle settings (`PUT /projects/:name/lifecycle`) need the owner's step-up on this session within the
-last 10 minutes (ADR 0062: the authenticator code, or the password without one), as key changes do (ADR 0028); otherwise `403
-REAUTH_REQUIRED` and nothing is saved. "Approve and accept as canon" is unchanged.
+saving the lifecycle settings (`PUT /projects/:name/lifecycle`) take the owner's confirmation and are audited. C2d had
+them ask for a step-up as key changes do; since ADR 0081 (the owner, 26 November 2026: "A code at sign-in is enough")
+they need only the signed-in session, its Origin and CSRF checks. "Approve and accept as canon" is unchanged.
 
 ## Timeline, map and board content on Authoritative pages (ADR 0036 decision 6)
 
@@ -438,75 +456,53 @@ there), which also decides the row's place and the new count; the proposal does 
 so a pending chronology proposal does not become conflicted because another event of the same age was approved first.
 Its events are captured and compared as any other target.
 
-## Write scope: review, revert and safety rails (v3 F3.4)
+## Write scope: direct writes, review and Revert (v3 F3.4, F12)
 
-[ADR 0055](adr/0055-write-scope-review-revert-rails.md). At scope `write` an agent's ordinary changes run at once; the
-owner reviews them afterwards and can revert one. Canon and lifecycle changes stay proposals at every scope, as above.
+[ADR 0055](adr/0055-write-scope-review-revert-rails.md), as amended by
+[ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md). At scope `write` an agent's changes run at once,
+**canon and lifecycle changes and deletes included** (promote, archive, move to Working, CANON, deleting pages); the
+owner reviews them afterwards on the Review page and can revert any of them. The canon and lifecycle guards answer
+`allow` or `refuse` for a direct request, never `propose`: a refusal of an invalid change stays a refusal, and a guard
+that still answered `propose` would be a bridge fault, denied. A proposal is made only by a connection at scope
+`propose`, or by the owner's automation for a code at Propose.
 
-**Safety rails** (per profile, on the dashboard's Clients & Access page, "Always propose"). Even at scope `write`, a
-request that a rail covers becomes an ordinary proposal instead of running:
-
-| Rail                             | Default    | Covers                                                                                                                                                                                                                                                                                                                                            |
-| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Deletes                          | on         | deleting a page, a document, a timeline event or lane, a map feature, an asset, a calendar, a sidebar or infobox property, board shapes; replacing a board's content or a calendar whole (`replaceBoardContent`, `updateCalendar`: what is not sent is deleted; CR-2026-11-R2, R2-02); and every removal through the low-level tools (below)      |
-| Bulk changes (more than N pages) | on, N = 10 | a job that writes or makes more than N pages (a cascade counts every page under its page, and a copy with its children every page copied: R2-01; a restore every page it may bring back: ADR 0057 decision 9; pages not known count as more; a count from the repository tree that would let the job run is taken again on the live pages: R2-04) |
-| Renames and moves of pages       | off        | a page's name changed or the page moved (`moveResource`); a page made in the same job is not counted (renaming an Authoritative page is a canonical proposal whatever the rails: R2-12, ADR 0057 decision 5)                                                                                                                                      |
-| Asset deletes and asset moves    | on         | `deleteAsset`, and `updateAsset` to another folder; placing a staged image is not a move                                                                                                                                                                                                                                                          |
-
-- **A rail only adds a proposal.** It is asked only about a request that would otherwise run directly: never about one
-  already proposed (scope `propose`, the canon guard, a pack tool's switch), approved work, or the bridge's own. A rail
-  that cannot be judged fails closed (a proposal). It is judged in the engine at entry, after the canon and lifecycle
-  guards, with the profile's rails read live like its scope.
-- **The proposal says which rail sent it**: `proposedBecause`, for example `proposed because: bulk change (14 pages > 10)`
-  or `proposed because: delete (1 page “Mehrana al-Khalid”)`, stored with the proposal (`proposals.proposed_because`),
-  shown on the Proposals page and returned to the agent with a hint never to retry it or route round it.
-- A chronology change that re-makes an event (a date edit that removes an end deletes the event and makes it again) is
-  not a delete.
-- **Removals through the low-level tools are deletes** (ADR 0057 decision 4, the owner's, 17 November 2026; R2-52).
-  Through `lk_api_write`, `lk_api_batch` or `lk_op_*`, the deletes rail also covers `deleteBlock`, `deleteBlockRow`,
-  `deletePropertyRow` and `deleteBlockPropertyRow`, and every whole-list write that drops an entry LegendKeeper holds
-  now: `replaceDocumentBlocks` (a block not sent), and `updateProperty`, `updateBlockProperty`, `replaceBlock` or
-  `updateBlock` whose `items`, `rows` or `children` leave an entry out (read live before the verdict; a read that fails
-  counts as a removal). A list write that only adds, reorders or edits entries stays an edit. The high-level tools'
-  removals (`write_page`, `set_facts`, the chronology tools) are planned, checked and revertible, and stay edits. Revert
-  does not put a low-level removal back yet (open in ADR 0057): the journal keeps the pre-image.
-- **Text taken off a pack page through the low-level tools is a removal too** (ADR 0061 part B decision 1, the owner's,
-  19 November 2026; R3-53). On a project whose approved pack has split rules, a request through `lk_api_write`,
-  `lk_api_batch` or `lk_op_*` whose `replaceDocumentBlocks`, `updateBlock` or `replaceBlock` writes take the pack's
-  `splits.guardWords` words (120) or more off a pack page (a page of a character's set, a page with a Subject fact, a
-  pack owner: the split guard's own test, which refuses the same through `write_page` with `USE_ARKONA_SPLIT`) is a
-  proposal under the deletes rail, even when every block id is kept. The words are counted over the whole request, per
-  page, on what LegendKeeper holds now (read live); a document that cannot be read counts as a removal. The proposal
-  says so: `proposed because: text removal (312 words off “Zahra al-Rashid”, a page of a character’s set; the pack's
-threshold is 120)`.
-- **A restore counts every page it may bring back** (ADR 0057 decision 9; R2-03): LegendKeeper restores every page
-  deleted by the same delete, so the bulk rail counts the page and its restore set (the set the canon guard reads since
-  R2-10: the bridge's journal of its own delete, the snapshots, the tree). A set that cannot be told counts as more than
-  N (fails closed).
-- **The rails are judged when a request arrives** (ADR 0057 decision 6, the owner's: WS-G3). Switching a rail on applies
-  to the next request; it does not stop a direct job already accepted and queued. **Lowering the profile's scope is the
-  emergency brake**: a direct job is asked again by the gate before each step, so lowering the scope (to `propose` or
-  `read`) on Clients & Access stops a queued job before its next write, with one click and no re-authentication.
+- **The safety rails are removed** (F12): the per-profile "Always propose" switches (deletes, bulk changes, renames and
+  moves, asset deletes and moves), their stored settings and `PUT /api/admin/clients/profiles/:id/rails`. What they
+  guarded is on the Review page with Revert, and every agent delete is copied first.
+- **A copy before every agent delete** (ADR 0081 D3): before `deleteResource` or `deleteDocument` runs for an agent, the
+  page (and for a cascade its whole subtree, at most 1,000 pages) is read live at P1 and kept as a change snapshot,
+  recorded in `delete_copies`; if the copy cannot be taken the delete is refused (`DELETE_COPY_FAILED`). A copy is kept
+  for `DELETE_COPY_RETENTION_DAYS` (90). An asset's bytes are kept before its delete, as before.
+- **Every write kind has a way back or is refused for agents** (`src/review/write-kinds.ts`, kept so by
+  `test/review/f12-coverage.test.ts`): member administration (`inviteMember`, `removeMember`, `revokeInvite`) is
+  refused for agents at every scope; the owner does it in the LegendKeeper app.
+- **The owner's dashboard actions are confirmed, not proposed**: a job whose origin carries `ownerConfirmed` (set only
+  by the dashboard's routes, as the system principal) runs at once after the owner's confirmation dialog; on any other
+  origin `ownerConfirmed` is refused (`POLICY_DENIED`).
+- **Lowering the profile's scope is the emergency brake**: a direct job is asked again by the gate before each step, so
+  lowering the scope (to `propose` or `read`) on Clients & Access stops a queued job before its next write.
 - **A page never moves under `templates`** (W18, the write-scope rehearsal: LegendKeeper accepts the move and the page
   then reads with parentId "templates", out of the repository). `moveResource` to `templates` is refused for every caller
   at every scope, before anything is queued or proposed (`TEMPLATES_DESTINATION`): `move_resource`, `lk_api_write`,
   `lk_api_batch`, `lk_op_moveResource`, a setting pack's package and the owner's own dashboard work.
-- **Changing a rail** is an ordinary profile setting: re-authenticated, audited `profile.set_rails` with the rails before
-  and after (`PUT /api/admin/clients/profiles/:id/rails`). N is a whole number from 1 to 1,000.
 
 **Review and Revert** (the dashboard's Review page, [dashboard.md](dashboard.md#review-v3-f34)). Every job an agent ran
 directly (not approved by the owner) that wrote something is listed until the owner marks it reviewed (audited
 `review.mark`, or `review.mark_all` for a filtered set) or reverts it. Revert (`job.revert`, re-authenticated) is the
 owner's: one job, run by the system principal at P1, that puts back what the job changed when nothing has changed since,
 from the journal's pre-images and the job's own record (page text block by block, sidebar facts and links, chronology
-rows and events in step, names, tags, aliases and moves, image placements). It never reverts a deletion
-(`restore_resource`), a proposal, a running job or a revert, and never deletes an asset itself: a reverted image
-placement goes back on the Staging page (its file copied to the bridge's server, nothing written to `LK-Bridge
-staging`) and deleting the placed asset is one proposal for the owner.
+rows and events in step, names, tags, aliases and moves, image placements). Since F12 it also puts back canon and
+lifecycle changes, the writes the generic undo covers (map features, timeline events and lanes, properties, board
+shapes, documents) and deletions: a deleted page by LegendKeeper's own restore, else made again from the copy kept
+before the delete (new ids, the old ids mapped and the pages linking to them listed); a deleted asset uploaded again
+from its kept bytes in the same folder under the same name. It never reverts a proposal, a running job or a revert. A
+reverted image placement goes back on the Staging page (its file copied to the bridge's server, nothing written to
+`LK-Bridge staging`), and the placed asset is deleted in the same confirmed action (F12; before, a proposal for the
+owner).
 
 ## The second review's changes (CR-2026-11-R2)
 
-What changed in the guards, the rails and Revert after [CR-2026-11-R2](reviews/CR-2026-11-R2.md) (owner decisions in
+What changed in the guards, the rails (removed in F12) and Revert after [CR-2026-11-R2](reviews/CR-2026-11-R2.md) (owner decisions in
 [ADR 0057](adr/0057-cr-2026-11-r2-owner-decisions.md)):
 
 - **Restores** are judged on every page they may bring back (LegendKeeper restores every page deleted by the same
@@ -519,7 +515,7 @@ What changed in the guards, the rails and Revert after [CR-2026-11-R2](reviews/C
   page** (by its `[BSRC]` prefix or its Status), even keeping `[BSRC]`, is a canonical proposal too (ADR 0057 decision 5),
   by every route: `update_resource`, `lk_api_write`, `lk_api_batch`, `lk_op_updateResource` and the setting-pack tools
   (an upgrade to a Core, the appraisal's name fix). Judged by the canon guard at entry and again inside the lock. A
-  Working or Archived page's rename is not affected (the renames-and-moves rail applies when it is on).
+  Working or Archived page's rename is not affected. (F12: for an agent at scope `write` these run directly.)
 - **Template copies take the template's tags** (and a page saved as a template its page's): they are judged as a
   create's tags, at entry and in the lock; a copy whose template's tags cannot be read is refused (R2-13).
 - **Where a page lands is judged inside the lock**, on its parent as LegendKeeper holds it now: a `[BWRK]`, `[BARC]` or
@@ -527,18 +523,19 @@ What changed in the guards, the rails and Revert after [CR-2026-11-R2](reviews/C
 - **The fold** reads Latin small capitals and Cherokee and Lisu look-alikes as the Latin letters they look like (R2-15).
 - **A job with no job-level lock** (a setting pack's package) runs its checks again when it starts again before its
   first write, as a locked job does (CR-06; R2-29).
-- **A chosen chronology link** is a proposal at every scope (R2-08; ADR 0057 decision 3, accepted).
-- **Re-authentication** for every change that lets a connection do more (R2-50, R2-51; [dashboard.md](dashboard.md);
-  ADR 0057 decision 1, accepted).
+- **A chosen chronology link** is a proposal at every scope (R2-08; ADR 0057 decision 3, accepted). Since ADR 0081
+  amendment 1: direct at scope `write` (on the Review page, whose Revert takes the link off), a proposal at `propose`.
+- **Re-authentication** for every change to what a connection may do (R2-50; [dashboard.md](dashboard.md); ADR 0057
+  decision 1, accepted; ADR 0081: a connection's scope changed either way, made, moved or revoked, and every token).
 - **An orphan event beside a row whose date cannot be read** is not deleted (ADR 0057 decision 2; R2-49): while the age's
   table has an unpaired row whose Date cell cannot be read and that is not marked table-only, `delete_timeline_event`
-  with `orphan` and the dashboard's "Propose a fix" refuse (`ORPHAN_NEAR_UNREADABLE`, naming the rows), since the bridge
+  with `orphan` and the dashboard's "Delete the event…" (formerly "Propose a fix") refuse (`ORPHAN_NEAR_UNREADABLE`, naming the rows), since the bridge
   cannot tell whether one of them is the event's own. Marking the row table-only, or fixing its date, lifts the block; a
   row whose date cannot be read that appears after the proposal stops it inside the lock.
 - **ChatGPT's file source has its own switch** (ADR 0057 decision 7; R2-45): the project setting `fileSourceEnabled` (on
   by default), separate from `UPLOAD_ALLOW_URL_SOURCE` (`url` only), with the same guarded download. Switched off, a
-  `file` is refused before anything is fetched (`UPLOAD_FILE_SOURCE_DISABLED`). Switching it on needs the owner's
-  re-authentication; switching it off is one click; both are audited (`project.set_setting`).
+  `file` is refused before anything is fetched (`UPLOAD_FILE_SOURCE_DISABLED`). Switching it on or off is one click
+  (ADR 0081); both are audited (`project.set_setting`).
 - **A character's art folder comes from its exact path only** (ADR 0057 decision 8; R2-46): `Characters / Group / Race /
 Character`. A folder with the character's name anywhere else is never used; a path that is ambiguous, or blocked by an
   asset that is not a folder, is refused (`ART_FOLDER_AMBIGUOUS`).
@@ -550,29 +547,28 @@ authenticate the owner (session cookie and CSRF) first. Each takes `actor: 'owne
 checked at run time). Every change writes an `audit_log` row (`at`, `actor`, `action`, `target`, `before`, `after`) and
 emits a `policy` event on the engine's event emitter; proposal state changes also emit `proposal` events.
 
-| Command                                                      | What it does                                                                                              | Audit action                                        |
-| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `listProfiles(actor)`                                        | Profiles with their count of active connections                                                           | –                                                   |
-| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                                  | `profile.create`                                    |
-| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                                             | `profile.set_scope`                                 |
-| `setRails(actor, profileId, change)` (v3 F3.4)               | Changes a profile's safety rails (a partial change keeps the other switches); applies at its next request | `profile.set_rails` (rails before and after)        |
-| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                                | `policy.set_default_scope`                          |
-| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                                  | –                                                   |
-| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                                     | `connection.set_profile`                            |
-| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                                  | `connection.revoke`                                 |
-| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                                        | –                                                   |
-| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks                 | –                                                   |
-| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`). Refused for a canonical proposal      | `proposal.approve` (then `proposal.executed`, …)    |
-| `approveAsCanon(actor, id)` (v2 C2a)                         | "Approve and accept as canon": the only approval of a canonical proposal; records `canonicalApprovedBy`   | `proposal.approve_as_canon`                         |
-| `reject(actor, id, reason?)`                                 | A pending or conflicted proposal                                                                          | `proposal.reject`                                   |
-| `removeConnection(actor, id)`                                | Removes a revoked or expired connection (tombstone); an active one: `CONNECTION_ACTIVE`                   | `connection.remove`                                 |
-| `removeInactiveConnections(actor)`                           | Removes every revoked and expired connection, in one transaction                                          | `connection.remove` (each)                          |
-| `revokeStaleConnections(actor, profileId)`                   | Revokes the profile's stale connections                                                                   | `connection.revoke` (`via: 'stale'`)                |
-| `getAutoRemoveDays` / `setAutoRemoveDays(actor, days)`       | Days before the daily sweep removes dead connections (0 = never; default 30)                              | `policy.set_auto_remove_days`                       |
-| `getStaleAfterDays` / `setStaleAfterDays(actor, days)`       | Days of disuse before a connection is stale (0 = never; default 14)                                       | `policy.set_stale_after_days`                       |
-| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id. `bulkApprove` skips a canonical proposal (`skipped: true`)      | as above                                            |
-| `bulkApproveAsCanon(actor, ids)`                             | `approveAsCanon` for each id, one at a time, in order; an ordinary proposal is refused and stays pending  | `proposal.approve_as_canon` each, with `bulk: true` |
-| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                                               | –                                                   |
+| Command                                                      | What it does                                                                                             | Audit action                                        |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `listProfiles(actor)`                                        | Profiles with their count of active connections                                                          | –                                                   |
+| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                                 | `profile.create`                                    |
+| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                                            | `profile.set_scope`                                 |
+| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                               | `policy.set_default_scope`                          |
+| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                                 | –                                                   |
+| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                                    | `connection.set_profile`                            |
+| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                                 | `connection.revoke`                                 |
+| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                                       | –                                                   |
+| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks                | –                                                   |
+| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`). Refused for a canonical proposal     | `proposal.approve` (then `proposal.executed`, …)    |
+| `approveAsCanon(actor, id)` (v2 C2a)                         | "Approve and accept as canon": the only approval of a canonical proposal; records `canonicalApprovedBy`  | `proposal.approve_as_canon`                         |
+| `reject(actor, id, reason?)`                                 | A pending or conflicted proposal                                                                         | `proposal.reject`                                   |
+| `removeConnection(actor, id)`                                | Removes a revoked or expired connection (tombstone); an active one: `CONNECTION_ACTIVE`                  | `connection.remove`                                 |
+| `removeInactiveConnections(actor)`                           | Removes every revoked and expired connection, in one transaction                                         | `connection.remove` (each)                          |
+| `revokeStaleConnections(actor, profileId)`                   | Revokes the profile's stale connections                                                                  | `connection.revoke` (`via: 'stale'`)                |
+| `getAutoRemoveDays` / `setAutoRemoveDays(actor, days)`       | Days before the daily sweep removes dead connections (0 = never; default 30)                             | `policy.set_auto_remove_days`                       |
+| `getStaleAfterDays` / `setStaleAfterDays(actor, days)`       | Days of disuse before a connection is stale (0 = never; default 14)                                      | `policy.set_stale_after_days`                       |
+| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id. `bulkApprove` skips a canonical proposal (`skipped: true`)     | as above                                            |
+| `bulkApproveAsCanon(actor, ids)`                             | `approveAsCanon` for each id, one at a time, in order; an ordinary proposal is refused and stays pending | `proposal.approve_as_canon` each, with `bulk: true` |
+| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                                              | –                                                   |
 
 The system writes its own rows with actor `system`: `proposal.conflicted`, `proposal.executed`, `proposal.failed`,
 `proposal.expired`, `proposal.approval_reverted` and `proposal.approval_interrupted`; since v3 F3.4 also `job.revert`
@@ -602,7 +598,8 @@ Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PR
   without choosing its scope therefore never changes it silently. A bad choice shows an error without using up the
   request; denial is unchanged. **The step-up (CR-2026-11-R4, [ADR 0062](adr/0062-dashboard-sessions-and-step-up.md)
   amendment 1):** a raise (once confirmed), a new profile above the default scope, and a connection on a profile at
-  scope `write` also need the owner's step-up within the last 10 minutes, asked on the consent page itself ("Confirm
+  scope `write` also need the owner's step-up within the window (`AUTH_STEP_UP_WINDOW_SECONDS`, 12 hours; ADR 0081),
+  asked on the consent page itself ("Confirm
   it’s you": the authenticator code, or the password without one) before anything is applied or any code issued; see
   [auth.md](auth.md#consent-and-profiles-chunk-2b). An ordinary connection at `read` or `propose` and a lowering do not.
 - **Replace on reconnect (ADR 0033).** When the application being approved already has active connections, the page

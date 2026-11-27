@@ -307,7 +307,10 @@ describe('arkona_rename: a character', () => {
     // index, three move (the Art, the Biography and the Archive Notes; before, four moved and the set ended out of order)
     // and two stay in place (the Core and the Relationship), each read inside its lock and nothing sent (47 → 46 writes,
     // the same 185 requests).
-    expect(job).toEqual({ requests: 185, writes: 46 });
+    // v3 F12 (ADR 0081): the pre-image Revert needs: each sidebar row write (updatePropertyRow) reads its property's
+    // rows first, inside the lock, where a row write chained on the previous one's version read nothing (185 → 194
+    // requests; the same 46 writes).
+    expect(job).toEqual({ requests: 194, writes: 46 });
   });
 
   it('plans exactly what is left as a follow-up (from: the old name)', async () => {
@@ -417,7 +420,8 @@ describe('arkona_rename: a culture', () => {
     // ADR 0058 amendment: each character's tag is re-checked inside its own write's lock, on the read that write makes
     // anyway, instead of by the job's first check (98 → 93 requests).
     // CR-2026-11-R3 (R3-29): one read more for each page with restatements (2 here).
-    expect(cost).toEqual({ requests: 95, writes: 20 });
+    // v3 F12 (ADR 0081): the pre-image Revert needs: one read of the rows before a chained sidebar row write (95 → 96).
+    expect(cost).toEqual({ requests: 96, writes: 20 });
   });
 });
 

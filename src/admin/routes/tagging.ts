@@ -7,8 +7,8 @@
  * - `POST /tagging/audit`: an audit of a page, a branch or everything (free: the snapshots);
  * - `GET /tagging/runs/:id`: a stored run's pages (filtered, paged);
  * - `GET /tagging/holds`: the latest run's holds, each with the agents' suggestions and the owner's classification;
- * - `POST /tagging/classify` (re-authenticated; audited `retag.classify`): the owner's classification of a page from the
- *   closed list, used by every later audit; `POST /tagging/unclassify` (re-authenticated; audited) withdraws it;
+ * - `POST /tagging/classify` (audited `retag.classify`): the owner's classification of a page from the
+ *   closed list, used by every later audit; `POST /tagging/unclassify` (audited) withdraws it;
  * - `POST /tagging/batches`: deterministic corrections of a run proposed as ONE batch (a proposal for the Proposals
  *   page, where the owner approves it with its own confirmation);
  * - `POST /tagging/reconciliations` (start, with a first audit), `GET /tagging/reconciliations/:id` (stale pages
@@ -19,9 +19,7 @@
 import * as z from 'zod';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { RetagError, type RetagService } from '../../packs/retag/service.js';
-import { DEFAULT_WRITE_RAILS } from '../../policy/rails.js';
 import { verdictView } from '../../mcp/tools/retag.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectParam, type Register, type RouteProject, projectFor } from './util.js';
 
@@ -54,11 +52,16 @@ const STATUS: Readonly<Record<string, number>> = {
   ALREADY_LISTED: 409,
 };
 
+/**
+ * The owner's tagging actions (each confirmed in its dialog, `confirm: true`). v3 F12 (ADR 0081): a retag batch the
+ * owner asks for runs at once as one job (no proposal to approve next).
+ */
 const ORIGIN = (tool: string): JobOrigin => ({
   kind: 'ui',
   client: 'owner',
   tool,
   principal: SYSTEM_PRINCIPAL,
+  ownerConfirmed: true,
 });
 
 const scopeBody = {
@@ -191,7 +194,6 @@ export const registerTagging: Register = (api, ctx) => {
   });
 
   api.post('/tagging/classify', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -219,7 +221,6 @@ export const registerTagging: Register = (api, ctx) => {
   });
 
   api.post('/tagging/unclassify', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z.object({ project: projectParam, pageId: pageIdSchema, confirm: z.literal(true) }).strict(),
       req.body,
@@ -254,9 +255,8 @@ export const registerTagging: Register = (api, ctx) => {
     };
   });
 
-  /** "Keep this tag here": the owner's ruling for one page (re-authenticated; audited `retag.keep_here`). */
+  /** "Keep this tag here": the owner's ruling for one page (audited `retag.keep_here`). */
   api.post('/tagging/keep-here', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -294,8 +294,8 @@ export const registerTagging: Register = (api, ctx) => {
 
   /**
    * "Allow this tag everywhere": the bridge edits the Tagging Standard's Approved Supplementary Tags to add the tag, as
-   * the owner's action. `dryRun` (one read, no step-up) returns the paragraph before and after; the edit itself asks for
-   * the step-up, runs as one job (journalled, revertible) and is audited `retag.allow_everywhere`.
+   * the owner's action. `dryRun` (one read) returns the paragraph before and after; the edit itself runs as one job
+   * (journalled, revertible) and is audited `retag.allow_everywhere`.
    */
   api.post('/tagging/allow-everywhere', async (req) => {
     const b = parseInput(
@@ -317,7 +317,6 @@ export const registerTagging: Register = (api, ctx) => {
           'CONFIRM_REQUIRED',
           'Confirm the edit (confirm: true), or ask for a dry run.',
         );
-      requireReauth(ctx.deps.services, req);
     }
     const p = projectFor(ctx, req, b.project);
     return wrap(async () =>
@@ -342,8 +341,6 @@ export const registerTagging: Register = (api, ctx) => {
       req.body,
     );
     const p = projectFor(ctx, req, b.project);
-    // ADR 0062: the owner's own change of more than 10 pages at once (the bulk rail's size) needs the step-up.
-    if (b.pageIds.length > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
     return wrap(async () => {
       const r = retag();
       const plan = r.planApply({ projectId: p.id, runId: b.runId, pageIds: b.pageIds });
@@ -358,8 +355,7 @@ export const registerTagging: Register = (api, ctx) => {
 
   /**
    * v3 F5a (ADR 0067, H4): "Apply all corrections" of a run: every deterministic correction not in an open batch, in
-   * the usual bounded batches (the pack's batch size, each page an item), each ONE proposal. More than 10 pages in all
-   * is the owner's own bulk change, so the step-up first (ADR 0062).
+   * the usual bounded batches (the pack's batch size, each page an item), each ONE proposal (ADR 0081: no fresh code).
    */
   api.post('/tagging/apply-all', async (req) => {
     const b = parseInput(
@@ -371,7 +367,6 @@ export const registerTagging: Register = (api, ctx) => {
       const r = retag();
       const chunks = r.correctionBatches(p.id, b.runId);
       const pages = chunks.reduce((n, c) => n + c.length, 0);
-      if (pages > DEFAULT_WRITE_RAILS.bulkPages) requireReauth(ctx.deps.services, req);
       const batches: { batchId: string; proposalId: string | null; jobId: string | null; pages: number }[] =
         [];
       for (const ids of chunks) {
@@ -394,7 +389,7 @@ export const registerTagging: Register = (api, ctx) => {
 
   /**
    * v3 F5a (ADR 0067, H4): "Approve all these batches": the retag batches' proposals approved together, each whole, one
-   * at a time; a bulk approval, so the step-up first. Only retag batch proposals of this project are taken.
+   * at a time (ADR 0081: no fresh code). Only retag batch proposals of this project are taken.
    */
   api.post('/tagging/approve-batches', async (req) => {
     const b = parseInput(
@@ -407,7 +402,6 @@ export const registerTagging: Register = (api, ctx) => {
         .strict(),
       req.body,
     );
-    requireReauth(ctx.deps.services, req);
     const p = projectFor(ctx, req, b.project);
     const r = retag();
     const notBatches = b.proposalIds.filter((id) => !r.isBatchProposal(p.id, id));
@@ -450,8 +444,6 @@ export const registerTagging: Register = (api, ctx) => {
   api.post('/tagging/reconciliations/:id/resume', async (req) => {
     const { id } = parseInput(z.object({ id: recIdSchema }), req.params);
     const b = parseInput(z.object({ project: projectParam, confirm: z.literal(true) }).strict(), req.body);
-    // ADR 0062: the next batch may hold up to the pack's batch size: a bulk change, so the step-up first.
-    requireReauth(ctx.deps.services, req);
     const p = projectFor(ctx, req, b.project);
     return wrap(async () => {
       const out = await retag().resume({

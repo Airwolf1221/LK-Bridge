@@ -49,17 +49,10 @@ const mapFeatures = () => w!.features.get(w!.d.map)!;
 const feature = (id: string) => mapFeatures().find((f) => f.id === id)!;
 const sentLabelSizes = () => w!.featureWrites.filter((x) => Object.hasOwn(x.body, 'labelSize'));
 
-async function settle(id: string, canon = false): Promise<string> {
-  const pol = w!.stack.runtime.policy;
-  if (canon) await pol.commands.approveAsCanon('owner', id);
-  else await pol.commands.approve('owner', id);
-  for (
-    let i = 0;
-    i < 400 && !['executed', 'failed', 'conflicted'].includes(pol.proposals.get(id)!.state);
-    i++
-  )
-    await new Promise((res) => setTimeout(res, 20));
-  return pol.proposals.get(id)!.state;
+/** v3 F12 (ADR 0081): at scope write a restore runs at once as one job; how it ended. */
+async function ran(r: ToolCall): Promise<string> {
+  expect(r.body.jobId, r.text).toBeTruthy();
+  return (await w!.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 30_000)).status;
 }
 
 /**
@@ -110,12 +103,12 @@ describe('label sizes are never sent (E5.4)', () => {
       scope: 'document',
       document: 'Map',
     });
-    expect(r.body.status, r.text).toBe('proposal_captured');
+    expect(r.body.status, r.text).toBe('written');
     const notes = (r.body.notRestored ?? []) as { what: string; why: string }[];
     const note = notes.find((x) => x.what.includes('label size'))!;
     expect(note.what).toBe('the label size of 3 feature(s) of map Map');
     expect(note.why).toContain(LABEL_SIZE_NOT_RESTORABLE);
-    expect(await settle(String(r.body.proposalId))).toBe('executed');
+    expect(await ran(r)).toBe('succeeded');
     expect(sentLabelSizes()).toEqual([]);
     expect(w!.featureWrites.length).toBeGreaterThanOrEqual(3);
     expect(feature('lbl00001').labelSize).toBeUndefined();
@@ -151,10 +144,10 @@ describe('label sizes are never sent (E5.4)', () => {
       scope: 'deleted',
       mode: 'recreate',
     });
-    expect(r.body.status, r.text).toBe('proposal_captured');
+    expect(r.body.status, r.text).toBe('written');
     const notes = (r.body.notRestored ?? []) as { what: string; why: string }[];
     expect(notes.find((x) => x.what.includes('label size'))?.why).toContain(LABEL_SIZE_NOT_RESTORABLE);
-    expect(await settle(String(r.body.proposalId), true)).toBe('executed');
+    expect(await ran(r)).toBe('succeeded');
     expect(sentLabelSizes()).toEqual([]);
     const map = w!.repo.liveDocs(w!.repo.live(S.atlas)!).find((x) => x.name === 'Map')!;
     const made = w!.features.get(map.id)!;

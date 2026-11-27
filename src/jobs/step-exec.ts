@@ -156,6 +156,8 @@ export interface StepExecDeps {
   readonly etagVersions?: (projectId: string) => boolean;
   /** v2 D3 (ADR 0041): keeps an asset's bytes before any `deleteAsset` (see `AssetDeleteKeeper`). */
   readonly assetDeleteKeeper?: () => AssetDeleteKeeper | undefined;
+  /** v3 F12 (ADR 0081, D3): keeps a restorable copy before a page or document delete (see `DeleteCopier`). */
+  readonly deleteCopier?: () => DeleteCopier | undefined;
   /** v2 E1a (ADR 0042): told about every read a job makes for its own checks (the snapshot service's read tap). */
   readonly onRead?: (info: ReadInfo) => void;
 }
@@ -173,6 +175,22 @@ export type AssetDeleteKeeper = (ctx: {
   /** The asset as `getAsset` gave it. */
   readonly asset: Record<string, unknown>;
   /** A governed read in the job's name (listAssets for a folder's children). */
+  readonly read: (opId: string, params: OpParams) => Promise<unknown>;
+}) => Promise<Record<string, unknown>>;
+
+/**
+ * v3 F12 (ADR 0081, D3): called before a `deleteResource` or `deleteDocument` is journalled and sent, on EVERY route.
+ * It keeps a restorable copy of what the delete takes (the page, every page under it for a cascade, read live) and
+ * returns what the journal's pre-image records about it (`{ copy: { snapshotId, pages, reads } }`), or `{}` when the job
+ * needs none (the bridge's own work). It throws (a `JobsError`, `DELETE_COPY_FAILED`) to refuse the delete: nothing is
+ * sent then, and the job stops there.
+ */
+export type DeleteCopier = (ctx: {
+  readonly job: JobView;
+  readonly step: StepView;
+  readonly opId: 'deleteResource' | 'deleteDocument';
+  readonly params: OpParams;
+  /** A governed read in the job's name. */
   readonly read: (opId: string, params: OpParams) => Promise<unknown>;
 }) => Promise<Record<string, unknown>>;
 
@@ -2048,6 +2066,19 @@ export class StepExecutor {
             // v2 E4: a step whose pre-image the tool supplied needs no read for it.
             (meta.journal === 'pre-image' && !journalled && step.options.journalPreImage === undefined));
 
+        // v3 F12 (ADR 0081): the pre-image these writes keep since F12 (for Revert) is not a reason to compare the target
+        // with the plan: a write that carries a version (the caller's, or one the engine chained) is refused by
+        // LegendKeeper's If-Match if it changed, as before; the bridge's own compare-and-swap below stays for the writes
+        // it was made for (no version to chain from, a guard, an older pre-image).
+        const plannedRead =
+          needRead &&
+          !(
+            F12_PRE_IMAGE_OPS.has(op.operationId) &&
+            callerVersion !== undefined &&
+            meta.guard === undefined &&
+            !(step.options.readBefore === true && !journalled)
+          );
+
         // ONE read serves the If-Match version, the unsupported-block guard and the journal pre-image.
         const current =
           carried ??
@@ -2207,7 +2238,7 @@ export class StepExecutor {
         // v2 C2a: the bridge's own compare-and-swap for a write LegendKeeper does not version (a link collection's
         // updateProperty): the read just made inside the lock must show the state the plan was built on.
         const expect = step.options.expectCurrent;
-        if (expect && !resend && needRead && !judged) {
+        if (expect && !resend && plannedRead && !judged) {
           if (!current || (expect.state === 'collection' && !current.exists)) {
             throw new StateConflictError(
               op.operationId,
@@ -2287,6 +2318,35 @@ export class StepExecutor {
         // Chunk 8 (required change A): EVERY write gets a journal entry before it is sent (outcome `pending`, settled
         // below), so agents can see each other's edits. Only destructive writes (`meta.journal`) keep a pre-image or ids.
         let journalId: number | undefined;
+        // v3 F12 (ADR 0081, D3): a restorable copy before a page or document delete (refused when none can be taken).
+        let copy: Record<string, unknown> = {};
+        if (!journalled && (op.operationId === 'deleteResource' || op.operationId === 'deleteDocument')) {
+          const copier = this.d.deleteCopier?.();
+          if (copier)
+            copy = await copier({
+              job,
+              step,
+              opId: op.operationId,
+              params,
+              read: async (opId, p) => (await this.readOp(job, step, opId, p)).body,
+            });
+        }
+        // v3 F12 (ADR 0081, D2): a block deleted through the low-level tools keeps the document's blocks as they were (one
+        // read), so Review's Revert puts the page text back block by block, where the block stood. The high-level tools'
+        // block writes carry their own check of the document before, which serves the same.
+        if (
+          !journalled &&
+          op.operationId === 'deleteBlock' &&
+          LOW_LEVEL_TOOL.test(job.origin.tool ?? '') &&
+          params.path?.resourceId &&
+          params.path.documentId
+        ) {
+          const r = await this.readOp(job, step, 'getDocumentBlocks', {
+            path: { resourceId: params.path.resourceId, documentId: params.path.documentId },
+          });
+          const blocks = (r.body as { blocks?: unknown } | undefined)?.blocks;
+          if (r.exists && Array.isArray(blocks)) copy = { ...copy, documentBlocks: blocks };
+        }
         if (!journalled) {
           const created = meta.verify === 'client-id' ? step.clientIds : [];
           journalId = this.d.journal.record({
@@ -2316,23 +2376,23 @@ export class StepExecutor {
                 }
               : {}),
             ...(created.length > 1 ? { targets: created } : {}),
-            ...(meta.journal === 'pre-image' && current
-              ? {
-                  preImage:
-                    step.options.journalPreImageWith !== undefined &&
-                    current.entity !== null &&
-                    typeof current.entity === 'object'
-                      ? {
-                          ...(current.entity as Record<string, unknown>),
-                          with: step.options.journalPreImageWith,
-                        }
-                      : (current.entity ?? current.body),
-                }
-              : step.options.journalPreImage !== undefined
-                ? { preImage: step.options.journalPreImage }
-                : step.options.readBefore === true && current?.exists
-                  ? { preImage: current.entity ?? current.body }
-                  : {}),
+            ...withCopy(
+              meta.journal === 'pre-image' && current
+                ? step.options.journalPreImageWith !== undefined &&
+                  current.entity !== null &&
+                  typeof current.entity === 'object'
+                  ? {
+                      ...(current.entity as Record<string, unknown>),
+                      with: step.options.journalPreImageWith,
+                    }
+                  : (current.entity ?? current.body)
+                : step.options.journalPreImage !== undefined
+                  ? step.options.journalPreImage
+                  : step.options.readBefore === true && current?.exists
+                    ? (current.entity ?? current.body)
+                    : undefined,
+              copy,
+            ),
           });
         }
 
@@ -3269,4 +3329,29 @@ function runsText(content: unknown): string | null {
         : '',
     )
     .join('');
+}
+
+/**
+ * v3 F12 (ADR 0081, D3): a journal entry's pre-image with the restorable copy a delete kept merged in (`copy`), whatever
+ * the pre-image came from (the engine's read, the tool's own, or none).
+ */
+/** The writes that keep a pre-image since v3 F12 (ADR 0081), for Revert (src/jobs/op-meta.ts). */
+const F12_PRE_IMAGE_OPS = new Set([
+  'updateBlock',
+  'updateBlockRow',
+  'updateBlockPropertyRow',
+  'updatePropertyRow',
+  'updateBoardShapes',
+]);
+
+/** The low-level tools, whose block deletes keep the document before (above). */
+const LOW_LEVEL_TOOL = /^(lk_api_write|lk_api_batch|lk_op_)/;
+
+function withCopy(pre: unknown, copy: Record<string, unknown>): { preImage?: unknown } {
+  const hasCopy = Object.keys(copy).length > 0;
+  if (pre === undefined) return hasCopy ? { preImage: copy } : {};
+  if (!hasCopy) return { preImage: pre };
+  return pre !== null && typeof pre === 'object' && !Array.isArray(pre)
+    ? { preImage: { ...(pre as Record<string, unknown>), ...copy } }
+    : { preImage: { value: pre, ...copy } };
 }

@@ -72,16 +72,12 @@ export type PolicyDecision =
   | { readonly decision: 'deny'; readonly reason: string }
   | { readonly decision: 'propose' };
 
-/** v3 F3.4 (ADR 0055): one operation of a request, as the safety rails judge it. */
-export interface RailRequestItem {
-  readonly opId: string;
-  readonly kind: string;
-  readonly params: OpParams;
-  readonly options: StepOptions;
-}
-
-/** v3 F3.4: the safety rails a request met, in words (`proposed because: bulk change (14 pages > 10)`). */
-export interface RailDecision {
+/**
+ * Why a request became a proposal, in words (`proposed because: …`): today only the lifecycle guard's ordinary proposal
+ * (a page moved into or out of Narratives) at scope `propose` or for the automation engine. v3 F12 (ADR 0081): the
+ * safety rails that also gave one are gone.
+ */
+export interface ProposalReason {
   readonly reason: string;
   readonly hits: readonly { readonly rail: string; readonly text: string }[];
 }
@@ -93,23 +89,6 @@ export interface PolicyGate {
     params: OpParams,
     ctx: PolicyContext,
   ): PolicyDecision | Promise<PolicyDecision>;
-  /**
-   * v3 F3.4 (ADR 0055): asked once about a request that would otherwise run directly (the gate allowed every operation
-   * and no guard made it a proposal), never about approved work or the bridge's own: the agent profile's safety rails
-   * the request meets, or null. A verdict makes the request ONE proposal saying which rail sent it. A rail can only add
-   * a proposal.
-   */
-  rails?(
-    principal: Principal,
-    items: readonly RailRequestItem[],
-    ctx: {
-      readonly project: string;
-      readonly jobKind: JobKind;
-      readonly stagedPlacement?: boolean;
-      /** The tool the request came through (`origin.tool`): the low-level tools' removals meet the deletes rail. */
-      readonly tool?: string;
-    },
-  ): RailDecision | null | Promise<RailDecision | null>;
 }
 
 export interface ProposedOp extends StepOptions {
@@ -136,11 +115,8 @@ export interface ProposalMeta {
    * accept as canon". `reason` and `changes` are shown to the owner and returned to the agent.
    */
   readonly canonical?: { readonly reason: string; readonly changes: readonly unknown[] };
-  /**
-   * v3 F3.4 (ADR 0055): the safety rail that made a direct write at scope `write` a proposal, shown to the owner and
-   * returned to the agent.
-   */
-  readonly rail?: RailDecision;
+  /** Why the request became a proposal (`ProposalReason`), shown to the owner and returned to the agent. */
+  readonly rail?: ProposalReason;
 }
 
 /** v2 C2a: kept with a proposal and used again when the approved batch is submitted. */

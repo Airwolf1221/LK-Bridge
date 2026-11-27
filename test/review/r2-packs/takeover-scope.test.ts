@@ -1,10 +1,10 @@
 /**
  * R2-PACKS ATK-08: the staged-image takeover (ADR 0052 decision 10) when the package is NOT a proposal.
  *
- * The takeover was designed (and is only tested, test/packs/takeover.test.ts, with every switch on "always propose")
- * for a package that is captured as a proposal: finishPackage (src/packs/run.ts:334-367) withdraws the image's own
- * pending placement proposal AFTER runWriteJob returns. With the seed's switch, `arkona_add_character_art` follows the
- * scope, so at scope `write` runWriteJob submits a direct job and WAITS for it (src/mcp/tools/write-job.ts:119-123):
+ * The takeover was designed (and is tested, test/packs/takeover.test.ts, with the agent at scope propose) for a
+ * package that is captured as a proposal: finishPackage (src/packs/run.ts:334-367) withdraws the image's own
+ * pending placement proposal AFTER runWriteJob returns. Every pack tool follows the scope (v3 F12: the pack's switches are
+ * gone), so at scope `write` runWriteJob submits a direct job and WAITS for it (src/mcp/tools/write-job.ts:119-123):
  * the job's own `pack.absent` check (src/packs/engine/checks.ts:211-230) still sees the placement proposal pending (not
  * this job's), refuses STAGED_IMAGE_BUSY and the job fails; only then does finishPackage withdraw the owner's pending
  * placement proposal ("superseded by package job_…", a job that placed nothing) and point the staged image at the

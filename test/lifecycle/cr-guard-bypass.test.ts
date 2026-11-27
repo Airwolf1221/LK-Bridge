@@ -1,5 +1,8 @@
 /**
- * Security review (cr): MCP write paths. Each test asserts the SAFE behaviour.
+ * Security review (cr): MCP write paths. Each test asserts the SAFE behaviour. v3 F12 (ADR 0081): at scope `write` a
+ * canon change (a delete of an Authoritative page, a Status leaving Authoritative) is direct, so the attacks on the
+ * canon guard are made at scope `propose`, where canon must still become a CANONICAL proposal; the lifecycle guard's
+ * refusals hold at every scope.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,8 +11,11 @@ import { facts, SidebarModel } from '../resources/world.js';
 
 let w: LifecycleWorld;
 let client: Client;
+let proposer: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
+const propose = (tool: string, args: Record<string, unknown>) =>
+  w.stack.call(proposer, tool, { project: 'test', ...args });
 
 beforeAll(async () => {
   w = await lifecycleWorld({
@@ -19,6 +25,7 @@ beforeAll(async () => {
     },
   });
   client = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('cr-guard-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 
@@ -34,8 +41,8 @@ describe('cascade delete and the canon guard', () => {
     ]);
     expect(w.stack.runtime.tree.queries.node('proj_mock', 'canonch1').data).toBeNull();
 
-    // An agent at scope write deletes the parent with cascade.
-    const r = await call('lk_api_write', {
+    // An agent at scope propose deletes the parent with cascade.
+    const r = await propose('lk_api_write', {
       operationId: 'deleteResource',
       params: { path: { resourceId: 'staging1' }, query: { cascade: true } },
       confirm: 'cascade',
@@ -134,7 +141,7 @@ describe('the entry check simulates a batch; an agent controls a template copyâ€
     expect(version).toMatch(/^v\d+$/);
     expect(facts(w, L.harbour)).toContain('Status=Authoritative');
 
-    const r = await call('lk_api_batch', {
+    const r = await propose('lk_api_batch', {
       onError: 'continue',
       calls: [
         // Fails at LegendKeeper (409 DUPLICATE_ID), but the guards' simulation now treats Old Harbour as a blank copy.

@@ -129,7 +129,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerEvaluation(api, ctx); // v2 E3: the Evaluation helper
       registerPacks(api, ctx); // v3 F3a: setting packs
       registerAppraisal(api, ctx); // v3 F3c: the appraisal tools (read-only; fixes are proposals)
-      registerConsistency(api, ctx); // v3 F4b: the owner's "Pick the right value" (a step-up; one proposal)
+      registerConsistency(api, ctx); // v3 F4b: the owner's "Pick the right value" (one proposal)
       registerTagging(api, ctx); // v3 F3f: the retag audit, holds, batches and reconciliations
       registerReferenceTypes(api, ctx); // v3 F6a: the Reference Type report, decisions and publication
       registerIndexClassification(api, ctx); // v3 F6b: the index classification report and decisions

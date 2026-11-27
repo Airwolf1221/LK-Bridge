@@ -6,7 +6,7 @@
  * - "Reject all conflicted" over 60 proposals across pages (the page shows 50): one confirmation, no step-up; refused
  *   when the set changed since the count the owner confirmed.
  * - The filters (state, tool, principal, age) and the count of everything they match.
- * - "Approve selected" with a rail inside (a delete) asks for the step-up; without one it does not.
+ * - "Approve selected" with a rail inside (a delete) needs no step-up (ADR 0081), as without one.
  * - A proposal whose job is running is never touched; a partial failure is listed proposal by proposal.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -119,28 +119,23 @@ describe('H4: the filters', () => {
 });
 
 describe('H4: Approve selected', () => {
-  it('asks for the step-up when any selected proposal triggers a rail (a delete); not otherwise', async () => {
+  it('needs no step-up (ADR 0081), a delete among the selection or not, nor over a filter', async () => {
     const plain = await propose('Approver', 'write', 'a1');
     const del = await propose('Approver', 'delete');
     notSteppedUp();
-    const guarded = await stack.post('/api/admin/proposals/bulk', { action: 'approve', ids: [plain, del] });
-    expect(guarded.status).toBe(403);
-    expect(guarded.json.error.code).toBe('REAUTH_REQUIRED');
-    expect(stack.policy.proposals.get(plain)!.state).toBe('pending'); // nothing decided
-    const ok = await stack.post('/api/admin/proposals/bulk', { action: 'approve', ids: [plain] });
-    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
-    expect(ok.json.results[0]).toMatchObject({ id: plain, ok: true });
-    // Over a filter too: approving everything a filter matches, a delete among them, asks.
+    const both = await stack.post('/api/admin/proposals/bulk', { action: 'approve', ids: [plain, del] });
+    expect(both.status, JSON.stringify(both.json)).toBe(200);
+    expect(both.json.results[0]).toMatchObject({ id: plain, ok: true });
+    // Over a filter too: approving everything a filter matches, a delete among them, needs none.
+    await propose('Approver', 'delete');
     const viaFilter = await stack.post('/api/admin/proposals/bulk-matching', {
       action: 'approve',
       filter: { group: 'pending', tool: 'delete_resource' },
       expect: (await stack.get('/api/admin/proposals?group=pending&tool=delete_resource')).json.total,
       confirm: true,
     });
-    expect(viaFilter.status).toBe(403);
+    expect(viaFilter.status, JSON.stringify(viaFilter.json)).toBe(200);
     steppedUp();
-    // Reject the delete again so later tests start clean.
-    await stack.post('/api/admin/proposals/bulk', { action: 'reject', ids: [del] });
   });
 
   it('never touches a proposal whose job is running, and lists each failure', async () => {

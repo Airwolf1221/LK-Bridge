@@ -120,7 +120,7 @@ export function proposalTools(proposals: ProposalService, o: ProposalToolsOption
     name: 'bridge_proposal_status',
     title: 'Proposal status',
     description:
-      'Shows the state of one of YOUR proposals (writes held for the owner): pending, approved, executing, executed, rejected (with the reason), conflicted, expired or failed, and the job id once it runs. Pass `proposalId`; without it, lists your proposals in the project, newest first (optionally only one `state`, at most `limit`). Pass the project the write was for. Use it after proposal_captured instead of repeating the write; only the owner can approve or reject, on the dashboard. A conflicted proposal means the page changed: read it again and propose afresh. Cost: none.',
+      'Shows the state of one of YOUR proposals (writes held for the owner). Proposals come from a connection at scope propose (every write becomes one) or from the owner’s automation; at scope write your writes run directly. States: pending, approved, executing, executed, rejected (with the reason), conflicted, expired or failed, and the job id once it runs. Pass `proposalId`; without it, lists your proposals in the project, newest first (optionally only one `state`, at most `limit`). Pass the project the write was for. Use it after proposal_captured instead of repeating the write; only the owner can approve or reject, on the dashboard. A conflicted proposal means the page changed: read it again and propose afresh. Cost: none.',
     inputSchema: z.object({
       proposalId: z.string().min(1).max(64).optional().describe('One proposal. Leave out to list yours.'),
       state: z.enum(PROPOSAL_STATES).optional().describe('When listing: only proposals in this state.'),

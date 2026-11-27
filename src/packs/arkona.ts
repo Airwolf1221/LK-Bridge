@@ -55,33 +55,10 @@ const primaryOwner = (name: string, category: string, worldToo = false) => ({
 
 const rules: PackRules = packRulesSchema.parse({
   schema: 1,
-  // v3 F3.4 (ADR 0055 decision D): per tool. A package of the three creation tools makes several pages at once, so it
-  // stays a proposal; adding art and an appraisal fix follow the agent's scope (direct at `write`). Any other tool:
-  // `alwaysPropose`.
-  settings: {
-    alwaysPropose: true,
-    tools: {
-      arkona_create_character: 'propose',
-      arkona_create_owner: 'propose',
-      arkona_create_relationship: 'propose',
-      arkona_add_character_art: 'scope',
-      arkona_appraisal_fix: 'scope',
-      // v3 F3f (ADR 0060): the Tagging Standard calls for a separately approved apply, so every batch is a proposal.
-      arkona_retag_apply: 'propose',
-      // v3 F5c (ADR 0069, H6): bulk identity facts with their tags follow the agent's scope (direct at `write` for 10
-      // pages or fewer; the bulk rail makes more a proposal with one item per character; a proposal at `propose`).
-      arkona_identity_reconcile: 'scope',
-      // v3 F4c (ADR 0065, design E5): routine narrative organisation follows the agent's scope (direct at `write`, on
-      // the Review page and Revertible); renumbering more than 10 pages meets the bulk rail. Promoting lore to canon is
-      // always a proposal (E7).
-      arkona_story_create: 'scope',
-      arkona_chapter_plan: 'scope',
-      arkona_chapter_save: 'scope',
-      arkona_chapter_insert: 'scope',
-      arkona_chapter_move: 'scope',
-      arkona_promote_from_chapter: 'propose',
-    },
-  },
+  // v3 F12 (ADR 0081): no switches. Every pack tool follows the agent's scope: direct at `write` (on the owner's Review
+  // page, with Revert), a proposal at `propose`. The F3.4 per-tool "always propose" switches (`alwaysPropose`, `tools`)
+  // are dropped by this seed's upgrade.
+  settings: {},
   tags: {
     authoritative: 'CANON',
     working: 'Working',
@@ -1586,8 +1563,14 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // classifier, the territory categories' nesting (Conflicts in Historical Events), the Lost Realmships, and the ruling
   // `nation-subindex-roles`. No new pinned section: Source Formatting's "Nation-Centred Territorial Navigation" is pinned
   // already, so the reviewer's paragraph shows as governance drift and the owner approves again.
-  seed: 'arkona-2026-11-28-f5b1',
+  // `-f5b1` (ADR 0068 amendment 2, 28 November 2026; session F5b.1): the automation caps leave the rules (they are
+  // settings, AUTOMATION_CAP_PER_CODE / _PER_RUN).
+  // `-f12` (ADR 0081, 28 November 2026; session F12, after F5b.1): the per-tool "always propose" switches dropped
+  // (`settings` is empty); every pack tool follows the agent's scope. Nothing else changed.
+  seed: 'arkona-2026-11-28-f12',
   supersedes: [
+    'arkona-2026-11-28-f5b1',
+    'arkona-2026-11-26-f12', // F12's seed before F5b.1 merged (never released)
     'arkona-2026-11-27-f6c',
     'arkona-2026-11-25-f6b',
     'arkona-2026-11-24-f6a',

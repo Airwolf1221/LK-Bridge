@@ -1,17 +1,17 @@
 import { useState } from 'react';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { useProject, useProjectApi, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 
 /**
  * Tagging (v3 F3f, ADR 0060), in the Repository group: the Controlled Native Tagging Standard's workflows for the Arkona
  * pack. **Audit**: a free, read-only policy audit (the snapshots) of a page, a branch or everything, each page with its
- * current and proposed arrays, a rationale per slot and its disposition; deterministic corrections can be proposed as
- * ONE batch (a proposal, approved on the Proposals page). **Holds**: what needs the owner, with agents' suggestions; an
- * uncertain category is resolved by choosing the category (and specialist) from the closed list (re-authenticated,
- * audited). **Batches**: each batch's proposal and what became of each page. **Reconciliation**: a named record across
- * batches; Resume audits what remains afresh and proposes the next batch. Nothing here writes to LegendKeeper.
+ * current and proposed arrays, a rationale per slot and its disposition; deterministic corrections can be applied as
+ * ONE batch (v3 F12, ADR 0081: confirmed in a dialog, then one job at once). **Holds**: what needs the owner, with
+ * agents' suggestions; an uncertain category is resolved by choosing the category (and specialist) from the closed list
+ * (audited). **Batches**: each batch's job and what became of each page. **Reconciliation**: a named record across
+ * batches; Resume audits what remains afresh and applies the next batch. Nothing here writes to LegendKeeper until
+ * the owner confirms a batch.
  */
 
 type Disposition = 'compliant' | 'correction' | 'hold' | 'exception';
@@ -137,7 +137,7 @@ export function TaggingPage() {
       </PageHeader>
       <p className="muted">
         The Controlled Native Tagging Standard, for the Arkona pack: audit first (free, from the snapshots),
-        holds go to you, and every apply is a proposal you approve on the Proposals page.
+        holds go to you, and every apply is a batch you confirm, which then runs at once as one job.
       </p>
       {d.unavailable ? (
         <div className="note note-warn" role="status">
@@ -239,15 +239,14 @@ function AuditTab({ overview, onChanged }: { overview: Overview; onChanged: () =
     );
   const propose = () =>
     void confirm({
-      title: `Propose ${picked.size} correction${picked.size === 1 ? '' : 's'} as one batch?`,
+      title: `Apply ${picked.size} correction${picked.size === 1 ? '' : 's'} as one batch?`,
       message: (
         <p>
-          ONE proposal, each page an item. Nothing is written until you approve it on the Proposals page; its
-          job compares the policy, reads each page fresh (a page changed since the audit is skipped as
-          conflicted) and reads it back.
+          ONE job, at once: it compares the policy, reads each page fresh (a page changed since the audit is
+          skipped as conflicted) and reads it back. Follow it on the Jobs page; Revert undoes it.
         </p>
       ),
-      confirmLabel: 'Propose the batch',
+      confirmLabel: 'Apply the batch',
     }).then((ok) => {
       if (!ok || !runId) return;
       void run(
@@ -257,7 +256,7 @@ function AuditTab({ overview, onChanged }: { overview: Overview; onChanged: () =
             pageIds: [...picked],
             confirm: true,
           }),
-        'Batch proposed: approve it on the Proposals page.',
+        'Batch applying: follow it on the Jobs page.',
       ).then((x) => {
         if (x) {
           setPicked(new Set());
@@ -369,7 +368,7 @@ function AuditTab({ overview, onChanged }: { overview: Overview; onChanged: () =
             </table>
           </div>
           <Button variant="primary" busy={busy} disabled={picked.size === 0} onClick={propose}>
-            Propose the picked corrections ({picked.size})
+            Apply the picked corrections ({picked.size})…
           </Button>
         </>
       )}
@@ -386,7 +385,7 @@ const runCorrections = (o: Overview, runId: string): number =>
 
 /**
  * v3 F5a (ADR 0067, H4): "Apply all corrections" of the run shown: the usual bounded batches (the pack's batch size,
- * each page an item), then "Approve all these batches" (a bulk approval: the step-up).
+ * each page an item), then "Approve all these batches" (a bulk approval).
  */
 function ApplyAll({
   runId,
@@ -399,7 +398,6 @@ function ApplyAll({
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [made, setMade] = useState<{ proposalId: string | null; pages: number }[] | null>(null);
   const [approved, setApproved] = useState<{ id: string; ok: boolean; error?: { message: string } }[] | null>(
@@ -407,23 +405,21 @@ function ApplyAll({
   );
   const applyAll = () =>
     void confirm({
-      title: `Propose all ${corrections} correction${corrections === 1 ? '' : 's'} of this run?`,
+      title: `Apply all ${corrections} correction${corrections === 1 ? '' : 's'} of this run?`,
       message: (
         <p>
-          They are proposed in the usual bounded batches (each page an item); pages already in an open batch
-          are left out. Nothing is written until the batches are approved.
+          They run in the usual bounded batches, each one job at once (each page checked fresh and read back);
+          pages already in an open batch are left out. Follow them on the Jobs page.
         </p>
       ),
-      confirmLabel: 'Make the batches',
+      confirmLabel: 'Apply the batches',
     }).then((ok) => {
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post<{ pages: number; batches: { proposalId: string | null; pages: number }[] }>(
-              '/tagging/apply-all',
-              { runId, confirm: true },
-            ),
+          api.post<{ pages: number; batches: { proposalId: string | null; pages: number }[] }>(
+            '/tagging/apply-all',
+            { runId, confirm: true },
           ),
         'Batches made.',
       ).then((x) => {
@@ -440,8 +436,7 @@ function ApplyAll({
       message: (
         <p>
           Each batch is approved whole and runs on its own: its job checks the policy, reads each page fresh
-          (a page changed since the audit is skipped as conflicted) and reads it back. A bulk approval asks
-          for your authenticator code.
+          (a page changed since the audit is skipped as conflicted) and reads it back.
         </p>
       ),
       confirmLabel: 'Approve all these batches',
@@ -449,11 +444,9 @@ function ApplyAll({
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post<{ results: { id: string; ok: boolean; error?: { message: string } }[] }>(
-              '/tagging/approve-batches',
-              { proposalIds: ids, confirm: true },
-            ),
+          api.post<{ results: { id: string; ok: boolean; error?: { message: string } }[] }>(
+            '/tagging/approve-batches',
+            { proposalIds: ids, confirm: true },
           ),
         'Batches approved.',
       ).then((x) => {
@@ -471,7 +464,7 @@ function ApplyAll({
         <>
           <p className="small-text">
             {made.length === 0
-              ? 'No correction is left to propose (each is in an open batch already).'
+              ? 'No correction is left to apply (each is in an open batch already).'
               : `${made.length} batch${made.length === 1 ? '' : 'es'} made: ${made.map((b) => b.pages).join(', ')} pages.`}
           </p>
           {ids.length > 0 && !approved && (
@@ -516,7 +509,7 @@ interface RulingSuggestion {
 /**
  * v3 F5a (ADR 0067, H2): the latest audit's exceptions, each with the owner's two actions: "Keep this tag here" (a ruling
  * for this page, while its tags are unchanged) and "Allow this tag everywhere" (the Tagging Standard's Approved
- * Supplementary Tags edited: a dry run first, then the step-up). Agents' suggestions are shown beside them.
+ * Supplementary Tags edited: a dry run first, then the edit). Agents' suggestions are shown beside them.
  */
 function ExceptionsTab({ onChanged }: { onChanged: () => void }) {
   const r = useScopedApi<{
@@ -560,7 +553,6 @@ function ExceptionCard({
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [reason, setReason] = useState('');
   const keep = (tag: string) =>
@@ -576,10 +568,7 @@ function ExceptionCard({
     }).then((ok) => {
       if (!ok) return;
       void run(
-        () =>
-          withReauth(() =>
-            api.post('/tagging/keep-here', { pageId: page.pageId, tag, reason, confirm: true }),
-          ),
+        () => api.post('/tagging/keep-here', { pageId: page.pageId, tag, reason, confirm: true }),
         'Kept: the next audit treats it as allowed on this page.',
       ).then((x) => {
         if (x) onChanged();
@@ -616,10 +605,7 @@ function ExceptionCard({
       }).then((ok) => {
         if (!ok) return;
         void run(
-          () =>
-            withReauth(() =>
-              api.post('/tagging/allow-everywhere', { tag, pageId: page.pageId, confirm: true }),
-            ),
+          () => api.post('/tagging/allow-everywhere', { tag, pageId: page.pageId, confirm: true }),
           'The Tagging Standard is edited: approve the pack’s new version on the Packs page.',
         ).then((x) => {
           if (x) onChanged();
@@ -742,7 +728,6 @@ function HoldCard({
 }) {
   const api = useProjectApi();
   const confirm = useConfirm();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [primary, setPrimary] = useState(hold.classification?.primary ?? '');
   const [specialist, setSpecialist] = useState(hold.classification?.specialist ?? '');
@@ -757,15 +742,13 @@ function HoldCard({
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.post('/tagging/classify', {
-              pageId: hold.pageId,
-              primary,
-              specialist: specialist || null,
-              reason,
-              confirm: true,
-            }),
-          ),
+          api.post('/tagging/classify', {
+            pageId: hold.pageId,
+            primary,
+            specialist: specialist || null,
+            reason,
+            confirm: true,
+          }),
         'Classified: the next audit uses it.',
       ).then((x) => {
         if (x) onChanged();
@@ -773,7 +756,7 @@ function HoldCard({
     });
   const withdraw = () =>
     void run(
-      () => withReauth(() => api.post('/tagging/unclassify', { pageId: hold.pageId, confirm: true })),
+      () => api.post('/tagging/unclassify', { pageId: hold.pageId, confirm: true }),
       'Classification withdrawn.',
     ).then((x) => {
       if (x) onChanged();
@@ -966,7 +949,7 @@ function ReconciliationTab({ overview, onChanged }: { overview: Overview; onChan
       message: (
         <p>
           What remains is audited afresh (free, from the snapshots), then its next batch of deterministic
-          corrections is proposed: ONE proposal for you to approve on the Proposals page.
+          corrections runs at once as one job.
         </p>
       ),
       confirmLabel: 'Resume',

@@ -5,7 +5,8 @@
  * not a change of an existing value; a real existing value is still protected. The page's template: the save's own copy
  * (narrative-f4c N3), or a narrative page's kind (a chapter made in the app); never the tree's record of an older copy. This
  * must not reopen R4-01 (canon moved into Narratives): a page whose Continuity differs from its template default still
- * proposes, inside Narratives or out, and a canon page moved into a story is still the owner's canonical decision.
+ * proposes, inside Narratives or out, and a canon page moved into a story is still the owner's canonical decision (v3
+ * F12, ADR 0081: at scope propose; at scope write both are the agent's direct writes, on the owner's Review page).
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import { SidebarModel } from '../resources/world.js';
@@ -13,6 +14,11 @@ import { O } from '../packs/f4a-world.js';
 import { CHAPTER_SIDEBAR, N, narrativeWorld, NT, PROJECT, type NarrativeWorld } from './world.js';
 
 let w: NarrativeWorld;
+/**
+ * v3 F12 (ADR 0081): an agent at scope propose. At scope write a protected value's change is the agent's direct write
+ * (on the owner's Review page); the protection itself (a canonical proposal, its reason) is seen at scope propose.
+ */
+let proposeTool: (name: string, args: Record<string, unknown>) => Promise<Record<string, any>>;
 const STORY = 'Placeholder Tides';
 const PLACEHOLDER = Object.fromEntries(CHAPTER_SIDEBAR).Continuity!;
 const ids = {
@@ -43,6 +49,8 @@ const proposalsNow = () => w.stack.runtime.policy.proposals.list({ project: PROJ
 
 beforeAll(async () => {
   w = await narrativeWorld();
+  const proposing = await w.stack.connect(w.stack.newToken('r41-proposer', 'propose').token);
+  proposeTool = async (name, args) => (await w.stack.call(proposing, name, args)).body;
   expect((await w.tool('arkona_story_create', { continuity: 'Main CANON', title: STORY })).status).toBe(
     'written',
   );
@@ -152,7 +160,7 @@ describe('template defaults are not existing values (R4.1)', () => {
       [ids.copied, PLACEHOLDER],
       [ids.copiedReal, 'Main'],
     ] as const) {
-      const b = await w.tool('set_facts', { page, facts: { Continuity: 'AU-1' } });
+      const b = await proposeTool('set_facts', { page, facts: { Continuity: 'AU-1' } });
       expect(b.status, `${page}: ${JSON.stringify(b)}`).toBe('proposal_captured');
       expect(b.requiresCanonicalApproval).toBe(true);
       expect(b.reason).toContain(`Continuity would change from “${from}” to “AU-1”`);
@@ -165,20 +173,20 @@ describe('template defaults are not existing values (R4.1)', () => {
       [ids.copiedReal, 'Main'], // a page the bridge copied, outside Narratives
       [ids.appChapter, 'Main CANON'], // the app-made chapter just filled: its value is its own now
     ] as const) {
-      const b = await w.tool('set_facts', { page, facts: { Continuity: 'Elsewhere' } });
+      const b = await proposeTool('set_facts', { page, facts: { Continuity: 'Elsewhere' } });
       expect(b.status, `${page}: ${JSON.stringify(b)}`).toBe('proposal_captured');
       expect(b.requiresCanonicalApproval).toBe(true);
       expect(b.reason).toContain(`Continuity would change from “${from}” to “Elsewhere”`);
     }
     // The placeholder's text on a page whose template the bridge cannot tell is protected as before.
-    const s = await w.tool('set_facts', { page: ids.stranger, facts: { Continuity: 'Main' } });
+    const s = await proposeTool('set_facts', { page: ids.stranger, facts: { Continuity: 'Main' } });
     expect(s.status, JSON.stringify(s)).toBe('proposal_captured');
     expect(s.reason).toContain(`Continuity would change from “${PLACEHOLDER}” to “Main”`);
     // Canon moved into a story is still the owner's canonical decision (R4-01), and its Continuity still protected.
-    const mv = await w.tool('move_resource', { page: ids.canon, to: ids.story });
+    const mv = await proposeTool('move_resource', { page: ids.canon, to: ids.story });
     expect(mv.status, JSON.stringify(mv)).toBe('proposal_captured');
     expect(mv.requiresCanonicalApproval).toBe(true);
-    const cf = await w.tool('set_facts', { page: ids.canon, facts: { Continuity: 'Main CANON' } });
+    const cf = await proposeTool('set_facts', { page: ids.canon, facts: { Continuity: 'Main CANON' } });
     expect(cf.status, JSON.stringify(cf)).toBe('proposal_captured');
     expect(cf.reason).toContain('Continuity would change from “Main” to “Main CANON”');
   });

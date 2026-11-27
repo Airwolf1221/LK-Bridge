@@ -3,8 +3,8 @@
  * the approved Arkona pack version carries narrative rules. Routine narrative organisation (the Fiction Writing
  * Reference, 32B: a request to write a chapter authorises saving it, and this organisation "does not create new
  * substantive canon owners"), so at scope `write` they write directly (on the Review page, Revertible); at scope
- * `propose` (or when the owner switched a tool to `propose` on the Packs page) they are proposals. More than 10 pages in
- * one call meets the bulk rail as a proposal.
+ * `propose` they are proposals. v3 F12 (ADR 0081): no switch and no bulk rail any more; a renumbering of any size is
+ * one job of items at scope `write`.
  *
  * - `arkona_story_create`: the story index, its Story Map, and (with acts) the act indexes and Act Maps;
  * - `arkona_chapter_plan`: a Chapter Plan made or updated under the right map (its body comes from the template);
@@ -401,7 +401,6 @@ async function storyCreate(
       env.tool,
       pages.map((p) => p.id),
     ),
-    ...(env.forceProposal ? { forceProposal: true } : {}),
     proposal: { operations: job.operations, summary, prefetched: prefetchedTemplates(env.cc) },
     head,
     preview,
@@ -625,7 +624,6 @@ async function chapterPlan(
       title: summary,
       holdLock: { resourceId: plan.node.id },
       lifecycle: marker(env.tool, [plan.node.id]),
-      ...(env.forceProposal ? { forceProposal: true } : {}),
       proposal: {
         operations: [
           { tool: env.tool, page: { id: plan.node.id, name: plan.node.displayName }, pageParts: ['sidebar'] },
@@ -698,7 +696,6 @@ async function chapterPlan(
     labels: job.labels,
     title: summary,
     lifecycle: marker(env.tool, [id]),
-    ...(env.forceProposal ? { forceProposal: true } : {}),
     proposal: { operations: job.operations, summary, prefetched: prefetchedTemplates(env.cc) },
     head,
     preview: () => head,
@@ -1161,7 +1158,6 @@ async function saveAndReadBack(
         : {}),
     ...(o.holdDocuments ? { holdDocuments: o.holdDocuments } : {}),
     lifecycle: marker(env.tool, [o.chapter.id, ...o.holdMore]),
-    ...(env.forceProposal ? { forceProposal: true } : {}),
     proposal: {
       operations: o.operations ?? [
         { tool: env.tool, page: { id: o.chapter.id, name: o.chapter.name }, pageParts: ['text', 'sidebar'] },
@@ -1323,7 +1319,7 @@ async function renumberParts(
   return { ok: true, value: { parts, items, targets, targetItems } };
 }
 
-/** Submits a renumbering (with any page the call makes) as ONE job of items; the bulk rail judges its size. */
+/** Submits a renumbering (with any page the call makes) as ONE job of items (a proposal at scope `propose`). */
 async function submitRenumbering(
   env: Env,
   o: {
@@ -1366,7 +1362,6 @@ async function submitRenumbering(
     holdLock: { resourceId: o.ids[0]! },
     ...(o.ids.length > 1 ? { holdMore: { resources: o.ids.slice(1) } } : {}),
     lifecycle: marker(env.tool, o.ids),
-    ...(env.forceProposal ? { forceProposal: true } : {}),
     proposal: {
       operations: o.operations,
       summary: o.title.slice(0, 500),
@@ -1809,7 +1804,7 @@ function chapterTools(deps: ToolDeps, listed: () => boolean): McpToolProvider[] 
       title: 'Insert a chapter and renumber the rest (Arkona pack)',
       access: 'write',
       description:
-        'The Arkona pack (design F4c, E5): makes room for a chapter at position `at`: every chapter and Chapter Plan numbered `at` or more moves up by one (names and Chapter Number fields; mentions point at pages, so they follow; prose is never changed), and the new chapter’s Chapter Plan is made at `at` (Question Gate Open; write the chapter with arkona_chapter_save). One job of items: more than 10 pages meets the bulk rail as a proposal the owner can approve item by item. Cost: 1 read per page renumbered, about 2 writes each.',
+        'The Arkona pack (design F4c, E5): makes room for a chapter at position `at`: every chapter and Chapter Plan numbered `at` or more moves up by one (names and Chapter Number fields; mentions point at pages, so they follow; prose is never changed), and the new chapter’s Chapter Plan is made at `at` (Question Gate Open; write the chapter with arkona_chapter_save). One job of items at scope write (on the owner’s Review page, with Revert); at scope propose a proposal the owner can approve item by item. Cost: 1 read per page renumbered, about 2 writes each.',
       inputSchema: z.object({
         story: storyArg,
         continuity: continuityArg,
@@ -1830,7 +1825,7 @@ function chapterTools(deps: ToolDeps, listed: () => boolean): McpToolProvider[] 
       title: 'Move a chapter to another position or act (Arkona pack)',
       access: 'write',
       description:
-        'The Arkona pack (design F4c, E5): moves chapter `from` (and its Chapter Plan) to position `to`, renumbering every chapter and plan in between (names and Chapter Number fields; mentions follow; prose never changes), and into another act when its new position (or `act`) says so (its plan to that act’s Act Map). One job of items: more than 10 pages meets the bulk rail as a proposal. Cost: 1 read per page renumbered, about 2 writes each.',
+        'The Arkona pack (design F4c, E5): moves chapter `from` (and its Chapter Plan) to position `to`, renumbering every chapter and plan in between (names and Chapter Number fields; mentions follow; prose never changes), and into another act when its new position (or `act`) says so (its plan to that act’s Act Map). One job of items at scope write (on the owner’s Review page, with Revert); a proposal at scope propose. Cost: 1 read per page renumbered, about 2 writes each.',
       inputSchema: z.object({
         story: storyArg,
         continuity: continuityArg,

@@ -2,7 +2,7 @@
  * CR-2026-11 round 2 (write scope): shared helpers for the adversarial tests in this directory. Each test asserts the
  * SAFE behaviour; it fails on the current code when the attack works.
  *
- * - `writeAgent`: a profile at scope `write` with the DEFAULT rails (as `newToken` makes it), low-level tools shown.
+ * - `writeAgent`: a profile at scope `write` (as `newToken` makes it), low-level tools shown.
  * - `mutationsSince` / `writeCallsSince`: what reached the mock LegendKeeper.
  * - `modelSaveAsTemplate`: the mock tree has no `saveResourceAsTemplate`; this models the spec ("Creates a top-level
  *   template as a copy of the resource … the copy takes the resource's fields, properties and documents"), with
@@ -22,18 +22,12 @@ export interface Agent {
   readonly patId: string;
 }
 
-/** A write-scope agent with the default rails (`newToken` keeps the defaults), its low-level tools shown. */
+/** A write-scope agent, its low-level tools shown. */
 export async function writeAgent(w: DiscoverWorld, label: string): Promise<Agent> {
   const t = w.stack.newToken(label, 'write');
   w.stack.runtime.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
   const client = await w.stack.connect(t.token);
   return { client, profileId: t.profileId, patId: t.patId };
-}
-
-/** The rails a profile has now (to show they are the defaults). */
-export function railsOf(w: DiscoverWorld, profileId: string): unknown {
-  const p = w.stack.runtime.policy.store.getProfile(profileId) as unknown as { rails?: unknown };
-  return p?.rails;
 }
 
 export const mutationsSince = (w: DiscoverWorld, n: number) => w.repo.mutations.slice(n);

@@ -12,9 +12,10 @@
  * bridge does, without building the tree again (about 1,470 reads on the test world) and without ever writing to the
  * bridge's database. Two temporary principals exist in that temporary database only:
  *
- * - the AGENT: a profile at scope `write` with the default safety rails, as a profile raised to write will have;
- * - a HELPER: scope `write`, rails off, which only makes and removes the throwaway chronology event (only the
- *   chronology tools write the chronology, and they take a principal).
+ * - the AGENT: a profile at scope `write`, as a profile raised to write will have;
+ * - a HELPER: scope `write`, which only makes and removes the throwaway chronology event (only the chronology tools
+ *   write the chronology, and they take a principal);
+ * - v3 F12 (ADR 0081): a PROPOSER at scope `propose`, so the proposal path stays covered.
  *
  * Setup (the bridge's own work, never on the Review page): a throwaway page `lk-bridge write-scope <time>` at the top
  * of the AI REPOSITORY, a page under it with a page document of three paragraphs and a PROPERTIES sidebar (Region,
@@ -25,16 +26,15 @@
  * 2. The agent changes one fact (set_facts Colour): a direct write.
  * 3. The agent fixes the throwaway chronology event (update_timeline_event, its name and description): a direct write.
  * 4. The agent stages an image, then places it (upload_image): a direct write.
- * 5. A pack package is still a proposal by default: the approved version's tool switches (the three create tools:
- *    always propose), and a package-shaped job sent down the same path a package takes (`forceProposal` from the
- *    switch), captured as a proposal, then rejected. A real package is not sent: its tags need the pack's governance
- *    sources, which live in the Arkona project, and the rehearsal never reads another project.
+ * 5. v3 F12 (ADR 0081): the proposal path, through the PROPOSER: a package-shaped job at scope `propose` is captured as
+ *    a proposal, then rejected (at scope `write` every pack tool is direct: no switch any more). A real package is not
+ *    sent: its tags need the pack's governance sources, which live in the Arkona project.
  * Review: the four direct writes are on the Review queue.
  * R1–R4: each is reverted as the owner reverts it (one job, from the journal) and its target read back as it was. R4,
  * the image (decision B5): the asset is neither moved nor hidden and nothing is written to the staging folder; the image
- * is back on the Staging page (its file copied to the bridge's server), and deleting the placed asset is ONE proposal,
- * which the script approves as the owner would.
- * Rails: a delete and an 11-page batch become proposals under the default rails, saying why; both are rejected.
+ * is back on the Staging page (its file copied to the bridge's server), and the placed asset is deleted by the revert's
+ * own follow-up job (v3 F12: part of the owner's confirmed Revert, its bytes kept first).
+ * Delete (v3 F12): a delete at scope `write` runs directly, its restorable copy kept first (the safety rails are gone).
  * Clean-up: pending proposals rejected; the HELPER deletes the chronology event; the throwaway page (cascade) and the
  * image's folder are deleted; R4's re-staged copy is discarded from the Staging page. A 404 or "already deleted" counts
  * as cleaned (when a read says so, or when the delete itself answers not found: R4's approved deletion took the image).
@@ -51,7 +51,6 @@ import { readAgeTable } from '../../src/chronology/table.js';
 import type { Db } from '../../src/db/open.js';
 import { SYSTEM_PRINCIPAL as SYSTEM, type Principal } from '../../src/jobs/index.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
-import { packToolMode } from '../../src/packs/types.js';
 import type { Runtime } from '../../src/runtime.js';
 import { SandboxGuardError, type Finding, type Verdict } from './smoke.js';
 import type { HttpCounters } from './soak.js';
@@ -316,15 +315,8 @@ export async function runWriteScopeRehearsal(
     now: () => Math.floor(Date.now() / 1000),
   });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const principal = (label: string, railsOff: boolean): Principal => {
-    const profile = rt.policy.commands.createProfile('owner', { label, kind: 'other', scope: 'write' });
-    if (railsOff)
-      rt.policy.commands.setRails('owner', profile.id, {
-        deletes: false,
-        bulk: false,
-        renamesMoves: false,
-        assets: false,
-      });
+  const principal = (label: string, scope: 'write' | 'propose' = 'write'): Principal => {
+    const profile = rt.policy.commands.createProfile('owner', { label, kind: 'other', scope });
     const created = pats.create({ name: label, profileId: profile.id, expiresInDays: 1 });
     const found = rt.policy.store.lookupPrincipal(created.pat.id);
     if (!found) throw new Error(`the temporary principal ${label} could not be resolved`);
@@ -377,17 +369,6 @@ export async function runWriteScopeRehearsal(
     await waitForJob(rt.engine, pid, jobId, name, wait);
     return { jobId, body };
   };
-  /** A tool's write that must become a proposal; returns the proposal's id and the reason it gives. */
-  const proposed = async (who: Principal, name: string, args: Obj) => {
-    const { body } = await tool(who, name, args);
-    if (body.status !== 'proposal_captured') {
-      if (typeof body.jobId === 'string') pending.jobs.push(body.jobId);
-      throw new Fails(`${name} was not proposed: status ${String(body.status)}`);
-    }
-    const proposalId = String(body.proposalId);
-    pending.proposals.push(proposalId);
-    return { proposalId, because: typeof body.proposedBecause === 'string' ? body.proposedBecause : null };
-  };
   const reject = (proposalId: string): void => {
     const p = rt.policy.proposals.get(proposalId);
     if (p?.state === 'pending')
@@ -426,15 +407,15 @@ export async function runWriteScopeRehearsal(
   const fixedDescription = `${chron.description} (fixed)`;
   const image = { stagedId: '', assetId: '', jobId: '', folderId: null as string | null };
   const jobs: Record<'1' | '2' | '3' | '4', string> = { '1': '', '2': '', '3': '', '4': '' };
-  const who: { agent?: Principal; helper?: Principal } = {};
+  const who: { agent?: Principal; helper?: Principal; proposer?: Principal } = {};
 
   // ---------------------------------------------------------------------------------------------- read-backs
-  /** The proposal a revert of `jobId` made to delete a placed image (the revert's audit records it), or null. */
-  function deletionProposal(jobId: string): string | null {
+  /** The job a revert of `jobId` ran to delete a placed image (v3 F12; the revert's audit records it), or null. */
+  function deletionJob(jobId: string): string | null {
     for (const a of rt.policy.store.listAudit({ action: 'job.revert', limit: 50 })) {
-      const after = a.after as { outcome?: string; images?: { deletionProposalId?: string | null }[] } | null;
+      const after = a.after as { outcome?: string; images?: { deletionJobId?: string | null }[] } | null;
       if (a.target !== jobId || after?.outcome !== 'images') continue;
-      return after.images?.find((x) => typeof x.deletionProposalId === 'string')?.deletionProposalId ?? null;
+      return after.images?.find((x) => typeof x.deletionJobId === 'string')?.deletionJobId ?? null;
     }
     return null;
   }
@@ -479,8 +460,9 @@ export async function runWriteScopeRehearsal(
           throw new Unclear(
             'the repository tree is not built on the bridge yet: build it on the dashboard (Repository tree) first',
           );
-        who.agent = principal(`rehearsal agent ${stamp}`, false);
-        who.helper = principal(`rehearsal helper ${stamp}`, true);
+        who.agent = principal(`rehearsal agent ${stamp}`);
+        who.helper = principal(`rehearsal helper ${stamp}`);
+        who.proposer = principal(`rehearsal proposer ${stamp}`, 'propose');
         const root = await run('createResource', { body: { name: base, parentId: repoRoot } });
         made.root = String(root.id);
         const page = await run('createResource', { body: { name: `${base} page`, parentId: made.root } });
@@ -643,25 +625,10 @@ export async function runWriteScopeRehearsal(
     });
 
     // ============================================================================================ 5: a package
-    await check('5', 'a pack package is still a proposal by default', async () => {
-      const attached = rt.packs.forProject(pid);
-      if (attached.length === 0) throw new Noted('no setting pack is attached to this project');
-      const pack = attached[0]!;
-      if (pack.approved?.version !== pack.version)
-        throw new Noted(
-          `the ${pack.name} pack's current version (${pack.version}) is not approved yet (approved: ${String(pack.approved?.version ?? 'none')}): approve it on the Packs page, then run again`,
-        );
-      const modes = Object.fromEntries(
-        ['create_character', 'create_owner', 'create_relationship', 'add_character_art', 'appraisal_fix'].map(
-          (x) => [`${pack.id}_${x}`, packToolMode(pack.rules, `${pack.id}_${x}`)],
-        ),
-      );
-      const creates = ['create_character', 'create_owner', 'create_relationship'].map(
-        (x) => `${pack.id}_${x}`,
-      );
-      const off = creates.filter((x) => modes[x] !== 'propose');
-      if (off.length > 0) throw new Fails(`these package tools follow the agent's scope: ${off.join(', ')}`);
-      // The same path a package takes: the switch decides forceProposal, at scope write.
+    await check('5', 'the proposal path: a package-shaped job at scope propose is a proposal', async () => {
+      const p = who.proposer;
+      if (!p) throw new Skip('no proposer');
+      // v3 F12 (ADR 0081): no pack switch any more; the connection's scope decides. At scope propose it is ONE proposal.
       const r = await rt.engine.submit({
         kind: 'batch_ops',
         project: pid,
@@ -671,9 +638,8 @@ export async function runWriteScopeRehearsal(
             params: { body: { name: `${base} package (never made)`, parentId: made.root } },
           },
         ],
-        origin: { kind: 'mcp', tool: creates[0]!, principal: a },
-        title: `${creates[0]!}: a rehearsal package (never made)`,
-        forceProposal: modes[creates[0]!] === 'propose',
+        origin: { kind: 'mcp', tool: 'arkona_create_character', principal: p },
+        title: 'arkona_create_character: a rehearsal package (never made)',
       });
       if (r.status !== 'proposal_captured') {
         if ('jobId' in r) pending.jobs.push(r.jobId);
@@ -681,11 +647,7 @@ export async function runWriteScopeRehearsal(
       }
       pending.proposals.push(r.proposalId);
       reject(r.proposalId);
-      return `version ${pack.version} approved; ${Object.entries(modes)
-        .map(([k, v]) => `${k}: ${v === 'propose' ? 'always propose' : 'follows scope'}`)
-        .join(
-          ', ',
-        )}; a package-shaped job at scope write was captured as a proposal (then rejected). A real package is not sent: its tags need the governance sources in the Arkona project, which this script never reads`;
+      return `a package-shaped job at scope propose was captured as proposal ${r.proposalId} (then rejected). A real package is not sent: its tags need the governance sources in the Arkona project, which this script never reads`;
     });
 
     // ============================================================================================ the Review queue
@@ -738,69 +700,41 @@ export async function runWriteScopeRehearsal(
     });
     await check(
       'R4',
-      'Revert puts the placed image back on the Staging page and proposes deleting it; nothing goes to the staging folder',
+      'Revert puts the placed image back on the Staging page and deletes the placed asset; nothing goes to the staging folder',
       async () => {
         const id = await revert('4');
-        // The bridge's follow-up comes right after the revert job: the staged record, then the deletion proposal.
-        let proposalId: string | null = null;
-        for (let i = 0; i < 300 && !proposalId; i++) {
-          proposalId = deletionProposal(jobs['4']);
-          if (!proposalId) await sleep(100);
+        // The bridge's follow-up comes right after the revert job: the staged record, then the deletion job (v3 F12).
+        let deletion: string | null = null;
+        for (let i = 0; i < 300 && !deletion; i++) {
+          deletion = deletionJob(jobs['4']);
+          if (!deletion) await sleep(100);
         }
-        const asset = await run('getAsset', { path: { assetId: image.assetId } });
-        if (!asset?.id || asset.deletedAt) throw new Fails('the asset is gone: a revert never deletes it');
-        if (asset.isHidden === true) throw new Fails('the asset was hidden');
-        if ((typeof asset.folderId === 'string' ? asset.folderId : null) !== image.folderId)
-          throw new Fails(`the asset was moved (to folder ${String(asset.folderId)})`);
         const row = rt.images.staged(pid, image.stagedId);
         if (row?.staged !== true || !row.serverSha256 || row.assetId !== null)
           throw new Fails('the image is not back on the Staging page from the bridge’s server');
-        if (!proposalId) throw new Fails('no proposal to delete the placed image');
-        const p = rt.policy.proposals.detail(proposalId);
-        if (p?.state !== 'pending' || p.ops.map((o) => o.op).join(',') !== 'deleteAsset')
-          throw new Fails(
-            `the deletion proposal is not as expected: ${JSON.stringify(p?.ops.map((o) => o.op))}`,
-          );
-        // As the owner does on the Proposals page: approve it (the asset's bytes are kept first, as for every delete).
-        await rt.policy.commands.approve('owner', proposalId);
-        let state = rt.policy.proposals.get(proposalId)?.state;
-        for (let i = 0; i < 600 && !['executed', 'failed', 'conflicted'].includes(state ?? ''); i++) {
-          await sleep(100);
-          state = rt.policy.proposals.get(proposalId)?.state;
-        }
-        const jobOfDelete = rt.policy.proposals.get(proposalId)?.jobId;
-        if (state !== 'executed' || !jobOfDelete)
-          throw new Fails(`the approved deletion ended ${String(state)}`);
-        await waitForJob(rt.engine, pid, jobOfDelete, 'the approved deletion', wait);
+        if (!deletion) throw new Fails('no job deleted the placed image');
+        await waitForJob(rt.engine, pid, deletion, 'the deletion of the placed image', wait);
         const after = await attempt('getAsset', { path: { assetId: image.assetId } });
-        if (after.ok && after.body?.deletedAt == null)
-          throw new Fails('the approved deletion did not delete the image');
-        return `revert job ${id}: the image is back on the Staging page (its file on the bridge’s server), nothing written to the staging folder; proposal ${proposalId} deleted the placed image once approved`;
+        if (after.ok && after.body?.deletedAt == null) throw new Fails('the placed image was not deleted');
+        return `revert job ${id}: the image is back on the Staging page (its file on the bridge’s server), nothing written to the staging folder; job ${deletion} deleted the placed image (its bytes kept first)`;
       },
     );
 
-    // ============================================================================================ the rails
-    await check('rail-delete', 'a delete becomes a proposal under the default rails', async () => {
-      const p = await proposed(a, 'delete_resource', { page: made.deleteMe, confirm: true });
-      if (!p.because?.includes('delete'))
-        throw new Fails(`proposed, but not by the rail: ${String(p.because)}`);
-      reject(p.proposalId);
-      const still = await attempt('getResource', { path: { resourceId: made.deleteMe } });
-      if (!still.ok || still.body?.deletedAt) throw new Fails('the page was deleted');
-      return `${p.because} (rejected; the page is still there)`;
-    });
-    await check('rail-bulk', 'an 11-page batch becomes a proposal under the default rails', async () => {
-      const p = await proposed(a, 'lk_api_batch', {
-        calls: Array.from({ length: 11 }, (_, i) => ({
-          operationId: 'createResource',
-          params: { body: { name: `${base} batch ${i + 1}`, parentId: made.root } },
-        })),
-      });
-      if (p.because !== 'proposed because: bulk change (11 pages > 10)')
-        throw new Fails(`proposed, but not by the bulk rail: ${String(p.because)}`);
-      reject(p.proposalId);
-      return `${p.because} (rejected; nothing made)`;
-    });
+    // ============================================================================================ a delete (F12)
+    await check(
+      'delete',
+      'a delete at scope write runs directly, its restorable copy kept first',
+      async () => {
+        const r = await direct(a, 'delete_resource', { page: made.deleteMe, confirm: true });
+        const copy = t.db
+          .prepare('SELECT snapshot_id, pages FROM delete_copies WHERE job_id = ?')
+          .get(r.jobId) as { snapshot_id: string; pages: string } | undefined;
+        if (!copy) throw new Fails(`job ${r.jobId} deleted the page with no copy recorded`);
+        const still = await attempt('getResource', { path: { resourceId: made.deleteMe } });
+        if (still.ok && !still.body?.deletedAt) throw new Fails('the page is still there');
+        return `job ${r.jobId}: deleted directly; its copy is snapshot ${copy.snapshot_id}`;
+      },
+    );
   } finally {
     // ============================================================================================ clean-up
     await check('cleanup', 'everything the rehearsal made is removed', async () => {

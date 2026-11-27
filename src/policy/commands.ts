@@ -9,7 +9,6 @@ import type { JobOrigin } from '../jobs/types.js';
 import type { ConnectionManager } from './connections.js';
 import { PolicyError } from './errors.js';
 import type { ProposalDetail, ProposalService } from './proposals.js';
-import { mergeRails } from './rails.js';
 import {
   AUTO_REMOVE_DAYS_KEY,
   STALE_AFTER_DAYS_KEY,
@@ -55,12 +54,6 @@ export interface OwnerCommands {
   setScope(actor: OwnerActor, profileId: string, scope: Scope): Profile;
   /** v2 B2: shows or hides the low-level tools for a profile's connections. Audited as `profile.set_low_level_tools`. */
   setShowLowLevelTools(actor: OwnerActor, profileId: string, show: boolean): Profile;
-  /**
-   * v3 F3.4 (ADR 0055): changes a profile's safety rails at scope `write` (a partial change keeps the other switches).
-   * Applies at the profile's next request. Audited as `profile.set_rails` with the rails before and after. The admin
-   * route asks for re-authentication first.
-   */
-  setRails(actor: OwnerActor, profileId: string, change: unknown): Profile;
   getDefaultScope(actor: OwnerActor): Scope;
   setDefaultScope(actor: OwnerActor, scope: Scope): Scope;
   listGrantsAndPats(actor: OwnerActor): ConnectionView[];
@@ -210,16 +203,6 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
         { showLowLevelTools: before.showLowLevelTools },
         { showLowLevelTools: after.showLowLevelTools },
       );
-      return after;
-    },
-
-    setRails(actor, profileId, change) {
-      assertOwner(actor);
-      const current = store.getProfile(profileId);
-      if (!current) throw new PolicyError('PROFILE_NOT_FOUND', `No profile ${profileId}`);
-      const next = mergeRails(current.rails, change);
-      const { before, after } = store.updateRails(profileId, next);
-      store.audit('owner', 'profile.set_rails', profileId, { rails: before.rails }, { rails: after.rails });
       return after;
     },
 

@@ -19,8 +19,12 @@ import { accept, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.
 
 let w: LifecycleWorld;
 let client: Client;
+/** v3 F12 (ADR 0081): at scope write a set's change is direct; the canonical proposal is made at scope propose. */
+let proposer: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
+const propose = (tool: string, args: Record<string, unknown>) =>
+  w.stack.call(proposer, tool, { project: 'test', ...args });
 const today = isoDate(Date.now());
 const store = () => w.stack.runtime.lifecycle.store;
 const res = (id: string) => w.repo.live(id)!;
@@ -35,6 +39,7 @@ const LIMITS = {
 beforeAll(async () => {
   w = await lifecycleWorld({ env: { LK_TIER_LIMITS: JSON.stringify(LIMITS) }, limits: LIMITS });
   client = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('sets-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 
@@ -66,7 +71,8 @@ describe('archive_page with subtree: an Authoritative character set', () => {
     expect(r.body, r.text).toMatchObject({
       status: 'dry_run',
       subtree: true,
-      requiresCanonicalApproval: true,
+      // v3 F12 follow-up (ADR 0081 amendment 1, decision 4): at scope write the set runs directly, on the Review page.
+      atYourScope: 'runs directly, on the owner’s Review page',
       set: {
         pages: 4,
         contentPages: 2,
@@ -92,9 +98,9 @@ describe('archive_page with subtree: an Authoritative character set', () => {
     expect(w.seen.filter((l) => !l.startsWith('GET')).length).toBe(before);
   });
 
-  it('is ONE canonical proposal; accepted as canon, the whole set is archived together', async () => {
+  it('at scope propose is ONE canonical proposal; accepted as canon, the whole set is archived together', async () => {
     const before = layout(s);
-    const r = await call('archive_page', { page: s.root, subtree: true });
+    const r = await propose('archive_page', { page: s.root, subtree: true });
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     // One proposal for the set, its operation listing every page.
     const p = w.stack.runtime.policy.proposals.get(String(r.body.proposalId))!;
@@ -149,12 +155,10 @@ describe('archive_page with subtree: an Authoritative character set', () => {
     expect(inArchive.body.error?.code, inArchive.text).toBe('LIFECYCLE_AREA');
   });
 
-  it('unarchive_page with subtree: every page back to its own previous state, the root back to its previous parent', async () => {
-    const r = await call('unarchive_page', { page: s.root, subtree: true });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    expect(r.body.relatedPages).toBeUndefined();
-    const done = await accept(w, r);
+  it('unarchive_page with subtree (direct at scope write): every page back to its own previous state, the root back to its previous parent', async () => {
+    const done = await call('unarchive_page', { page: s.root, subtree: true });
     expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(done.body.relatedPages).toBeUndefined();
     expect(res(s.root).parentId).toBe('locs0001');
     expect(placedAmong(kids(w, 'locs0001'), `[INDEX] ${s.name}`)).toBe(true);
     expect(kids(w, s.root)).toEqual([`[INDEX] ${s.name} Art`, `[BSRC] ${s.name} - Character Core`]);
@@ -295,7 +299,7 @@ describe('what a set may hold', () => {
 describe('decision 5 on a set', () => {
   it('a page added under the set between proposal and approval: conflicted, nothing written', async () => {
     const s = await seedSet(w, 'authoritative');
-    const r = await call('archive_page', { page: s.root, subtree: true });
+    const r = await propose('archive_page', { page: s.root, subtree: true });
     expect(r.body.status, r.text).toBe('proposal_captured');
     w.repo.seed({ id: 'latecom1', name: `[BSRC] ${s.name} - Late`, parentId: s.art, tags: ['CANON'] });
     const writes = w.seen.filter((l) => !l.startsWith('GET')).length;
@@ -333,7 +337,8 @@ describe('related pages of a set (archive and move to Working)', () => {
 describe('decision 5 on a set, inside the lock', () => {
   it('a page added after the approval’s own listing: the job’s first check refuses it, conflicted, nothing written', async () => {
     const s = await seedSet(w, 'authoritative');
-    const r = await call('archive_page', { page: s.root, subtree: true });
+    const r = await propose('archive_page', { page: s.root, subtree: true });
+    expect(r.body.status, r.text).toBe('proposal_captured');
     const inSet = new Set(s.all);
     let calls = 0;
     const re = /\/resources$/;
@@ -425,7 +430,9 @@ describe('costs (measured against the mock)', () => {
       const s = await seedSet(w, 'authoritative', { extra });
       expect(s.all).toHaveLength(4 + extra);
       const a = w.seen.length;
-      const r = await call('archive_page', { page: s.root, subtree: true });
+      // The plan (the proposal) and the job (its approval), measured apart at scope propose.
+      const r = await propose('archive_page', { page: s.root, subtree: true });
+      expect(r.body.status, r.text).toBe('proposal_captured');
       const plan = count(a);
       const b = w.seen.length;
       const done = await accept(w, r);

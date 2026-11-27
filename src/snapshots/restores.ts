@@ -7,7 +7,7 @@
 import type { BackgroundRunner } from '../background.js';
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
-import type { JobEngine, JobOrigin, Principal } from '../jobs/index.js';
+import { SYSTEM_PRINCIPAL, type JobEngine, type JobOrigin, type Principal } from '../jobs/index.js';
 import {
   planRestore,
   RestoreError,
@@ -34,9 +34,12 @@ export interface RestoreRecord {
   readonly mode: string | null;
   readonly documentId: string | null;
   readonly proposalId: string | null;
-  readonly state: 'proposed' | 'executed' | 'failed' | 'closed';
+  /** v3 F12 (ADR 0081): the job a restore runs as when it was not proposed. */
+  readonly jobId: string | null;
+  readonly state: 'proposed' | 'running' | 'executed' | 'failed' | 'closed';
   readonly followUp: string | null;
   readonly followUpProposalId: string | null;
+  readonly followUpJobId: string | null;
   readonly requestedBy: string;
   readonly summary: string;
   /** What the run could not restore exactly: a field LegendKeeper refused and the write went without (v2 E1a, ADR 0042). */
@@ -48,6 +51,17 @@ export interface RestoreRecord {
 
 export type ProposeResult =
   | { readonly status: 'nothing_to_do'; readonly plan: RestorePlan }
+  /**
+   * v3 F12 (ADR 0081): run at once as one job: the owner confirmed it on the dashboard (`origin.ownerConfirmed`), or an
+   * agent at scope `write` asked for it (on the owner's Review page). The record follows the job.
+   */
+  | {
+      readonly status: 'submitted';
+      readonly jobId: string;
+      readonly summary: string;
+      readonly restoreId: string;
+      readonly plan: RestorePlan;
+    }
   | {
       readonly status: 'proposal_captured';
       readonly proposalId: string;
@@ -156,7 +170,7 @@ export class Restores {
     const r = this.o.db
       .prepare(
         `SELECT id, mode, proposal_id FROM snapshot_restores WHERE project_id = ? AND page_id = ? AND scope = 'deleted'
-           AND state = 'proposed' ORDER BY created_at DESC LIMIT 1`,
+           AND state IN ('proposed', 'running') ORDER BY created_at DESC LIMIT 1`,
       )
       .get(projectId, pageId) as { id: string; mode: string | null; proposal_id: string | null } | undefined;
     return r ? { id: r.id, mode: r.mode, proposalId: r.proposal_id } : null;
@@ -208,8 +222,10 @@ export class Restores {
   }
 
   /**
-   * Plans and submits a restore as one proposal. `origin` is the caller's (an agent's MCP origin, or the dashboard's);
-   * its principal is kept for the follow-up proposal.
+   * Plans and submits a restore. `origin` is the caller's (an agent's MCP origin, or the dashboard's); its principal is
+   * kept for the content stage. v3 F12 (ADR 0081): it runs as ONE job for the owner's confirmed dashboard action
+   * (`ownerConfirmed`) and for an agent at scope `write`; it is ONE proposal for an agent at scope `propose` (the gate)
+   * and for any other request of the bridge's own (forced, as before).
    */
   async propose(
     input: RestoreInput,
@@ -222,6 +238,9 @@ export class Restores {
     // v3 F3d (ADR 0058): minted first, so a recreate's job knows its restore (Resume finishes it by its record).
     const id = `rst_${randomBytes(8).toString('hex')}`;
     const recreate = input.scope === 'deleted' && plan.mode === 'recreate';
+    const ownWork =
+      (origin.principal === undefined || origin.principal.principalId === SYSTEM_PRINCIPAL.principalId) &&
+      origin.ownerConfirmed !== true;
     const r = await this.o.engine.submit({
       kind: 'batch_ops',
       project: input.projectId,
@@ -237,7 +256,7 @@ export class Restores {
       // v3 F3d (ADR 0058): a recreate that stops part-way is resumed by finishing it (F2's Finish, ADR 0049 decision 6).
       ...(recreate ? { resumable: { kind: 'recreate' as const, ref: id } } : {}),
       internal: true,
-      forceProposal: true,
+      ...(ownWork ? { forceProposal: true } : {}),
       proposal: {
         operation: restoreOperation(plan),
         operations: [
@@ -251,14 +270,16 @@ export class Restores {
         summary: plan.summary,
       },
     });
-    if (!('proposalId' in r) || typeof r.proposalId !== 'string')
-      throw new RestoreError('NOT_PROPOSED', 'The restore was not captured as a proposal; nothing was done.');
+    const proposalId = 'proposalId' in r && typeof r.proposalId === 'string' ? r.proposalId : null;
+    const jobId = !proposalId && 'jobId' in r && typeof r.jobId === 'string' ? r.jobId : null;
+    if (!proposalId && !jobId)
+      throw new RestoreError('NOT_PROPOSED', 'The restore was neither run nor proposed; nothing was done.');
     const now = this.o.now();
     this.o.db
       .prepare(
-        `INSERT INTO snapshot_restores (id, project_id, page_id, page_name, snapshot_id, scope, mode, document_id, proposal_id, state,
-           follow_up, requested_by, summary, plan, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO snapshot_restores (id, project_id, page_id, page_name, snapshot_id, scope, mode, document_id, proposal_id,
+           job_id, state, follow_up, requested_by, summary, plan, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -269,7 +290,9 @@ export class Restores {
         input.scope,
         plan.mode ?? null,
         input.documentId ?? null,
-        r.proposalId,
+        proposalId,
+        jobId,
+        jobId ? 'running' : 'proposed',
         plan.followUp ?? null,
         requestedBy,
         plan.summary,
@@ -277,6 +300,7 @@ export class Restores {
           principal: origin.principal ?? null,
           originKind: origin.kind,
           client: origin.client ?? null,
+          ...(origin.ownerConfirmed === true ? { ownerConfirmed: true } : {}),
           idMap: plan.idMap ?? null,
           lost: plan.lost.length,
           notRestored: plan.notRestored.length,
@@ -284,10 +308,11 @@ export class Restores {
         now,
         now,
       );
+    if (jobId) return { status: 'submitted', jobId, summary: plan.summary, restoreId: id, plan };
     const canonical = (r as { canonical?: { reason: string } }).canonical;
     return {
       status: 'proposal_captured',
-      proposalId: r.proposalId,
+      proposalId: proposalId!,
       summary: (r as { summary?: string }).summary ?? null,
       ...(canonical ? { canonical: { reason: canonical.reason } } : {}),
       restoreId: id,
@@ -295,27 +320,42 @@ export class Restores {
     };
   }
 
-  /** Follows the restore proposals: an executed undelete gets its content proposal; a final state closes the record. */
+  /**
+   * Follows the restores: an executed undelete gets its content stage; a final state closes the record. A proposed
+   * restore is followed by its proposal, one that runs at once (v3 F12) by its job.
+   */
   attach(): () => void {
+    const executed = (rec: RestoreRecord, jobId: string | null) => {
+      this.setState(rec.id, 'executed');
+      this.noteDropped(rec, jobId);
+      if (rec.scope === 'image') this.noteImage(rec, jobId);
+      if (rec.followUp === 'content') {
+        const p = this.followUp(rec).catch((err: unknown) =>
+          this.o.log?.warn({ err, restore: rec.id }, 'the restore’s content stage failed'),
+        );
+        void (this.o.background ? this.o.background.track('the restore’s content stage', p) : p);
+      }
+    };
     const off = this.o.engine.events.on('proposal', (e) => {
       if (e.type !== 'updated') return;
       const rec = this.byProposal(e.proposalId);
       if (!rec || rec.state !== 'proposed') return;
-      if (e.state === 'executed') {
-        this.setState(rec.id, 'executed');
-        this.noteDropped(rec, e.jobId);
-        if (rec.scope === 'image') this.noteImage(rec, e.jobId);
-        if (rec.followUp === 'content') {
-          const p = this.followUp(rec).catch((err: unknown) =>
-            this.o.log?.warn({ err, restore: rec.id }, 'the restore’s second proposal failed'),
-          );
-          void (this.o.background ? this.o.background.track('the restore’s second proposal', p) : p);
-        }
-      } else if (['failed', 'conflicted', 'rejected', 'expired'].includes(e.state)) {
+      if (e.state === 'executed') executed(rec, e.jobId);
+      else if (['failed', 'conflicted', 'rejected', 'expired'].includes(e.state)) {
         this.setState(rec.id, e.state === 'failed' ? 'failed' : 'closed');
       }
     });
     this.detach.push(off);
+    const offJobs = this.o.engine.events.on('job', (e) => {
+      if (e.type !== 'updated') return;
+      const st = e.job.status;
+      if (st !== 'succeeded' && st !== 'failed' && st !== 'cancelled') return;
+      const rec = this.byJob(e.job.projectId, e.job.id);
+      if (!rec || rec.state !== 'running') return;
+      if (st === 'succeeded') executed(rec, e.job.id);
+      else this.setState(rec.id, st === 'failed' ? 'failed' : 'closed');
+    });
+    this.detach.push(offJobs);
     return () => {
       for (const d of this.detach.splice(0)) d();
     };
@@ -323,15 +363,23 @@ export class Restores {
 
   /** The content of an undeleted page back to the snapshot: a second proposal, planned against the page as it came back. */
   async followUp(rec: RestoreRecord): Promise<string | null> {
-    const stored = rec.plan as { principal?: Principal | null; originKind?: string; client?: string | null };
+    const stored = rec.plan as {
+      principal?: Principal | null;
+      originKind?: string;
+      client?: string | null;
+      ownerConfirmed?: boolean;
+    };
+    // v3 F12 (ADR 0081): the content stage follows the first the same way: the owner's confirmed restore runs it at once.
+    const confirmed = stored.ownerConfirmed === true ? { ownerConfirmed: true as const } : {};
     const origin: JobOrigin = stored.principal
       ? {
           kind: (stored.originKind as JobOrigin['kind']) ?? 'mcp',
           ...(stored.client ? { client: stored.client } : {}),
           tool: 'restore_snapshot',
           principal: stored.principal,
+          ...confirmed,
         }
-      : { kind: 'ui', client: 'owner', tool: 'restore_snapshot' };
+      : { kind: 'ui', client: 'owner', tool: 'restore_snapshot', ...confirmed };
     try {
       const r = await this.propose(
         { projectId: rec.projectId, pageId: rec.pageId, snapshotId: rec.snapshotId, scope: 'content' },
@@ -339,12 +387,13 @@ export class Restores {
         rec.requestedBy,
       );
       const pid = r.status === 'proposal_captured' ? r.proposalId : null;
+      const jid = r.status === 'submitted' ? r.jobId : null;
       this.o.db
         .prepare(
-          'UPDATE snapshot_restores SET follow_up_proposal_id = ?, follow_up = ?, updated_at = ? WHERE id = ?',
+          'UPDATE snapshot_restores SET follow_up_proposal_id = ?, follow_up_job_id = ?, follow_up = ?, updated_at = ? WHERE id = ?',
         )
-        .run(pid, pid ? 'content' : 'content: already as at the snapshot', this.o.now(), rec.id);
-      return pid;
+        .run(pid, jid, pid || jid ? 'content' : 'content: already as at the snapshot', this.o.now(), rec.id);
+      return pid ?? jid;
     } catch (e) {
       this.o.db
         .prepare('UPDATE snapshot_restores SET follow_up = ?, updated_at = ? WHERE id = ?')
@@ -439,6 +488,14 @@ export class Restores {
     return r ? recordOf(r) : null;
   }
 
+  /** v3 F12: the restore a job runs (its first stage), or null. */
+  byJob(projectId: string, jobId: string): RestoreRecord | null {
+    const r = this.o.db
+      .prepare('SELECT * FROM snapshot_restores WHERE project_id = ? AND job_id = ?')
+      .get(projectId, jobId) as Raw | undefined;
+    return r ? recordOf(r) : null;
+  }
+
   byProposal(proposalId: string): RestoreRecord | null {
     const r = this.o.db.prepare('SELECT * FROM snapshot_restores WHERE proposal_id = ?').get(proposalId) as
       Raw | undefined;
@@ -479,9 +536,11 @@ function recordOf(r: Raw): RestoreRecord {
     mode: typeof r.mode === 'string' ? r.mode : null,
     documentId: typeof r.document_id === 'string' ? r.document_id : null,
     proposalId: typeof r.proposal_id === 'string' ? r.proposal_id : null,
+    jobId: typeof r.job_id === 'string' ? r.job_id : null,
     state: r.state as RestoreRecord['state'],
     followUp: typeof r.follow_up === 'string' ? r.follow_up : null,
     followUpProposalId: typeof r.follow_up_proposal_id === 'string' ? r.follow_up_proposal_id : null,
+    followUpJobId: typeof r.follow_up_job_id === 'string' ? r.follow_up_job_id : null,
     requestedBy: String(r.requested_by),
     summary: String(r.summary),
     couldntRestoreExactly: Array.isArray(json(r.plan).couldntRestoreExactly)

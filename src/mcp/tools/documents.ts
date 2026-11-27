@@ -21,7 +21,16 @@ import { CHANGE_ANNOTATIONS, CREATE_ANNOTATIONS, operationIdArg } from './resour
 import { pageRef } from './set-facts.js';
 import { resolveMapAsset } from './map-support.js';
 import { featurePoints, frameState } from '../../maps/index.js';
-import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
+import {
+  errorResult,
+  projectArg,
+  protectedDryRun,
+  protectedDryRunText,
+  render,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 
 type Obj = Record<string, unknown>;
@@ -534,7 +543,7 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete a document of a page',
     access: 'write',
     description:
-      'Deletes one document (a map, timeline or board, or one of several page documents) of a page; LegendKeeper keeps it. `confirm: true` is required. A page’s last or only page document is refused (that is its content: write_page, or delete_resource). Deleting a map, timeline or board of an Authoritative page is a canon rule (the owner can switch it off): always a proposal the owner accepts as canon. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write.',
+      'Deletes one document (a map, timeline or board, or one of several page documents) of a page; LegendKeeper keeps it. `confirm: true` is required. A page’s last or only page document is refused (that is its content: write_page, or delete_resource). Deleting a map, timeline or board of an Authoritative page is canon: direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); a proposal at scope propose. The bridge keeps a copy of the page first, so Revert can restore it. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: z.string().min(1).max(500).describe('The document (name or id).'),
@@ -589,7 +598,10 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
           page,
           document,
           ...(canon.length > 0
-            ? { requiresCanonicalApproval: true, protectedChanges: canon.map((c) => c.text) }
+            ? protectedDryRun(
+                mctx.scope,
+                canon.map((c) => c.text),
+              )
             : assessDelete(rules, facts, node.rawName).length > 0
               ? {
                   note: 'The page is protected canon (Authoritative); deleting this kind of document is not guarded by a canon rule.',
@@ -603,7 +615,7 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
               status: 'dry_run',
               message:
                 canon.length > 0
-                  ? 'Dry run: nothing was deleted. As the tree last read it, the page is protected canon, so the delete would become a proposal only the owner can accept as canon.'
+                  ? `Dry run: nothing was deleted. As the tree last read it, the page is protected canon. ${protectedDryRunText(mctx.scope, 'the delete (a copy kept first)')}`
                   : 'Dry run: nothing was deleted.',
             },
             pd,

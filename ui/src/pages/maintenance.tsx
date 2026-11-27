@@ -3,7 +3,6 @@ import { api, background } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, StatusBadge, useAction } from '../components';
 import { fmtAgo, fmtDuration, fmtTime } from '../format';
 import { useApi, useNow, useReloadOn } from '../hooks';
-import { useReauth } from '../reauth';
 import { useProject } from '../project';
 import { Link } from '../router';
 
@@ -283,7 +282,6 @@ function BlockIdSweepCard({
   const card = useApi<{ card: SweepCardData }>(`/maintenance/${SWEEP_ID}/card`);
   useReloadOn(['policy', 'job'], card.reload, 800);
   const { run, busy } = useAction();
-  const withReauth = useReauth();
   const { selected } = useProject();
   const [dry, setDry] = useState<DryRunData | null>(null);
   const [limit, setLimit] = useState<string | null>(null);
@@ -393,13 +391,13 @@ function BlockIdSweepCard({
             void run(
               () =>
                 on
-                  ? withReauth(() => api.put(`/maintenance/${SWEEP_ID}/override`, { on }))
+                  ? api.put(`/maintenance/${SWEEP_ID}/override`, { on })
                   : api.put(`/maintenance/${SWEEP_ID}/override`, { on }),
               on ? 'Override set (audited).' : 'Override cleared.',
             ).then(reload);
           }}
         />
-        Override: enable without a sandbox PASS (asks you to confirm it is you; audited)
+        Override: enable without a sandbox PASS (audited)
       </label>
       {pre.override && (
         <p className="muted small-text">
@@ -562,8 +560,6 @@ function JobRows({
   onChanged: () => void;
 }) {
   const { run, busy } = useAction();
-  // v2 E4 (RV1-4): switching off a job that keeps the backups asks for the password again.
-  const withReauth = useReauth();
   const { selected, nameOf } = useProject();
   const toggleId = `toggle-${j.id}`;
   // v2 E5.1: Run now acts on the selected project for a per-project job (the schedule still covers every project).
@@ -621,10 +617,7 @@ function JobRows({
               aria-describedby={j.implemented ? undefined : `${toggleId}-why`}
               onChange={(e) =>
                 void run(
-                  () =>
-                    withReauth(() =>
-                      api.post(`/maintenance/${j.id}/${e.target.checked ? 'enable' : 'disable'}`),
-                    ),
+                  () => api.post(`/maintenance/${j.id}/${e.target.checked ? 'enable' : 'disable'}`),
                   `${j.name} ${e.target.checked ? 'enabled' : 'disabled'}.`,
                 ).then(onChanged)
               }

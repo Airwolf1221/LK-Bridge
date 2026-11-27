@@ -5,18 +5,18 @@ of subject gets, from which templates, under which names and in which place, wit
 text rules its pages follow. The bridge's code holds the engine that applies any pack's rules and a few small hooks for
 what data cannot say. The first pack is **Arkona**, attached to the `arkona` and `test` projects. Its tools:
 
-| Tool                         | What it makes                                                                                                                               | Since |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `arkona_create_character`    | a character's set of pages, or new pages for an existing character                                                                          | F3a   |
-| `arkona_create_owner`        | one non-character owner page, typed by the owner table (below)                                                                              | F3b   |
-| `arkona_create_relationship` | one joint relationship page for two existing characters                                                                                     | F3b   |
-| `arkona_add_character_art`   | reference images for an existing character, on its Art page                                                                                 | F3b   |
-| `arkona_character_brief`     | nothing: a read-only brief on a character, from the bridge's own records, free                                                              | F3b   |
-| `arkona_appraise_owner`      | nothing: a page, branch or everything appraised against Source Formatting                                                                   | F3c   |
-| `arkona_change_impact`       | nothing: what depends on a page, a planned rename or a pending proposal                                                                     | F3c   |
-| `arkona_working_digest`      | nothing: Working pages, open proposals, unpromoted sets, contradictions                                                                     | F3c   |
-| `arkona_visual_hygiene`      | nothing: the visual references, candidates only                                                                                             | F3c   |
-| `arkona_appraisal_fix`       | Repairs one appraisal finding with a deterministic fix: at scope `write` at once (its switch follows the scope, v3 F3.4), else ONE proposal | F3c   |
+| Tool                         | What it makes                                                                                                                      | Since |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `arkona_create_character`    | a character's set of pages, or new pages for an existing character                                                                 | F3a   |
+| `arkona_create_owner`        | one non-character owner page, typed by the owner table (below)                                                                     | F3b   |
+| `arkona_create_relationship` | one joint relationship page for two existing characters                                                                            | F3b   |
+| `arkona_add_character_art`   | reference images for an existing character, on its Art page                                                                        | F3b   |
+| `arkona_character_brief`     | nothing: a read-only brief on a character, from the bridge's own records, free                                                     | F3b   |
+| `arkona_appraise_owner`      | nothing: a page, branch or everything appraised against Source Formatting                                                          | F3c   |
+| `arkona_change_impact`       | nothing: what depends on a page, a planned rename or a pending proposal                                                            | F3c   |
+| `arkona_working_digest`      | nothing: Working pages, open proposals, unpromoted sets, contradictions                                                            | F3c   |
+| `arkona_visual_hygiene`      | nothing: the visual references, candidates only                                                                                    | F3c   |
+| `arkona_appraisal_fix`       | Repairs one appraisal finding with a deterministic fix: at scope `write` at once (it follows the scope; v3 F12), else ONE proposal | F3c   |
 
 Design: [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md) and the owner-approved
 [character pack design](design/F3-character-pack.md) (F3a); [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md)
@@ -32,14 +32,13 @@ and the owner-approved [F3c design](design/F3c-appraisal.md) (F3c). The tools' r
 
 One versioned JSON document, its **rules** (`src/packs/types.ts` checks its shape):
 
-- **settings**: `alwaysPropose` (every package is a proposal for the owner, whatever the agent's scope; on for a pack's
-  first weeks), and since v3 F3.4 **`tools`**, a switch per writing tool that overrides it: `propose` (always a
-  proposal) or `scope` (follows the agent's scope: at scope `write` the package runs and the owner reviews it afterwards
-  on the Review page). The Arkona seed: `arkona_create_character`, `arkona_create_owner` and
-  `arkona_create_relationship` propose; `arkona_add_character_art` and `arkona_appraisal_fix` follow the scope; the
-  read-only tools have no switch ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D). Changing a
-  switch on the Packs page (**Save tool switches**, re-authenticated, audited `pack.set_tool_modes`) makes a new version,
-  which waits for the owner's approval like any other.
+- **settings**: empty since v3 F12 ([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md), seed
+  `arkona-2026-11-28-f12`). Every pack tool follows its connection's scope: at scope `write` the package runs directly,
+  canon included, and the owner reviews it afterwards on the Review page with Revert; at `propose` it is one proposal.
+  The former `alwaysPropose` (every package a proposal, whatever the agent's scope) and v3 F3.4's **`tools`** (a switch
+  per writing tool, `propose` or `scope`; [ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D) are
+  ignored when read and dropped by the seed upgrade; the Packs page's switches, **Save tool switches**
+  (`pack.set_tool_modes`) and `PUT /packs/:id/tools` are removed.
 - **tags**: the status tags (`CANON` for Authoritative, `Working` for Working, first and with no `CANON`), the AU rule
   (`au`: the Continuity Type that makes a page AU and the tag it carries in place of `CANON`; v3 F3b), the values that are
   never tags (`Unknown`, `Unestablished`, `None`), the **token maps** (a Race / Species or Naming Culture value and the
@@ -110,7 +109,7 @@ headings, in order with their levels. Choosing one and pressing **Re-map** (the 
 A renamed governance heading is therefore an expected drift, not a dead end. If a section was removed rather than
 renamed, the rules derived from it need checking first: re-map only to the section that now says the same thing. A
 later seed that names its own pinned headings replaces a re-mapped one when it is offered (and the owner approves it).
-API: `POST /api/admin/packs/:id/sections` `{ source, from, to, confirm: true }` (re-authenticated). Refusals:
+API: `POST /api/admin/packs/:id/sections` `{ source, from, to, confirm: true }`. Refusals:
 `SECTION_NOT_PINNED` (`from` is not pinned), `HEADING_NOT_FOUND` (`to` is not on the page now, with its outline),
 `SECTION_ALREADY_PINNED`, `SOURCE_NOT_FOUND`, `GOVERNANCE_UNREADABLE`.
 
@@ -127,7 +126,8 @@ packages cannot both create it).
    offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-18-f3e`, v3 F3e, the split
    rules, supersedes every earlier one: F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b`, F3b.1's
    `arkona-2026-11-16-f3b1`, F3.3's `arkona-2026-11-17-f3d`, which was named after the wrong session, and F3.4's
-   `arkona-2026-11-17-f3-4`, the tool switches), and a pack stored from one of them is given
+   `arkona-2026-11-17-f3-4`, the tool switches; the current seed is v3 F12's `arkona-2026-11-28-f12`, which drops the
+   switches and supersedes every earlier seed, `arkona-2026-11-27-f6c` included), and a pack stored from one of them is given
    the new seed's rules as a NEW version at start
    (audited `pack.seed_upgrade`), keeping the owner's token maps and the governance sources' places, taking the seed's
    source names and pinned sections, and adding to each attachment the template roles the new rules need. It waits for
@@ -142,7 +142,7 @@ packages cannot both create it).
    (`PACK_TEMPLATE_UNSET`) until the owner refreshes the templates and approves again (an approval works the unset ids out
    again).
 3. **Approved** by the owner on the Packs page: the current version, with each governance source's document version read
-   at that moment and (v3 F3b) a digest of each pinned section (`pack.approve`, re-authenticated). An approval is refused
+   at that moment and (v3 F3b) a digest of each pinned section (`pack.approve`). An approval is refused
    when a pinned section cannot be found on its page (`GOVERNANCE_SECTION_MISSING`, listing the page's headings and its
    outline; a heading renumbered, recased or written with "&" for "and" is still found, a shortened one is not); the
    owner re-maps the pin on the Packs page ([above](#re-mapping-a-pinned-heading)). Until a version is approved, the
@@ -176,7 +176,7 @@ derived" and must "compare policy version/digest before writing". So:
 ## Editing a pack
 
 F3a edits only the **token maps**, on the Packs page: a value and its token per row, for Race / Species and Naming
-Culture. A save makes a new version (`pack.set_tokens`, re-authenticated), which waits for approval. A token is never a
+Culture. A save makes a new version (`pack.set_tokens`), which waits for approval. A token is never a
 never-tag, and no value or token has an em or en dash in it. Everything else in the rules is read-only in F3a: the service's `replaceRules` command (the tests use it) makes a new
 version the same way (`pack.replace_rules`), and a seed never overwrites a stored pack.
 
@@ -253,7 +253,8 @@ new version is approved, every page the bridge archived or moved to Working befo
 content, the index text) and builds the set: a Compact Character Reference under its race index for a minor character,
 or an `[INDEX] {name}` with a Character Core and one page per domain for a developed one; Art pages with staged images
 placed in the character's asset folder; relationships hosted under one participant and linked from both. It previews
-everything first (`dryRun`), then makes **one proposal**; on approval it runs as one job and verifies what it wrote. With
+everything first (`dryRun`), then runs as one job and verifies what it wrote: at once at scope `write` (v3 F12, on the
+Review page with Revert), or, at `propose`, as **one proposal** that runs on approval. With
 `target` it adds pages to an existing character without duplicating it: new pages take the character's standing, a
 Compact Reference gets an index in its place when it gains siblings (its id kept), `upgradeToCore` makes it a Core (and
 v3 F7.1, ADR 0072: any package that leaves a character with an index and several owners makes it its Core in the same
@@ -366,10 +367,10 @@ appropriate interactive follow-up; do not silently perform the repair." So:
 - **The audits are reused, never duplicated**: A2 gathers the page's open audit findings (sibling order, tags, facts,
   references, lifecycle…) and adds only the checks they do not cover.
 - **Acting on a finding** is a separate, explicit request (the owner's addition, design section F): a finding whose
-  follow-up is a `fix` can be turned into **one ordinary proposal** by the Appraisal page's "Propose a fix", or by
-  `arkona_appraisal_fix`, after a live re-read shows it still holds. Since v3 F3.4 the tool follows its switch in the
-  pack's data: by default the agent's scope (at scope `write` the fix is made at once and reviewed afterwards on the
-  Review page); switched to "always propose", one proposal whatever the scope. Sibling order and tags go to the audits' own fixes. A
+  follow-up is a `fix` can be acted on by the Appraisal page's "Apply fix…" (since v3 F12 one confirmed job; before,
+  **one ordinary proposal**), or by `arkona_appraisal_fix`, after a live re-read shows it still holds. The tool follows
+  the agent's scope (at scope `write` the fix is made at once and reviewed afterwards on the Review page; at `propose`,
+  one proposal); the switch of v3 F3.4 was removed in F12. Sibling order and tags go to the audits' own fixes. A
   `judgement` names the tool and what has to be decided, and is the owner's.
 - **Reports are not written to LegendKeeper.** The bridge keeps the latest run of each tool and scope in its own database
   for comparison, as the audits do ([dashboard.md](dashboard.md#appraisal-v3-f3c)).
@@ -382,7 +383,8 @@ only Arkona's: the pack decides only the appraisal tools.
 [ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md); the owner-approved design:
 [design/F3d-renames.md](design/F3d-renames.md). The tool: [tools.md](tools.md#arkona_rename).
 
-**`arkona_rename`** renames a character or an owner everywhere it is named, as one canonical proposal made of **items**:
+**`arkona_rename`** renames a character or an owner everywhere it is named, as one package made of **items** (one
+direct job at scope `write` since v3 F12; one canonical proposal at `propose`):
 its page names (ids kept), identity facts, the old name kept as an alias (the Aliases fact and the pages' search aliases),
 index routing lines, chronology rows (with their events, by the chronology tools' own path), the art
 folder and asset names, a race's taxonomy entry, a culture's or race's identity token (with every character's fact and
@@ -458,16 +460,19 @@ appraisal and the split need to know:
 **What the pack's rules do in a split.** A new owner is made by F3a's rules (a character's page: its role, title,
 Reference Type, its place in the character's index; a Compact Reference with no index gets one, and moves into it) or
 F3b's (any other owner: type, Subject, home, Temporal Scope), with the pack's names, templates, computed tags, AU and
-lifecycle, as every package is; a new owner of a canon page is canon in the same canonical proposal. The appraisal uses
+lifecycle, as every package is; a new owner of a canon page is canon in the same package (direct at `write` since v3
+F12, a canonical proposal at `propose`). The appraisal uses
 the domains, `stays`, `together`, `destinations`, `visual` and `questions`; the split's visual audit uses `visual`, its
 universal audit `universalTypes`. Character Architecture's extra audits (relationship, visual, index) apply when the
 source is a character's page; Lifecycle's split rules (coverage, summaries, Dependencies, retirement) apply to any owner.
 
 **Items and phases.** Each destination is an item, with its own source edit: left out, its sections stay in the source.
 Phase 1 is one job (made, moved verbatim with the blocks' ids, checked before anything leaves the source, edited,
-remapped, dated, verified); phase 2, for a source to be retired, is a separate canonical `archive_page` proposal the
-bridge makes once phase 1 has verified and nothing was left out. The split never deletes. A stopped phase 1 is resumed
-or reverted by the owner; a reverted one proposes deleting the pages it made.
+remapped, dated, verified); phase 2, for a source to be retired, archives it through `archive_page`'s plan once phase 1
+has verified and nothing was left out (since v3 F12 no second approval: as the agent for a direct split, as the owner's
+confirmed action for an approved one; before, a separate canonical proposal). The split never deletes. A stopped phase 1
+is resumed or reverted by the owner; a reverted one deletes the pages it made in the same confirmed action (before F12,
+a deletion proposal).
 
 ## Retagging (v3 F3f)
 
@@ -477,11 +482,12 @@ guarded apply, and resumable reconciliation", using a versioned machine-readable
 derived and never a competing source". The translation is this pack's data, approved by the owner like every rule.
 
 **The retag rules** (`rules.retag`, new in `arkona-2026-11-19-f3f`, which also pins the Tagging Standard's "Excluded
-Routine Tags" and switches `arkona_retag_apply` to "always propose"):
+Routine Tags" and switched `arkona_retag_apply` to "always propose"; since v3 F12 the switch is gone and the tool follows
+its connection's scope):
 
 | Key                      | Arkona's value                                                                                                                                          |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `batchSize`              | 25 (pages in one apply proposal)                                                                                                                        |
+| `batchSize`              | 25 (pages in one apply batch)                                                                                                                           |
 | `identityReferenceTypes` | Character Core, Compact Character Reference (the pages that carry the identity tokens; with the roles whose grammar names `$race` or `$culture`)        |
 | `excludedRoutineTags`    | none yet: the owner lists them from the Standard's pinned section (the Packs page's token-map editor); until then every tag outside the grammar is kept |
 | `excludedAreas`          | Legacy Canon Archive, Design References, Repository Governance (index names; the governance sources' own pages are always excluded)                     |
@@ -500,17 +506,19 @@ type, role, primary and specialist), the retag's first evidence after the owner'
 v3 F3f have none; their current tags are their evidence.
 
 **Owner classification.** An "uncertain category" hold is the owner's: on the Tagging page they choose the category (and
-the specialist) from the closed list, with a reason; re-authenticated, audited (`retag.classify`), stored, and used by
+the specialist) from the closed list, with a reason; audited (`retag.classify`), stored, and used by
 every later audit. Agents suggest (`arkona_retag_audit { suggest }`), never classify.
 
-**Apply.** Deterministic corrections of a stored run, at most 25, as ONE proposal (each page an item). The job compares
+**Apply.** Deterministic corrections of a stored run, at most 25, as ONE batch (each page an item): a job at once for an
+agent at scope `write` and for the owner's confirmed batch on the Tagging page (v3 F12), ONE proposal at `propose` or for
+the automation at Propose. The job compares
 the policy first (changed: it stops), then per page reads it fresh (a page whose tags changed is conflicted and skipped,
 never rebased; one whose facts changed is held), writes inside its lock and reads back the exact array and everything
 else unchanged. Each page's disposition is recorded (applied, already compliant, held, conflicted, inaccessible). Last
 Major Revision is never set. Resume and Revert work.
 
 **Reconciliation.** A named record across batches: what was audited, proposed, applied, held and conflicted, and what
-remains. Resume audits what remains afresh and proposes the next batch. A page whose facts, Reference Type or template
+remains. Resume audits what remains afresh and submits the next batch (run at once since v3 F12, from the dashboard). A page whose facts, Reference Type or template
 changed in the snapshots since its verdict is marked stale and audited again: a completed run is never current truth.
 
 **Routing lines** (part D): the pack's routing-line writers (F3a's drafted index text and appended lines, F3b's
@@ -529,7 +537,7 @@ newer version waits (the approved version computes nothing until the owner appro
 
 On the Tagging page's Exceptions tab the owner rules on an exception: **Keep this tag here** (one page, while its tags are
 unchanged) or **Allow this tag everywhere** (the bridge edits the section's list as the owner's action, a dry run first,
-the step-up, one revertible job; the pack then offers its new version). Agents suggest either ruling with
+then one revertible job; the pack then offers its new version). Agents suggest either ruling with
 `arkona_retag_audit { suggestRuling }`, never take it.
 
 ## Where `arkona_get_art` reads an image's authority (v3 F7b)
@@ -544,10 +552,10 @@ no switch: `arkona_get_art` is read-only.
 
 ## `arkona_identity_reconcile`'s switch (v3 F5c)
 
-`arkona-2026-11-23-f5c` ([ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md)): the
-per-tool switch `arkona_identity_reconcile: scope` (it follows the agent's scope: direct at `write` for 10 pages or fewer,
-the bulk rail's proposal beyond, a proposal at `propose`). The switch is read as the stricter of the approved and the
-waiting version, so until the owner approves this version the tool is always a proposal. The tool reads the character
+`arkona-2026-11-23-f5c` ([ADR 0069](adr/0069-v3-f5c-orchestration-identity-reconcile-query-facts-workstreams.md)) added
+the per-tool switch `arkona_identity_reconcile: scope` (then: direct at `write` for 10 pages or fewer, the bulk rail's
+proposal beyond, a proposal at `propose`). Since v3 F12 the switch and the bulk rail are gone: the tool is direct at
+`write` whatever its size, and a proposal at `propose`. The tool reads the character
 type's identity fields, the race and culture maps and the retag rules from the approved version; it adds no other data.
 
 ## Automation's caps and Repository Automation (v3 F5b)
@@ -623,9 +631,10 @@ pinned governance sections.
   has twice is refused (`HEADING_AMBIGUOUS`) (R2-33).
 - **A package's checks run again after a hold**: a direct package job held after its checks (writes paused, read-only, a
   budget wait, a restart) checks the governance, what must be absent and its images again before its first write, and
-  stops (`PACK_GOVERNANCE_CHANGED`) when the tool's switch now says "always propose" (R2-29).
+  stops (`PACK_GOVERNANCE_CHANGED`) when the tool's switch now says "always propose" (R2-29; since v3 F12 there are no
+  switches, so only the governance and what must be absent can stop it).
 - **The switch** that applies is the stricter of the approved version's and one waiting for approval: a switch to
-  "always propose" applies at once; a loosening waits for the approval (R2-35).
+  "always propose" applies at once; a loosening waits for the approval (R2-35; the switches were removed in v3 F12).
 - **The staged-image takeover**: a package takes over only its own agent's pending placement of an image (another
   agent's is `STAGED_IMAGE_BUSY`), and withdraws it only once the package is a proposal or its job has succeeded
   (R2-34, R2-40).

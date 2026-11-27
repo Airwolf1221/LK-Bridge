@@ -6,6 +6,7 @@ import { AdminHttpError } from '../http.js';
 import type { StreamHub } from '../stream.js';
 import type { AdminDeps } from '../types.js';
 import type { Health } from '../health.js';
+import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/types.js';
 
 /** The project a dashboard request is about (v2 A1). */
 export interface RouteProject {
@@ -32,6 +33,21 @@ export interface RouteContext {
    * 400 UNKNOWN_PROJECT. Configured but never verified (so it has no id and no data yet): 409 PROJECT_UNAVAILABLE.
    */
   readonly project: (ref: string | undefined) => RouteProject;
+}
+
+/**
+ * v3 F12 (ADR 0081): the origin of an owner's dashboard action confirmed in its dialog (the request carries
+ * `confirm: true`): it runs at once as one job, canon and lifecycle changes included, with no proposal to approve next.
+ */
+export function ownerConfirmedOrigin(tool: string, detail?: string): JobOrigin {
+  return {
+    kind: 'ui',
+    client: 'owner',
+    tool,
+    ...(detail !== undefined ? { detail } : {}),
+    principal: SYSTEM_PRINCIPAL,
+    ownerConfirmed: true,
+  };
 }
 
 /** The optional `project` query parameter of every project-scoped route. */

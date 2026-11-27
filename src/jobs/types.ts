@@ -93,6 +93,12 @@ export interface JobOrigin {
    * the proposal's.
    */
   readonly workstream?: string;
+  /**
+   * v3 F12 (ADR 0081): the owner confirmed this dashboard action in its dialog, so it runs at once as one job (no
+   * proposal to approve next), canon and lifecycle changes included. Bridge code only, on a dashboard origin (`ui`)
+   * acting as the system principal; the policy gate refuses it anywhere else.
+   */
+  readonly ownerConfirmed?: true;
 }
 
 /** Caller-facing input of a registry operation: `{ path?, query?, ifMatch?, body? }` (see src/lk/registry). */
@@ -475,20 +481,12 @@ export interface BatchSubmit {
    */
   readonly pageScope?: { readonly subtrees: readonly PageScopeEntryShape[] };
   /**
-   * v2 D1.1 (ADR 0039), bridge code only: the batch becomes ONE proposal for the owner whatever the principal's scope
-   * (the dashboard's "Propose a fix"). The policy gate and the write guard still run, and a deny still denies; nothing
-   * is written until the owner approves. Nothing an agent sends reaches it (`lk_api_batch` never sets it).
+   * v2 D1.1 (ADR 0039), bridge code only: the batch becomes ONE proposal for the owner whatever the principal's scope.
+   * v3 F12 (ADR 0081): only the automation engine's codes at Propose (and a change the bridge only records, at scope
+   * `propose`) set it; an agent at scope `write` and the owner's own dashboard actions run directly. The policy gate and
+   * the write guard still run, and a deny still denies. Nothing an agent sends reaches it (`lk_api_batch` never sets it).
    */
   readonly forceProposal?: boolean;
-  /**
-   * CR-2026-11-R3, R3-55 (ADR 0061 part B decision 4), bridge code only, with `forceProposal`: why the proposal was made,
-   * from the safety rails the bridge judged itself (an agent's Resume of a job whose steps left a rail now covers). The
-   * proposal shows it as its `proposedBecause`.
-   */
-  readonly proposedBecause?: {
-    readonly reason: string;
-    readonly hits: readonly { rail: string; text: string }[];
-  };
   /**
    * v3 F2 (ADR 0049 decision 10), bridge code only: the batch places an image staged on the bridge's server (it uploads
    * it into its final folder). At scope `propose` the policy gate makes it a proposal, where any other upload is refused.

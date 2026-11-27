@@ -4,6 +4,9 @@
  * had no "before" and every such edit counted as a major revision. Now the engine reads the block once inside the lock,
  * only when the rule needs a "before" (the page has a Last Major Revision row and the mode is `auto`), and keeps it as
  * the write's journal pre-image: a typo fix is minor, a real rewrite is major, and `skip` makes no read.
+ *
+ * v3 F12 (ADR 0081): the pre-image Revert needs: every updateBlock now keeps its pre-image (one read inside the lock),
+ * whatever the rule's mode, so `skip` no longer saves the read; it still applies no rule and writes no date.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -102,13 +105,15 @@ describe('a direct updateBlock at scope write', () => {
     expect(lmr()).toBe(today());
   });
 
-  it('with lastMajorRevision "skip" the rule needs no "before": no read, no pre-image', async () => {
+  it('with lastMajorRevision "skip" the rule is not applied: only the one pre-image read Revert needs, and no date', async () => {
     const reads = blockReads();
     const { job } = await updateBlock('The envoy reached the Hollow Court at dawn.', {
       lastMajorRevision: 'skip',
     });
-    expect(blockReads()).toBe(reads);
-    expect(preImageOf(job.id)?.preImage ?? null).toBeNull();
+    // v3 F12 (ADR 0081): the pre-image Revert needs: one read of the block, as for any updateBlock; none for the rule.
+    expect(blockReads()).toBe(reads + 1);
+    expect(preImageOf(job.id)?.preImage?.content?.[0]?.text).toContain('at dusk');
+    expect(JSON.stringify(job.result)).not.toContain('major revision');
     expect(lmr()).toBe(OLD);
   });
 });

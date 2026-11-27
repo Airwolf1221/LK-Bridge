@@ -6,6 +6,10 @@
  * `deleted/<date>` safety net on Drive (`deletedRetentionDays: 1`). ADR 0036 decision 4 and ADR 0044 decision 12 put
  * every setting that switches a protection off behind the re-authentication (canon rules, lifecycle settings, audit
  * rules); a stolen dashboard session can silence the backup's alarms without the password.
+ *
+ * ADR 0081 (the owner, 26 November 2026: "A code at sign-in is enough"): these are settings, not credentials, so they
+ * now need only the signed-in session (with its Origin and CSRF checks); every change is still audited. These tests
+ * now assert that, and that the session's own checks still hold.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startAdminStack, type AdminStack } from '../admin/helpers.js';
@@ -26,24 +30,32 @@ afterEach(async () => {
 });
 
 describe('RV1-4: off-site settings that switch a protection off', () => {
-  it('need a re-authentication within 10 minutes (REAUTH_REQUIRED without one), and change nothing', async () => {
+  it('need no fresh code (ADR 0081): each saves and is audited; without the CSRF token nothing changes', async () => {
     const before = (await stack.get('/api/admin/offsite')).json.settings;
+    const noCsrf = await stack.call('PUT', '/api/admin/offsite/settings', {
+      body: { settings: { verifyEnabled: false } },
+      csrf: null,
+    });
+    expect(noCsrf.status).toBe(403);
+    expect((await stack.get('/api/admin/offsite')).json.settings).toEqual(before);
     for (const settings of [{ verifyEnabled: false }, { staleAfterDays: 365 }, { deletedRetentionDays: 1 }]) {
       const r = await stack.put('/api/admin/offsite/settings', { settings });
-      expect.soft(r.status, JSON.stringify(settings)).toBe(403);
-      expect.soft(r.json?.error?.code, JSON.stringify(settings)).toBe('REAUTH_REQUIRED');
+      expect.soft(r.status, JSON.stringify(settings)).toBe(200);
     }
-    const after = (await stack.get('/api/admin/offsite')).json.settings;
-    expect(after).toEqual(before);
+    expect((await stack.get('/api/admin/offsite')).json.settings).toMatchObject({
+      verifyEnabled: false,
+      staleAfterDays: 365,
+      deletedRetentionDays: 1,
+    });
+    expect(stack.audit('offsite.settings').length).toBeGreaterThanOrEqual(3);
   });
 
-  it('switching off the nightly full snapshot or the snapshot verify (E1a jobs) needs one too', async () => {
+  it('switching off the nightly full snapshot or the snapshot verify (E1a jobs) needs no fresh code either', async () => {
     for (const id of ['snapshot-full', 'snapshot-verify']) {
       expect((await stack.get(`/api/admin/maintenance/${id}`)).json.job.enabled, id).toBe(true);
       const r = await stack.post(`/api/admin/maintenance/${id}/disable`, {});
-      expect.soft(r.status, id).toBe(403);
-      expect.soft(r.json?.error?.code, id).toBe('REAUTH_REQUIRED');
-      expect.soft((await stack.get(`/api/admin/maintenance/${id}`)).json.job.enabled, id).toBe(true);
+      expect.soft(r.status, id).toBe(200);
+      expect.soft((await stack.get(`/api/admin/maintenance/${id}`)).json.job.enabled, id).toBe(false);
     }
   });
 });

@@ -121,17 +121,16 @@ describe('the write-scope rehearsal (dry run against the mock)', () => {
       'R2',
       'R3',
       'R4',
-      'rail-delete',
-      'rail-bulk',
+      'delete',
       'cleanup',
     ]) {
       expect(byId[id], id).toBeDefined();
       expect(byId[id]!.verdict, `${id}: ${byId[id]!.detail}`).toBe('pass');
     }
     expect(report.passed).toBe(true);
-    expect(byId['rail-bulk']!.detail).toContain('proposed because: bulk change (11 pages > 10)');
-    expect(byId['5']!.detail).toContain('arkona_create_character: always propose');
-    expect(byId['5']!.detail).toContain('arkona_add_character_art: follows scope');
+    // v3 F12 (ADR 0081): a delete at scope write is direct with its copy; the proposal path is the propose-scope one.
+    expect(byId.delete!.detail).toContain('deleted directly; its copy is snapshot');
+    expect(byId['5']!.detail).toContain('at scope propose was captured as proposal');
     // Nothing of the run is left: no page, no asset or folder, no chronology row or event; the count is as it was.
     const left = [...w.repo.res.values()].filter(
       (r) => String(r.name).startsWith('lk-bridge write-scope') && r.deletedAt === null,

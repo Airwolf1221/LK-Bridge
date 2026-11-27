@@ -2,8 +2,9 @@
 /**
  * R3-RETAG (pass 3): "a policy or governance change (pack version, token map, governance document) stops the job
  * (audit again)", "no unknown token is ever proposed" (a token only in a pending pack version), and "at most 25
- * pages per apply, always a proposal" (the pack's switch, a pending version that changes it, the bulk rail at
- * scope write).
+ * pages per apply" (a pending version does not raise it). v3 F12 (ADR 0081): the pack's "always propose" switch and the
+ * bulk rail are gone (RT-73 and RT-75, which tested them, went with them): at scope write an apply runs directly, and
+ * is tracked as a batch.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ToolCall } from '../../tools/helpers.js';
@@ -42,8 +43,8 @@ beforeAll(async () => {
     })),
   ]);
   await w.snapshot();
-  // An agent at scope write with the DEFAULT safety rails (bulk on, more than 10 pages), as a new profile has them.
-  const { token } = w.stack.newToken('r3-rails-agent', 'write');
+  // An agent at scope write.
+  const { token } = w.stack.newToken('r3-write-agent', 'write');
   const client = await w.stack.connect(token);
   agent = (name, args) => w.stack.call(client, name, args);
 });
@@ -106,17 +107,7 @@ describe('a policy or governance change stops the apply', () => {
   });
 });
 
-describe('the cap and the "always propose" switch', () => {
-  it('RT-73: a pending version switching the apply to scope does not take effect', async () => {
-    const packs = w.stack.runtime.packs;
-    packs.commands.setToolModes('owner', 'arkona', { arkona_retag_apply: 'scope' });
-    expect(packs.strictToolMode('arkona', 'arkona_retag_apply')).toBe('propose');
-    const body = await audit(w, { page: BULK[0] });
-    const r = await w.call('arkona_retag_apply', { project: 'test', runId: body.runId, pages: [BULK[0]] });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    w.stack.runtime.policy.commands.reject('owner', r.body.proposalId as string, 'test');
-  });
-
+describe('the cap, and a direct apply', () => {
   it('RT-74: a pending version with batchSize 100 does not raise the cap of the approved one', () => {
     const packs = w.stack.runtime.packs;
     const pack = packs.get('arkona')!;
@@ -128,21 +119,7 @@ describe('the cap and the "always propose" switch', () => {
     expect(w.stack.runtime.retag.policyFor(PROJECT).rules.retag!.batchSize).toBe(25);
   });
 
-  it('RT-75: switch approved as scope: more than 10 pages at scope write is a proposal (bulk rail)', async () => {
-    w.approveRetag({ tools: { arkona_retag_apply: 'scope' } });
-    expect(w.stack.runtime.packs.strictToolMode('arkona', 'arkona_retag_apply')).toBe('scope');
-    const body = await audit(w, { under: w.desk });
-    const ids = BULK.slice(1, 12);
-    const writes = w.requests().writes;
-    const r = await agent('arkona_retag_apply', { project: 'test', runId: body.runId, pages: ids });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(w.requests().writes).toBe(writes);
-    // The proposal says why (the bulk rail), and a retag batch records it.
-    expect(w.stack.runtime.retag.store.batchByProposal(r.body.proposalId as string)).not.toBeNull();
-    w.stack.runtime.policy.commands.reject('owner', r.body.proposalId as string, 'test');
-  });
-
-  it('RT-76: switch approved as scope: a small batch runs directly and is still tracked', async () => {
+  it('RT-76: at scope write a small batch runs directly and is still tracked', async () => {
     const body = await audit(w, { page: BULK[11] });
     const r = await agent('arkona_retag_apply', { project: 'test', runId: body.runId, pages: [BULK[11]] });
     expect(r.isError, r.text).toBe(false);
@@ -157,7 +134,7 @@ describe('the cap and the "always propose" switch', () => {
 
 describe('policy inputs outside the digest', () => {
   it('RT-78: the project’s status tags changed after the audit: the job stops or holds', async () => {
-    w.approveRetag({ tools: { arkona_retag_apply: 'propose' } });
+    w.approveRetag();
     const body = await audit(w, { page: P.lifecycle });
     expect(body.pages[0]).toMatchObject({ disposition: 'correction', proposed: ['CANON', 'Polity'] });
     const p = await propose(w, body.runId, [P.lifecycle]);

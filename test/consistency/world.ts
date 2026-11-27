@@ -77,9 +77,14 @@ const canon = {
 };
 
 export async function f4bWorld(
-  o: { readonly seed?: NonNullable<Parameters<typeof f4aWorld>[0]>['seed'] } = {},
+  o: {
+    readonly seed?: NonNullable<Parameters<typeof f4aWorld>[0]>['seed'];
+    /** v3 F12 (ADR 0081): the world's agent scope, as packWorld takes it (`seed`: write; default: propose). */
+    readonly toolModes?: 'propose' | 'seed';
+  } = {},
 ): Promise<F4bWorld> {
   const w = await f4aWorld({
+    ...(o.toolModes ? { toolModes: o.toolModes } : {}),
     seed: (world) => {
       const r = world.repo;
       const core = (

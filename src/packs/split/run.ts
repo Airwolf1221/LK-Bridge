@@ -168,7 +168,9 @@ export async function runSplit(
         status: 'dry_run',
         ...preview,
         message:
-          'Dry run: nothing was written and nothing was proposed. Bring the map, the warnings and the Anti-Fragmentation note to the owner; call again without dryRun only when the owner wants the split: ONE canonical proposal, approved whole or destination by destination.',
+          mctx.scope === 'propose'
+            ? 'Dry run: nothing was written and nothing was proposed. Bring the map, the warnings and the Anti-Fragmentation note to the owner; call again without dryRun only when the owner wants the split: at your connection’s scope (propose) ONE canonical proposal, approved whole or destination by destination.'
+            : 'Dry run: nothing was written. Bring the map, the warnings and the Anti-Fragmentation note to the owner; call again without dryRun only when the owner wants the split: at your connection’s scope (write) ONE job that runs directly and appears on the owner’s Review page, with Revert.',
       },
       () => ({ items: plan.items.length, summary: plan.summary }),
     );
@@ -187,7 +189,7 @@ export async function runSplit(
         // No job-level locks: the job makes pages (as a package does); each write takes its own page's lock and
         // re-checks inside it (the source edits are exact or the job stops; an append is rebased on a conflict).
         lifecycle: plan.marker,
-        forceProposal: true,
+        // v3 F12 (ADR 0081): the agent's scope decides (direct at `write`, on the Review page; a proposal at `propose`).
         // ADR 0058 (Resume): a split that stops part-way resumes from where it stopped, its first check again first.
         // CR-2026-11-R3 (R3-22): and its destinations check (what left a destination while the job was stopped is never
         // then taken out of the source).

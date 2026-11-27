@@ -75,6 +75,21 @@ describe('the package: validation', () => {
     },
   );
 
+  // v3 F12 follow-up (ADR 0081 amendment 1, decision 4): a package's dry run says what it will be at the caller's scope.
+  it('the dry run says what the package will be at each scope: a proposal at propose, a direct job on Review at write', async () => {
+    const atPropose = await call(compactPackage({ name: 'Scope Check', identity: ident(), dryRun: true }));
+    expect(atPropose.body.status, atPropose.text).toBe('dry_run');
+    expect(String(atPropose.body.message)).toMatch(/scope \(propose\) ONE proposal for the owner/);
+    const writer = await w.stack.connect(w.stack.newToken('pack-dry-writer', 'write').token);
+    const atWrite = await w.stack.call(writer, TOOL, {
+      project: 'test',
+      ...compactPackage({ name: 'Scope Check', identity: ident(), dryRun: true }),
+    });
+    expect(atWrite.body.status, atWrite.text).toBe('dry_run');
+    expect(String(atWrite.body.message)).toMatch(/runs directly and appears on the owner’s Review page/);
+    expect(String(atWrite.body.message)).not.toMatch(/approv/i);
+  });
+
   it('a blank, whitespace or placeholder value is refused too', async () => {
     for (const v of ['', '   ', 'TBD', '[Naming culture]', 'Unknown']) {
       const r = await call(

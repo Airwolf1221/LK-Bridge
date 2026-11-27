@@ -5,21 +5,20 @@
  *
  * - `GET /reference-types`: the report (filtered, paged), the vocabulary in force with its status, the conflicts with a
  *   published section, the decisions not published yet, the latest publications;
- * - `POST /reference-types/decide` (the step-up; audited `reftypes.decide`): accept, edit (another canonical value, or a
+ * - `POST /reference-types/decide` (audited `reftypes.decide`): accept, edit (another canonical value, or a
  *   new one with its role word), reject, keep as specialist (the pages listed, or any page in the category);
- * - `POST /reference-types/bulk-accept` (the step-up): v3 F6a.1 (ADR 0076 amendment 1): the rows named by `ids` (the
+ * - `POST /reference-types/bulk-accept`: v3 F6a.1 (ADR 0076 amendment 1): the rows named by `ids` (the
  *   page sends the confident rows it offers), or every confident suggestion of the open rows a filter matches; ONE
  *   transaction, at most REFTYPE_BULK_MAX rows, idempotent; it returns the rows it changed, not a report;
- * - `POST /reference-types/undo` (the step-up; audited `reftypes.undo`): a decision not applied and not published;
- * - `POST /reference-types/publish`: `dryRun` (one read, no step-up) returns the section's exact text and the
- *   confirmation; otherwise the step-up, ONE job of the bridge's, audited `reftypes.publish`.
+ * - `POST /reference-types/undo` (audited `reftypes.undo`): a decision not applied and not published;
+ * - `POST /reference-types/publish`: `dryRun` (one read) returns the section's exact text and the confirmation;
+ *   otherwise ONE job of the bridge's, audited `reftypes.publish`.
  *
  * v3 F6a.1: every route awaits the service's `prepare` first, which brings the report's cached base up to date in chunks
  * that yield to the event loop; a reload while nothing changed rebuilds nothing, and a decision never rebuilds the report.
  */
 import * as z from 'zod';
 import { ReferenceTypeError, STATUSES, type ReferenceTypeService } from '../../packs/reftypes/service.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectFor, projectParam, type Register } from './util.js';
 
@@ -144,7 +143,6 @@ export const registerReferenceTypes: Register = (api, ctx) => {
   });
 
   api.post('/reference-types/decide', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -180,7 +178,6 @@ export const registerReferenceTypes: Register = (api, ctx) => {
   });
 
   api.post('/reference-types/bulk-accept', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -214,7 +211,6 @@ export const registerReferenceTypes: Register = (api, ctx) => {
   });
 
   api.post('/reference-types/undo', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -247,7 +243,6 @@ export const registerReferenceTypes: Register = (api, ctx) => {
           'CONFIRM_REQUIRED',
           'Confirm the publication (confirm: true), or ask for a preview.',
         );
-      requireReauth(ctx.deps.services, req);
     }
     const p = projectFor(ctx, req, b.project);
     return wrap(() => svc().publish('owner', p.id, b.dryRun === true ? { dryRun: true } : {}));

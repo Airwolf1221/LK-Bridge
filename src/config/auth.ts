@@ -45,6 +45,8 @@ export interface AuthConfig {
     readonly refreshFamilyMaxSeconds: number;
     readonly authCodeSeconds: number;
     readonly sessionSeconds: number;
+    /** ADR 0081: how long a step-up lasts on its session (`AUTH_STEP_UP_WINDOW_SECONDS`). */
+    readonly stepUpSeconds: number;
     readonly consentSeconds: number;
     /** How long a just-rotated refresh token may be presented again for the same successor. 0 disables. */
     readonly refreshGraceSeconds: number;
@@ -124,6 +126,9 @@ export const AUTH_ENV_SCHEMA = z.object({
   AUTH_CODE_TTL_SECONDS: intFrom(300, 30, 600),
   // ADR 0062: a sliding session, 30 days from its last use by default (was 12 hours from sign-in).
   AUTH_SESSION_TTL_SECONDS: intFrom(30 * 86400, 300, 30 * 86400),
+  // ADR 0081: how long a fresh authenticator code lasts for the credential changes that ask for one (12 hours; was a
+  // fixed 10 minutes). 5 minutes to 7 days.
+  AUTH_STEP_UP_WINDOW_SECONDS: intFrom(12 * 3600, 300, 7 * 86400),
   AUTH_REFRESH_GRACE_SECONDS: intFrom(10, 0, 60),
 
   AUTH_CIMD_TIMEOUT_MS: intFrom(4000, 100, 8000),
@@ -298,6 +303,7 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
       refreshFamilyMaxSeconds: e.AUTH_REFRESH_FAMILY_MAX_SECONDS,
       authCodeSeconds: e.AUTH_CODE_TTL_SECONDS,
       sessionSeconds: e.AUTH_SESSION_TTL_SECONDS,
+      stepUpSeconds: e.AUTH_STEP_UP_WINDOW_SECONDS,
       consentSeconds: 600,
       refreshGraceSeconds: e.AUTH_REFRESH_GRACE_SECONDS,
     },

@@ -779,18 +779,7 @@ export interface Profile {
   scope: Scope;
   /** v2 B2: shown the low-level tools in tools/list. */
   showLowLevelTools: boolean;
-  /** v3 F3.4 (ADR 0055): what still becomes a proposal at scope `write` (absent from an older bridge). */
-  rails?: WriteRails;
   connections: number;
-}
-
-/** v3 F3.4 (ADR 0055): a profile's safety rails at scope `write`. */
-export interface WriteRails {
-  deletes: boolean;
-  bulk: boolean;
-  bulkPages: number;
-  renamesMoves: boolean;
-  assets: boolean;
 }
 
 export interface Connection {
@@ -1551,6 +1540,8 @@ export interface ChronologyTableOnlyResponse {
 /** `POST /chronology/propose-fix` (v2 D1.1): the proposal made for one finding, or why there is nothing to propose. */
 export type ChronologyProposeFixResponse =
   | { status: 'proposal_captured'; proposalId: string; summary: string | null }
+  /** v3 F12 (ADR 0081): the owner's confirmed fix runs at once. */
+  | { status: 'job_submitted'; jobId: string; summary: string | null }
   | { status: 'nothing_to_do'; message: string };
 
 /** `GET /chronology/check`. */
@@ -1845,7 +1836,9 @@ export interface RestoreRecordView {
   mode: string | null;
   documentId: string | null;
   proposalId: string | null;
-  state: 'proposed' | 'executed' | 'failed' | 'closed';
+  /** v3 F12 (ADR 0081): the job a restore ran as when it was not proposed. */
+  jobId?: string | null;
+  state: 'proposed' | 'running' | 'executed' | 'failed' | 'closed';
   followUp: string | null;
   followUpProposalId: string | null;
   requestedBy: string;
@@ -2026,8 +2019,10 @@ export interface RestorePlanView {
 }
 
 export interface RestoreResponse {
-  status: 'nothing_to_do' | 'dry_run' | 'proposal_captured';
+  /** v3 F12 (ADR 0081): `submitted` (with `jobId`) when the owner's confirmed restore runs at once. */
+  status: 'nothing_to_do' | 'dry_run' | 'proposal_captured' | 'submitted';
   proposalId?: string;
+  jobId?: string;
   restoreId?: string;
   canonical?: { reason: string };
   plan: RestorePlanView;
@@ -2041,8 +2036,9 @@ export interface ImageReferenceView {
 }
 
 export interface ImageRestoreResponse {
-  status: 'dry_run' | 'proposal_captured';
+  status: 'dry_run' | 'proposal_captured' | 'submitted';
   proposalId?: string;
+  jobId?: string;
   old: Record<string, unknown>;
   /**
    * v3 F3c (ADR 0051): where the image goes back once approved: its name, the folder's path from the library's root, and
@@ -2242,6 +2238,8 @@ export interface AuditConfigResponse {
 
 export type AuditProposeFixResponse =
   | { status: 'proposal_captured'; proposalId: string; summary: string | null; fix: string }
+  /** v3 F12 (ADR 0081): the owner's confirmed "Apply fix" runs at once as one job. */
+  | { status: 'job_submitted'; jobId: string; summary: string | null; fix: string }
   | { status: 'nothing_to_do'; message: string };
 
 export interface AuditRecheckResponse {
@@ -2517,7 +2515,8 @@ export interface PackOwners {
 
 export interface PackRules {
   schema: 1;
-  settings: { alwaysPropose: boolean };
+  /** v3 F12 (ADR 0081): the retired switches may still be in a version stored before F12 (ignored). */
+  settings: { alwaysPropose?: boolean };
   tags: {
     authoritative: string;
     working: string;
@@ -2615,7 +2614,6 @@ export interface PackView {
   }[];
   tools: string[];
   /** v3 F3.4 (ADR 0055): each write tool's "always propose" switch (absent from an older bridge). */
-  toolModes?: { tool: string; mode: 'propose' | 'scope'; source: 'switch' | 'default' }[];
   versions: { version: number; reason: string; approved: unknown; createdAt: number }[];
 }
 
@@ -2732,6 +2730,8 @@ export interface AppraisalOverviewResponse {
 
 export type AppraisalFixResponse =
   | { status: 'proposal_captured'; proposalId: string; summary: string | null; fix: string; reads: number }
+  /** v3 F12 (ADR 0081): the owner's confirmed "Apply fix" runs at once. */
+  | { status: 'submitted'; jobId: string; summary: string | null; fix: string; reads: number }
   | { status: 'nothing_to_do'; message: string; reads: number };
 
 // ------------------------------------------------------------------------------------- v3 F3.4: write scope (ADR 0055)
@@ -2767,6 +2767,12 @@ export interface ReviewItem {
   textChanges?: TextChange[];
   reviewed: { at: number; by: string; via: string } | null;
   revert: ReviewRevert | null;
+  /** v3 F12 (ADR 0081, D2): the job's workstream (null: none), for grouping. */
+  workstream?: string | null;
+  /** v3 F12: which assistant's connection made it (`Claude`, `ChatGPT`, else its name). */
+  connection?: string;
+  /** v3 F12: whether anything it wrote has a Revert path (Revert is shown only then). */
+  revertible?: boolean;
 }
 
 export interface ReviewChange {
@@ -2778,6 +2784,8 @@ export interface ReviewChange {
   markdownDiff?: MarkdownDiff;
   document?: { id: string; name: string | null };
   facts?: { key: string; before: string | null; after: string | null }[];
+  /** v3 F12: what reverts this with something else (a page the job made), in words. */
+  coveredBy?: string;
   links?: {
     title: string;
     added: { id: string; name: string | null }[];
@@ -2828,7 +2836,7 @@ export interface RevertPreview {
   ready: number;
   notReverted: number;
   /**
-   * v3 F3e (ADR 0059): a split's phase 1: the pages it made go to ONE deletion proposal. CR-2026-11-R3 (R3-09): it is
+   * v3 F3e (ADR 0059): a split's phase 1: the pages it made go to ONE deletion job. CR-2026-11-R3 (R3-09): it is
    * reverted whole or not at all (`wholeOnly`).
    */
   split?: { pagesMade: number; wholeOnly?: boolean };

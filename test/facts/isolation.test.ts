@@ -131,12 +131,8 @@ describe('set_facts with two projects', () => {
       'Status', // v2 C2c: deleting a map, timeline or board of an Authoritative page
       undefined, // C2d: the status tags (ADR 0036 decision 7; no fact)
     ]);
-    // C2d (ADR 0036 decision 4): saving the rules needs the owner's step-up within the last 10 minutes (ADR 0062).
+    // ADR 0081: saving the rules needs no fresh code (C2d had asked one): a session not stepped up saves them.
     t.stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = NULL').run(); // signed in, not stepped up
-    const before403 = await t.admin.put('/projects/alpha/canon', { rules: null, confirm: true });
-    expect(before403.status).toBe(403);
-    expect(before403.json.error.code).toBe('REAUTH_REQUIRED');
-    expect((await t.admin.post('/security/reauth', { password: t.stack.bridge.password })).status).toBe(200);
     const bad = await t.admin.put('/projects/alpha/canon', {
       rules: [{ id: 'x', key: 'Status', kind: 'value' }],
       confirm: true,
@@ -149,20 +145,22 @@ describe('set_facts with two projects', () => {
     });
     expect(put.status, JSON.stringify(put.json)).toBe(200);
     expect(put.json).toMatchObject({ defaults: false, agentDefaultStatus: 'Draft' });
-    // Alpha: Status is no longer protected, Scope is. Beta keeps the defaults.
-    const a1 = await t.call(writer, 'set_facts', {
+    // Alpha: Status is no longer protected, Scope is. Beta keeps the defaults. v3 F12 (ADR 0081): the rules decide what
+    // is a CANONICAL proposal at scope propose (at scope write both changes would be direct).
+    const a1 = await t.call(proposer, 'set_facts', {
       project: 'alpha',
       page: 'Shared Page',
       facts: { Status: 'Authoritative' },
     });
-    expect(a1.body, a1.text).toMatchObject({ status: 'written' });
-    const a2 = await t.call(writer, 'set_facts', {
+    expect(a1.body, a1.text).toMatchObject({ status: 'proposal_captured' });
+    expect(a1.body.requiresCanonicalApproval).toBeFalsy();
+    const a2 = await t.call(proposer, 'set_facts', {
       project: 'alpha',
       page: 'Shared Page',
       facts: { Scope: 'Changed' },
     });
     expect(a2.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    const b1 = await t.call(writer, 'set_facts', {
+    const b1 = await t.call(proposer, 'set_facts', {
       project: 'beta',
       page: 'Shared Page',
       facts: { Status: 'Outline' },

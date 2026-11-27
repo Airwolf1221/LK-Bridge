@@ -14,7 +14,7 @@ Source: `src/mcp/tools/`. Design notes: [ADR 0011](adr/0011-tool-layer.md). Auth
 >
 > 1. Use the high-level tools (search, get_resource, read_document, write_page, set_facts, create__); the lk_api__ tools are only the fallback for a job none of them does.
 > 2. Read before you write, and pass the version you read (baseVersion, baseFactsVersion). Never retry a write that returned proposal_captured, queued or waiting_budget: follow it with bridge_proposal_status or bridge_job_status.
-> 3. New pages are Working. Canon and lifecycle changes (promote_page, archive_page, deleting Authoritative pages) are always proposals only the owner can accept: tell the person, never route around it.
+> 3. Write directly at your connection’s scope. Canon and lifecycle changes (promote_page, archive_page, CANON, deleting pages) are direct too, and every change is on the owner’s Review page with Revert: make them only when the owner has asked for them in this conversation, and say what you changed.
 > 4. Budgets are finite: never loop on an error, and check bridge_estimate before bulk work.
 >    Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page.
 
@@ -35,12 +35,16 @@ A refused `project` argument (below) carries the default project's footer, since
 - **Handles for big results.** A result over `MCP_RESULT_MAX_CHARS` (default 40,000 characters, far below Claude Code's 25,000-token cut-off) is stored as a job artefact (a succeeded one-step job) and comes back as `{ "status": "stored", "handle": "art_…", "preview": … }`. Page it with `bridge_result_page`.
 - **Typed errors.** A failure is `{ "error": { "code", "message", … } }` with `isError: true`. Codes include `WRONG_TOOL_FOR_OPERATION`, `UNKNOWN_OPERATION`, `INVALID_PARAMS`, `VERSION_CONFLICT` (with `currentVersion`), `UNSUPPORTED_BLOCK_LOSS` (with `blockIds`), `CASCADE_CONFIRM_REQUIRED`, `READ_ONLY`, `MEMBER_ADMIN_DISABLED`, `POLICY_DENIED`, `BUDGET_EXHAUSTED` (with `retryAt`), `LK_ERROR` (with `lkCode`, `status`, `requestId`), the project codes `UNKNOWN_PROJECT`, `PROJECT_REQUIRED` and `PROJECT_UNAVAILABLE` (each with `registered`, the project names), and the upload codes below.
 - **Not errors:** `queued`, `waiting_budget` and `proposal_captured` mean the write is accepted or waiting. Never retry it; follow it with `bridge_job_status`.
-- **At scope `write` (v3 F3.4, [ADR 0055](adr/0055-write-scope-review-revert-rails.md)).** Ordinary writes run at once and
-  the owner reviews them afterwards (the dashboard's Review page, with Revert). A write the profile's **safety rails**
-  keep for approval (by default: deletes, a job touching more than 10 pages, asset deletes and moves) comes back
-  `proposal_captured` with `proposedBecause` (`"proposed because: bulk change (14 pages > 10)"`) and a hint not to retry
-  it or route round it; canon and lifecycle changes, `restore_snapshot` and (by default) a setting pack's packages stay
-  proposals whatever the scope. The full table, tool by tool: ADR 0055, decision F.
+- **At scope `write` (v3 F3.4, [ADR 0055](adr/0055-write-scope-review-revert-rails.md); v3 F12,
+  [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)).** Writes run at once and the owner reviews them
+  afterwards (the dashboard's Review page, with Revert), **canon and lifecycle changes included** (`promote_page`,
+  `archive_page`, `unarchive_page`, `move_to_working`, CANON and Continuity Type, deleting or renaming Authoritative
+  pages), as are deletes (a copy is kept first), `restore_snapshot`, `restore_resource` and every pack tool. The guards
+  allow or refuse; they never turn a write into a proposal. The per-profile safety rails (and their `proposedBecause`)
+  and the packs' per-tool "always propose" switches were removed in F12. A proposal comes only from a connection at
+  scope `propose` (every write: `proposal_captured`, never resubmit it, follow it with `bridge_proposal_status`) or from
+  the owner's automation for a code at Propose; the exception is a chronology change that only adds a link, still a
+  proposal at every scope.
 
 ## How the tools are described (v2 E3)
 
@@ -106,70 +110,70 @@ budget (arkona): writes 0/120·min …
 
 `access` (`read` or `write`) is what the policy layer filters on: a connection whose profile has scope `read` sees only `read` tools, and a direct call to a hidden `write` tool is refused with the read-only message; the engine's policy gate refuses the write in any case ([policy.md](policy.md)). Annotations are what Claude and ChatGPT use to decide what to auto-approve: read tools are `readOnlyHint: true`; write tools are `readOnlyHint: false`.
 
-| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                                                                                                                    |
-| --------------------------- | ------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `list_projects`             | read   | true / false / true / false                                     | none                                                                                                                    |
-| `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                                                                                                         |
-| `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                                                                                                   |
-| `search`                    | read   | true / false / true / false                                     | none (the tree; `content: true`: the full-text index); 1 read with `content: "live"`                                    |
-| `get_resource`              | read   | true / false / true / false                                     | 1 read per page (none with `live: false`); `resources` runs several as one job                                          |
-| `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                                                                                                         |
-| `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                                                                                       |
-| `list_calendars`            | read   | true / false / true / false                                     | 1 read                                                                                                                  |
-| `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                                                                                                   |
-| `read_document`             | read   | true / false / true / false                                     | 1 read (a map: 2; a timeline: 2 + 1 per 100 events)                                                                     |
-| `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read                                                                                       |
-| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)                                                                                 |
-| `create_index`              | write  | false / false / false / false                                   | see [C2b](#resources-documents-and-characters-v2-c2b)                                                                   |
-| `create_resource`           | write  | false / false / false / false                                   | see C2b                                                                                                                 |
-| `create_bare_resource`      | write  | false / false / false / false                                   | 1 write + 1 listing + the tree’s re-read                                                                                |
-| `create_many_resources`     | write  | false / false / false / false                                   | see C2b                                                                                                                 |
-| `create_character`          | write  | false / false / false / false                                   | see C2b                                                                                                                 |
-| `update_resource`           | write  | false / **true** / false / false                                | 1 read + 1 write (+1 to re-place) + verify                                                                              |
-| `move_resource`             | write  | false / **true** / false / false                                | 1 write + 1 listing + the tree’s re-read                                                                                |
-| `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + 1 write + 1 read                                                                                 |
-| `restore_resource`          | write  | false / false / false / false                                   | 1 write + 1 read + the tree’s re-read                                                                                   |
-| `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                                                                                        |
-| `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read (a map image: 7 reads in all)                                                                |
-| `delete_document`           | write  | false / **true** / false / false                                | 1 write + 1 read                                                                                                        |
-| `create_map_feature`        | write  | false / false / false / false                                   | see [D2](#maps-v2-d2): 5 reads + 1 write                                                                                |
-| `update_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 reads + 1 write                                                                                               |
-| `delete_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 + 1 read and 1 write per feature                                                                              |
-| `archive_page`              | write  | false / **true** / false / false                                | see [C2c](#the-page-lifecycle-v2-c2c) and [C2d](#whole-sets-guarded-tags-and-approval-scope-v2-c2d)                     |
-| `unarchive_page`            | write  | false / **true** / false / false                                | see C2c and C2d                                                                                                         |
-| `move_to_working`           | write  | false / **true** / false / false                                | see C2c and C2d                                                                                                         |
-| `promote_page`              | write  | false / **true** / false / false                                | see C2c and C2d                                                                                                         |
-| `get_markdown_guide`        | read   | true / false / true / false                                     | none                                                                                                                    |
-| `get_bridge_guide`          | read   | true / false / true / false                                     | none                                                                                                                    |
-| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                                                                                                    |
-| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                                                                                                                    |
-| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                                                                                                                  |
-| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)                                                                                        |
-| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority                                                                                       |
-| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                                                                                                  |
-| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)                                                                                        |
-| `upload_image`              | write  | false / false / false / **true**                                | 2 writes, 1 read, 1 download; +1 write and read per new folder; see [Images](#images-v2-d3)                             |
-| `prepare_image_upload`      | write  | false / false / false / false                                   | none                                                                                                                    |
-| `upload_image_archive`      | write  | false / false / **true** / **true**                             | none in LegendKeeper (with `character`: a live read of its asset folders); see [Image archives](#image-archives-v3-f7c) |
-| `bridge_archive_status`     | read   | **true** / false / **true** / false                             | none                                                                                                                    |
-| `list_snapshots`            | read   | true / false / true / false                                     | none (the bridge's snapshot index)                                                                                      |
-| `snapshot_diff`             | read   | true / false / true / false                                     | none between two snapshots; against now 1 read + the document's own (page 1, map 2, timeline 3+)                        |
-| `restore_snapshot`          | write  | false / **true** / false / false                                | always a proposal; to plan 1–2 reads + the documents' own; see [Snapshots](#snapshots-and-restores-v2-e1a)              |
-| `audit_findings`            | read   | true / false / true / false                                     | none (the bridge's own findings); see [Audits](#audits-v2-e2)                                                           |
-| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                                                                                           |
-| `bridge_budget`             | read   | true / false / true / false                                     | none                                                                                                                    |
-| `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                                    |
-| `bridge_job_status`         | read   | true / false / true / false                                     | none (`wait_seconds` waits at most 25 s)                                                                                |
-| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                                                                                                    |
-| `bridge_job_resume`         | write  | false / false / false / false                                   | none to ask; the job's own steps that are left (`wait_seconds`-style wait of at most 25 s)                              |
-| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                                                                                                    |
-| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                                                                                    |
-| `bridge_result_page`        | read   | true / false / true / false                                     | none                                                                                                                    |
-| `bridge_proposal_status`    | read   | true / false / true / false                                     | none (without `proposalId` it lists yours)                                                                              |
-| `bridge_workstream`         | read   | true / false / true / false                                     | none (the connection's default workstream label, held on the bridge)                                                    |
-| `bridge_workstream_report`  | read   | true / false / true / false                                     | none (the bridge's own records); see [F5c](#orchestration-v3-f5c)                                                       |
-| `query_facts`               | read   | true / false / true / false                                     | none (the tree's stored sidebars); `live: true` 1 read per row; see [F5c](#orchestration-v3-f5c)                        |
-| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                                                                                                   |
+| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                                                                                                                                      |
+| --------------------------- | ------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_projects`             | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                                                                                                                           |
+| `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                                                                                                                     |
+| `search`                    | read   | true / false / true / false                                     | none (the tree; `content: true`: the full-text index); 1 read with `content: "live"`                                                      |
+| `get_resource`              | read   | true / false / true / false                                     | 1 read per page (none with `live: false`); `resources` runs several as one job                                                            |
+| `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                                                                                                                           |
+| `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                                                                                                         |
+| `list_calendars`            | read   | true / false / true / false                                     | 1 read                                                                                                                                    |
+| `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                                                                                                                     |
+| `read_document`             | read   | true / false / true / false                                     | 1 read (a map: 2; a timeline: 2 + 1 per 100 events)                                                                                       |
+| `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read                                                                                                         |
+| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 5 reads + 2 writes for two facts, the pre-image read Revert needs included)                                          |
+| `create_index`              | write  | false / false / false / false                                   | see [C2b](#resources-documents-and-characters-v2-c2b)                                                                                     |
+| `create_resource`           | write  | false / false / false / false                                   | see C2b                                                                                                                                   |
+| `create_bare_resource`      | write  | false / false / false / false                                   | 1 write + 1 listing + the tree’s re-read                                                                                                  |
+| `create_many_resources`     | write  | false / false / false / false                                   | see C2b                                                                                                                                   |
+| `create_character`          | write  | false / false / false / false                                   | see C2b                                                                                                                                   |
+| `update_resource`           | write  | false / **true** / false / false                                | 1 read + 1 write (+1 to re-place) + verify                                                                                                |
+| `move_resource`             | write  | false / **true** / false / false                                | 1 write + 1 listing + the tree’s re-read                                                                                                  |
+| `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + the copy kept before a delete (F12) + 1 write + 1 read                                                             |
+| `restore_resource`          | write  | false / false / false / false                                   | 1 write + 1 read + the tree’s re-read                                                                                                     |
+| `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                                                                                                          |
+| `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read (a map image: 7 reads in all)                                                                                  |
+| `delete_document`           | write  | false / **true** / false / false                                | the copy kept before a delete (F12: the page and that document) + 1 write + 1 read                                                        |
+| `create_map_feature`        | write  | false / false / false / false                                   | see [D2](#maps-v2-d2): 5 reads + 1 write                                                                                                  |
+| `update_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 reads + 1 write                                                                                                                 |
+| `delete_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 + 1 read and 1 write per feature                                                                                                |
+| `archive_page`              | write  | false / **true** / false / false                                | see [C2c](#the-page-lifecycle-v2-c2c) and [C2d](#whole-sets-guarded-tags-and-approval-scope-v2-c2d)                                       |
+| `unarchive_page`            | write  | false / **true** / false / false                                | see C2c and C2d                                                                                                                           |
+| `move_to_working`           | write  | false / **true** / false / false                                | see C2c and C2d                                                                                                                           |
+| `promote_page`              | write  | false / **true** / false / false                                | see C2c and C2d                                                                                                                           |
+| `get_markdown_guide`        | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `get_bridge_guide`          | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                                                                                                                                    |
+| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)                                                                                                          |
+| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority                                                                                                         |
+| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                                                                                                                    |
+| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)                                                                                                          |
+| `upload_image`              | write  | false / false / false / **true**                                | 2 writes, 1 read, 1 download; +1 write and read per new folder; see [Images](#images-v2-d3)                                               |
+| `prepare_image_upload`      | write  | false / false / false / false                                   | none                                                                                                                                      |
+| `upload_image_archive`      | write  | false / false / **true** / **true**                             | none in LegendKeeper (with `character`: a live read of its asset folders); see [Image archives](#image-archives-v3-f7c)                   |
+| `bridge_archive_status`     | read   | **true** / false / **true** / false                             | none                                                                                                                                      |
+| `list_snapshots`            | read   | true / false / true / false                                     | none (the bridge's snapshot index)                                                                                                        |
+| `snapshot_diff`             | read   | true / false / true / false                                     | none between two snapshots; against now 1 read + the document's own (page 1, map 2, timeline 3+)                                          |
+| `restore_snapshot`          | write  | false / **true** / false / false                                | direct at `write`, a proposal at `propose` (F12); to plan 1–2 reads + the documents' own; see [Snapshots](#snapshots-and-restores-v2-e1a) |
+| `audit_findings`            | read   | true / false / true / false                                     | none (the bridge's own findings); see [Audits](#audits-v2-e2)                                                                             |
+| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                                                                                                             |
+| `bridge_budget`             | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `bridge_job_status`         | read   | true / false / true / false                                     | none (`wait_seconds` waits at most 25 s)                                                                                                  |
+| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                                                                                                                      |
+| `bridge_job_resume`         | write  | false / false / false / false                                   | none to ask; the job's own steps that are left (`wait_seconds`-style wait of at most 25 s)                                                |
+| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `bridge_result_page`        | read   | true / false / true / false                                     | none                                                                                                                                      |
+| `bridge_proposal_status`    | read   | true / false / true / false                                     | none (without `proposalId` it lists yours)                                                                                                |
+| `bridge_workstream`         | read   | true / false / true / false                                     | none (the connection's default workstream label, held on the bridge)                                                                      |
+| `bridge_workstream_report`  | read   | true / false / true / false                                     | none (the bridge's own records); see [F5c](#orchestration-v3-f5c)                                                                         |
+| `query_facts`               | read   | true / false / true / false                                     | none (the tree's stored sidebars); `live: true` 1 read per row; see [F5c](#orchestration-v3-f5c)                                          |
+| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                                                                                                                     |
 
 `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*` are **low-level tools**, and since v2 E3b (the owner's answers to P4 and P5, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md)) so are two **rarely used** ones, `lk_upload_image` (which `upload_image` replaces) and `create_bare_resource` (a page with no template; `create_resource` covers every templated page): they are left out of the tool list of a profile whose **show low-level and rarely used tools** setting is off (the default; [below](#visibility-of-the-low-level-tools)). They still work when called by name, under the same policy.
 
@@ -237,7 +241,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`bridge_job_cancel`** `{ jobId }`: the step in flight finishes; nothing further is sent; finished steps are not undone. A job the owner approved (an approved proposal's job, which runs as the connection that proposed it) is refused with `OWNER_APPROVED_JOB`: only the owner stops approved work, on the dashboard (CR-2026-11).
 
-**`bridge_job_resume`** `{ jobId }` (v3 F3d, ADR 0058): resumes one of **your own** jobs that stopped part-way (a setting-pack package or a rename that failed or was cancelled after doing some of its work), in the same job: its own check runs again first, inside its locks; a step that succeeded is never sent again and nothing is made twice; a step that is no longer safe (its page changed since) is refused with its reason, and the job stops again where it was. Only at scope `write`, and only for a job the owner did not approve (`OWNER_APPROVED_JOB`: the owner resumes approved work on the dashboard); another connection's job answers `JOB_NOT_FOUND`. CR-2026-11-R3 (ADR 0061 part B, the owner's decisions): a job the owner (or the bridge) cancelled is not resumed by an agent (`CANCELLED_BY_OWNER`; the bridge records who cancelled, and an agent resumes only what it cancelled itself, R3-54); and the connection's safety rails are judged again on the steps left (R3-55): when one now covers a step, the rest becomes one proposal for the owner (`proposal_captured`, with `proposedBecause`), and the job is not resumed again while it stands (`REST_PROPOSED`). Audited as `job.resume`. `bridge_job_status` shows where a resumable job stopped (`stoppedAt`: its last verified step, the step it stopped at, why, how often it was resumed, and `youMayResume`).
+**`bridge_job_resume`** `{ jobId }` (v3 F3d, ADR 0058): resumes one of **your own** jobs that stopped part-way (a setting-pack package or a rename that failed or was cancelled after doing some of its work), in the same job: its own check runs again first, inside its locks; a step that succeeded is never sent again and nothing is made twice; a step that is no longer safe (its page changed since) is refused with its reason, and the job stops again where it was. Only at scope `write`, and only for a job the owner did not approve (`OWNER_APPROVED_JOB`: the owner resumes approved work on the dashboard); another connection's job answers `JOB_NOT_FOUND`. CR-2026-11-R3 (ADR 0061 part B, the owner's decisions): a job the owner (or the bridge) cancelled is not resumed by an agent (`CANCELLED_BY_OWNER`; the bridge records who cancelled, and an agent resumes only what it cancelled itself, R3-54); and (R3-55) the connection's safety rails were judged again on the steps left, the rest becoming one proposal when one covered a step: since v3 F12 the rails are gone, but a job whose rest an earlier rail proposed is still not resumed while that proposal stands (`REST_PROPOSED`). Audited as `job.resume`. `bridge_job_status` shows where a resumable job stopped (`stoppedAt`: its last verified step, the step it stopped at, why, how often it was resumed, and `youMayResume`).
 
 **`bridge_errors_recent`** `{ grouped?, limit?, sinceMinutes?, jobId? }`: failures grouped by operation, code and path (default), or one row each, with LegendKeeper `requestId`s.
 
@@ -667,16 +671,20 @@ every kept item exactly as read (`id`, `rank`, `resourceId`, `documentId`), then
 
 **Cost.** Planning: 1 read (plus 1 the first time a template's order is needed). The job: 1 read to check (plus 1 per
 collection changed), 1 write per fact changed, added or removed, 1 read and 1 write per collection changed, 1 read to
-verify and 1 for the tree. Changing two facts: 4 reads and 2 writes. Two facts and one link: 6 reads and 3 writes. A
+verify and 1 for the tree; since v3 F12 each row change after the first reads its row for the journal pre-image Revert
+needs (that read also gives the next write its version). Changing two facts: 5 reads and 2 writes (4 before F12). Two
+facts and one link: 6 reads and 3 writes. A
 dry run, or a proposal: the planning read (a proposal adds 1 read per property to capture it, and runs the job when
 approved).
 
 **Versions from the ETag (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)).** LegendKeeper
 answers a row write with no version in its body but with an `ETag` header (a delete answering 204 sends one too), so
 the bridge uses that ETag as the write's new version for the next chained If-Match, and a chained row write no longer
-reads the property inside the lock. Measured: changing two facts costs 4 reads and 2 writes with it, 6 without; a
-change, a change, an addition and a removal 6 reads against 10, with the same 4 writes. A removal reads its row for the
-journal pre-image either way. With neither a body version nor an ETag the bridge re-reads (the safe fallback). The
+reads the property inside the lock. Measured since v3 F12 (test/facts/etag.test.ts): changing two facts costs 5 reads
+and 2 writes with a version in the body, an ETag or neither, since the second change's pre-image read (the one Revert
+needs) gives it its version anyway (before F12: 4 with it, 6 without); a change, a change, an addition and a removal 6
+reads against 7, with the same 4 writes (before F12: 6 against 10): the ETag now saves only the in-lock read of a
+chained addition. A removal reads its row for the journal pre-image either way. With neither a body version nor an ETag the bridge re-reads (the safe fallback). The
 project setting `useEtagVersions` (default on; Projects page) switches it off without a deploy if the sandbox's B12
 check ever fails.
 
@@ -709,10 +717,15 @@ whose answer was lost and could not be checked is reported as `OUTCOME_UNKNOWN` 
 made), never as not written (CR-2026-11).
 
 **Protected canon.** A change that touches a protected fact (by default: `Status` set to or changed from
-`Authoritative`; an existing `Continuity Type` or `Continuity` changed) becomes a proposal **whatever the connection's
-scope**: `status: "proposal_captured"`, `requiresCanonicalApproval: true` and the `reason`. Only the owner's "Approve and
-accept as canon" can run it ([policy.md](policy.md)). A `dryRun` says `requiresCanonicalApproval` with the
-`protectedChanges`.
+`Authoritative`; an existing `Continuity Type` or `Continuity` changed) is canon. At scope `write` it runs directly
+since v3 F12 ([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)): on the owner's Review page with Revert,
+made only when the owner asked for it. At scope `propose` it becomes a canonical proposal: `status:
+"proposal_captured"`, `requiresCanonicalApproval: true` and the `reason`, which only the owner's "Approve and accept as
+canon" can run ([policy.md](policy.md)). A `dryRun` lists the `protectedChanges` and says what they will do at your
+scope ([ADR 0081 amendment 1](adr/0081-v3-f12-direct-writes-review-safety-net.md#amendment-1-the-owners-decisions-of-27-november-2026)):
+at `write` it runs directly and appears on the owner's Review page (no `requiresCanonicalApproval`); at `propose`
+`requiresCanonicalApproval: true`, a proposal only the owner can accept as canon. A Status or Continuity Type value that
+only looks like an allowed one (Unicode's confusables) is refused, the allowed values listed.
 
 **At scope `propose`** the same plan is captured as ONE proposal that holds the high-level operation (the page, the
 facts table before and after, the links added and removed) and its expansion: the check, the writes and the verify
@@ -746,8 +759,8 @@ The agent guide's "Creating and changing pages" section ([bridge-guide.md](bridg
   ever moved or reclassified.
 - **A lifecycle status (since v2 C2c).** Every page create takes `status: "working" | "authoritative"` (default
   `working`): a Working page is `[BWRK]`, directly under `[INDEX] Working`, with Status `Working` and the `Working`
-  tag; an Authoritative page is `[BSRC]` in its normal place, with Status `Authoritative` and the `CANON` tag, and is
-  always a canonical proposal. See [The page lifecycle](#the-page-lifecycle-v2-c2c). An index gets no Status and no
+  tag; an Authoritative page is `[BSRC]` in its normal place, with Status `Authoritative` and the `CANON` tag: canon,
+  direct at scope `write` (v3 F12, on the Review page) and a canonical proposal at `propose`. See [The page lifecycle](#the-page-lifecycle-v2-c2c). An index gets no Status and no
   status tag. A Status in `facts` must agree with `status` (`INVALID_FACTS` otherwise). Templates carry no defaults.
 - **The template is recorded** on the new page's tree node at once, so `set_facts` finds its template order later.
 - **Verified.** A verify step reads back every page made or changed: a created or moved page by its parent's listing
@@ -874,8 +887,9 @@ that cannot be read is answered as `update_resource` answers it: the read's erro
 **`move_resource`** `{ page, to, dryRun?, project }`: the page and everything under it, to a new parent index inside
 the repository, in its alphabetical place there (one `moveResource`, journalled with the page as it was).
 `MOVE_CYCLE` for a move under itself or a descendant; `NOT_IN_REPOSITORY` for a destination outside; `NAME_TAKEN` for a
-sibling of the same kind and name there. A move into or out of Narratives is a proposal at every scope (canonical when a
-page of the subtree carries a lifecycle signal; see "Narrative pages" under the Arkona fiction tools).
+sibling of the same kind and name there. A move into or out of Narratives is direct at scope `write` since v3 F12 (on
+the Review page with Revert) and a proposal at `propose` (canonical when a page of the subtree carries a lifecycle
+signal; see "Narrative pages" under the Arkona fiction tools).
 
 **Moves within a lifecycle area** (v2 C2d.1, decided by the owner on 12 November 2026) are ordinary moves: no lifecycle
 change, no canonical approval, and the page's prefix, Status and tags never change. **Working:** a `[BWRK]` page (or a
@@ -892,9 +906,15 @@ unarchived also returns to that index when it still exists, else to `[INDEX] Wor
 with pages under it is refused (`HAS_CHILDREN`, listing them) unless `cascade: true` is passed too. The result lists
 every page removed (`removed`). The journal keeps the page (its `getResource`) and the subtree's ids, names and parents.
 LegendKeeper's deletes are soft: `restore_resource` brings them back. **Protected canon** (decided by the owner on 10
-November 2026): deleting a page whose Status is `Authoritative`, or with `cascade` any page of the subtree that is,
-needs the owner's canonical approval, whatever the scope: the call becomes a proposal (`proposal_captured`,
-`requiresCanonicalApproval`, the `reason` naming each page). The guard reads each page's sidebar live (up to 101; a
+November 2026; v3 F12): deleting a page whose Status is `Authoritative`, or with `cascade` any page of the subtree that
+is, is canon. At scope `write` it runs directly (on the Review page; make it only when the owner asked); at `propose`
+it becomes a canonical proposal (`proposal_captured`, `requiresCanonicalApproval`, the `reason` naming each page).
+**A copy first** (F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)): before an agent's delete runs,
+the page and its whole subtree (at most 1,000 pages) are read live and kept as a change snapshot for
+`DELETE_COPY_RETENTION_DAYS` (90); if the copy cannot be taken the delete is refused (`DELETE_COPY_FAILED`). Revert
+restores the page by LegendKeeper's own restore, else makes it again from the copy (new ids, the old ids mapped). The
+copy costs, per page, one `getResource`, its sidebar and one read per document, and one `listResources` per page with
+children. The guard reads each page's sidebar live (up to 101; a
 larger cascade, or a sidebar it cannot read, counts as protected), and reads the page again inside its lock. A dry run
 says what the tree last read.
 
@@ -919,7 +939,9 @@ candidate and its folder): see [Maps](#maps-v2-d2).
 **`delete_document`** `{ page, document, confirm: true, dryRun?, project }`: refused for the page's last document
 (`DOCUMENT_LAST`) and for its only page-type document (`DOCUMENT_ONLY_PAGE`): that is the page's content (use
 `write_page` or `delete_resource`). Since v2 C2c the switchable canon rule `delete-document-authoritative` (on by
-default) makes deleting a map, timeline or board of an Authoritative page a canonical proposal.
+default) makes deleting a map, timeline or board of an Authoritative page canon (since v3 F12 direct at scope `write`,
+on the Review page; a canonical proposal at `propose`). An agent's `delete_document` is copied first, as
+`delete_resource` is.
 
 ### Costs (reads and writes, typical)
 
@@ -928,24 +950,30 @@ reads, the job's checks, the canon guard's in-lock read, the verify step and the
 
 | Call                                                    | Reads | Writes |
 | ------------------------------------------------------- | ----- | ------ |
-| `create_character` core with a new index, 1 caller fact | 11    | 9      |
-| `create_character` compact, no caller facts             | 8     | 7      |
+| `create_character` core with a new index, 1 caller fact | 19    | 9      |
+| `create_character` compact, no caller facts             | 13    | 7      |
 | `create_character` that returns an existing page        | 1     | 0      |
-| `create_resource` with 2 facts and 1 link               | 10    | 6      |
-| `create_bare_resource`                                  | 2     | 1      |
+| `create_resource` with 2 facts and 1 link               | 12    | 6      |
+| `create_bare_resource`                                  | 3     | 1      |
 | `update_resource` rename (re-placed among its siblings) | 4     | 1      |
 | `move_resource`                                         | 3     | 1      |
-| `delete_resource`, one page                             | 4     | 1      |
-| `restore_resource`                                      | 3     | 1      |
-| `create_document`                                       | 2     | 1      |
-| `update_document`                                       | 4     | 1      |
-| `delete_document`                                       | 4     | 1      |
-| `set_facts`, 2 facts (unchanged from C2a)               | 4     | 2      |
+| `delete_resource`, one page                             | 6     | 1      |
+| `restore_resource`                                      | 4     | 1      |
+| `create_document`                                       | 4     | 1      |
+| `update_document`                                       | 6     | 1      |
+| `delete_document`                                       | 7     | 1      |
+| `set_facts`, 2 facts                                    | 5     | 2      |
 
-These are the v2 C2c numbers: the creates are Working by default, so an index gets no Status (fewer reads and writes)
-and a page from a template gets its status tag in one more write; the measured rename is of the only page under
-`[INDEX] Working` (no re-placing); a document delete reads the page's facts and the document for the
-delete-document canon rule.
+The creates are Working by default (v2 C2c), so an index gets no Status (fewer reads and writes) and a page from a
+template gets its status tag in one more write; the measured rename is of the only page under `[INDEX] Working` (no
+re-placing); a document delete reads the page's facts and the document for the delete-document canon rule. The numbers
+include each write's change snapshot (v2 E1a: a new page's document, a map's settings and features) and, since v3 F12
+([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)), the pre-image reads Revert needs (each property row
+update after the first: the Core +5, the Compact Reference +4, `create_resource` +1, `set_facts` +1) and the copy kept
+before a delete (`delete_resource` +2: the page and its document; `delete_document` +3: the page's settings and that
+document only). Before, the table left the change snapshot's reads out (the Core 11, the Compact Reference 8,
+`create_resource` 10, `create_bare_resource` 2, `restore_resource` 3, `create_document` 2, `update_document` 4) and
+`delete_resource`, `delete_document` and `set_facts` were 4.
 
 Where they go, for a Working Core with a new index: 2 template sidebars (planning), 2 creates; for the Core, 1 copy
 check, 1 in-lock read of the rows and 1 canon check of the sidebar, then 1 write per fact (Status included) and 1 for
@@ -953,7 +981,8 @@ its status tag; the verify step's facts read and listings (the Working index's c
 re-reads, one per page, at the end of the job. `create_many_resources` with 100 pages without templates: 1 write, 1–2
 listings to verify, and the tree's 100 re-reads. A dry run costs the template reads only (none for the other tools); a
 proposal costs the planning reads, then the job when approved (capture reads nothing for pages it creates). A cascade
-delete adds 1 read per page under it (the canon check).
+delete adds 1 read per page under it (the canon check), and the copy kept before it (v3 F12) reads each page and its
+documents, plus one listing per page with children.
 
 ## The page lifecycle (v2 C2c)
 
@@ -990,7 +1019,8 @@ without a status is now a `[BWRK]` page under `[INDEX] Working`, not a `[BSRC]` 
   (`allowedParents`); nothing goes under a `[BWRK]` page. A Working character is built by `create_character` (Working),
   then `create_resource` (Working) with `parent` = the character's index, one page at a time.
 - **`authoritative`**: `[BSRC] {name}` in its normal place, Status `Authoritative`, the `CANON` tag. This is canon:
-  the call is always a canonical proposal (`proposal_captured`, `requiresCanonicalApproval`), whatever the scope. A
+  at scope `write` the call runs directly (v3 F12, on the owner's Review page with Revert; only when the owner asked);
+  at `propose` it is a canonical proposal (`proposal_captured`, `requiresCanonicalApproval`). A
   parent in a lifecycle area is refused (`LIFECYCLE_AREA`).
 - **Characters**: a Working Core gets its own `[INDEX] {name}` directly under `[INDEX] Working`, with the Core,
   `[BWRK] {name} - Character Core`, beneath it; a Working compact page goes directly under `[INDEX] Working`. The race
@@ -1003,7 +1033,8 @@ without a status is now a `[BWRK]` page under `[INDEX] Working`, not a `[BSRC]` 
 - **`create_many_resources`**: a Working item's parent follows the same rule as a single create (`[INDEX] Working`, left
   out, or an `[INDEX]` inside a Working set); nothing goes under a Working item (`WORKING_PARENT`: no `parent_key` under
   a `[BWRK]` item). A
-  batch may mix Working and Authoritative items; any Authoritative item makes the whole batch one canonical proposal.
+  batch may mix Working and Authoritative items; at scope `propose` any Authoritative item makes the whole batch one
+  canonical proposal (at `write` the batch runs directly, F12).
 
 A Status in `facts` must agree with `status` (`INVALID_FACTS`). No lifecycle record is written for a create.
 
@@ -1011,10 +1042,13 @@ A Status in `facts` must agree with `status` (`INVALID_FACTS`). No lifecycle rec
 
 `archive_page`, `unarchive_page`, `move_to_working` and `promote_page` are the only way a page changes state. Each:
 
-- **always needs the owner's canonical approval**, at every scope (a profile with scope `write` too): the call returns
-  `proposal_captured` with `requiresCanonicalApproval`; the dashboard's ordinary Approve is refused, only "Approve and
-  accept as canon" runs it. Never retry the call; follow it with `bridge_proposal_status`;
-- shows the **full plan** in the proposal and with `dryRun: true`: the move and new name, every fact as a table (before
+- **follows the connection's scope** (v3 F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md); before,
+  it needed the owner's canonical approval at every scope): at scope `write` it runs directly, on the owner's Review
+  page with Revert (Revert puts back the names, Status, tags and place before), so make it only when the owner asked
+  for it in this conversation and say what you changed; at `propose` the call returns `proposal_captured` with
+  `requiresCanonicalApproval`, the dashboard's ordinary Approve is refused, only "Approve and accept as canon" runs it.
+  Never retry a proposal; follow it with `bridge_proposal_status`;
+- shows the **full plan** (in the proposal at `propose`) and with `dryRun: true`: the move and new name, every fact as a table (before
   and after), the tags removed and added, the archive note as a Markdown diff, and (for `archive_page` and
   `move_to_working`) the related pages;
 - is **checked again when it runs**: a page changed after capture conflicts, and nothing is written;
@@ -1097,7 +1131,8 @@ job ends with a verify step.
 
 A job that stops part-way marks the page's **lifecycle record** `incomplete` and the result says which steps ran
 (`WRITTEN_IN_PART`). **Calling the same tool on the page again resumes it**: the bridge plans again from the page as it
-is now and proposes only what is left (a new canonical proposal; nothing is replayed). Another lifecycle tool on that
+is now and does only what is left (at scope `write` a new direct job, at `propose` a new canonical proposal; nothing is
+replayed). Another lifecycle tool on that
 page is refused until then (`LIFECYCLE_INCOMPLETE`, naming the tool to call).
 
 ### What a result says
@@ -1133,21 +1168,26 @@ refused, not proposed.
 
 ### Costs (reads and writes, typical)
 
-Measured against the mock LegendKeeper (test/lifecycle/costs.test.ts), every read included: to capture the proposal
-(planning, the note's place, the content search), then the job the owner's acceptance runs (its checks, the canon and
+Measured against the mock LegendKeeper (test/lifecycle/costs.test.ts, at scope `propose` since v3 F12; at `write` the
+job runs at once with the same reads), every read included: to capture the proposal (planning, the note's place, the
+content search), then the job the owner's acceptance runs (its checks, the canon and
 lifecycle guards' reads, the in-lock reads before each write, the verify step and the tree's re-read). CR-2026-11 took
 4 reads off every job without dropping a check: the guards' entry reads of the sidebar now use the approval's re-read of
 the page, made a moment before, and the tree re-reads the page once when the job ends rather than after the rename and
-the move as well. **D1.1** (the ETag as the next write's version, above) takes a further 4 reads off `archive_page`
-and 3 off `unarchive_page` (and so off their Working forms), 2 off `promote_page` and none off `move_to_working`; the
-numbers below are measured with it (test/lifecycle/etag-costs.test.ts compares the three ways a version can arrive).
+the move as well. **D1.1** (the ETag as the next write's version, above) took a further 4 reads off `archive_page` and
+3 off `unarchive_page`, 2 off `promote_page` and none off `move_to_working`. **v3 F12** (ADR 0081): the fact and note
+updates now keep the journal pre-image Revert needs, which costs `archive_page` and `unarchive_page` 3 more job reads
+(4 for archiving a Working page, whose five facts are all updates: 15 → 18 or 19); that read also gives the next write
+its version, so the ETag now saves 1 read off `archive_page` from Authoritative, 2 off `promote_page` and none off the
+others. The numbers below are measured with it (test/lifecycle/etag-costs.test.ts compares the three ways a version
+can arrive).
 
 | Call                               | Capture reads | Job reads | Job writes |
 | ---------------------------------- | ------------- | --------- | ---------- |
-| `archive_page`, from Authoritative | 6             | 15        | 8          |
-| `archive_page`, from Working       | 5             | 15        | 8          |
-| `unarchive_page`, to Authoritative | 4             | 15        | 7          |
-| `unarchive_page`, to Working       | 4             | 15        | 7          |
+| `archive_page`, from Authoritative | 6             | 18        | 8          |
+| `archive_page`, from Working       | 5             | 19        | 8          |
+| `unarchive_page`, to Authoritative | 4             | 18        | 7          |
+| `unarchive_page`, to Working       | 4             | 18        | 7          |
 | `move_to_working`                  | 3             | 11        | 3          |
 | `promote_page`                     | 2             | 11        | 5          |
 
@@ -1162,8 +1202,9 @@ Decided by the owner on 11 November 2026 ([ADR 0037](adr/0037-whole-set-lifecycl
 
 ### Whole sets: `subtree: true`
 
-All four lifecycle tools take **`subtree: true`**: the page and every page beneath it change together, as **one
-canonical proposal** (the only approval is "Approve and accept as canon"). The main case is a character: its
+All four lifecycle tools take **`subtree: true`**: the page and every page beneath it change together, as one job at
+scope `write` (v3 F12, on the Review page with Revert) or, at `propose`, as **one canonical proposal** (the only
+approval is "Approve and accept as canon"). The main case is a character: its
 `[INDEX] {name}` with its Core and specialist pages.
 
 - **`archive_page`** `{ page, subtree: true, dryRun?, project }`: the set's root moves under `[INDEX] Archived`.
@@ -1266,13 +1307,12 @@ changed page (or rules edited since) stops the pack's tools until the owner appr
 
 A pack's tools carry its prefix (`arkona_`) and are listed only while the pack is attached to a project the bridge
 serves (the list changes at the next `tools/list` when that changes); called for any other project they answer
-`PACK_NOT_ATTACHED` with the projects they work on. Each writing tool has a switch in the pack's data (v3 F3.4,
-[ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D), set on the Packs page: **always propose** (every
-call is **one proposal** for the owner, whatever the connection's scope) or **follow the scope** (at scope `write` it
-runs, and the owner reviews it afterwards). The seed's defaults: `arkona_create_character`, `arkona_create_owner` and
-`arkona_create_relationship` always propose; `arkona_add_character_art` follows the scope. A tool with no switch keeps
-the pack's `alwaysPropose`. A package that makes canon is a canonical proposal ("Approve and accept as canon") either
-way.
+`PACK_NOT_ATTACHED` with the projects they work on. Every writing tool follows its connection's scope (v3 F12,
+[ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)): at scope `write` it runs directly, canon included, and
+the owner reviews it afterwards on the Review page with Revert; at `propose` every call is **one proposal** (canonical,
+"Approve and accept as canon", when it makes canon). The per-tool **always propose** switches of v3 F3.4
+([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D), with the pack's `alwaysPropose` and `tools`, were
+removed in F12 (pack seed `arkona-2026-11-28-f12`).
 
 **`arkona_create_character`** `{ name, depth?, status?, identity, pages, index?, target?, upgradeToCore?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
 a whole character from one package, by Arkona's Character Architecture, Source Formatting and Controlled Native
@@ -1283,7 +1323,7 @@ Tagging Standard (v1.8).
   template, with a `{name} - Character Core`). Left out, it follows the identity page given.
 - `status`: `"working"` (the default for a new character: `[BWRK]` pages, the set under `[INDEX] Working`, Status
   `Working`, the `Working` tag and no CANON) or `"authoritative"` (`[BSRC]` pages in the race's place, Status
-  `Authoritative`, `CANON`; a canonical proposal). With `target`, the default is the existing character's standing.
+  `Authoritative`, `CANON`; canon: direct at scope `write` since v3 F12, a canonical proposal at `propose`). With `target`, the default is the existing character's standing.
 - `identity`: `givenName`, `surname`, `race`, `namingCulture`, `lifeState`, `temporalScope` (the completion gate: each
   required for a new character, never blank or a placeholder), and `subject`, `canonicalDisplayName`, `aliases`,
   `supersedes`. Each is a string or `{ value, reason? }`; `"Unestablished"` needs a `reason`, which is written into the
@@ -1390,15 +1430,15 @@ Measured against the mock LegendKeeper (test/packs/costs.test.ts), every request
 Three of the planning reads are the pack's governance pages (read again in the job's first check). Since v3 F7d an art
 call also reads the identity page (and an existing Art page's sidebar) to plan; a new Art page's job checks the identity
 page and writes its Dependencies. LegendKeeper changes
-one sidebar row per request, so a page's rows are most of its writes (a Compact Reference has 17). Capturing the
-proposal writes nothing; the job runs when the owner approves.
+one sidebar row per request, so a page's rows are most of its writes (a Compact Reference has 17). At scope `propose`,
+capturing the proposal writes nothing; the job runs when the owner approves.
 
 ## Setting packs: owners, relationships, art and the brief (v3 F3b)
 
 v3 F3b adds four tools to the Arkona pack, on the same engine as `arkona_create_character`: the pack's rules decide the
-pages, the planner computes the whole package from them and the tree, a dry run shows it, and anything else is **one
-proposal** for the owner whatever the connection's scope (canonical when it makes or moves canon). On approval it runs
-as one job that re-reads the pack's governance (drift stops it before it writes), checks again that nothing it relies on
+pages, the planner computes the whole package from them and the tree, a dry run shows it, and anything else follows the
+connection's scope (v3 F12: one direct job at `write`, on the Review page; **one proposal** at `propose`, canonical when
+it makes or moves canon). The job (at once, or on approval) re-reads the pack's governance (drift stops it before it writes), checks again that nothing it relies on
 appeared or moved meanwhile, writes, sets Last Major Revision on each page it made or changed, and verifies. Design:
 [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md), [packs.md](packs.md) and the owner-approved
 [F3b design](design/F3b-owner-tools.md). The agent guide's parts are "Arkona owners" and "Arkona relationships, art and
@@ -1488,13 +1528,12 @@ character only after promotion). **In the job**: `RELATIONSHIP_EXISTS`.
 **`arkona_add_character_art`** `{ character, groups: [{ outfit?, newOutfit?, images: [{ staged_id? | upload_id? | archive?, label, interpretation }] }], artPage?: { scope?, temporalScope?, visualState?, dependencies?, related?, markdown?, status? }, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`,
 or the single-target form `{ character, outfit?, newOutfit?, images: [...], file?, scope?, markdown?, status?, … }`:
 reference images for an existing character. **Since v3 F7d** ([ADR 0077](adr/0077-v3-f7d-one-call-art.md)): a
-character's whole art set in ONE call (`groups`), one package (a proposal or a job by the tool's switch, as below; a
-proposal approved item by item). The single-target form is planned as a one-group call: it fills the same sidebar and
+character's whole art set in ONE call (`groups`), one package (a proposal or a job by the connection's scope, as below;
+a proposal approved item by item). The single-target form is planned as a one-group call: it fills the same sidebar and
 takes `artPage` (`ART_PAGE_FIELD_TWICE` when `scope`, `markdown` or `status` is given in both places); its answer is as
-before. **Proposal or job**: the tool's switch in the pack (the Packs page; default "follow the scope"): at scope
-`propose` one proposal; at scope `write` a job, except a new Authoritative Art page or an Authoritative Compact
-Reference's upgrade (a canonical proposal) and what the owner's rails hold back (`proposedBecause`); so adding to an
-existing Art page at `write` is direct; "always propose" makes every call one proposal. A group without `outfit` holds the design pieces; a
+before. **Proposal or job**: the connection's scope (v3 F12; the pack's switch and the owner's rails are gone): at scope
+`propose` one proposal (canonical for a new Authoritative Art page or an Authoritative Compact Reference's upgrade); at
+scope `write` a direct job, canon included, on the Review page with Revert. A group without `outfit` holds the design pieces; a
 group with `outfit`, that outfit's. Planned once, together: the folders read live once, the outfit record once, each
 group matched (a near match refused unless `newOutfit`), groups naming the same outfit merged (a note), placement as
 below counting the outfit's recorded pieces plus this call's; ANY problem in any group refuses the whole call with every
@@ -1743,13 +1782,12 @@ images those pages show.
 
 **`arkona_appraisal_fix`** `{ findingId, project }`: the fix for ONE finding whose `followUp.kind` is `fix`. It re-reads
 the page (or the asset) live and checks the finding still holds (`FIX_STALE` otherwise, with what is there now: nothing
-is done). Then it follows the pack's switch for this tool (v3 F3.4, [ADR 0055](adr/0055-write-scope-review-revert-rails.md)
-decision D; the Packs page): **follow the agent's scope**, the seed's default, makes the fix at once at scope `write`, as
-one job (`written`, or `queued`: follow it with `bridge_job_status`; the owner reviews it afterwards on the Review page),
-and one proposal at scope `propose`; **always propose** makes **one ordinary proposal** for the owner whatever the scope
-(`proposal_captured`; never resubmit it, follow it with `bridge_proposal_status`). Canon, lifecycle and the safety rails
-still make a proposal (with `proposedBecause` for a rail). The handed-over audit fixes (sibling order, tags) are always
-proposals, as the audits make them, and the Appraisal page's **Propose a fix** always proposes.
+is done). Then it follows the agent's scope (v3 F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md);
+the pack's switch of v3 F3.4 is gone): at scope `write` it makes the fix at once, as one job (`written`, or `queued`:
+follow it with `bridge_job_status`; the owner reviews it afterwards on the Review page), canon and lifecycle included;
+at scope `propose` it is one proposal (`proposal_captured`; never resubmit it, follow it with
+`bridge_proposal_status`). The handed-over audit fixes (sibling order, tags) follow the same rule, and the Appraisal
+page's **Apply fix…** runs at once as the owner's confirmed action.
 
 | Finding                                      | The proposal                                                                                |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -1759,7 +1797,7 @@ proposals, as the audits make them, and the Appraisal page's **Propose a fix** a
 | `heading_links`                              | block by block: each heading's text kept, its link dropped                                  |
 | `asset_extension`                            | the asset renamed without its extension; refused when its folder already holds that name    |
 | `related_noncurrent`                         | that one link removed from Related Sources (set_facts' plan)                                |
-| `sibling_order`, `tag_grammar` (from audits) | handed over to the audit's own "Propose a fix"                                              |
+| `sibling_order`, `tag_grammar` (from audits) | handed over to the audit's own fix ("Apply fix…" on the dashboard)                          |
 
 **A name fix that changes a subject's name** (CR-2026-11-R3, R3-59): the dash replaced in a subject's page name changes
 the subject part the bridge reads ("Gata—Lund - Polity Reference" reads as "Gata", descriptor "Lund - Polity Reference",
@@ -1805,8 +1843,9 @@ The full-text index is built and updated from the snapshot store (no LegendKeepe
 
 `{ subject, newName, given?, family?, keepOldAsAlias?, effectiveDate?, token?, from?, lastMajorRevision?, dryRun?, operation_id?, project? }`,
 or `{ report, project? }`. Renames an Arkona character (any page of its set) or owner (a culture, a polity, a place, a race)
-everywhere it is named, as **ONE canonical proposal**, whatever the caller's scope (ADR 0057 decision 5: renaming canon is
-canon). It is **not subject to the bulk rail** (ADR 0055): one subject, one proposal the owner reads item by item.
+everywhere it is named, as one package (ADR 0057 decision 5: renaming canon is canon). Since v3 F12
+([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)) it follows the caller's scope: at `write` ONE direct
+job, on the owner's Review page with Revert; at `propose` **ONE canonical proposal** the owner reads item by item.
 
 **The plan** (A1's full-text index and A3's references find where the name is; each page or document with a planned edit
 is read live): one package of **items**, each with an id, its change (`diff`) and its dependencies:
@@ -1955,13 +1994,13 @@ pointer to A6). Nothing is ever written.
 ### `arkona_split_owner` (C2)
 
 `{ source, retire?, destinations, map, dependencies?, lastMajorRevision?, dryRun?, operation_id?, project? }`, or
-`{ report, project? }`. `access: write`; **always ONE canonical proposal** at every scope (D7); not subject to the bulk
-rail.
+`{ report, project? }`. `access: write`; at scope `write` ONE direct job (v3 F12, on the Review page with Revert; before,
+always ONE canonical proposal at every scope, D7); at `propose` **ONE canonical proposal**.
 
 | Argument       | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `source`       | The owner page to split (name, alias, path or id): an Authoritative or Working page, not an index or an Archived page.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `retire`       | D2: archive the source once phase 1 has verified (a separate canonical proposal by the bridge). Default `false`: it survives.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `retire`       | D2: archive the source once phase 1 has verified (since F12 no second proposal: as the agent for a direct split, as the owner's confirmed action for an approved one). Default `false`: it survives.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `destinations` | Each `{ key, kind, … }`: `new` (`role`, `title`, `referenceType`, `specialistTag` for a character's page; `type`, `name`, `descriptor`, `home`, `nation`, `temporalScope` for any other owner; `scope` and `purpose` required), `existing` (`page`, `under`), `relationship` (`page`, or `with` and `label` for a new one), `universal` (`owner`, `text`, `in`). A new owner the pack expects to carry them (`splits.sections`: on Arkona a Core, a Compact Reference, a relationship owner and any other owner; not an Art or specialist page unless its Reference Type is named; CR-2026-11-R4) also answers for the source's Source Boundaries and Unresolved Material (`sourceBoundaries`, `unresolvedMaterial`, or `notApplicable: { … : reason }`, unless items of them move there) and its Dependencies (`dependencies`, or `noDependencies: { reason }`): ADR 0059 amendment 1. |
 | `map`          | Each `{ section, to }` (a heading's text or block id, or `(preamble)`; a key or `stays`), or `{ section, blocks: [{ ids, to, summary?, under? }] }` to divide a section block by block; `summary` (required for each section that leaves a surviving source) and `under`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `dependencies` | D5: each `{ page, to, keepSource? }`: a page that depends on the source, to the destination it needs (every one when `retire`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -2010,9 +2049,9 @@ Compact Character Reference that the split leaves at the head of several owners 
 index already holds) is upgraded in place in the same proposal, as F3a's `upgradeToCore` does: renamed
 `<Name> - Character Core`, Reference Type `Character Core`, the Core template recorded; its id, documents, text,
 identity facts and links kept. Every new owner of the split needs that upgrade (its item), so a partial approval never
-makes the character several owners without a Core. Revert leaves the upgrade to the deletion proposal of the pages the
-split made (renaming an Authoritative page is canon): once the owner approves it as canon, the pages go first, then the
-Core is the Compact Character Reference again (only when every page the split made is deleted).
+makes the character several owners without a Core. Revert leaves the upgrade to the deletion of the pages the split
+made (since F12 a job run at once as part of the owner's confirmed Revert): the pages go first, then the Core is the
+Compact Character Reference again (only when every page the split made is deleted).
 
 **Items.** `dest:<key>` (a destination and its own source edit), `universal:<key>` (universal material whose text stays
 in the source), `index:<id>` (a new character index), `existing:<id>` (an existing page's changes from F3a or F3b, such
@@ -2028,8 +2067,8 @@ lock, rebased on a conflict), the destinations check (`split.destinations`, befo
 remapped Dependencies, Last Major Revision per page, the pack's read-back, and the verification (`split.verify`:
 `SPLIT_VERIFY_FAILED`). A stop is resumable (Resume, its destinations check run again first) and revertible (Revert: the
 job puts back what it changed, whole or not at all: a target that cannot go back refuses it, `SPLIT_REVERT_NOT_WHOLE`;
-the pages it made go to ONE deletion proposal once the material they took is back in the source, each only while it is
-exactly as the split made it, checked again when the deletion runs). CR-2026-11-R3: "moved verbatim" is checked on each
+the pages it made are deleted, in ONE job run at once since F12, once the material they took is back in the source,
+each only while it is exactly as the split made it, checked again when the deletion runs). CR-2026-11-R3: "moved verbatim" is checked on each
 block's whole content; an item's later appends to an existing owner are core (the job stops, resumable, rather than skip
 it part-way); a source holding an inline icon is refused (`SPLIT_NOT_WRITABLE`), and so is an image assigned as universal
 material (`SPLIT_VISUAL`).
@@ -2042,8 +2081,10 @@ retired, and `report` says `verified: false` with the job to look at. A split re
 difference reads that write back again first (ADR 0061 part B decision 6): put right by hand since, it counts as
 verified.
 
-**Phase 2**: with `retire`, once phase 1 has verified and nothing was left out or skipped, the bridge proposes
-archiving the source with `archive_page`'s own plan (a separate canonical proposal, owner-forced). Never a delete.
+**Phase 2**: with `retire`, once phase 1 has verified and nothing was left out or skipped, the source is archived with
+`archive_page`'s own plan. Since v3 F12 there is no second approval: an agent's direct split retires its source as that
+agent (the gate asks its scope again; on the Review page with Revert), and a split the owner approved retires it at once
+as the owner's confirmed action (before, a separate canonical proposal). Never a delete.
 `{ report }` (a split's id, proposal or job) answers its state, its destinations and phase 2 (or why there is none), free.
 
 **`write_page` and splits.** On a project whose approved pack has split rules, an edit that takes `splits.guardWords`
@@ -2054,16 +2095,16 @@ proposal. `arkona_create_character`'s `split` is refused with the same code.
 
 ### Costs (measured against the mock)
 
-| Call                                                                                | Requests                                                                          | Writes |
-| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------ |
-| `arkona_split_appraisal`                                                            | 0 (`live: true`: 2 a page, at most 25)                                            | 0      |
-| `arkona_split_owner`, a character monolith: plan (dry run)                          | 13 (10 the plan's own, 3 the pack's governance)                                   | 0      |
-| the same, proposed                                                                  | 26                                                                                | 0      |
-| its job (six new owners and a new index, the Core upgrade, one remapped Dependency) | 248 (estimated 175 reads)                                                         | 89     |
-| `arkona_split_owner`, an owner with two domains: proposed                           | 12                                                                                | 0      |
-| its job (one new owner, one existing owner, two remapped Dependencies)              | 84 (estimated 58 reads)                                                           | 22     |
-| phase 2                                                                             | `archive_page`'s own (about 6 reads to propose, then about 15 reads and 8 writes) | 8      |
-| a conflict on an existing owner's append (LegendKeeper answers 412)                 | one more read, and the write again                                                | 1      |
+| Call                                                                                | Requests                                                                       | Writes |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------ |
+| `arkona_split_appraisal`                                                            | 0 (`live: true`: 2 a page, at most 25)                                         | 0      |
+| `arkona_split_owner`, a character monolith: plan (dry run)                          | 13 (10 the plan's own, 3 the pack's governance)                                | 0      |
+| the same, proposed                                                                  | 26                                                                             | 0      |
+| its job (six new owners and a new index, the Core upgrade, one remapped Dependency) | 248 (estimated 175 reads)                                                      | 89     |
+| `arkona_split_owner`, an owner with two domains: proposed                           | 12                                                                             | 0      |
+| its job (one new owner, one existing owner, two remapped Dependencies)              | 84 (estimated 58 reads)                                                        | 22     |
+| phase 2                                                                             | `archive_page`'s own (about 6 reads to plan, then about 18 reads and 8 writes) | 8      |
+| a conflict on an existing owner's append (LegendKeeper answers 412)                 | one more read, and the write again                                             | 1      |
 
 ## Setting packs: retagging (v3 F3f)
 
@@ -2115,7 +2156,8 @@ added or removed; a status tag present is moved first. Cost: none.
 Input: `runId` and `pages` (page ids of that run), or `reconciliation: "<name>"`. Only deterministic corrections, at most
 the pack's `retag.batchSize` (25): `RETAG_NOT_DETERMINISTIC` (a hold, an exception, a compliant or excluded page),
 `RETAG_BATCH_TOO_LARGE`, `RETAG_PAGE_IN_BATCH` (already in an open batch), `RETAG_POLICY_CHANGED` (the run was made under
-another policy), `RUN_NOT_FOUND`. ONE proposal by the pack's switch ("always propose" in the seed), each page an item.
+another policy), `RUN_NOT_FOUND`. ONE batch, each page an item, by the connection's scope (v3 F12: one direct job at
+`write`, on the Review page with Revert; ONE proposal at `propose`; the pack's "always propose" switch is gone).
 The job: the policy and its governance checked first (one read per source; changed: the whole job stops, "policy changed
 since the audit; audit again"); per page a fresh read (conflicted, held, already compliant or inaccessible pages are
 skipped and recorded), the write inside the page's lock (judged again there), and an independent read-back (the exact
@@ -2292,12 +2334,13 @@ writes the bridge's own record). Agents can never pick.
 
 ### "Pick the right value" (the owner's, on the Audits page)
 
-`POST /api/admin/audits/findings/:id/consistency-pick` `{ side, shown? | value, confirm: true }`, a step-up action (ADR
-0062). `side` is one of the values the dashboard shows (the audit's stored values; anything else is `SIDE_NOT_FOUND`) and
+`POST /api/admin/audits/findings/:id/consistency-pick` `{ side, shown? | value, confirm: true }` (ADR
+0081: no fresh code). `side` is one of the values the dashboard shows (the audit's stored values; anything else is `SIDE_NOT_FOUND`) and
 `shown` its value as shown (the dashboard sends it): when the side reads otherwise now, the pick is refused with
-`SIDE_CHANGED` and nothing is proposed. A typed `value` must read, whole, as ONE date of the calendar (a range, or a line
-break, is `VALUE_UNREADABLE`); the calendar's own reading of it is written. The bridge makes ONE proposal of items, one
-per page that disagrees with the pick: a sidebar field's date replaced inside the field (`set_facts`' plan), a sentence's
+`SIDE_CHANGED` and nothing is changed. A typed `value` must read, whole, as ONE date of the calendar (a range, or a line
+break, is `VALUE_UNREADABLE`); the calendar's own reading of it is written. The bridge runs ONE job of items at once (v3
+F12, [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md): the owner's confirmed action; before, ONE
+proposal), one per page that disagrees with the pick: a sidebar field's date replaced inside the field (`set_facts`' plan), a sentence's
 date replaced in its one text run (`write_page`'s block-by-block path), a chronology row's date through
 `update_timeline_event`'s own plan (its Date and KCY cells and its timeline event together). **Each edit is placed where
 the check read the value, never searched for** (CR-2026-11-R4): the sentence (or the field's `;` clause) the check read,
@@ -2310,8 +2353,7 @@ written twice; a date split by a mention or formatting; a field holding a mentio
 date is kept); a page Archived, or filed under the Archived area, the Legacy Canon Archive or the Design References, since
 the check (each page's name, parent and tags are read live, and checked again inside the job's locks before it writes the
 page). The side picked, and every value agreeing with it, is never touched; a gap or a value inherited from Main CANON is
-listed and left. Approval (selective, as every itemized proposal), the rails (more than 10 pages asks for the step-up at
-approval), Last Major Revision (the engine's rule) and Revert work as for any proposal. Audited `consistency.pick`. Cost
+listed and left. Last Major Revision (the engine's rule) and Revert (from the Jobs page) work as for any job. Audited `consistency.pick`. Cost
 of the planning: 1 read per page (its name, parent and tags), plus 1 for its sidebar or each of its documents; a
 chronology row about 9.
 
@@ -2337,9 +2379,11 @@ refuses one (`NARRATIVE_NOT_AUTHORITY`) and never lists one as an owner or a sou
 makes a page with no prefix and the narrative tags (a `status`, a Status in `facts`, and a tag that reads as a status or
 lifecycle tag, AU included, are refused: `NARRATIVE_NO_LIFECYCLE`). **Into and out of Narratives** (CR-2026-11-R4,
 [ADR 0065 amendment 2](adr/0065-v3-f4c-fiction.md)): a page or subtree moved into Narratives (or created, copied or
-restored there by any route but the narrative tools), or moved out of it, is a proposal at every scope, by every route;
-when a page of it carries a lifecycle signal (a `[BSRC]`, `[BWRK]` or `[BARC]` prefix, a status tag, a lifecycle Status)
-it needs the owner's canonical approval, and the proposal names the pages that lose (or regain) their lifecycle. No page
+restored there by any route but the narrative tools), or moved out of it, is the owner's decision: since v3 F12 an agent
+at scope `write` makes it directly (on the Review page with Revert; only when the owner asked), and at `propose` it is a
+proposal; when a page of it carries a lifecycle signal (a `[BSRC]`, `[BWRK]` or `[BARC]` prefix, a status tag, a
+lifecycle Status) that proposal needs the owner's canonical approval, and names the pages that lose (or regain) their
+lifecycle. No page
 is given a narrative index's name (Narratives, Continuities, Main CANON), and the tools never rename the Narratives index.
 A story holding a page with a lifecycle signal is left alone by the writing tools (`NARRATIVE_LIFECYCLE_PAGE`); the audit
 reports the page (`narrative_lifecycle_page`). A page in Narratives whose name carries a lifecycle prefix is canon filed
@@ -2349,9 +2393,9 @@ tool that places a page there and the ordering audit use it.
 
 ### Writing (E5): direct at `write`, proposals at `propose`
 
-Each tool's switch on the Packs page is `scope` (the seed): direct at scope `write` (on the Review page, Revertible),
-a proposal at scope `propose`; more than 10 pages in one call meets the bulk rail as a proposal. The owner may switch a
-tool to `propose`. Templates are resolved by name through the template list; a field a tool needs that a template (or a
+Each tool follows its connection's scope: direct at scope `write` (on the Review page, Revertible), a proposal at scope
+`propose`. Since v3 F12 there is no per-tool switch and no bulk rail: a renumbering of any size is one job of items at
+`write`. Templates are resolved by name through the template list; a field a tool needs that a template (or a
 page) lacks is refused as `TEMPLATE_MISMATCH` naming it, any other is skipped and listed (`fieldsNotOnTemplate`).
 
 | Tool                                                                                                                                                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -2382,7 +2426,7 @@ revision: 3 reads and one write per changed field plus the text; a renumbering: 
 | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `arkona_chapter_context { chapter \| plan \| story + number, live? }`         | Free (the snapshots, the tree, the calendar): the smallest sufficient canon for drafting one chapter, as of its In-world Date (or its plan's Planned Date): `arkona_as_of` and `arkona_brief` for its POV, Characters Present and Locations, the chronology rows around the date and open contradictions (from the as-of answers), the plan's Canon Constraints and Question Gate, the previous chapter's closing state (its last section, or its last paragraphs) and its plan's Closing State; every part labelled by its evidence class (the plan and earlier chapters: narrative, never canon).                                                                                                                                                                                                                                                                                                                                                        |
 | `arkona_chapter_check { chapter \| story + number, live? }`                   | Read-only (2 reads: the chapter, live; `live: false` reads the snapshots): people (not yet born, recorded deceased, nothing recording them alive at the date); `presence` (listed but not in the prose, in the prose but not listed); ages (`rules.consistency.ages`, when the pack has them) and births or deaths in the prose (the pack's prose phrasings, by name only) against the as-of values; new-lore candidates (capitalised names, never a sentence's first word, resolving to no page outside Narratives, or a page there whose name carries a lifecycle prefix; capped, `candidateCap`) and names resolving only to Archived or Legacy pages; Locations gone or only Archived. An AU chapter is read in its continuity. Each item: `Contradicts canon`, `Not in canon (candidate)` or `Unestablished in canon`. Never edits. Without a full snapshot yet (a new bridge), it and `arkona_chapter_context` refuse `NO_SNAPSHOT` (CR-2026-11-R4). |
-| `arkona_promote_from_chapter { chapter, candidates: [{ candidate, as, … }] }` | Canon proposals through the existing tools, whatever the scope: `character` (`arkona_create_character`, status authoritative: its namesake warning carried), `page` (`create_resource`, authoritative), `fact` and `text` on an existing owner page (`set_facts`' and `write_page`'s plans, ONE forced proposal of items, approvable one by one). The agent supplies the content. The chapter is cited in each proposal's note (its summary) only: never a Dependency or a Related Source. Nothing is ever applied by itself.                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `arkona_promote_from_chapter { chapter, candidates: [{ candidate, as, … }] }` | Canon changes through the existing tools, by the connection's scope (v3 F12: direct at `write`, on the Review page with Revert, only when the owner asked; proposals at `propose`): `character` (`arkona_create_character`, status authoritative: its namesake warning carried), `page` (`create_resource`, authoritative), `fact` and `text` on an existing owner page (`set_facts`' and `write_page`'s plans, ONE package of items: a job at `write`, a proposal approvable item by item at `propose`). The agent supplies the content. The chapter is cited in each change's note (its summary) only: never a Dependency or a Related Source. Nothing is ever applied by itself.                                                                                                                                                                                                                                                                        |
 
 ## Orchestration (v3 F5c)
 
@@ -2403,9 +2447,8 @@ Continuity Type, Continuity and the other protected facts; `UNMAPPED_VALUE` for 
 pack's maps; each refuses its item only. A Naming Culture gets `arkona_name_check`'s culture report. A hold or exception
 writes no tags (`partly_done`, with why). Inside the job a character changed since it was read is skipped
 (`FACTS_STALE`), a failed write fails its item only (the others carry on; the job is resumable), and a changed tag array is
-never written over. At scope `write`: direct for 10 pages or fewer; the bulk rail makes more ONE proposal with an item per
-character; at `propose`, a proposal (the pack's switch `scope`, in `arkona-2026-11-23-f5c`; always a proposal until the
-owner approves that version). Last Major Revision by the owner's rule. When the job ends: each item `done`,
+never written over. At scope `write`: direct, one job with an item per character, whatever its size (v3 F12: the bulk rail
+and the pack's switch of `arkona-2026-11-23-f5c` are gone); at `propose`, ONE proposal with an item per character. Last Major Revision by the owner's rule. When the job ends: each item `done`,
 `partly_done`, `skipped`, `failed`, `not_run`, `refused` or `excluded`, with `arkona_consistency`'s findings as
 follow-ups. Cost: 1 read per character to plan; per character about 4 reads and 2 writes for one fact and its tags.
 
@@ -2660,8 +2703,10 @@ single-day event, another year, a missing `uri`). This tool repairs ONE such row
   compared again inside the lock, so a row edited meanwhile stops the job (a proposal ends `conflicted`) and nothing is
   written.
 - **Nothing to do**: a row whose event already agrees answers `status: "nothing_to_do"` and writes nothing.
-- It is an ordinary edit (not canon); a job at scope `write`, ONE proposal at `propose`. The dashboard's **Propose a fix**
-  on each such finding makes that proposal for the owner to approve ([dashboard.md](dashboard.md#chronology-v2-d1)).
+- It is an ordinary edit (not canon); a job at scope `write`, ONE proposal at `propose`. The dashboard's **Apply fix…**
+  (named **Propose a fix** before v3 F12) on each such finding runs the same plan at once as the owner's confirmed
+  action ([dashboard.md](dashboard.md#chronology-v2-d1)). A sync that only adds the bridge's link between a row and an
+  event (no LegendKeeper write) stays a proposal at every scope (F12, deferred: Revert cannot take a link off yet).
 - **Chronology II** (v2 E6, [ADR 0048](adr/0048-chronology-ii.md)). A **qualified** row (`c. 4A 563; exact date
 unresolved`, `After Isar 6th and before Zarzakh 29th, 4A 610; …`) is read by its anchor
   ([chronology.md](chronology.md)): its event takes the anchor's minutes and precision (a year, a month, a range, or
@@ -2972,7 +3017,9 @@ width, height, frames, conversion, `storedBytesVerified`, `staged` (and its `sta
 **Asset deletes keep their bytes**, by any route (`lk_api_write`, `lk_api_batch`, `lk_op_deleteAsset`, the Staging
 page): before `deleteAsset` is sent the file is downloaded and kept by the bridge (90 days), the journal's pre-image says
 where (`keptBytes`), a folder's delete lists its children and keeps their images; if a file cannot be fetched the delete
-is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner allows it on the Staging page.
+is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner allows it on the Staging page. Since v3 F12 an agent's asset delete
+at scope `write` is direct (on the Review page): Revert uploads the kept bytes again as a new asset in the same folder
+under the same name, and relinks the pages that showed the old URL and have not changed since (the rest are listed).
 
 **Costs** (reads and writes to LegendKeeper, measured against the mock): an upload into an existing folder 2 writes, 1
 read (the asset tree's re-read) and 1 download (the verification), plus the PUT on the upload tier; each folder created
@@ -3049,24 +3096,28 @@ settings from snapshot `from` to snapshot `to` (free), or to the page now (`to` 
 reads). Keep regions show as one placeholder line each; `-` lines are the older state, `+` the newer.
 
 **`restore_snapshot`** `{ page?, snapshot, scope, document?, mode?, ids?, parent?, asset?, updateReferences?, dryRun?,
-lastMajorRevision?, project }` (write). **Always a proposal, whatever the scope (`write` included):** nothing is written until the owner
-approves it on the dashboard; follow it with `bridge_proposal_status`. `dryRun: true` shows the plan and its diff and
-proposes nothing. Scopes:
+lastMajorRevision?, project }` (write). **By the connection's scope** (v3 F12,
+[ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md); before, always a proposal): at scope `write` it runs as
+ONE job, on the owner's Review page with Revert (use it only when the owner asked for it); at `propose` it is ONE
+proposal, written only when the owner approves it on the dashboard (follow it with `bridge_proposal_status`). The owner's
+own restore on the Snapshots page is one confirmed action. `dryRun: true` shows the plan and its diff and writes nothing.
+Scopes:
 
 - `page`: the page's documents back to the snapshot (documents added since are left alone, and said so);
 - `sidebar`: the facts property (through `set_facts`' own plan and guards), the link collections and every other
   key-value property, row by row;
 - `document` (with `document`: its name or id): one document;
 - `deleted`: a deleted page with its content. `mode: "undelete"` (or `auto` while LegendKeeper still keeps it, taken as
-  `SNAPSHOT_SOFT_DELETE_DAYS`) restores it, and a second proposal then brings its content back to the snapshot;
+  `SNAPSHOT_SOFT_DELETE_DAYS`) restores it, and a second stage then brings its content back to the snapshot (the same
+  way as the first: a job at `write` or for the owner's confirmed restore, a second proposal at `propose`);
   `mode: "recreate"` makes it again under its snapshot parent (`parent` when that is gone), with its **original ids**
   (`ids: "original"`, the default) where LegendKeeper takes them, else new ones (`ids: "new"`); the result maps old ids
   to new;
 - `image` (with `asset`: the deleted image's old asset id; no `page`): the image comes back as a **new asset with a new
   URL**. v3 F3c ([ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 3): its bytes
-  wait on the bridge's server (nothing goes to LegendKeeper, and nothing ever to `LK-Bridge staging`), and the proposal
-  describes the image, its folder and its name (`image: { name, path, creates, stagedId }`; no new asset id or URL yet).
-  Approved, ONE job finds or creates the folder by its path (a folder deleted since is made again), uploads the image
+  wait on the bridge's server (nothing goes to LegendKeeper, and nothing ever to `LK-Bridge staging`), and the plan (the
+  proposal, at `propose`) describes the image, its folder and its name (`image: { name, path, creates, stagedId }`; no
+  new asset id or URL yet). Run (at once, or once approved), ONE job finds or creates the folder by its path (a folder deleted since is made again), uploads the image
   straight into it, checks it, and with `updateReferences: true` rewrites the page documents and map images that showed
   the old URL to the new asset (the result lists them; anything else is listed for a hand change). A page that changed
   in the meantime is not rewritten: the job stops after the upload, the asset stays, and the job and the restore's record
@@ -3112,7 +3163,7 @@ id, or a fragment of its name or path), `new` (first seen in the latest run), `a
 `all`). Paged: `limit` (default 25, at most 100) and `offset`; the answer gives `nextOffset`. `detail: "full"` adds each
 finding's **evidence** (what was expected and what was found). Each finding says which snapshot it came from and its age in
 minutes: **it may not show edits made since**. A finding that has a fix says so (`fixAvailable`); only the owner applies it,
-with the dashboard's "Propose a fix".
+with the dashboard's "Apply fix…" (named "Propose a fix" before v3 F12).
 
 Categories: `rules` (no rule matches a page, several do), `template` (a page's sidebar and tabs against its template's),
 `tags`, `references` (missing, deleted or inaccessible links; an Authoritative page linking to an Archived one),
@@ -3136,9 +3187,9 @@ snapshot).
   paragraph itself is refused (`PAGE_NOT_WRITABLE`).
 - There is no tool to run, edit or acknowledge an audit: the owner does that on the dashboard.
 
-**Costs.** `audit_findings`: none (no request to LegendKeeper). The dashboard's "Propose a fix" re-reads its page first (a
-paragraph split 2 reads, a Reference Type fix 3, a re-placement 2 plus 1 per 100 siblings, a tag fix 1) and writes
-nothing until the owner approves; "Re-check now" reads the page live (1 read plus one per page document).
+**Costs.** `audit_findings`: none (no request to LegendKeeper). The dashboard's "Apply fix…" re-reads its page first (a
+paragraph split 2 reads, a Reference Type fix 3, a re-placement 2 plus 1 per 100 siblings, a tag fix 1), then runs the
+fix's own writes as one job once the owner confirms it; "Re-check now" reads the page live (1 read plus one per page document).
 
 ## Image upload (v1: `lk_upload_image`)
 

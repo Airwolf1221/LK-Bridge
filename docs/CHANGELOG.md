@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased: v3 F12, direct writes with the Review page as the safety net
+
+**Follow-up (27 November 2026, [ADR 0081 amendment 1](adr/0081-v3-f12-direct-writes-review-safety-net.md#amendment-1-the-owners-decisions-of-27-november-2026)):**
+a rename that puts `[BSRC]` on or takes it off so the prefix disagrees with Status is refused at every scope, naming
+`archive_page`, `move_to_working` or `promote_page`; a Status or Continuity Type value that only looks like an allowed
+one (Unicode's confusables, UTS #39, vendored as `spec/unicode/confusables.txt`, `npm run gen:confusables`) is refused as
+an invalid value, the allowed values listed; a chronology change that only records a link is direct at write (on Review,
+whose Revert takes the link off) and a proposal at propose; dry runs say what a protected change will do at the caller's
+scope (no `requiresCanonicalApproval` at write).
+
+[ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md). Migration `4900`. Pack seed `arkona-2026-11-28-f12` (after F5b.1's `-f5b1`, which it supersedes).
+New settings: `DELETE_COPY_RETENTION_DAYS` (90) and `AUTH_STEP_UP_WINDOW_SECONDS` (43,200). Removed: the per-profile
+safety rails and the pack's per-tool "always propose" switches. Built and tested against the mock; nothing live was
+touched.
+
+- **Direct writes at scope `write`.** Canon and lifecycle changes (promote, archive, CANON, deleting pages) run
+  directly for an agent at scope `write`; the guards allow or refuse, never propose. Proposals come only from a
+  `propose`-scope connection or the owner's automation at Propose. Agent proposals already open are left as they are.
+- **The rails and the pack's tool switches are gone**, with the Clients page's rails card and the Packs page's switches.
+- **The owner's dashboard actions are one confirmed action**: a snapshot or image restore, "Apply fix" on the Audits,
+  Chronology, Appraisal, Consistency and Tagging pages ask for confirmation, then run at once.
+- **Review is the safety net**: every write kind has a Revert path or is refused for agents (a test keeps it so); a
+  generic undo for maps, timelines, properties, boards, documents and assets; a created page's sidebar rows in one line;
+  Revert hidden when there is nothing to revert; items grouped by workstream and connection, with "Mark reviewed" for
+  the group.
+- **Recoverable deletes**: a copy of the page (and its whole subtree) is taken before every agent delete, or the delete
+  is refused; Revert restores through LegendKeeper, else recreates from the copy (new ids, the links to the old ids
+  listed). An asset's Revert uploads its kept bytes again in the same folder under the same name and relinks pages.
+- **The step-up only for credentials**: the password, the authenticator, recovery codes, connections and their scope,
+  MCP tokens, API keys and off-site credentials; its window is 12 hours by default.
+- **Guidance**: the MCP instructions' rule 3 and the bridge guide say writes are direct and on the Review page; one line
+  for scope `propose`.
+
 ## Unreleased: v3 F5b.1, automation paces itself
 
 [ADR 0068 amendment 2](adr/0068-v3-f5b-automatic-actions-for-audits.md). Pack seed `arkona-2026-11-28-f5b1`. New

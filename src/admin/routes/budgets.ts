@@ -1,4 +1,3 @@
-import { requireReauth } from '../guard.js';
 import * as z from 'zod';
 import type { BudgetSampleView } from '../../jobs/index.js';
 import { TIER_IDS } from '../../lk/registry-types.js';
@@ -123,7 +122,6 @@ export const registerBudgets: Register = (api, ctx) => {
   });
 
   api.put('/budgets/reserve-floors', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const body = parseInput(
       z.union([
         z.object({ reset: z.literal(true), confirm: z.literal(true) }),
@@ -139,7 +137,6 @@ export const registerBudgets: Register = (api, ctx) => {
 
   /** v3 F9 amendment 1 (ADR 0074): the daily tier's floors, all four together (or back to the environment's). */
   api.put('/budgets/reserve-day-floors', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const body = parseInput(
       z.union([
         z.object({ reset: z.literal(true), confirm: z.literal(true) }),
@@ -199,23 +196,15 @@ export const registerBudgets: Register = (api, ctx) => {
   });
 
   api.put('/writers/max', (req) => {
-    requireReauth(ctx.deps.services, req); // ADR 0062: a setting
     const b = parseInput(
       z.object({ value: z.number().int(), confirm: z.literal(true).optional() }),
       req.body,
     );
     return { controls: actions.setWritersMax(b.value) };
   });
-  // ADR 0062 (the owner's rule: tightening is one click, loosening asks): pausing and draining are one click (the
-  // brakes); resuming writes and undraining release a brake, so they ask for the step-up.
+  // The brakes and their release: ADR 0081, none asks for a fresh code (ADR 0062 had asked one of the releases).
   api.post('/writes/pause', () => ({ controls: actions.pauseWrites() }));
-  api.post('/writes/resume', (req) => {
-    requireReauth(ctx.deps.services, req);
-    return { controls: actions.resumeWrites() };
-  });
+  api.post('/writes/resume', () => ({ controls: actions.resumeWrites() }));
   api.post('/writes/drain', () => ({ controls: actions.drain() }));
-  api.post('/writes/undrain', (req) => {
-    requireReauth(ctx.deps.services, req);
-    return { controls: actions.undrain() };
-  });
+  api.post('/writes/undrain', () => ({ controls: actions.undrain() }));
 };

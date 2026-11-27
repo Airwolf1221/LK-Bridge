@@ -83,11 +83,13 @@ A rehearsal restores a full snapshot into a throwaway root of a sandbox project,
 - **A page deleted in the LegendKeeper app** can be restored (scope `deleted`) when a full or change snapshot holds it,
   although the bridge holds no delete record of it. The lifecycle and canon guards judge the restore from the newest
   snapshot's state (its name with its prefix, its parent, its Status and tags), as they would a create of that page: an
-  Authoritative page comes back only as a canonical proposal. It is refused only when no snapshot holds it. Every restore
-  proposal names the snapshot it came from and when it was taken.
+  Authoritative page comes back only as a canonical proposal at scope `propose` (since v3 F12 an agent at `write` and the
+  owner's confirmed restore bring it back directly). It is refused only when no snapshot holds it. Every restore names
+  the snapshot it came from and when it was taken.
 - **A recreate that stopped part-way is finished, never duplicated.** Its page's id was minted when its proposal was
   captured and is kept with the restore's record. The same request again (or **Finish** on the restores list of the
-  Snapshots page) compares the page it made with the snapshot and proposes only what is missing: documents it lacks (with
+  Snapshots page; since v3 F12 confirmed, then run at once as one job) compares the page it made with the snapshot and
+  plans only what is missing: documents it lacks (with
   their content), a page document still blank, a map's features, a timeline's lanes and events, a board's content, and
   sidebar properties. When nothing is missing the answer is "nothing to do". A timeline's events are read page by page
   (100 a page), so an event already made is never planned again (CR-2026-11-R2, R2-47).
@@ -104,21 +106,22 @@ A rehearsal restores a full snapshot into a throwaway root of a sandbox project,
 
 [ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 3.
 
-- **Until approval, the image is only on the bridge's server.** `restore_snapshot` (scope `image`) and the Snapshots
+- **Until the restore runs, the image is only on the bridge's server.** `restore_snapshot` (scope `image`) and the Snapshots
   page's image restore stage the snapshot store's bytes on the server, exactly as stored (a PNG stays a PNG). Nothing is
   sent to LegendKeeper, nothing is hidden, and nothing is ever written to `LK-Bridge staging`.
-- **The proposal says what will happen:** the image's name, the folder it goes back to (its path from the library's
+- **The plan says what will happen** (the preview, and the proposal at scope `propose`): the image's name, the folder it goes back to (its path from the library's
   root) and any folder that has to be made on the way, and the pages that showed it. There is no new asset id or URL yet.
-- **Approving it runs one job:** the folder is found, or made again by its path if it was deleted since the snapshot;
+- **Confirming it runs one job** (v3 F12: at once, for the owner's confirmed restore or an agent at scope `write`; at
+  `propose`, once the proposal is approved): the folder is found, or made again by its path if it was deleted since the snapshot;
   the image is uploaded straight into it under its name and checked; then, with "update references", each page
   document that showed the old URL is rewritten to the new one, and each map image is set to the new asset.
 - **A page edited in the meantime is not overwritten.** Its rewrite carries the page's version from when the restore
-  was proposed; if the page has changed, the rewrite is refused and the job stops there, after the upload. The image
+  was planned; if the page has changed, the rewrite is refused and the job stops there, after the upload. The image
   stays in its folder. The restore's row on the Snapshots page says `image_relink_failed: the image was restored, but N
 page(s) changed since the proposal and still show the old URL (…); relink them by hand to the new asset`, and the
   bridge never retries it. The new asset's id and URL are in the restore's record.
 - An image that was at the library's root goes back to the root. One whose folder is gone and whose path the snapshot
-  does not hold goes to the root too, and the proposal says so.
+  does not hold goes to the root too, and the plan says so.
 
 ## The page index (25 November 2026)
 
@@ -134,3 +137,22 @@ bridge for about a minute per click on Arkona.
   measures the store again in the background at start-up and every six hours (the page shows "measuring…" before the
   first measurement).
 - **A partial snapshot's missing pieces** are recorded when it is indexed; for older ones, once the backfill reaches them.
+
+## v3 F12: restores run at once; a copy before every agent delete
+
+[ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md).
+
+- **A restore is no longer always a proposal.** The owner's restore on the Snapshots page (a page, a sidebar, a document,
+  a deleted page, a deleted image, and **Finish**) is one confirmed action: previewed, confirmed in a dialog, then run at
+  once as one job. An agent's `restore_snapshot` (and `restore_resource`) follows its connection's scope: direct at
+  `write`, on the owner's Review page with Revert; a proposal at `propose`. The admin routes need `confirm: true` unless
+  the call is a dry run.
+- **A copy before every agent delete.** Before `deleteResource` or `deleteDocument` runs for an agent's job (or a
+  Revert's), the page and, for a cascade, its whole subtree (at most 1,000 pages) are read live at P1 and kept as a
+  change snapshot, recorded in `delete_copies`. If the copy cannot be taken, the delete is refused
+  (`DELETE_COPY_FAILED`). The pruner keeps such a copy for `DELETE_COPY_RETENTION_DAYS` (default 90, 1 to 3,650), then
+  forgets it; the last full snapshot holds the pages as a second copy.
+- **Revert of a delete** uses LegendKeeper's own restore first (the subtree comes back with its ids); if LegendKeeper
+  no longer holds the page, it is made again from the copy, parents first (new ids: the result maps each old id to its
+  new one and lists the pages that linked to the old ids, for a hand relink). A document LegendKeeper has purged is not
+  recreated: the result names the copy's snapshot, for a restore from the Snapshots page.

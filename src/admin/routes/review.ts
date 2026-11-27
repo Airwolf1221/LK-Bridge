@@ -1,6 +1,6 @@
 /**
  * v3 F3.4 (ADR 0055): the Review page's API (the queue of agents' direct writes at scope `write`) and Revert (from the
- * Review and Jobs pages). Reviewing changes nothing in LegendKeeper. Revert needs the owner's re-authentication, is
+ * Review and Jobs pages). Reviewing changes nothing in LegendKeeper. Revert is
  * audited (`job.revert`), and is refused with the targets listed (409) when it would not revert everything and the owner
  * has not confirmed a partial revert. Every route acts within one project (`?project=`, default: the default project).
  */
@@ -8,7 +8,6 @@ import * as z from 'zod';
 import { RevertError } from '../../review/revert.js';
 import type { ReviewService } from '../../review/service.js';
 import type { RevertService } from '../../review/revert.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { redactDeep } from '../redact.js';
 import { idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
@@ -168,12 +167,11 @@ export const registerReview: Register = (api, ctx) => {
   });
 
   /**
-   * Reverts a finished direct-write job (owner, re-authenticated, confirmed). A refusal is 409 with the targets and why
+   * Reverts a finished direct-write job (owner, confirmed). A refusal is 409 with the targets and why
    * each is not reverted; `confirmPartial: true` with `confirmed` (the ready targets the owner saw) reverts exactly
    * those when some cannot be.
    */
   api.post('/jobs/:id/revert', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     const b = parseInput(

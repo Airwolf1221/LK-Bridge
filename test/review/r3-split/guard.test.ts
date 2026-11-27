@@ -4,20 +4,21 @@
  * `splits.guardWords` (120) words or more off a pack page is refused with USE_ARKONA_SPLIT. Each test asserts the SAFE
  * behaviour on one route (refused, or at least never a direct write that takes the material off): a pass means the
  * attempt HELD, a failure is a bypass (a finding). ADR 0059 departure 9 documents that `lk_api_write` is not guarded
- * for splits; ADR 0057 decision 4's deletes rail makes a low-level removal a proposal. Both are tried.
+ * for splits; ADR 0057 decision 4's deletes rail made a low-level removal a proposal, until v3 F12 (ADR 0081) removed
+ * the rails: a low-level removal is now a direct write at scope write, on the owner's Review page, and Revert puts the
+ * text back (SP-31 to SP-34 assert that).
  *
  * - SP-28: write_page `replace` of the whole page without two sections.
  * - SP-29: the same material taken off in edits of under 120 words each (the owner's decision, ADR 0061 part B
  *   decision 2 (a): the guard is per edit, so this one asserts that each edit is written and on the Review page).
  * - SP-30: a key-value block holding ~300 words dropped with write_page (`dropRegions`).
  * - SP-31: lk_api_write replaceDocumentBlocks without the Biography's blocks.
- * - SP-32: lk_api_write replaceDocumentBlocks with every id kept and the Biography's text emptied (a proposal since
- *   ADR 0061 part B decision 1 (b): the deletes rail counts text taken off a pack page).
+ * - SP-32: lk_api_write replaceDocumentBlocks with every id kept and the Biography's text emptied.
  * - SP-33: lk_api_batch updateBlock on each Biography paragraph (its text emptied; the same).
  * - SP-34: lk_api_write deleteBlock on a Biography paragraph.
  * - SP-43: update_document on a pack page's page document.
  *
- * Every call is made by an agent profile at scope write with the default rails (deletes on), as a new profile has.
+ * Every call is made by an agent profile at scope write.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { splitWorld, statutesBody, zahraBody, type SplitWorld } from '../../packs/split-world.js';
@@ -43,13 +44,36 @@ const pageWords = (w: SplitWorld, pageId: string): number =>
     0,
   );
 
+const REVERTED = { onReview: true, taken: true, revert: 'submitted', missingAfterRevert: 0 };
+
 describe('USE_ARKONA_SPLIT on every route', () => {
   let w: SplitWorld;
-  /** An agent at scope write with the DEFAULT rails (the world's own token has them off, a test convenience). */
+  /** An agent at scope write. */
   let agent: Awaited<ReturnType<SplitWorld['stack']['connect']>>;
   const call = (name: string, args: Obj) => w.stack.call(agent, name, { project: 'test', ...args });
   const version = async (page: string) =>
     String(((await call('read_document', { resource: page })).body as any).version);
+  /**
+   * A low-level removal at scope write (v3 F12, ADR 0081): one direct job on the owner's Review page; the owner's Revert
+   * puts the page's text back as it was. Returns the words the job took off, and the words still missing after Revert.
+   */
+  const directThenReverted = async (r: { body: any; text: string }, before: number) => {
+    expect(typeof r.body?.jobId, r.text.slice(0, 400)).toBe('string');
+    const job = await settle(w, r.body.jobId);
+    expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+    const taken = before - pageWords(w, S.zahra);
+    const listed = w.stack.runtime.review
+      .list(PROJECT, { state: 'all', limit: 500 })
+      .some((i) => i.jobId === job.id);
+    const rv = await w.stack.runtime.reverts.revert('owner', PROJECT, job.id);
+    if (rv.status === 'submitted') await settle(w, rv.revertJobId);
+    return {
+      onReview: listed,
+      taken: taken > 0,
+      revert: rv.status === 'refused' ? `${rv.code}: ${JSON.stringify(rv.targets).slice(0, 300)}` : rv.status,
+      missingAfterRevert: before - pageWords(w, S.zahra),
+    };
+  };
   /** Waits for a job a call started, if it started one. */
   const after = async (r: { body: any }) => {
     if (typeof r.body?.jobId === 'string') await settle(w, r.body.jobId);
@@ -157,12 +181,13 @@ describe('USE_ARKONA_SPLIT on every route', () => {
     ).toEqual({ code: 'USE_ARKONA_SPLIT', lost: 0 });
   });
 
-  it('SP-31 lk_api_write replaceDocumentBlocks without the Biography is never a direct write', async () => {
+  it('SP-31 lk_api_write replaceDocumentBlocks without the Biography: direct, on Review, reverted', async () => {
     setBody(
       w,
       S.zahra,
       zahraBody((id) => `https://assets.test:${w.port}/a/${id}.webp`),
     );
+    const before = pageWords(w, S.zahra);
     const doc = w.repo.blocks.get(w.mainOf(S.zahra))!;
     const blocks = (doc.blocks as Obj[]).filter((b) => !BIO.includes(b.id as string));
     const r = await call('lk_api_write', {
@@ -173,17 +198,11 @@ describe('USE_ARKONA_SPLIT on every route', () => {
         body: { blocks },
       },
     });
-    await after(r);
-    const still = BIO.filter((id) => bodyOf(w, S.zahra).some((b) => b.id === id));
-    expect({ status: (r.body as any).status ?? (r.body as any).error?.code, still: still.length }).toEqual({
-      status: expect.stringMatching(/proposal_captured|USE_ARKONA_SPLIT/),
-      still: BIO.length,
-    });
+    expect(await directThenReverted(r, before)).toEqual(REVERTED);
+    expect(BIO.filter((id) => bodyOf(w, S.zahra).some((b) => b.id === id))).toHaveLength(BIO.length);
   });
 
-  // CR-2026-11-R3 (R3-53), decided (ADR 0061 part B decision 1, the owner's (b)): the deletes rail counts a low-level write
-  // that takes the pack's guardWords words or more off a pack page as a removal, so this is a proposal.
-  it('SP-32 lk_api_write replaceDocumentBlocks keeping every id but emptying the Biography is never a direct write', async () => {
+  it('SP-32 lk_api_write replaceDocumentBlocks keeping every id but emptying the Biography: direct, on Review, reverted', async () => {
     setBody(
       w,
       S.zahra,
@@ -202,24 +221,10 @@ describe('USE_ARKONA_SPLIT on every route', () => {
         body: { blocks },
       },
     });
-    await after(r);
-    const lost = before - pageWords(w, S.zahra);
-    expect(
-      { lost },
-      `${String((r.body as any).status ?? (r.body as any).error?.code)}: ${lost} words taken off directly`,
-    ).toEqual({
-      lost: 0,
-    });
-    // Held as a proposal by the deletes rail, which says why.
-    expect((r.body as any).status, r.text.slice(0, 400)).toBe('proposal_captured');
-    expect(r.text).toMatch(
-      /text removal \(\d+ words off “[^”]+”, a page of a character’s set; the pack's threshold is 120\)/,
-    );
+    expect(await directThenReverted(r, before)).toEqual(REVERTED);
   });
 
-  // CR-2026-11-R3 (R3-53), decided (ADR 0061 part B decision 1, the owner's (b)): the deletes rail counts a low-level write
-  // that takes the pack's guardWords words or more off a pack page as a removal, so this is a proposal.
-  it('SP-33 lk_api_batch updateBlock emptying each Biography paragraph is never a direct write', async () => {
+  it('SP-33 lk_api_batch updateBlock emptying each Biography paragraph: direct, on Review, reverted', async () => {
     setBody(
       w,
       S.zahra,
@@ -235,27 +240,16 @@ describe('USE_ARKONA_SPLIT on every route', () => {
         },
       })),
     });
-    await after(r);
-    const lost = before - pageWords(w, S.zahra);
-    expect(
-      { lost },
-      `${String((r.body as any).status ?? (r.body as any).error?.code)}: ${lost} words taken off directly`,
-    ).toEqual({
-      lost: 0,
-    });
-    // Held as a proposal by the deletes rail, which says why.
-    expect((r.body as any).status, r.text.slice(0, 400)).toBe('proposal_captured');
-    expect(r.text).toMatch(
-      /text removal \(\d+ words off “[^”]+”, a page of a character’s set; the pack's threshold is 120\)/,
-    );
+    expect(await directThenReverted(r, before)).toEqual(REVERTED);
   });
 
-  it('SP-34 lk_api_write deleteBlock on a Biography paragraph is never a direct write', async () => {
+  it('SP-34 lk_api_write deleteBlock on a Biography paragraph: direct, on Review, reverted', async () => {
     setBody(
       w,
       S.zahra,
       zahraBody((id) => `https://assets.test:${w.port}/a/${id}.webp`),
     );
+    const before = pageWords(w, S.zahra);
     const doc = w.repo.blocks.get(w.mainOf(S.zahra))!;
     const r = await call('lk_api_write', {
       operationId: 'deleteBlock',
@@ -264,13 +258,9 @@ describe('USE_ARKONA_SPLIT on every route', () => {
         ifMatch: `v${doc.version}`,
       },
     });
-    await after(r);
-    expect({
-      status: (r.body as any).status ?? (r.body as any).error?.code,
-      zb3: bodyOf(w, S.zahra).some((b) => b.id === 'zb3'),
-    }).toEqual({ status: expect.stringMatching(/proposal_captured|USE_ARKONA_SPLIT/), zb3: true });
+    expect(await directThenReverted(r, before)).toEqual(REVERTED);
+    expect(bodyOf(w, S.zahra).some((b) => b.id === 'zb3')).toBe(true);
     void para;
-    void PROJECT;
   });
 
   it('SP-43 update_document cannot change a pack page’s page document (its text is write_page’s)', async () => {

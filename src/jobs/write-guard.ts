@@ -40,6 +40,12 @@ export interface WriteGuardEntry {
   readonly prefetched?: ProposalExtras['prefetched'];
   /** The policy gate's verdict for the request: `allow` (scope write, or approved work) or `propose`. */
   readonly gate: 'allow' | 'propose';
+  /**
+   * v3 F12 (ADR 0081): the request runs directly whatever a guard would otherwise have proposed (`directWrite`): an
+   * agent at scope `write`, or the owner's confirmed dashboard action. For it a guard answers `allow` or `deny`, NEVER
+   * `propose` or `propose_canonical`: a refusal of an invalid change still refuses, only "propose" becomes "allow".
+   */
+  readonly direct?: boolean;
   /** v2 C2c: the lifecycle change the request declares (bridge code only: `BatchSubmit.lifecycle`). */
   readonly lifecycle?: LifecycleMarker;
   /**
@@ -79,7 +85,7 @@ export interface WriteGuard {
 }
 
 /**
- * v2 C2c (ADR 0035): several guards as one. At entry, the first deny wins; otherwise any `propose_canonical` makes the
+ * v2 C2c (ADR 0035): several guards as one (v3 F12: for a `direct` request, allow or deny only). At entry, the first deny wins; otherwise any `propose_canonical` makes the
  * request a canonical proposal (the reasons and changes of all of them together, an ordinary proposal's included);
  * otherwise any `propose` makes it an ordinary proposal; otherwise allow. Inside the lock each guard is asked in turn
  * (the first to throw refuses).
@@ -91,6 +97,14 @@ export function combineGuards(...guards: readonly WriteGuard[]): WriteGuard {
       for (const g of guards) {
         const v = await g.entry(input);
         if (v.decision === 'deny') return v;
+        // v3 F12 (ADR 0081): a direct request is answered allow or deny; a guard that still proposes is a bridge fault,
+        // refused (fail closed) rather than turned into a proposal nobody asked for.
+        if (input.direct === true && v.decision !== 'allow')
+          return {
+            decision: 'deny',
+            opId: input.items[0]?.op ?? 'operation',
+            reason: `a write guard asked for a proposal of a direct write (${v.reason}); this is a bridge fault, nothing was written`,
+          };
         if (v.decision === 'propose_canonical' || v.decision === 'propose')
           proposals.push({
             reason: v.reason,
@@ -109,6 +123,61 @@ export function combineGuards(...guards: readonly WriteGuard[]): WriteGuard {
       for (const g of guards) await g.inLock?.(input);
     },
   };
+}
+
+/** The automation engine's principal (`AUTOMATION_PRINCIPAL` in types.ts; kept as a literal to avoid a cycle). */
+const AUTOMATION_PRINCIPAL_ID = 'automation';
+
+/** An agent's own principal: neither the bridge's (`system`) nor the automation engine's. */
+function isAgentPrincipal(principalId: string): boolean {
+  return principalId !== SYSTEM_PRINCIPAL.principalId && principalId !== AUTOMATION_PRINCIPAL_ID;
+}
+
+/**
+ * v3 F12 (ADR 0081): whether a request runs directly, at entry. Two kinds of work do, canon and lifecycle changes
+ * included, so the guards answer them `allow` or `deny`, never a proposal:
+ *
+ * - an agent's request the policy gate allowed (scope `write`) that no approval carries and bridge code did not force
+ *   into a proposal;
+ * - the owner's confirmed dashboard action (`origin.ownerConfirmed`, the system principal on a dashboard origin).
+ *
+ * The automation engine's requests are never direct here: its codes at Propose make proposals, and at Apply the guards
+ * judge it as before (ADR 0068). Work at scope `propose` is a proposal at the gate and never reaches this as `allow`.
+ */
+export function directWrite(input: {
+  readonly principal: { readonly principalId: string };
+  readonly origin: Pick<JobOrigin, 'kind' | 'approval' | 'approvedBy' | 'ownerConfirmed'>;
+  readonly gate: 'allow' | 'propose';
+}): boolean {
+  if (input.gate !== 'allow') return false;
+  if (input.origin.approval !== undefined || input.origin.approvedBy !== undefined) return false;
+  if (isAgentPrincipal(input.principal.principalId)) return true;
+  return (
+    input.principal.principalId === SYSTEM_PRINCIPAL.principalId &&
+    input.origin.kind === 'ui' &&
+    input.origin.ownerConfirmed === true
+  );
+}
+
+/**
+ * v3 F12 (ADR 0081): the same, inside the lock, for a job that is running: an agent's job no owner approved (it ran
+ * past entry only at scope `write`, and the gate is asked again before every step, so a lowered scope stops it), or the
+ * owner's confirmed dashboard action. The guards let such a job make the canon and lifecycle changes they judged at
+ * entry, as a job approved as canon makes them.
+ */
+export function directJob(job: Pick<JobView, 'principalId' | 'approvedBy' | 'origin'>): boolean {
+  if (job.approvedBy !== null || job.origin.canonicalApprovedBy !== undefined) return false;
+  if (isAgentPrincipal(job.principalId)) return true;
+  return (
+    job.principalId === SYSTEM_PRINCIPAL.principalId &&
+    job.origin.kind === 'ui' &&
+    job.origin.ownerConfirmed === true
+  );
+}
+
+/** Inside the lock: the job may make protected canon changes (approved as canon, or a direct job, F12). */
+export function canonAccepted(job: Pick<JobView, 'principalId' | 'approvedBy' | 'origin'>): boolean {
+  return job.origin.canonicalApprovedBy !== undefined || directJob(job);
 }
 
 /**

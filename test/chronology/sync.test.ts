@@ -308,11 +308,10 @@ describe('sync_timeline_event: refusals', () => {
       event_id: choice.id,
     });
     // It already agrees with the row (same date, detail and uri): nothing to write, but the choice is remembered
-    // (v3 F2.1): the bridge records the link, and the check pairs them from now on. CR-2026-11-R2 (R2-08): a link is a
-    // proposal at every scope (the owner sees it first); approved, it is recorded.
-    expect(ok.body, ok.text).toMatchObject({ status: 'proposal_captured' });
-    expect(done().writes).toBe(0);
-    expect(await approve(String(ok.body.proposalId))).toMatchObject({ state: 'executed' });
+    // (v3 F2.1): the bridge records the link, and the check pairs them from now on. v3 F12 follow-up (ADR 0081
+    // amendment 1, decision 3): at scope write the link is direct (on the owner's Review page, with Revert).
+    expect(ok.body, ok.text).toMatchObject({ status: 'linked' });
+    await w.stack.runtime.engine.wait(PROJECT, String(ok.body.jobId), 20_000);
     expect(done().writes).toBe(0);
     const again = await call('sync_timeline_event', {
       row: { date: '4A 881', description: 'The year of the long harvest' },

@@ -811,7 +811,7 @@ function promoteTool(
     title: 'Offer what a chapter invents to the owner as canon (Arkona pack)',
     access: 'write',
     description:
-      'The Arkona pack (design F4c, E7): turns items of arkona_chapter_check into CANON PROPOSALS through the existing tools, whatever your scope: a new character (arkona_create_character, Authoritative), a new page (create_resource, Authoritative), or a fact or text on an existing owner page (set_facts, write_page: made proposals). YOU supply the content (never the prose taken as canon by itself); arkona_name_check’s namesakes are carried for a new character. Several facts and texts in one call are ONE proposal of items, so the owner accepts some and rejects the rest; each new character or page is its own proposal. The chapter is cited in the proposal’s note only (never a Dependency or a Related Source). Nothing is ever applied by itself, and silence is never acceptance. Cost: the tools’ own (each a proposal).',
+      'The Arkona pack (design F4c, E7): turns items of arkona_chapter_check into new canon through the existing tools (at scope write directly, on the owner’s Review page with Revert: only when the owner asked for it in this conversation; at scope propose as proposals): a new character (arkona_create_character, Authoritative), a new page (create_resource, Authoritative), or a fact or text on an existing owner page (set_facts, write_page). YOU supply the content (never the prose taken as canon by itself); arkona_name_check’s namesakes are carried for a new character. Several facts and texts in one call are ONE job of items (at scope propose ONE proposal, so the owner accepts some and rejects the rest); each new character or page is its own. The chapter is cited in the change’s note only (never a Dependency or a Related Source). Nothing is made from a chapter unless you call this tool; silence is never acceptance. Cost: the tools’ own.',
     inputSchema: z.object({
       chapter: z.string().min(1).max(300).describe('The chapter the lore comes from: its name or id.'),
       continuity: z.string().min(1).max(200).optional(),
@@ -884,7 +884,7 @@ function promoteTool(
   });
 }
 
-/** Facts and texts on existing owner pages: ONE proposal of items (forced), whatever the scope. */
+/** Facts and texts on existing owner pages: ONE job of items (direct at scope write; ONE proposal at scope propose). */
 async function promoteEdits(
   env: Env,
   list: readonly z.infer<typeof candidateSchema>[],
@@ -1025,8 +1025,8 @@ async function promoteEdits(
     steps,
     labels: steps.map((st) => st.op),
     title: summary,
-    // A canon proposal whatever the scope (E7): it states new canon.
-    forceProposal: true,
+    // v3 F12 (ADR 0081): it states new canon, which an agent at scope `write` now writes directly (on the owner's Review
+    // page, with Revert); a proposal at scope `propose` (E7 as amended).
     proposal: {
       operations: items.map((it) => ({ tool: env.tool, page: it.page, pageParts: [it.kind] })),
       summary: summary.slice(0, 500),

@@ -45,7 +45,7 @@ const reauth = () =>
 const expire = () =>
   s.db
     .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
-    .run(Math.floor(Date.now() / 1000) - 601, s.services.sessionHash(s.sessionToken)); // ADR 0062: older than the 10-minute step-up
+    .run(null, s.services.sessionHash(s.sessionToken)); // ADR 0081: no step-up at all (these routes ask for none)
 
 describe('the Tagging page API', () => {
   it('shows the policy (the approved version and its digest) and the closed list', async () => {
@@ -62,7 +62,7 @@ describe('the Tagging page API', () => {
     ]);
   });
 
-  it('the owner’s classification needs a fresh re-authentication, takes the closed list only, and is audited', async () => {
+  it('the owner’s classification needs no fresh code (ADR 0081), takes the closed list only, and is audited', async () => {
     const body = {
       pageId: 'rttwo001',
       primary: 'Culture',
@@ -71,11 +71,7 @@ describe('the Tagging page API', () => {
       confirm: true,
     };
     expire();
-    const refused = await s.post('/api/admin/tagging/classify', body);
-    expect(refused.status).toBe(403);
-    expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
     expect(s.audit('retag.classify')).toEqual([]);
-    reauth();
     const notListed = await s.post('/api/admin/tagging/classify', { ...body, primary: 'Guild' });
     expect(notListed.status).toBe(400);
     expect(notListed.json.error.code).toBe('NOT_ON_CLOSED_LIST');
@@ -99,12 +95,8 @@ describe('the Tagging page API', () => {
     expect(list.json.classifications).toHaveLength(1);
   });
 
-  it('withdrawing a classification also needs re-authentication and is audited', async () => {
+  it('withdrawing a classification needs no fresh code either, and is audited', async () => {
     expire();
-    expect(
-      (await s.post('/api/admin/tagging/unclassify', { pageId: 'rttwo001', confirm: true })).status,
-    ).toBe(403);
-    reauth();
     const ok = await s.post('/api/admin/tagging/unclassify', { pageId: 'rttwo001', confirm: true });
     expect(ok.json.removed).toBe(true);
     expect(s.audit('retag.unclassify')).toHaveLength(1);
@@ -122,7 +114,7 @@ describe('the Tagging page API', () => {
     ).toThrow(/Only the owner/);
   });
 
-  it('the Packs page takes the Excluded Routine Tags: a new version (re-authenticated, audited) waiting for approval', async () => {
+  it('the Packs page takes the Excluded Routine Tags: a new version (audited) waiting for approval', async () => {
     reauth();
     const r = await s.put('/api/admin/packs/arkona/tokens', {
       excludedRoutineTags: ['Imported', ' imported ', 'Draft'],

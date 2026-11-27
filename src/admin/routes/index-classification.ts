@@ -5,12 +5,12 @@
  *
  * - `GET /index-classification`: the report (filtered, paged), the counts, the pack's rules (whether T11's order is in
  *   force, the tag section's state), the structural lists, and the ids "Approve all as proposed" offers in the filter;
- * - `POST /index-classification/decide` (the step-up; audited `indexclassify.decide`): approve (as proposed), change (to
+ * - `POST /index-classification/decide` (audited `indexclassify.decide`): approve (as proposed), change (to
  *   nav or subject, with the subject's kind), or leave undecided;
- * - `POST /index-classification/bulk-approve` (the step-up; audited `indexclassify.bulk_approve`): the rows named by
+ * - `POST /index-classification/bulk-approve` (audited `indexclassify.bulk_approve`): the rows named by
  *   `ids` (the page sends the proposed rows of its filter), or every proposed row of the filter; ONE transaction, at
  *   most INDEX_CLASSIFY_BULK_MAX rows, idempotent; it returns the rows it changed, not a report;
- * - `PUT /index-classification/structural` (the step-up): the pack's exact-name lists edited: a NEW pack version the
+ * - `PUT /index-classification/structural`: the pack's exact-name lists edited: a NEW pack version the
  *   owner approves on the Packs page (audited by the pack, `pack.replace_rules`).
  *
  * Every route awaits the service's `prepare` first (the cached base brought up to date in chunks that yield), so no
@@ -19,7 +19,6 @@
 import * as z from 'zod';
 import { IndexClassifyError, ROW_STATUSES, type IndexClassifyService } from '../../packs/indextax/service.js';
 import { SUBJECT_KINDS } from '../../packs/indextax/rules.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectFor, projectParam, type Register } from './util.js';
 
@@ -118,7 +117,6 @@ export const registerIndexClassification: Register = (api, ctx) => {
   });
 
   api.post('/index-classification/decide', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -148,7 +146,6 @@ export const registerIndexClassification: Register = (api, ctx) => {
   });
 
   api.post('/index-classification/bulk-approve', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({
@@ -179,7 +176,6 @@ export const registerIndexClassification: Register = (api, ctx) => {
   });
 
   api.put('/index-classification/structural', async (req) => {
-    requireReauth(ctx.deps.services, req);
     const b = parseInput(
       z
         .object({

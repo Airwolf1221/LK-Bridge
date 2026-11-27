@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Badge, Button, Empty, ErrorNote, useAction } from '../components';
 import { fmtTime } from '../format';
 import { useProjectApi, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 
 /**
  * v3 F7 (ADR 0070, G3): the outfit record, on the Asset Tree page. "Seed" reads one character's folders LIVE and lists
@@ -48,7 +47,6 @@ interface OutfitsResponse {
 
 export function OutfitsCard() {
   const api = useProjectApi();
-  const withReauth = useReauth();
   const { run, busy } = useAction();
   const [character, setCharacter] = useState('');
   const [folderId, setFolderId] = useState<string | null>(null);
@@ -65,9 +63,7 @@ export function OutfitsCard() {
       'Read live: review the outfits below, then save or discard.',
     ).then(list.reload);
   const save = (id: string) =>
-    void run(() => withReauth(() => api.post(`/art/outfits/seed/${id}/save`, {})), 'Outfits saved.').then(
-      list.reload,
-    );
+    void run(() => api.post(`/art/outfits/seed/${id}/save`, {}), 'Outfits saved.').then(list.reload);
   const discard = (id: string) =>
     void run(() => api.post(`/art/outfits/seed/${id}/discard`, {}), 'Seeding discarded.').then(list.reload);
   const addAlias = (o: Outfit) =>

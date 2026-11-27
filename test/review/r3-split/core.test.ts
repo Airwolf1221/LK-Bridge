@@ -81,14 +81,14 @@ describe('R3-66: a Compact Character Reference split into several owners becomes
     expect(w.repo.live(S.zahra)!.parentId).toBe(C.qishen);
     const rec = await recordOf(w, jobId, (r) => r.state === 'reverted');
     expect(rec.revert.core).toEqual({ back: true });
-    const del = w.stack.runtime.policy.proposals.get(rec.revert.deletionProposalId)!;
-    expect(del.requiresCanonicalApproval).toBe(true);
-    expect(del.summary).toContain(
+    // v3 F12 (ADR 0081): the deletion of the pages the split made is part of the owner's confirmed Revert: ONE job, at
+    // once (each page checked first), then she is her Compact Character Reference again.
+    expect(rec.revert.deletionProposalId).toBeNull();
+    const del = await settle(w, String(rec.revert.deletionJobId));
+    expect(del.title).toContain(
       'then [BSRC] Zahra al-Rashid - Character Core back to [BSRC] Zahra al-Rashid - Character Reference (Reference Type Compact Character Reference)',
     );
-    // The owner approves it as canon: the pages go, then she is her Compact Character Reference again.
-    const d = await approveSplit(w, del.id);
-    expect(d.job.status, JSON.stringify(d.job.lastError)).toBe('succeeded');
+    expect(del.status, JSON.stringify(del.lastError)).toBe('succeeded');
     expect(named(w, '[INDEX] Zahra al-Rashid')).toBeFalsy();
     expect(w.repo.live(S.zahra)!.name).toBe('[BSRC] Zahra al-Rashid - Character Reference');
     expect(rowsOf(w, S.zahra)['Reference Type']).toBe('Compact Character Reference');

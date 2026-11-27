@@ -3,8 +3,9 @@
  * v3 F3c, section F (ADR 0054): "Propose a fix". Each deterministic fix re-reads its target live (one read), checks the
  * finding still holds, and makes exactly the intended proposal and nothing more; Last Major Revision follows ADR 0051 (a
  * dash or a blank paragraph is not a major revision); a stale finding proposes nothing; a judgement has no fix; the
- * audits' own fixes take sibling order and tags; the dashboard's route is the owner's. Nothing is applied before the
- * owner approves it.
+ * audits' own fixes take sibling order and tags. At scope `propose` nothing is applied before the owner approves it; at
+ * scope `write` the fix is one direct job on the Review page; the dashboard's route is the owner's confirmed action, one
+ * job at once (v3 F12, ADR 0081).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ADMIN_CSRF_PURPOSE } from '../../src/admin/guard.js';
@@ -223,7 +224,8 @@ describe('handed over to the audits, refused, stale', () => {
 });
 
 describe('the dashboard’s Propose a fix', () => {
-  it('is the owner’s: one proposal, audited; a judgement is refused', async () => {
+  // v3 F12 (ADR 0081): the owner's confirmed action runs at once as one job (no proposal to approve next).
+  it('is the owner’s: one job at once, audited; a judgement is refused', async () => {
     const s = w.stack.services;
     const session = s.owner.createSession('127.0.0.1', 'vitest');
     const headers = {
@@ -246,10 +248,15 @@ describe('the dashboard’s Propose a fix', () => {
     expect(run.status, JSON.stringify(run.json)).toBe(200);
     const fl = run.json.report.findings as any[];
     const blanks = fl.find((f) => f.check === 'blank_paragraphs');
+    const before = proposals();
     const r = await post(`/appraisal/findings/${blanks.id}/propose-fix`, { confirm: true });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    expect(r.json.status).toBe('proposal_captured');
-    expect(w.stack.runtime.policy.proposals.get(r.json.proposalId)!.principalId).toBe('system');
+    expect(r.json.status).toBe('submitted');
+    expect(proposals()).toBe(before);
+    const job = await w.stack.runtime.engine.wait(PROJECT, String(r.json.jobId), 30_000);
+    expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+    expect(job.principalId).toBe('system');
+    expect(job.origin.ownerConfirmed).toBe(true);
     const audit = w.stack.db
       .prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE action = 'appraisal.propose_fix'`)
       .get() as { n: number };
@@ -263,26 +270,21 @@ describe('the dashboard’s Propose a fix', () => {
   });
 });
 
-describe('the pack’s switch for arkona_appraisal_fix (v3 F3.4, ADR 0055 decision D)', () => {
-  it('“follow the agent’s scope” (the seed’s default): a proposal at scope propose; at scope write one job, reviewed afterwards', async () => {
-    const packs = w.stack.runtime.packs;
-    packs.commands.setToolModes('owner', 'arkona', { arkona_appraisal_fix: 'scope' });
-    // A version waiting for approval does not apply yet: the approved one still says "always propose".
-    expect(packs.toolMode('arkona', 'arkona_appraisal_fix')).toBe('propose');
-    await packs.commands.approve('owner', 'arkona');
-    expect(packs.toolMode('arkona', 'arkona_appraisal_fix')).toBe('scope');
+// v3 F12 (ADR 0081): the pack's per-tool switches are gone; the agent's scope decides.
+describe('arkona_appraisal_fix follows the agent’s scope (v3 F3.4, ADR 0055 decision D, ADR 0081)', () => {
+  it('a proposal at scope propose; at scope write one job, reviewed afterwards', async () => {
     await w.snapshot();
     const fresh = await w.call('arkona_appraise_owner', { page: P.headingLink, limit: 50, project: 'test' });
     const f = (fresh.body.findings as any[]).find((x) => x.check === 'heading_links');
     expect(f, fresh.text).toBeDefined();
-    // At scope propose: still one proposal.
-    const t = w.stack.newToken('appraisal-proposer', 'propose');
-    const proposer = await w.stack.connect(t.token);
-    const p = await w.stack.call(proposer, 'arkona_appraisal_fix', { findingId: f.id, project: 'test' });
+    // At scope propose (this world's agent): one proposal.
+    const p = await fix(f.id);
     expect(p.body.status, p.text).toBe('proposal_captured');
     w.stack.runtime.policy.commands.reject('owner', String(p.body.proposalId), 'test');
     // At scope write: made at once, as one job no one approved, and on the Review page for the owner.
-    const r = await fix(f.id);
+    const t = w.stack.newToken('appraisal-writer', 'write');
+    const writer = await w.stack.connect(t.token);
+    const r = await w.stack.call(writer, 'arkona_appraisal_fix', { findingId: f.id, project: 'test' });
     expect(['written', 'queued'], r.text).toContain(r.body.status);
     const job = await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 30_000);
     expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
@@ -293,20 +295,5 @@ describe('the pack’s switch for arkona_appraisal_fix (v3 F3.4, ADR 0055 decisi
       .list(PROJECT, { state: 'unreviewed', limit: 500 })
       .map((i) => i.jobId);
     expect(listed).toContain(job.id);
-  });
-
-  it('switched back to “always propose” and approved: one proposal at scope write too', async () => {
-    const packs = w.stack.runtime.packs;
-    packs.commands.setToolModes('owner', 'arkona', { arkona_appraisal_fix: 'propose' });
-    await packs.commands.approve('owner', 'arkona');
-    await w.snapshot();
-    const fresh = await w.call('arkona_appraise_owner', { page: P.blanks, limit: 50, project: 'test' });
-    const f = (fresh.body.findings as any[]).find((x) => x.check === 'blank_paragraphs');
-    expect(f, fresh.text).toBeDefined();
-    const before = proposals();
-    const r = await fix(f.id);
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(proposals()).toBe(before + 1);
-    w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
   });
 });

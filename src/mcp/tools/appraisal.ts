@@ -30,8 +30,8 @@ import {
   errorResult,
   mcpOrigin,
   projectArg,
-  RAIL_HINT,
-  railBody,
+  REASON_HINT,
+  reasonBody,
   render,
   withProject,
   type ProjectDeps,
@@ -564,7 +564,7 @@ export function appraisalTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Fix an appraisal finding (Arkona pack)',
       access: 'write',
       description:
-        'The Arkona pack: the fix for ONE appraisal finding whose followUp is `fix` (its `findingId` from an appraisal report). It re-reads the page (or asset) live and checks the finding still holds (FIX_STALE otherwise: nothing is done). Then it follows the pack’s switch for this tool, set by the owner: “follow the agent’s scope” (the default) makes the fix at once at scope write (the owner reviews it afterwards) and ONE proposal at scope propose; “always propose” makes ONE ordinary proposal for the owner whatever your scope. Canon, lifecycle and the owner’s safety rails still make a proposal. The fixes: an em dash in a page name (update_resource; when that changes a subject’s name, the fix says it is a plain rename of that page only) or in its headings and prose (block by block, every other character kept); decorative blank paragraphs removed; a heading’s link dropped (its text kept); an asset name’s file extension dropped (refused when the folder holds that name); a Working or Archived page removed from an Authoritative page’s Related Sources; sibling order and tags handed to the audits’ own fix. Last Major Revision follows the owner’s rule (a dash or a blank paragraph is not a major revision). A `judgement` finding has no fix: ask the owner. Sibling order and tags go to the audits’ own fix, always a proposal. Never resubmit a captured proposal (follow it with bridge_proposal_status) or a job (bridge_job_status). ' +
+        'The Arkona pack: the fix for ONE appraisal finding whose followUp is `fix` (its `findingId` from an appraisal report). It re-reads the page (or asset) live and checks the finding still holds (FIX_STALE otherwise: nothing is done). Then it makes the fix at once at scope write (on the owner’s Review page, with Revert) and ONE proposal at scope propose. Canon, lifecycle and the owner’s safety rails still make a proposal. The fixes: an em dash in a page name (update_resource; when that changes a subject’s name, the fix says it is a plain rename of that page only) or in its headings and prose (block by block, every other character kept); decorative blank paragraphs removed; a heading’s link dropped (its text kept); an asset name’s file extension dropped (refused when the folder holds that name); a Working or Archived page removed from an Authoritative page’s Related Sources; sibling order and tags handed to the audits’ own fix. Last Major Revision follows the owner’s rule (a dash or a blank paragraph is not a major revision). A `judgement` finding has no fix: ask the owner. Sibling order and tags go to the audits’ own fix, the same way. Never resubmit a captured proposal (follow it with bridge_proposal_status) or a job (bridge_job_status). ' +
         'The fix checks its target again inside its job before it writes (an asset renamed or moved, a linked page made current meanwhile: FIX_STALE, nothing written). ' +
         'Cost: 1 read (2 for a Related Sources link: the linked page is read too), then the fix’s own writes (at once, or when the owner approves the proposal).',
       inputSchema: z.object({
@@ -582,16 +582,14 @@ export function appraisalTools(deps: ToolDeps): McpToolProvider[] {
           if (!s.ok) return s.result;
           try {
             const origin = mcpOrigin(mctx, 'arkona_appraisal_fix');
-            // v3 F3.4 (ADR 0055 decision D): the pack's switch, from the version the owner approved; CR-2026-11-R2 (R2-35):
-            // a switch to "always propose" waiting for approval applies at once (the stricter of the two).
-            const mode = pd.services?.packs?.strictToolMode('arkona', 'arkona_appraisal_fix') ?? 'propose';
             const r = await s.a.proposeFix({
               projectId: pd.project.id,
               findingId: args.findingId,
               actor: origin.principal?.principalId ?? 'agent',
               origin,
               read: liveReader(pd, mctx, 'arkona_appraisal_fix'),
-              forceProposal: mode === 'propose',
+              // v3 F12 (ADR 0081): the agent's scope decides (no pack switch).
+              forceProposal: false,
             });
             if (r.status === 'submitted') {
               // At scope write, as one job: the owner reviews it afterwards (the Review page).
@@ -606,10 +604,10 @@ export function appraisalTools(deps: ToolDeps): McpToolProvider[] {
                     summary: r.summary,
                     fix: r.fix,
                     ...(r.requiresCanonicalApproval ? { requiresCanonicalApproval: true } : {}),
-                    ...(r.proposedBecause ? railBody({ proposedBecause: r.proposedBecause }) : {}),
+                    ...(r.proposedBecause ? reasonBody({ proposedBecause: r.proposedBecause }) : {}),
                     reads: r.reads,
                     hint: r.proposedBecause
-                      ? RAIL_HINT
+                      ? REASON_HINT
                       : 'ONE proposal for the owner, NOT applied. Never resubmit it; follow it with bridge_proposal_status.',
                   }
                 : { status: 'nothing_to_do', message: r.message, reads: r.reads },

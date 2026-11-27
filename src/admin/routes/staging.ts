@@ -12,7 +12,7 @@
  *   ambiguous folder, a non-folder of the same name) exactly as placing would give it.
  * - `POST /staging/:id/place` (a destination; an optional new name) and `POST /staging/:id/discard` (the bytes are kept
  *   before the delete).
- * - `POST /staging/allow-delete` (re-authenticated): lets ONE delete of an asset go ahead although its bytes could not
+ * - `POST /staging/allow-delete`: lets ONE delete of an asset go ahead although its bytes could not
  *   be kept (within an hour).
  *
  * Every change is audited (`staging.upload`, `staging.place`, `staging.discard`, `asset.delete_without_bytes`).
@@ -22,7 +22,6 @@ import { ImageError, displayNameOf } from '../../images/convert.js';
 import { STAGING_EXPIRY_WARNING_MS, ImageServiceError, type ImageService } from '../../images/service.js';
 import type { ImageUploadRow } from '../../images/store.js';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
-import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, projectParam, type Register } from './util.js';
 
@@ -357,7 +356,6 @@ export const registerStaging: Register = (api, ctx) => {
   });
 
   api.post('/staging/allow-delete', (req) => {
-    requireReauth(ctx.deps.services, req);
     const q = parseInput(projectQuery, req.query);
     const b = parseInput(
       z.object({ assetId: z.string().min(1).max(64), confirm: z.literal(true) }).strict(),

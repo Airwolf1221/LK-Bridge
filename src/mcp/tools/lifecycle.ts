@@ -3,8 +3,8 @@
  * `unarchive_page`, `move_to_working` and `promote_page`.
  *
  * Each plans from the page as it is now (one `getResource`), the lifecycle record and the settings, refusing in a typed
- * way; answers a `dryRun` with the plan; and otherwise submits ONE job that always needs the owner's canonical approval
- * ("Approve and accept as canon"), at every scope: the lifecycle marker makes it a canonical proposal. The proposal holds
+ * way; answers a `dryRun` with the plan; and otherwise submits ONE job: v3 F12 (ADR 0081) direct at scope `write` (on
+ * the owner's Review page, with Revert), a canonical proposal at scope `propose` (the lifecycle marker). The proposal holds
  * the full plan (the move and new name, every fact change, the tag changes, the note as a Markdown diff, the related
  * pages). The job:
  *
@@ -76,7 +76,16 @@ import { defineTool } from './define.js';
 import { liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
 import { CHANGE_ANNOTATIONS } from './resources.js';
 import { pageRef, templateKeysFor } from './set-facts.js';
-import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
+import {
+  errorResult,
+  projectArg,
+  protectedDryRun,
+  protectedDryRunText,
+  render,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { runWriteJob } from './write-job.js';
 import { runSet, subtreeArg } from './lifecycle-sets.js';
 
@@ -853,9 +862,11 @@ export const dryRunArg = z
   );
 
 export const CANON_NOTE =
-  'ALWAYS needs the owner’s canonical approval, whatever your scope: the call returns proposal_captured with ' +
-  'requiresCanonicalApproval; never retry it, follow it with bridge_proposal_status. A call on a page whose earlier ' +
-  'change of the same kind stopped part-way resumes it (only what is left). Every check is made again when it runs.';
+  'A canon and lifecycle change: at scope write it is made directly, on the owner’s Review page with Revert, so make it ' +
+  'only when the owner has asked for it in this conversation, and say what you changed; at scope propose it returns ' +
+  'proposal_captured with requiresCanonicalApproval: never retry it, follow it with bridge_proposal_status. A call on a ' +
+  'page whose earlier change of the same kind stopped part-way resumes it (only what is left). Every check is made ' +
+  'again when it runs.';
 
 interface Common {
   readonly page: string;
@@ -993,9 +1004,8 @@ async function runLifecycle(
                 ...head,
                 status: 'dry_run',
                 steps: b.labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l)),
-                requiresCanonicalApproval: true,
-                message:
-                  'Dry run: nothing was written and nothing was proposed. Run without dryRun to propose it: it always needs the owner’s canonical approval.',
+                ...protectedDryRun(mctx.scope, [`${tool} changes a page’s lifecycle state`]),
+                message: `Dry run: nothing was written and nothing was proposed. ${protectedDryRunText(mctx.scope)}`,
               },
               pd,
             ),
@@ -1018,7 +1028,7 @@ async function runLifecycle(
           head: {
             ...head,
             recordId:
-              'assigned when the change runs (bridge_proposal_status, then bridge_job_status, show it)',
+              'assigned when the change runs: bridge_job_status shows it (for a proposal, bridge_proposal_status first)',
           },
           preview: () => ({ page: (head as Obj).page, newName: (head as Obj).newName }),
         });
@@ -1243,7 +1253,7 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Archive a page',
     access: 'write',
     description:
-      'Retires an Authoritative [BSRC] or Working [BWRK] page to [INDEX] Archived as [BARC]: moves, renames and re-tags it (Archived replaces the status tag; first on a project whose pack says the lifecycle tag leads), adds a dated note at the top of its page document, and sets Status Archived, Continuity Type NON-CURRENT and Scope. Use it to retire a design, not delete_resource. A page with pages under it is refused unless `subtree: true`, which archives the whole set (a character’s index, Core and specialist pages) as ONE proposal. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. Lists the pages that link to it (never edited): tell the person. dryRun shows the whole plan. A change that stopped part-way resumes when you call the same tool again. Cost: about 6 reads to propose; the job about 15 reads and 8 writes once approved.',
+      'Retires an Authoritative [BSRC] or Working [BWRK] page to [INDEX] Archived as [BARC]: moves, renames and re-tags it (Archived replaces the status tag; first on a project whose pack says the lifecycle tag leads), adds a dated note at the top of its page document, and sets Status Archived, Continuity Type NON-CURRENT and Scope. Use it to retire a design, not delete_resource. A page with pages under it is refused unless `subtree: true`, which archives the whole set (a character’s index, Core and specialist pages) as ONE job (ONE proposal at scope propose). Canon: direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); at scope propose a proposal only the owner can accept as canon: never retry it, follow it with bridge_proposal_status. Lists the pages that link to it (never edited): tell the person. dryRun shows the whole plan. A change that stopped part-way resumes when you call the same tool again. Cost: about 6 reads to plan; the job about 15 reads and 8 writes.',
     inputSchema: z.object({
       page: pageRef.describe('The page to archive (name or id); with subtree, the root of the set.'),
       subtree: subtreeArg,
@@ -1354,7 +1364,7 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Unarchive a page',
     access: 'write',
     description:
-      'Reverses an archiving from the bridge’s lifecycle record: the page goes back to its previous place and state (formerly Authoritative: [BSRC] with its old Status, Continuity Type and Scope; formerly Working: [BWRK]); the archive note is removed if it was not edited. If the old place is gone give `destination`; a page archived by hand needs `destination`, `previousState` and `restore`. `subtree: true` unarchives a whole archived set as ONE proposal. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 4 reads to propose; the job about 15 reads and 7 writes once approved.',
+      'Reverses an archiving from the bridge’s lifecycle record: the page goes back to its previous place and state (formerly Authoritative: [BSRC] with its old Status, Continuity Type and Scope; formerly Working: [BWRK]); the archive note is removed if it was not edited. If the old place is gone give `destination`; a page archived by hand needs `destination`, `previousState` and `restore`. `subtree: true` unarchives a whole archived set as ONE job (ONE proposal at scope propose). Canon: direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); at scope propose a proposal only the owner can accept as canon: never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 4 reads to plan; the job about 15 reads and 7 writes.',
     inputSchema: z.object({
       page: pageRef.describe('The [BARC] page (name or id); with subtree, the root of the archived set.'),
       subtree: subtreeArg,
@@ -1615,7 +1625,7 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
     title: 'Move a page back to Working',
     access: 'write',
     description:
-      'Takes an Authoritative [BSRC] page back to Working for rework: moves it under [INDEX] Working as [BWRK], Status Working, its status tag (CANON, or AU under the AU ruling) swapped for Working (first where the pack says the lifecycle tag leads). The record keeps where it was (promote_page offers it as the destination). `subtree: true` moves a whole Authoritative set as ONE proposal; a Character Core under its own index moves alone. Lists the pages that link to it (never edited). ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 3 reads to propose; the job about 11 reads and 3 writes once approved.',
+      'Takes an Authoritative [BSRC] page back to Working for rework: moves it under [INDEX] Working as [BWRK], Status Working, its status tag (CANON, or AU under the AU ruling) swapped for Working (first where the pack says the lifecycle tag leads). The record keeps where it was (promote_page offers it as the destination). `subtree: true` moves a whole Authoritative set as ONE job (ONE proposal at scope propose); a Character Core under its own index moves alone. Lists the pages that link to it (never edited). Canon: direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); at scope propose a proposal only the owner can accept as canon: never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 3 reads to plan; the job about 11 reads and 3 writes.',
     inputSchema: z.object({
       page: pageRef.describe('The [BSRC] page (name or id); with subtree, the root of the set.'),
       subtree: subtreeArg,
@@ -1710,7 +1720,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Promote a Working page',
     access: 'write',
     description:
-      'Makes a Working [BWRK] page Authoritative (canon): moves it to `destination` (required, an [INDEX]; a dry run suggests where it was before move_to_working), renames it [BSRC], sets Status Authoritative and Last Major Revision, swaps the Working tag for CANON, or AU for a page whose Continuity Type is AU where the pack carries the AU ruling (first where the pack says the lifecycle tag leads; none beneath an index the owner lists as Authoritative without CANON). A Working character’s Core takes its [INDEX] with it. `subtree: true` promotes a whole Working set (a character’s index and all its pages) as ONE proposal; any page of that character left flat under [INDEX] Working is listed as an outsider: move_resource it into the set first. This is the only way to make a page canon: never set Status to Authoritative with set_facts. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 2 reads to propose; the job about 11 reads and 5 writes once approved.',
+      'Makes a Working [BWRK] page Authoritative (canon): moves it to `destination` (required, an [INDEX]; a dry run suggests where it was before move_to_working), renames it [BSRC], sets Status Authoritative and Last Major Revision, swaps the Working tag for CANON, or AU for a page whose Continuity Type is AU where the pack carries the AU ruling (first where the pack says the lifecycle tag leads; none beneath an index the owner lists as Authoritative without CANON). A Working character’s Core takes its [INDEX] with it. `subtree: true` promotes a whole Working set (a character’s index and all its pages) as ONE job (ONE proposal at scope propose); any page of that character left flat under [INDEX] Working is listed as an outsider: move_resource it into the set first. This is the only way to make a page canon: never set Status to Authoritative with set_facts. Canon: direct at scope write, on the owner’s Review page with Revert (make it only when the owner asked for it in this conversation, and say what you changed); at scope propose a proposal only the owner can accept as canon: never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 2 reads to plan; the job about 11 reads and 5 writes.',
     inputSchema: z.object({
       page: pageRef.describe('The [BWRK] page (name or id); with subtree, the root of the Working set.'),
       subtree: subtreeArg,

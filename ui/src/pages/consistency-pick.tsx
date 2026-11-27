@@ -1,8 +1,8 @@
 /**
  * v3 F4b (ADR 0064, design D6): "Pick the right value" on a consistency finding of the Audits page. Both (or all) values
  * side by side, each with its page, lifecycle, section and excerpt; the agents' suggestions (shown, never applied) and
- * the owner's earlier picks. The owner picks one value or types the right one: a step-up action (ADR 0062), after which
- * the bridge proposes ONE proposal editing every page that disagrees, for the owner to approve on the Proposals page.
+ * the owner's earlier picks. The owner picks one value or types the right one; confirmed in its dialog, the bridge edits
+ * every page that disagrees at once, as one job (v3 F12, ADR 0081: no proposal to approve next).
  */
 import { useState } from 'react';
 import { api } from '../api';
@@ -39,12 +39,15 @@ interface ConsistencyView {
     readonly value: string;
     readonly pickedAt: string;
     readonly proposalId: string | null;
+    readonly jobId?: string | null;
   }[];
   readonly rule: string;
 }
 
 interface PickResponse {
-  readonly proposalId: string;
+  readonly proposalId?: string;
+  /** v3 F12 (ADR 0081): the job the edits run as. */
+  readonly jobId?: string;
   readonly items: readonly { readonly id: string; readonly label: string }[];
   readonly untouched: readonly { readonly page: string; readonly value: string; readonly why: string }[];
   readonly notPlanned?: readonly { readonly page: string; readonly from: string; readonly why: string }[];
@@ -81,11 +84,12 @@ export function ConsistencyPick({
       title: 'Pick this value?',
       message: (
         <p>
-          <strong>{choice.label}</strong> becomes the value: the bridge proposes edits to every page that
-          disagrees with it (never the side you picked). Nothing is written until you approve the proposal.
+          <strong>{choice.label}</strong> becomes the value: the bridge edits every page that disagrees with
+          it (never the side you picked), at once, as one job. Each page is checked again first; follow it on
+          the Jobs page.
         </p>
       ),
-      confirmLabel: 'Pick and propose',
+      confirmLabel: 'Pick and apply',
     });
     if (!yes) return;
     // CR-2026-11-R4: a side goes with the value shown, so the bridge refuses it if the side reads otherwise now.
@@ -97,7 +101,7 @@ export function ConsistencyPick({
           project,
           ...body,
         }),
-      'Proposed: approve it on the Proposals page.',
+      'Applying: follow the job on the Jobs page.',
     );
     if (out) {
       setResult(out);
@@ -179,7 +183,7 @@ export function ConsistencyPick({
                 maxLength={300}
               />
               <Button type="submit" busy={busy} disabled={!project || typed.trim() === ''}>
-                Propose this value
+                Apply this value…
               </Button>
             </form>
             {r.data.suggestions.length > 0 && (
@@ -203,16 +207,26 @@ export function ConsistencyPick({
                 {r.data.picks
                   .map(
                     (p) =>
-                      `${p.value} (${fmtTime(Date.parse(p.pickedAt))}${p.proposalId ? `, ${p.proposalId}` : ''})`,
+                      `${p.value} (${fmtTime(Date.parse(p.pickedAt))}${p.jobId ? `, ${p.jobId}` : p.proposalId ? `, ${p.proposalId}` : ''})`,
                   )
                   .join('; ')}
               </div>
             )}
             {result && (
               <div className="small-text note note-ok">
-                Proposed <code>{result.proposalId}</code> ({result.items.length} page
-                {result.items.length === 1 ? '' : 's'}): approve it on the{' '}
-                <Link to="/proposals">Proposals</Link> page.
+                {result.jobId ? (
+                  <>
+                    Applying as job <code>{result.jobId}</code> ({result.items.length} page
+                    {result.items.length === 1 ? '' : 's'}): follow it on the <Link to="/jobs">Jobs</Link>{' '}
+                    page.
+                  </>
+                ) : (
+                  <>
+                    Proposed <code>{result.proposalId}</code> ({result.items.length} page
+                    {result.items.length === 1 ? '' : 's'}): approve it on the{' '}
+                    <Link to="/proposals">Proposals</Link> page.
+                  </>
+                )}
                 {result.notPlanned && result.notPlanned.length > 0 && (
                   <> Not planned: {result.notPlanned.map((n) => `${n.page} (${n.why})`).join('; ')}.</>
                 )}

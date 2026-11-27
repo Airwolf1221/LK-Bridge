@@ -3,6 +3,8 @@
  * one with updatePropertyRow / deletePropertyRow, with no journal pre-image (set_facts' own row writes carry one:
  * src/facts/expand.ts journalPreImage). What the restore overwrote cannot be found in the journal. (Checked and sound:
  * an edit made between the proposal and its approval is caught at approval, the proposal ends conflicted.)
+ *
+ * v3 F12 (ADR 0081): at scope `write` the sidebar restore runs at once as one job (no proposal to approve).
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -21,19 +23,11 @@ afterEach(async () => {
 const call = (name: string, args: Record<string, unknown>) =>
   w!.stack.call(c, name, { project: 'test', ...args });
 
-async function approve(r: ToolCall) {
-  expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
-  const id = String(r.body.proposalId);
-  const pol = w!.stack.runtime.policy;
-  await pol.commands.approve('owner', id);
-  for (
-    let i = 0;
-    i < 400 && !['executed', 'failed', 'conflicted'].includes(pol.proposals.get(id)!.state);
-    i++
-  )
-    await new Promise((res) => setTimeout(res, 20));
-  const p = pol.proposals.get(id)!;
-  return { state: p.state, jobId: p.jobId };
+/** v3 F12 (ADR 0081): at scope write a restore runs at once as one job; how it ended, and the job. */
+async function ran(r: ToolCall) {
+  expect(r.body, r.text).toMatchObject({ status: 'written' });
+  const jobId = String(r.body.jobId);
+  return { status: (await w!.stack.runtime.engine.wait(PROJECT, jobId, 30_000)).status, jobId };
 }
 
 type Row = { id: string; key: string; content: { text?: string }[] };
@@ -69,11 +63,11 @@ async function setup() {
 it('RV3-2b: the restore’s updatePropertyRow keeps the row it replaces as a journal pre-image', async () => {
   const snap = await setup();
   const r = await call('restore_snapshot', { page: S.atlas, snapshot: snap, scope: 'sidebar' });
-  const res = await approve(r);
-  expect(res.state).toBe('executed');
+  const res = await ran(r);
+  expect(res.status).toBe('succeeded');
   expect(text('Ruler')).toBe('Queen Mara');
   const entries = w!.stack.runtime.engine.queries.journalLookup(PROJECT, {
-    jobId: res.jobId!,
+    jobId: res.jobId,
     includePreImage: true,
     limit: 50,
   });

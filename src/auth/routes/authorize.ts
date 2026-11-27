@@ -5,6 +5,7 @@ import { CODE_CHALLENGE_S256 } from '../crypto.js';
 import { OAuthError } from '../errors.js';
 import { FormBody } from '../form.js';
 import { clientIp, originAllowed, rawQuery, redirectWith, sendErrorPage, sendHtml } from '../http.js';
+import { stepUpWindowInWords } from '../owner.js';
 import { renderConsent, renderConsentStepUp, renderScopeConfirm } from '../pages.js';
 import { findRegisteredRedirect, isAllowedRedirectUri, isLoopbackRedirect } from '../redirect-uris.js';
 import { ScopeSyntaxError, grantableScopes, parseScope } from '../scopes.js';
@@ -375,6 +376,7 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
               replace: replaces,
               need,
               totp: s.owner.totpRequired,
+              window: stepUpWindowInWords(s.owner.stepUpWindowSeconds),
               ...(error !== undefined ? { error } : {}),
             }),
             [new URL(pending.redirectUri).origin],

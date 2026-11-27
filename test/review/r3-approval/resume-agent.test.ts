@@ -1,16 +1,17 @@
 /**
  * CR-2026-11 round 3 (approval), ADR 0058 decision 3.3: an agent resumes, with `bridge_job_resume`, "only its own job,
  * only one the owner did not approve (OWNER_APPROVED_JOB), only at scope write (SCOPE)". The attempts: a job the OWNER
- * cancelled; a job whose connection was moved to a lower scope; a job resumed after the owner switched a safety rail on
- * (ADR 0055 C); another agent's job; a job the owner approved; a revoked connection.
+ * cancelled; a job whose connection was moved to a lower scope; another agent's job; a job the owner approved; a
+ * revoked connection. (AP-32, a resume after the owner switched a safety rail on, went with the rails in v3 F12, ADR
+ * 0081.)
  *
  * Modelled: the agent's direct, resumable job is submitted through the engine with the agent's principal and
- * `resumable: { kind: 'package' }`, exactly as test/packs/resume.test.ts models one (a setting-pack tool switched to
- * "follow the scope" submits the same shape through `runWriteJob`).
+ * `resumable: { kind: 'package' }`, exactly as test/packs/resume.test.ts models one (a setting-pack tool at scope write
+ * submits the same shape through `runWriteJob`).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { approve } from '../../packs/world.js';
-import { C, P, R, renameWorld, type RenameWorld } from '../../packs/rename-world.js';
+import { P, R, renameWorld, type RenameWorld } from '../../packs/rename-world.js';
 import type { JobOrigin } from '../../../src/jobs/types.js';
 import { PROJECT, intercept, proposeRename, settle } from './helpers.js';
 
@@ -142,51 +143,6 @@ describe('bridge_job_resume: whose job, and when', () => {
     const r2 = await w.stack.call(ca, 'bridge_job_resume', { jobId });
     expect(r2.isError, r2.text).toBe(true);
     expect(w.repo.live(P.nadiraArt)!.tags).not.toContain('Two');
-  });
-
-  // CR-2026-11-R3 (R3-55), decided (ADR 0061 part B decision 4, the owner's (b)): an agent's Resume judges the rails
-  // again on the steps left; a step one now covers makes the rest a proposal.
-  it('AP-32 after the renames-and-moves rail is switched on, the agent’s resume renames nothing: the rest is proposed', async () => {
-    const w = (open = await renameWorld());
-    const a = w.stack.newToken('ap32-agent', 'write');
-    // Rails as a new profile has them: renames and moves OFF, so the job ran directly.
-    w.failNext('PATCH', /\/resources\/hollowwk$/, 0);
-    // Two Working pages (not canon): their renames run directly at scope write while the rail is off.
-    const jobId = await directJob(
-      w,
-      a,
-      [
-        { id: C.draft, body: { name: '[BWRK] Draft Notes (old)' } },
-        { id: P.hollowWorking, body: { name: '[BWRK] Hollow Court Draft (old)' } },
-      ],
-      'ap32',
-    );
-    expect((await settle(w, jobId)).status).toBe('failed');
-    expect(w.repo.live(C.draft)!.name).toBe('[BWRK] Draft Notes (old)');
-    // The owner now wants every rename by this agent to be a proposal.
-    w.stack.runtime.policy.commands.setRails('owner', a.profileId, { renamesMoves: true });
-    const ca = await w.stack.connect(a.token);
-    const r = await w.stack.call(ca, 'bridge_job_resume', { jobId });
-    await settle(w, jobId);
-    // SAFE: the rename the rail now covers does not run directly (refused, or proposed).
-    expect(
-      w.repo.live(P.hollowWorking)!.name,
-      `the rail switched on before the resume was not applied: ${r.text.slice(0, 200)}`,
-    ).toBe('[BWRK] Hollow Court Draft');
-    // The rest is one proposal, saying which rail sent it; the job is not resumed again while it stands.
-    expect(r.body.status, r.text.slice(0, 300)).toBe('proposal_captured');
-    const proposalId = r.body.proposalId as string;
-    const p = w.stack.runtime.policy.proposals.get(proposalId)!;
-    expect(p.state).toBe('pending');
-    expect(JSON.stringify(p)).toMatch(/proposed because: .*rename/i);
-    const again = await w.stack.call(ca, 'bridge_job_resume', { jobId });
-    expect((again.body.error as { code?: string } | undefined)?.code, again.text.slice(0, 300)).toBe(
-      'REST_PROPOSED',
-    );
-    // The owner approves it: the rest runs, as the owner's work.
-    const done = await approve(w, proposalId);
-    expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
-    expect(w.repo.live(P.hollowWorking)!.name).toBe('[BWRK] Hollow Court Draft (old)');
   });
 
   it('AP-33 another agent’s job, the owner-approved rename, and a revoked connection are refused', async () => {

@@ -1,18 +1,16 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON replies in tests */
 /**
- * CR-2026-11 round 4 (sessions), the guarded rails at approval (ADR 0062 decision 5): "approving a proposal that deletes
- * anything ... judged by the rails' own rules at their defaults on the proposal's operations, however it came to be
- * proposed (a rail, a scope, the owner's own request)" needs the step-up. ADR 0057 decision 4 makes a removal through a
- * low-level tool (`deleteBlock`, `deletePropertyRow`, a whole-list write that drops entries) a delete for the deletes
- * rail. The attempt: an agent at scope `write` (default rails) sends such a removal; the deletes rail turns it into a
- * proposal ("proposed because: delete ..."); a dashboard session that has NOT stepped up approves it.
- *
- * The safe behaviour asserted: the approval answers 403 REAUTH_REQUIRED and nothing is deleted.
+ * CR-2026-11 round 4 (sessions), approving a low-level removal, as ADR 0081 now has it (the owner, 26 November 2026:
+ * "A code at sign-in is enough"): approving a proposal never asks for a fresh authenticator code, a low-level removal
+ * included (ADR 0062 decision 5 had asked for one). The case: an agent at scope `propose` sends a removal through a
+ * low-level tool (`deleteBlock`, `deletePropertyRow`, a whole-list write that drops entries, a page delete), which is a
+ * proposal (since F12 the rails that made one at scope `write` are gone); a dashboard session signed in but not stepped
+ * up approves it, and it goes ahead.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { factsWorld, P, type FactsWorld } from '../../facts/world.js';
 import { PROJECT, PUBLIC_URL } from '../../tools/helpers.js';
-import { writeAgent, type Agent } from '../r2-writescope/helpers.js';
+import { type Agent } from '../r2-writescope/helpers.js';
 import { ownerSession, type Owner } from './helpers.js';
 
 let w: FactsWorld;
@@ -27,7 +25,10 @@ beforeAll(async () => {
     },
     limits: { 'key-min': 5000, 'write-min': 2000 },
   });
-  a = await writeAgent(w, 'r4-sessions-agent');
+  // A connection at scope propose, with the low-level tools: its writes are proposals.
+  const t = w.stack.newToken('r4-sessions-agent', 'propose');
+  w.stack.runtime.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
+  a = { client: await w.stack.connect(t.token), profileId: t.profileId, patId: t.patId };
   owner = ownerSession(w.stack, PUBLIC_URL); // signed in, never stepped up
 }, 60_000);
 afterAll(async () => w?.close());
@@ -55,8 +56,8 @@ const settle = async (proposalId: string) => {
   return undefined;
 };
 
-describe('a low-level removal the deletes rail made a proposal, approved without the step-up', () => {
-  it('SE-05: lk_op_deleteBlock (a whole chronology table) — the approval asks for the step-up; nothing is deleted', async () => {
+describe('a low-level removal proposed at scope propose, approved by a session not stepped up (ADR 0081: it goes ahead)', () => {
+  it('SE-05: lk_op_deleteBlock (a whole chronology table) — approved without a step-up, the table goes', async () => {
     const before = await blocksOf();
     expect(before.ids).toContain('tbl1');
     const r = await call('lk_op_deleteBlock', {
@@ -64,7 +65,6 @@ describe('a low-level removal the deletes rail made a proposal, approved without
       ifMatch: before.version,
     });
     expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.proposedBecause).toBe('proposed because: delete (1 block)'); // the deletes rail made it a proposal
     const res = await approve(String(r.body.proposalId));
     await settle(String(r.body.proposalId));
     const after = await blocksOf();
@@ -72,10 +72,10 @@ describe('a low-level removal the deletes rail made a proposal, approved without
       status: res.status,
       code: res.json?.error?.code ?? null,
       tableKept: after.ids.includes('tbl1'),
-    }).toEqual({ status: 403, code: 'REAUTH_REQUIRED', tableKept: true });
+    }).toEqual({ status: 200, code: null, tableKept: false });
   });
 
-  it('SE-06: lk_api_write replaceDocumentBlocks that drops a block — the approval asks for the step-up', async () => {
+  it('SE-06: lk_api_write replaceDocumentBlocks that drops a block — approved without a step-up', async () => {
     const before = await blocksOf();
     const keep = before.blocks.filter((b) => b.id !== before.ids.at(-1));
     const r = await call('lk_api_write', {
@@ -87,15 +87,11 @@ describe('a low-level removal the deletes rail made a proposal, approved without
       },
     });
     expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.proposedBecause).toMatch(/delete \(1 document replace that drops blocks\)/);
     const res = await approve(String(r.body.proposalId));
-    expect({ status: res.status, code: res.json?.error?.code ?? null }).toEqual({
-      status: 403,
-      code: 'REAUTH_REQUIRED',
-    });
+    expect({ status: res.status, code: res.json?.error?.code ?? null }).toEqual({ status: 200, code: null });
   });
 
-  it('SE-07: lk_api_batch deletePropertyRow (a sidebar row) — the approval asks for the step-up', async () => {
+  it('SE-07: lk_api_batch deletePropertyRow (a sidebar row) — approved without a step-up', async () => {
     const r = await call('lk_api_batch', {
       calls: [
         {
@@ -105,24 +101,17 @@ describe('a low-level removal the deletes rail made a proposal, approved without
       ],
     });
     expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.proposedBecause, r.text).toMatch(/delete \(1 sidebar row\)/);
     const res = await approve(String(r.body.proposalId));
-    expect({ status: res.status, code: res.json?.error?.code ?? null }).toEqual({
-      status: 403,
-      code: 'REAUTH_REQUIRED',
-    });
+    expect({ status: res.status, code: res.json?.error?.code ?? null }).toEqual({ status: 200, code: null });
   });
 
-  it('SE-08 (control): a page delete through the same low-level tool asks for the step-up at approval', async () => {
+  it('SE-08: a page delete through the same low-level tool is approved without a step-up', async () => {
     const r = await call('lk_api_write', {
       operationId: 'deleteResource',
       params: { path: { resourceId: P.miyabi } },
     });
     expect(r.body.status, r.text).toBe('proposal_captured');
     const res = await approve(String(r.body.proposalId));
-    expect({ status: res.status, code: res.json?.error?.code ?? null }).toEqual({
-      status: 403,
-      code: 'REAUTH_REQUIRED',
-    });
+    expect({ status: res.status, code: res.json?.error?.code ?? null }).toEqual({ status: 200, code: null });
   });
 });

@@ -36,8 +36,8 @@ import type {
  *
  * OPS2: projects are added here by pasting a key into a write-only field (checked with LegendKeeper, then confirmed,
  * then stored encrypted), keys are replaced (same LegendKeeper project only), and projects are paused and drained, then
- * removed (archived). Adding, replacing and removing ask for the password again when the last check is over five
- * minutes old.
+ * removed (archived). Adding, replacing and removing (a key) ask for the authenticator code again when the last check
+ * is older than the step-up's window (ADR 0081: 12 hours by default). Nothing else here asks.
  */
 export function ProjectsPage() {
   const { data, error, reload } = useProject();
@@ -189,7 +189,7 @@ function ProjectRow({
         ).then(onChanged);
     });
   };
-  /** v3 F2 (ADR 0049 decision 3): stores this project as the default (re-authentication; audited). No restart. */
+  /** v3 F2 (ADR 0049 decision 3): stores this project as the default (audited). No restart. */
   const makeDefault = () =>
     void confirm({
       title: `Make ${p.name} the default project?`,
@@ -209,7 +209,7 @@ function ProjectRow({
     }).then((ok) => {
       if (ok)
         void run(
-          () => withReauth(() => api.post(`/projects/${name}/default`, { confirm: true })),
+          () => api.post(`/projects/${name}/default`, { confirm: true }),
           `${p.name} is now the stored default.`,
         ).then(onChanged);
     });
@@ -714,8 +714,6 @@ function SettingEditor({
   const [draft, setDraft] = useState('');
   const { run, busy } = useAction();
   const confirm = useConfirm();
-  // CR-2026-11-R2 (R2-51): a canon setting (the Status of pages agents create) asks for the password first.
-  const withReauth = useReauth();
   const shown =
     value === undefined && k.default !== undefined ? (
       <span>
@@ -731,10 +729,7 @@ function SettingEditor({
   const save = (v: string | boolean | null) => {
     const go = () =>
       void run(
-        () =>
-          withReauth(() =>
-            api.put(`/projects/${encodeURIComponent(p.name)}/settings`, { key: k.key, value: v }),
-          ),
+        () => api.put(`/projects/${encodeURIComponent(p.name)}/settings`, { key: k.key, value: v }),
         `${k.label} of ${p.name} saved.`,
       ).then((r) => {
         if (r) {
@@ -895,8 +890,6 @@ function CanonCard({ data }: { data: ProjectsResponse }) {
 function CanonEditor({ project: p }: { project: ProjectInfo }) {
   const c = useApi<CanonConfig>(`/projects/${encodeURIComponent(p.name)}/canon`);
   const { run, busy } = useAction();
-  // C2d (ADR 0036 decision 4): saving the rules asks for the owner's step-up (within 10 minutes, ADR 0062).
-  const withReauth = useReauth();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<CanonRule[] | null>(null);
   const [key, setKey] = useState('');
@@ -924,12 +917,10 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
       if (!ok) return;
       void run(
         () =>
-          withReauth(() =>
-            api.put(`/projects/${encodeURIComponent(p.name)}/canon`, {
-              rules: next,
-              confirm: true,
-            }),
-          ),
+          api.put(`/projects/${encodeURIComponent(p.name)}/canon`, {
+            rules: next,
+            confirm: true,
+          }),
         'Canon rules saved.',
       ).then((r) => {
         if (r) {
@@ -1198,8 +1189,6 @@ function CanonExemptEditor(props: {
 function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
   const v = useApi<LifecycleView>(`/projects/${encodeURIComponent(p.name)}/lifecycle`);
   const { run, busy } = useAction();
-  // C2d (ADR 0036 decision 4): saving the lifecycle settings asks for the owner's step-up (within 10 minutes, ADR 0062).
-  const withReauth = useReauth();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<Partial<Record<Group, Record<string, string>>>>({});
   if (!v.data) return v.error ? <ErrorNote error={v.error} onRetry={v.reload} /> : <Loading />;
@@ -1212,10 +1201,7 @@ function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
       (ok) => {
         if (!ok) return;
         void run(
-          () =>
-            withReauth(() =>
-              api.put(`/projects/${encodeURIComponent(p.name)}/lifecycle`, { ...body, confirm: true }),
-            ),
+          () => api.put(`/projects/${encodeURIComponent(p.name)}/lifecycle`, { ...body, confirm: true }),
           'Lifecycle settings saved.',
         ).then((r) => {
           if (r) {

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- mock documents */
 /**
  * v3 F4b (ADR 0064, D6): a pick that edits a chronology row goes through the F2 row tools (`update_timeline_event`'s own
- * plan), so the row's Date and KCY cells and its timeline event change together, in ONE proposal of items. Against the
+ * plan), so the row's Date and KCY cells and its timeline event change together, in ONE job (v3 F12; a proposal before). Against the
  * chronology world (a confirmed Universal Chronology on the mock LegendKeeper, Arkona's own calendar).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -35,7 +35,7 @@ function rowOf(date: string): any {
 }
 
 describe('a pick that edits a chronology row (D6)', () => {
-  it('is ONE proposal of one item, edited through the row tools: the Date, the KCY and the timeline event together', async () => {
+  it('is ONE job (v3 F12) of one item, edited through the row tools: the Date, the KCY and the timeline event together', async () => {
     const row = rowOf('Azah 18th, 4A 1');
     expect(row).toBeDefined();
     const before = w.events(w.ages[FOURTH]!.timeline).find((e) => String(e.name).includes('Divine System'))!;
@@ -62,12 +62,11 @@ describe('a pick that edits a chronology row (D6)', () => {
       before: 'Azah 18th, 4A 1',
       after: 'Azah 20th, 4A 1',
     });
-    // Nothing is written before the owner approves.
-    expect(w.rows(FOURTH).some((x) => x.startsWith('Azah 20th, 4A 1'))).toBe(false);
-    await rt.policy.commands.approve('owner', r.proposalId);
+    // v3 F12 (ADR 0081): the owner's confirmed pick runs at once as ONE job, no proposal.
+    expect(r.proposalId).toBe('');
+    expect(r.jobId).toEqual(expect.any(String));
     for (let i = 0; i < 500; i++) {
-      const p = rt.policy.proposals.get(r.proposalId)!;
-      const job = p.jobId ? rt.engine.queries.getJob(PROJECT, p.jobId) : undefined;
+      const job = rt.engine.queries.getJob(PROJECT, r.jobId!);
       if (job && ['succeeded', 'failed', 'cancelled'].includes(job.status)) {
         expect(job.status, JSON.stringify(job.lastError ?? null)).toBe('succeeded');
         break;

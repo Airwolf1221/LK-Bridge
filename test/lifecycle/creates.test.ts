@@ -2,7 +2,8 @@
 /**
  * Creating pages as Working or Authoritative (v2 C2c, ADR 0035; Part 1, owner): each creation tool with "working" (the
  * default: [BWRK] directly under [INDEX] Working, Status Working, the Working tag, CANON removed if the template brings
- * it) and "authoritative" ([BSRC] in its normal place, Status Authoritative, CANON: a canonical proposal); Working
+ * it) and "authoritative" ([BSRC] in its normal place, Status Authoritative, CANON: a canonical proposal at scope
+ * `propose`, direct at scope `write` since v3 F12, ADR 0081); Working
  * characters (Core and compact, return-existing in both places, an unresolved race still fails); the batch's parent rules;
  * create_index refused under [INDEX] Working and [INDEX] Archived; and a project whose indexes are not confirmed.
  */
@@ -13,6 +14,7 @@ import { accept, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.
 
 let w: LifecycleWorld;
 let client: Client;
+let proposer: Client;
 const call = (tool: string, args: Record<string, unknown>) =>
   w.stack.call(client, tool, { project: 'test', ...args });
 const writes = () => w.seen.filter((l) => !l.startsWith('GET'));
@@ -22,6 +24,7 @@ beforeAll(async () => {
   // The General Source template brings the CANON tag (and another): a Working page must not keep CANON.
   w.repo.res.get(T.general)!.tags = ['CANON', 'source'];
   client = await w.stack.connect();
+  proposer = await w.stack.connect(w.stack.newToken('creates-propose', 'propose').token);
 });
 afterAll(async () => w.close());
 
@@ -44,8 +47,9 @@ describe('create_resource', () => {
     expect(childNames(w, LIFECYCLE.working)).toEqual(['[BWRK] Bell Tower', '[BWRK] Sky Ferry']);
   });
 
-  it('authoritative: a canonical proposal; accepted, [BSRC] in its normal place, Status Authoritative, CANON', async () => {
-    const r = await call('create_resource', {
+  it('authoritative at scope propose: a canonical proposal; accepted, [BSRC] in its normal place, Status Authoritative, CANON', async () => {
+    const r = await w.stack.call(proposer, 'create_resource', {
+      project: 'test',
       name: 'Bell Yard',
       template: T.general,
       parent: 'Kumikas',
@@ -78,7 +82,7 @@ describe('create_resource', () => {
 });
 
 describe('create_bare_resource', () => {
-  it('working: [BWRK] with the Working tag in the create; authoritative: [BSRC], CANON, a canonical proposal', async () => {
+  it('working: [BWRK] with the Working tag in the create; authoritative: [BSRC], CANON, direct at scope write', async () => {
     const r = await call('create_bare_resource', { name: '[BSRC] Bare Draft', tags: ['CANON', 'x'] });
     expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
     expect(w.repo.live(r.body.pages[0].id)).toMatchObject({
@@ -91,9 +95,8 @@ describe('create_bare_resource', () => {
       parent: 'Kumikas',
       status: 'authoritative',
     });
-    expect(a.body, a.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    const done = await accept(w, a);
-    expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(a.body, a.text).toMatchObject({ status: 'written', verified: true });
+    expect(a.body).not.toHaveProperty('requiresCanonicalApproval');
     expect(w.repo.live(a.body.pages[0].id)!.tags).toEqual(['CANON']);
     expect(
       (
@@ -108,16 +111,14 @@ describe('create_bare_resource', () => {
 });
 
 describe('create_many_resources', () => {
-  it('a mixed batch is fine and becomes one canonical proposal; canon is judged per item', async () => {
+  it('a mixed batch is fine and, at scope write, one direct job; canon is judged per item', async () => {
     const r = await call('create_many_resources', {
       items: [
         { key: 'a', name: '[BSRC] Mixed Working' },
         { key: 'b', name: 'Mixed Canon', template: T.general, parent: 'Isar', status: 'authoritative' },
       ],
     });
-    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
-    const done = await accept(w, r);
-    expect(done.body, done.text).toMatchObject({ status: 'written', verified: true });
+    expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
     const byName = Object.fromEntries(r.body.pages.map((p: { name: string; id: string }) => [p.name, p.id]));
     expect(w.repo.live(byName['[BWRK] Mixed Working'])!.parentId).toBe(LIFECYCLE.working);
     expect(w.repo.live(byName['[BSRC] Mixed Canon'])!.parentId).toBe('isar_idx');
@@ -233,7 +234,7 @@ describe('a project whose lifecycle indexes are not confirmed', () => {
         parent: 'Kumikas',
         status: 'authoritative',
       });
-      expect(a.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
+      expect(a.body, a.text).toMatchObject({ status: 'written' });
       const t = await u.stack.call(c, 'archive_page', { project: 'test', page: 'Ashgate' });
       expect(t.body.error.code).toMatch(/LIFECYCLE_NOT_CONFIGURED|AMBIGUOUS/);
     } finally {

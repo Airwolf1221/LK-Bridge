@@ -3,7 +3,7 @@
  * v3 F4c (ADR 0065; design E1, E2, E5): the narrative writing tools against the REAL stack on the mock LegendKeeper:
  * the layout (with and without acts; the Story Map first; Act 10 after Act 9; plans under maps), no prefix and the
  * narrative tags, saving (new, revised in place, the dateline, the date, a taken number, the Drafting Gate), and
- * renumbering (insert at 2 of 6, the bulk rail, prose untouched, the event loop).
+ * renumbering (insert at 2 of 6, one proposal of items at scope propose, prose untouched, the event loop).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loopYields } from '../../src/mcp/tools/narrative-support.js';
@@ -397,12 +397,11 @@ describe('renumbering (E5.4)', () => {
     expect(bodyText(ch7.id)).toEqual(['Camue 16th, 4A 400', 'Lantern 6 burned.']);
   });
 
-  it('more than 10 pages through the bulk rail (a write token with the default rails) is ONE proposal of items', async () => {
-    const { token } = w.stack.newToken('narrative-rails', 'write');
+  it('at scope propose, a renumbering of more than 10 pages is ONE proposal of items (v3 F12: the bulk rail is gone)', async () => {
+    const { token } = w.stack.newToken('narrative-proposer', 'propose');
     const client = await w.stack.connect(token);
     const b = (await w.stack.call(client, 'arkona_chapter_insert', { story, at: 1, title: 'Prologue' })).body;
     expect(b.status, JSON.stringify(b)).toBe('proposal_captured');
-    expect(b.proposedBecause ?? b.railReason ?? JSON.stringify(b)).toMatch(/bulk/);
     const p = w.stack.runtime.policy.proposals.detail(b.proposalId)!;
     // Every chapter and plan renumbered (6 + 7) and the new plan, one item each.
     expect(p.itemPlan?.items.length).toBe(14);

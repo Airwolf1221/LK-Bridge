@@ -739,6 +739,16 @@ const SPECS: readonly Spec[] = [
     applies: 'now',
   },
   {
+    key: 'DELETE_COPY_RETENTION_DAYS',
+    schema: 'tools',
+    group: 'snapshots',
+    label: 'Copies kept before deletes for',
+    description:
+      'Days the restorable copy the bridge keeps before an agent deletes something (the pages it reads first, kept as a change snapshot) is kept, so Revert on the Review page can bring it back.',
+    unit: UNITS.days,
+    applies: 'now',
+  },
+  {
     key: 'SNAPSHOT_SOFT_DELETE_DAYS',
     schema: 'tools',
     group: 'snapshots',
@@ -957,6 +967,16 @@ const SPECS: readonly Spec[] = [
     label: 'Dashboard session lifetime',
     description: 'The dashboard session lasts this long from its last use (a sliding session).',
     unit: UNITS.secondsAsDays,
+    applies: 'next_start',
+  },
+  {
+    key: 'AUTH_STEP_UP_WINDOW_SECONDS',
+    schema: 'auth',
+    group: 'dashboard',
+    label: 'Fresh authenticator code lasts',
+    description:
+      'How long a fresh authenticator code (or the password without one) lasts on its session for the credential changes that ask for one: the password, the authenticator, recovery codes, connections, tokens and keys.',
+    unit: UNITS.secondsAsMinutes,
     applies: 'next_start',
   },
   {

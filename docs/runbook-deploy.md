@@ -870,12 +870,14 @@ test on`); the soak refuses any other, and any key whose own project (from `list
 
 ## Write-scope rehearsal ✋
 
-v3 F3.4 ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision G). Before an agent's profile is raised from
-`propose` to `write`, rehearse write scope on the **test world**: as a temporary write-scoped agent the script makes the
-four kinds of direct write the agents will make, checks that a pack package is still a proposal, reverts the four writes
-as you would from the Review page and reads each target back, and checks that a delete and an 11-page batch become
-proposals under the default safety rails. Then it cleans up. Run it after deploying F3.4 and approving the new pack
-version on the Packs page. It makes roughly 150 to 250 LegendKeeper requests (about 30 of them writes) and takes a few
+v3 F3.4 ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision G), as changed by v3 F12
+([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)). Before an agent's profile is raised from `propose` to
+`write`, rehearse write scope on the **test world**: as a temporary write-scoped agent the script makes the four kinds
+of direct write the agents will make, checks through a temporary `propose`-scope connection that the proposal path
+still makes a proposal, reverts the four writes as you would from the Review page and reads each target back, and
+checks that a delete at scope `write` runs directly with its restorable copy kept first (the safety rails are gone).
+Then it cleans up. Run it after deploying F3.4 (and again after F12) and approving the new pack version on the Packs
+page. It makes roughly 150 to 250 LegendKeeper requests (about 30 of them writes) and takes a few
 minutes.
 
 🔒 sudo (as `lkbridge`)
@@ -890,22 +892,25 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/rehearse-write-scope.sh --project tes
   a key. It shares the project's rate budget with the bridge: run it while the test world is quiet.
 - **Its own temporary database**, which starts as a **read-only copy** of the project's settings (the AI REPOSITORY, the
   confirmed chronology, the lifecycle indexes), its stored repository tree and its packs from `bridge.db`; nothing is
-  ever written to `bridge.db`, no other project is read, and the service need not be stopped. The two temporary
-  principals (the agent, with the default rails; a helper with the rails off that only makes and removes the throwaway
-  chronology event) exist in that temporary database only.
+  ever written to `bridge.db`, no other project is read, and the service need not be stopped. The three temporary
+  principals (the agent, at scope `write`; a helper at scope `write` that only makes and removes the throwaway
+  chronology event; since F12 a proposer at scope `propose`, for the proposal path) exist in that temporary database
+  only.
 - **The steps**, each PASS, FAIL, NOTED, INCONCLUSIVE or SKIPPED with its cost: setup (a throwaway page
   `lk-bridge write-scope <time>` at the top of the AI REPOSITORY with a page of three paragraphs and a PROPERTIES sidebar,
   a page to delete, and a throwaway chronology event dated like the first dated row of the first age); **1** one sentence
   edited (`write_page`); **2** one fact changed (`set_facts`); **3** the chronology event fixed (`update_timeline_event`,
-  its row and event in step); **4** a staged image placed (`upload_image`); **5** a pack package still a proposal (the
-  approved version's switches, and a package-shaped job captured as a proposal and rejected: a real package needs the
-  pack's governance pages, which are in the Arkona project, which the rehearsal never reads; NOTED if the new pack
-  version is not approved yet); **review** the four on the Review queue; **R1 to R4** each reverted and read back as it
-  was (R4, the image: not moved or hidden and nothing written to `LK-Bridge staging`; back on the Staging page from the
-  bridge's server, with ONE proposal to delete the placed image, which the script approves as you would); **rail-delete** and **rail-bulk** a delete and an 11-page batch proposed by the default rails (then rejected);
-  **cleanup**.
+  its row and event in step); **4** a staged image placed (`upload_image`); **5** the proposal path: a package-shaped
+  job from the proposer at scope `propose` captured as a proposal and rejected (since F12 every pack tool is direct at
+  `write`, with no switch; a real package is not sent, since it needs the pack's governance pages, which are in the
+  Arkona project, which the rehearsal never reads); **review** the four on the Review queue; **R1 to R4** each reverted
+  and read back as it was (R4, the image: not moved or hidden and nothing written to `LK-Bridge staging`; back on the
+  Staging page from the bridge's server, and the placed image deleted by the revert's own follow-up job, part of the
+  owner's confirmed Revert, its bytes kept first); **delete** a page deleted by the agent at scope `write`, directly,
+  with its restorable copy recorded (`delete_copies`) before the delete and the page read back as gone; **cleanup**.
 - **Clean-up**: the chronology event is deleted, the throwaway page with everything under it (cascade), and the image's
-  asset folder (`lk-bridge write-scope <time>`; the image itself was deleted when R4 approved its proposal). If
+  asset folder (`lk-bridge write-scope <time>`; the image itself was deleted by R4's follow-up job), and R4's re-staged
+  copy is discarded from the Staging page; any proposal still pending is rejected. If
   anything cannot be removed the report says what, to delete by hand in LegendKeeper, and the exit code is 1.
 - Exit code: 0 when no step failed (NOTED and SKIPPED are not failures), 1 when one did, 2 when it refused to run.
 - Without the wrapper: `DB_PATH=… LK_PROJECT_TEST_API_KEY=… npm run rehearse:write-scope -- --project test` (from a
@@ -1246,8 +1251,8 @@ encrypted secret store, never in the env file.
    set **Contact email** under Settings to show a contact line on `/privacy`); the Caddy block already proxies every
    path, so nothing changes there. Open both pages in a private window before saving them at Google.
 4. Dashboard → **Off-site copy** → **Google Drive**: paste the **Client ID** and **Client secret**, **Save the client**
-   (it asks for the step-up, your authenticator code or your password without one, if not given in the last ten
-   minutes; ADR 0062).
+   (it asks for the step-up, your authenticator code or your password without one, if not given within the last 12
+   hours; ADR 0081).
 5. **Connect Google Drive**: sign in at Google and allow access; back on the page, the card says **Connected** with the
    account's name and email.
 6. **Encryption keys** → **Generate keys**. Save both (the password and the salt) in your password manager, beside
@@ -1506,9 +1511,9 @@ Since OPS2 ([ADR 0028](adr/0028-secrets-on-the-dashboard.md)) projects, their AP
 authenticator app are managed on the dashboard. The keys are kept **encrypted in the bridge's database**
 (AES-256-GCM) under `SECRETS_MASTER_KEY`, which env-sync generates; the env file keeps only the bootstrap secrets
 (`SESSION_SECRET`, `JWT_SIGNING_KEY`, `SECRETS_MASTER_KEY`). Adding, replacing or removing a key, and changing the
-password or the authenticator, ask for the step-up (your authenticator code, or your password without one) if you have
-not given it in the last ten minutes; so do the settings, scope changes, pack approvals and the guarded rails' approvals
-(ADR 0062). The dashboard session lasts 30 days from its last use: remove an `AUTH_SESSION_TTL_SECONDS` lower than that
+password or the authenticator, and every change to a connection or token, ask for the step-up (your authenticator code,
+or your password without one) if you have not given it within the last 12 hours (`AUTH_STEP_UP_WINDOW_SECONDS`;
+ADR 0081). Nothing else does: the settings, pack approvals and proposals' approvals need only the signed-in session. The dashboard session lasts 30 days from its last use: remove an `AUTH_SESSION_TTL_SECONDS` lower than that
 from the env file.
 
 ### The first deploy of this release ✋

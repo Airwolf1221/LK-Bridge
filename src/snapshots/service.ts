@@ -1281,12 +1281,7 @@ export class SnapshotService {
       readonly signal?: AbortSignal;
     },
   ): Promise<RunOutcome> {
-    const startedAt = this.o.now();
-    const priority = o.priority ?? 'P1';
-    const deps = this.captureDeps(projectId, priority, undefined, { download: false });
-    const read = this.reader(projectId, priority, o.signal ? { signal: o.signal } : {});
-    const c = newCounters();
-    const pages: PageEntry[] = [];
+    const nodes: PageNode[] = [];
     for (const id of [...new Set(pageIds)]) {
       let node: TreeNode | null;
       try {
@@ -1295,17 +1290,43 @@ export class SnapshotService {
         node = null;
       }
       if (!node) continue;
-      const n: PageNode = {
+      nodes.push({
         id: node.id,
         parentId: node.parentId,
         rank: node.rank,
         name: node.rawName,
         kind: node.kind,
-      };
-      pages.push(await capturePage(deps, read, n, EVERYTHING, c));
+      });
     }
-    if (pages.length === 0)
+    if (nodes.length === 0)
       return { changed: false, skipped: true, summary: 'None of the pages is in the tree.' };
+    return this.captureNodes(projectId, nodes, o);
+  }
+
+  /**
+   * v3 F12 (ADR 0081, D3): a change snapshot of the given pages as the caller read them live (each piece of each, read
+   * now, at P1 by default), tree or not: the restorable copy kept before an agent's delete. A read that fails throws, so
+   * no copy is half taken. Returns the snapshot's id and the reads it made.
+   */
+  async captureNodes(
+    projectId: string,
+    nodes: readonly PageNode[],
+    o: {
+      readonly trigger: Record<string, unknown>;
+      readonly priority?: PriorityClass;
+      readonly signal?: AbortSignal;
+      /** The pieces of each page (default: everything); a document's delete copies that document and the page's settings. */
+      readonly pieces?: PieceSelection;
+    },
+  ): Promise<RunOutcome & { readonly reads?: number }> {
+    const startedAt = this.o.now();
+    const priority = o.priority ?? 'P1';
+    const deps = this.captureDeps(projectId, priority, undefined, { download: false });
+    const read = this.reader(projectId, priority, o.signal ? { signal: o.signal } : {});
+    const c = newCounters();
+    const pages: PageEntry[] = [];
+    for (const n of nodes) pages.push(await capturePage(deps, read, n, o.pieces ?? EVERYTHING, c));
+    if (pages.length === 0) return { changed: false, skipped: true, summary: 'No page to capture.' };
     let rootId: string | null;
     try {
       rootId = this.o.tree.queries.root(projectId).data?.id ?? null;
@@ -1326,6 +1347,7 @@ export class SnapshotService {
     return {
       changed: true,
       snapshotId: manifest.id,
+      reads: c.reads,
       summary: `Took change snapshot ${manifest.id}: ${summaryOf(manifest)}.`,
     };
   }
@@ -1582,7 +1604,16 @@ export class SnapshotService {
       const fulls = this.index.snapshots(pid, { kind: 'full', limit: 100_000 });
       const drop = fullsToDrop(fulls, now, this.o.settings);
       const cutoff = now - this.o.settings.keepDays * DAY;
-      drop.push(...this.index.snapshots(pid, { kind: 'change', before: cutoff, limit: 100_000 }));
+      // v3 F12 (ADR 0081, D3): a copy kept before a delete is kept for DELETE_COPY_RETENTION_DAYS, however short the
+      // change snapshots' own retention (its record goes with it once that has passed).
+      const copyCutoff = now - (this.o.settings.deleteCopyDays ?? 90) * DAY;
+      const copies = this.deleteCopiesSince(pid, copyCutoff);
+      drop.push(
+        ...this.index
+          .snapshots(pid, { kind: 'change', before: cutoff, limit: 100_000 })
+          .filter((x) => !copies.has(x.id)),
+      );
+      this.forgetDeleteCopies(pid, copyCutoff);
       for (const s of drop) {
         // ADR 0042 amendment 2: its pages out of the page index first (in chunks that yield).
         await this.pages.forget(s.id);
@@ -1592,6 +1623,30 @@ export class SnapshotService {
       }
     }
     return { removed, gc: await this.gc() };
+  }
+
+  /** v3 F12: the snapshots that delete copies made since `at` name (kept by the pruner). */
+  private deleteCopiesSince(projectId: string, at: number): Set<string> {
+    try {
+      return new Set(
+        (
+          this.o.db
+            .prepare('SELECT snapshot_id FROM delete_copies WHERE project_id = ? AND at >= ?')
+            .all(projectId, at) as { snapshot_id: string }[]
+        ).map((r) => r.snapshot_id),
+      );
+    } catch {
+      return new Set();
+    }
+  }
+
+  /** v3 F12: the records of delete copies past their retention (their snapshots are pruned as change snapshots). */
+  private forgetDeleteCopies(projectId: string, before: number): void {
+    try {
+      this.o.db.prepare('DELETE FROM delete_copies WHERE project_id = ? AND at < ?').run(projectId, before);
+    } catch {
+      // the table is there from migration 4900; nothing to forget otherwise
+    }
   }
 
   /**

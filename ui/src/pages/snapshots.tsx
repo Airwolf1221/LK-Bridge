@@ -38,7 +38,7 @@ import { MarkdownDiffView } from './proposals';
  * Snapshots (v2 E1a, ADR 0042; docs/dashboard.md › Snapshots): the bridge's own copies of each page, taken every night
  * in full (which catches edits made in the app) and after every bridge write. The store's size, how much
  * deduplication saves and the disk's free space against the minimum; the runs; any missing or damaged piece; each page's
- * history with its diffs and "Propose a restore" (always a proposal, approved on the Proposals page); a deleted image
+ * history with its diffs and "Restore…" (v3 F12, ADR 0081: previewed, confirmed in a dialog, then one job at once); a deleted image
  * back as a new asset; the restore rehearsal into the test world; and the nightly database copies.
  */
 
@@ -115,7 +115,7 @@ export function figuresText(f: PlanFiguresView | null | undefined): string | nul
 function EstimateLine({ e }: { e: PlanEstimateView }) {
   return (
     <p className="muted small-text" aria-label="Restore estimate">
-      Once approved: {fmtInt(e.writes)} write{e.writes === 1 ? '' : 's'} and {fmtInt(e.reads)} read
+      When it runs: {fmtInt(e.writes)} write{e.writes === 1 ? '' : 's'} and {fmtInt(e.reads)} read
       {e.reads === 1 ? '' : 's'}
       {e.wallClockMs !== null ? `, about ${fmtDuration(e.wallClockMs)}` : ''}
       {e.fitsToday === false ? ' (more than today’s budget has left)' : ''}. {figuresText(e.figures)}
@@ -163,7 +163,7 @@ function PlanView({ plan }: { plan: RestorePlanView }) {
       )}
       {plan.followUp && (
         <p className="muted">
-          Once it has run, a second proposal brings the page’s content back to the snapshot.
+          Once it has run, a second stage brings the page’s content back to the snapshot.
         </p>
       )}
     </div>
@@ -185,6 +185,7 @@ function RestoreForm({
 }) {
   const projectApi = useProjectApi();
   const { run, busy } = useAction();
+  const confirm = useConfirm();
   const [scope, setScope] = useState<'page' | 'sidebar' | 'document' | 'deleted'>(
     page.live ? 'page' : 'deleted',
   );
@@ -198,7 +199,7 @@ function RestoreForm({
     scope,
     ...(scope === 'document' ? { document: doc } : {}),
     ...(scope === 'deleted' ? { mode, ids } : {}),
-    ...(dryRun ? { dryRun: true } : {}),
+    ...(dryRun ? { dryRun: true } : { confirm: true }),
   });
   const preview = (e: FormEvent) => {
     e.preventDefault();
@@ -206,20 +207,36 @@ function RestoreForm({
       (r) => r && setResult(r),
     );
   };
-  const propose = () =>
+  // v3 F12 (ADR 0081): one confirmed action: the dialog says what it restores, then it runs at once as one job.
+  const propose = async () => {
+    const yes = await confirm({
+      title: `Restore ${page.name}?`,
+      message: (
+        <>
+          <p>{result?.plan.summary ?? 'The restore previewed below.'}</p>
+          <p className="small-text">
+            It runs at once as one job, checked again against the page as it is now; follow it on the Jobs
+            page.
+          </p>
+        </>
+      ),
+      confirmLabel: 'Restore',
+    });
+    if (!yes) return;
     void run(
       () => projectApi.post<RestoreResponse>('/snapshots/restore', body(false)),
-      'Proposed: approve it on the Proposals page.',
+      'Restoring: follow the job on the Jobs page.',
     ).then((r) => {
       if (!r) return;
       setResult(r);
       onDone();
     });
+  };
   const id = `restore-${snapshot.snapshot}`;
   return (
-    <form className="stack card" onSubmit={preview} aria-label={`Propose a restore to ${snapshot.snapshot}`}>
+    <form className="stack card" onSubmit={preview} aria-label={`Restore to ${snapshot.snapshot}`}>
       <h4>
-        Propose a restore of {page.name} to {fmtTime(Date.parse(snapshot.takenAt))}
+        Restore {page.name} to {fmtTime(Date.parse(snapshot.takenAt))}
       </h4>
       <label htmlFor={`${id}-scope`}>What to restore</label>
       <select
@@ -267,8 +284,8 @@ function RestoreForm({
           Preview
         </button>
         {result?.status === 'dry_run' && (
-          <Button variant="primary" busy={busy} onClick={propose}>
-            Propose this restore
+          <Button variant="primary" busy={busy} onClick={() => void propose()}>
+            Restore…
           </Button>
         )}
       </div>
@@ -276,6 +293,12 @@ function RestoreForm({
         <div role="status">
           {result.status === 'nothing_to_do' && (
             <p className="note">The page already matches the snapshot here; there is nothing to restore.</p>
+          )}
+          {result.status === 'submitted' && result.jobId && (
+            <p className="note">
+              Restoring as job <code>{result.jobId}</code>.{' '}
+              <Link to={`/jobs${qs({ id: result.jobId })}`}>Follow it on the Jobs page</Link>.
+            </p>
           )}
           {result.status === 'proposal_captured' && result.proposalId && (
             <p className="note">
@@ -417,7 +440,7 @@ function PageHistory({ pageId, onClose }: { pageId: string; onClose: () => void 
                     className="small"
                     onClick={() => setRestoring(restoring === s.snapshot ? null : s.snapshot)}
                   >
-                    Propose a restore
+                    Restore…
                   </button>
                 </td>
               </tr>
@@ -589,30 +612,46 @@ function ImageRestore({ snapshots }: { snapshots: SnapshotRowView[] }) {
   const [asset, setAsset] = useState('');
   const [update, setUpdate] = useState(false);
   const [result, setResult] = useState<ImageRestoreResponse | null>(null);
-  const send = (dryRun: boolean) =>
+  const confirm = useConfirm();
+  const send = async (dryRun: boolean) => {
+    // v3 F12 (ADR 0081): one confirmed action, then one job at once.
+    if (!dryRun) {
+      const yes = await confirm({
+        title: 'Restore this image?',
+        message: (
+          <>
+            <p>{result?.summary ?? 'The image previewed below comes back as a new asset.'}</p>
+            <p className="small-text">It runs at once as one job; follow it on the Jobs page.</p>
+          </>
+        ),
+        confirmLabel: 'Restore the image',
+      });
+      if (!yes) return;
+    }
     void run(
       () =>
         projectApi.post<ImageRestoreResponse>('/snapshots/restore-image', {
           snapshot,
           asset: asset.trim(),
           updateReferences: update,
-          ...(dryRun ? { dryRun: true } : {}),
+          ...(dryRun ? { dryRun: true } : { confirm: true }),
         }),
-      dryRun ? undefined : 'Done: see below.',
+      dryRun ? undefined : 'Restoring: see below.',
     ).then((r) => r && setResult(r));
+  };
   return (
     <section className="card" aria-labelledby="snap-image-h">
       <h2 id="snap-image-h">Restore a deleted image</h2>
       <p className="muted">
         LegendKeeper cannot undelete an image, so it comes back as a <strong>new</strong> asset with a new
-        URL: staged (hidden) first, then one proposal puts it back in its folder. Tick the box to update the
-        pages that showed the old URL in the same proposal.
+        URL, uploaded from the bridge’s copy as one job once you confirm it. Tick the box to update the pages
+        that showed the old URL in the same job.
       </p>
       <form
         className="stack"
         onSubmit={(e) => {
           e.preventDefault();
-          send(true);
+          void send(true);
         }}
       >
         <label htmlFor="img-snap">Snapshot</label>
@@ -634,14 +673,20 @@ function ImageRestore({ snapshots }: { snapshots: SnapshotRowView[] }) {
             Preview
           </button>
           {result?.status === 'dry_run' && (
-            <Button variant="primary" busy={busy} onClick={() => send(false)}>
-              Propose it
+            <Button variant="primary" busy={busy} onClick={() => void send(false)}>
+              Restore it…
             </Button>
           )}
         </div>
       </form>
       {result && (
         <div className="stack" role="status">
+          {result.status === 'submitted' && result.jobId && (
+            <p className="note">
+              Restoring as job <code>{result.jobId}</code>.{' '}
+              <Link to={`/jobs${qs({ id: result.jobId })}`}>Follow it on the Jobs page</Link>.
+            </p>
+          )}
           {result.status === 'proposal_captured' && result.proposalId && (
             <p className="note">
               Proposed as <code>{result.proposalId}</code>.{' '}
@@ -655,8 +700,8 @@ function ImageRestore({ snapshots }: { snapshots: SnapshotRowView[] }) {
                 {result.image.path.length > 0 ? result.image.path.join(' / ') : 'the library’s root'}
               </strong>{' '}
               as “{result.image.name}”
-              {result.image.creates.length > 0 && `, making ${result.image.creates.join(', ')}`}. Nothing is
-              sent to LegendKeeper until the proposal is approved; the image waits on the bridge’s server.
+              {result.image.creates.length > 0 && `, making ${result.image.creates.join(', ')}`}.
+              {result.status === 'dry_run' && ' Nothing is sent to LegendKeeper until you restore it.'}
             </p>
           )}
           {result.references.length === 0 ? (
@@ -987,10 +1032,22 @@ function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: stri
   const projectApi = useProjectApi();
   const { run, busy } = useAction();
   const [finished, setFinished] = useState<Record<string, string>>({});
-  /** v3 F2 (ADR 0049 decision 6): a recreate that stopped part-way, proposed again for only what is missing. */
-  const finish = (id: string) =>
+  const confirm = useConfirm();
+  /**
+   * v3 F2 (ADR 0049 decision 6): a recreate that stopped part-way, finished for only what is missing. v3 F12 (ADR
+   * 0081): confirmed, it runs at once as one job.
+   */
+  const finish = async (id: string) => {
+    const yes = await confirm({
+      title: 'Finish this restore?',
+      message: (
+        <p>The restore is planned again for only what the page still lacks, and runs at once as one job.</p>
+      ),
+      confirmLabel: 'Finish',
+    });
+    if (!yes) return;
     void run(() =>
-      projectApi.post<{ status: string; proposalId?: string; summary?: string }>(
+      projectApi.post<{ status: string; proposalId?: string; jobId?: string; summary?: string }>(
         `/snapshots/restores/${encodeURIComponent(id)}/finish`,
         {},
       ),
@@ -998,9 +1055,14 @@ function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: stri
       if (r)
         setFinished((f) => ({
           ...f,
-          [id]: r.proposalId ? `Proposed: ${r.proposalId}` : 'Nothing is missing: the page is complete.',
+          [id]: r.jobId
+            ? `Finishing: job ${r.jobId}`
+            : r.proposalId
+              ? `Proposed: ${r.proposalId}`
+              : 'Nothing is missing: the page is complete.',
         }));
     });
+  };
   return (
     <div className="table-wrap">
       <h3>{title}</h3>
@@ -1040,6 +1102,7 @@ function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: stri
                 )}
               </td>
               <td>
+                {r.jobId && <Link to={`/jobs${qs({ id: r.jobId })}`}>{r.jobId}</Link>}
                 {r.proposalId && <Link to={`/proposals${qs({ id: r.proposalId })}`}>{r.proposalId}</Link>}
                 {r.followUpProposalId && (
                   <>
@@ -1052,7 +1115,7 @@ function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: stri
                   r.state === 'failed' &&
                   !finished[r.id] && (
                     <div>
-                      <Button className="small" busy={busy} onClick={() => finish(r.id)}>
+                      <Button className="small" busy={busy} onClick={() => void finish(r.id)}>
                         Finish
                       </Button>
                       <span className="muted small-text">
@@ -1487,8 +1550,8 @@ export function SnapshotsPage() {
       <p className="muted">
         The bridge keeps its own copies of every page under the AI REPOSITORY: a full snapshot every night
         (which catches edits made in the LegendKeeper app within a day) and one after every bridge write. Each
-        piece is stored once, and an image that has not changed is not downloaded again. A restore is always a
-        proposal you approve on the Proposals page.
+        piece is stored once, and an image that has not changed is not downloaded again. A restore is
+        previewed, then confirmed, and runs at once as one job.
       </p>
       <StoreCard d={d} />
       <Problems d={d} />

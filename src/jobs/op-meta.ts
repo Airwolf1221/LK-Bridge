@@ -174,14 +174,15 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
     journal: 'pre-image',
     guard: 'block',
   },
-  updateBlock: patch('block'),
+  // v3 F12 (ADR 0081, D2): an update keeps what it overwrote, so Revert can put it back (one read, the guard's anyway).
+  updateBlock: patch('block', 'pre-image'),
   // Chunk 8 (F-03): deleting a block removes its whole subtree, and block deletes cannot be restored; the guard refuses
   // a delete that would remove an `unsupported` block (the target or a descendant) unless allowUnsupportedLoss is set.
   deleteBlock: { ...gone('block', 'pre-image'), guard: 'block' },
   moveBlock: key('block'),
   listBlockRows: read,
   createBlockRow: key('blockRows'),
-  updateBlockRow: patch('blockRows'),
+  updateBlockRow: patch('blockRows', 'pre-image'),
   deleteBlockRow: gone('blockRows', 'pre-image'),
   listBlockProperties: read,
   createBlockProperty: key('blockProperties'),
@@ -191,7 +192,7 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   deleteBlockProperty: { ...gone('blockProperty', 'pre-image'), guard: 'property' },
   listBlockPropertyRows: read,
   createBlockPropertyRow: key('blockPropertyRows'),
-  updateBlockPropertyRow: patch('blockPropertyRows'),
+  updateBlockPropertyRow: patch('blockPropertyRows', 'pre-image'),
   deleteBlockPropertyRow: gone('blockPropertyRows', 'pre-image'),
   // Properties (sidebar)
   listProperties: read,
@@ -203,7 +204,7 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   deleteProperty: { ...gone('property', 'pre-image'), guard: 'property' },
   listPropertyRows: read,
   createPropertyRow: key('propertyRows'),
-  updatePropertyRow: patch('propertyRows'),
+  updatePropertyRow: patch('propertyRows', 'pre-image'),
   deletePropertyRow: gone('propertyRows', 'pre-image'),
   // Timelines
   listLanes: read,
@@ -241,6 +242,7 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
     verify: 'state',
     compare: 'patch',
     reader: 'board',
+    journal: 'pre-image',
     intent: (p) => (p.body as { shapes?: unknown } | undefined)?.shapes ?? [],
     actual: (body) => boardShapes(body),
   },

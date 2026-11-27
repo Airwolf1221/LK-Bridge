@@ -7,7 +7,7 @@
  * - `CTX` / `page`: the pure engine's context and a page input, as test/packs/retag-engine.test.ts builds them
  *   (copied, so importing them does not import that file's tests).
  * - `r3World`: the appraisal world with the retag rules approved (lifecycle tag leads), plus `seed` pages of our own,
- *   `approveRetag` (a new approved version with changed rules: routine tags, token maps, batch size, tool switches) and
+ *   `approveRetag` (a new approved version with changed rules: routine tags, token maps, batch size) and
  *   `failNext` (one injected 400, as the retag world's).
  */
 import { ROOT } from '../../discover/world.js';
@@ -145,7 +145,6 @@ export interface R3World extends AppraisalWorld {
     readonly batchSize?: number;
     readonly race?: Readonly<Record<string, string>>;
     readonly culture?: Readonly<Record<string, string>>;
-    readonly tools?: Readonly<Record<string, 'propose' | 'scope'>>;
   }): void;
   /** The n-th (0-based) next request matching method and path fails once with a 400. */
   failNext(method: string, path: RegExp, n?: number): void;
@@ -187,10 +186,6 @@ export async function r3World(pages: readonly SeedPage[]): Promise<R3World> {
           ...base.tags,
           ...(o.race ? { race: { ...base.tags.race, ...o.race } } : {}),
           ...(o.culture ? { culture: { ...base.tags.culture, ...o.culture } } : {}),
-        },
-        settings: {
-          ...base.settings,
-          ...(o.tools ? { tools: { ...(base.settings.tools ?? {}), ...o.tools } } : {}),
         },
         retag: {
           ...(base.retag ?? ARKONA_PACK.rules.retag!),

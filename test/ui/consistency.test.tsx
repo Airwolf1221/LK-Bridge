@@ -265,11 +265,11 @@ const routes = (over: Record<string, unknown> = {}) =>
   });
 
 describe('Pick the right value (v3 F4b)', () => {
-  it('shows both values side by side and the agent’s suggestion; picks a side after a confirmation', async () => {
+  it('shows both values side by side and the agent’s suggestion; picks a side after a confirmation, then one job (v3 F12)', async () => {
     const api = installApi(
       routes({
         'POST /audits/findings/9/consistency-pick': {
-          proposalId: 'prop_88',
+          jobId: 'job_88',
           items: [{ id: 'page:natnref1', label: 'Velara: 4A 305 → Isar 3rd, 4A 300' }],
           untouched: [{ page: 'Core', value: 'Isar 3rd, 4A 300', why: 'the side picked' }],
         },
@@ -280,7 +280,7 @@ describe('Pick the right value (v3 F4b)', () => {
     const table = await screen.findByRole('table', { name: 'Findings' });
     const row = table.querySelector('[data-finding="9"]') as HTMLElement;
     expect(within(row).queryByRole('button', { name: 'Re-check now' })).toBeNull();
-    expect(within(row).queryByRole('button', { name: 'Propose a fix' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Apply fix…' })).toBeNull();
     await user.click(within(row).getByRole('button', { name: 'Pick the right value' }));
     const values = await screen.findByRole('table', { name: 'The values side by side' });
     const rows = within(values).getAllByRole('row').slice(1);
@@ -291,7 +291,7 @@ describe('Pick the right value (v3 F4b)', () => {
     expect(screen.getByText(/Suggested by agents/)).toBeInTheDocument();
     expect(screen.getByText(/The Core is the identity page/)).toBeInTheDocument();
     await user.click(within(rows[0]!).getByRole('button', { name: 'Pick this value' }));
-    await user.click(await screen.findByRole('button', { name: 'Pick and propose' }));
+    await user.click(await screen.findByRole('button', { name: 'Pick and apply' }));
     await waitFor(() => expect(api.find('POST', '/audits/findings/9/consistency-pick')).toHaveLength(1));
     // CR-2026-11-R4 (PK-51): the side goes with its value as shown, so the bridge refuses it if it reads otherwise now.
     expect(api.find('POST', '/audits/findings/9/consistency-pick')[0]!.body).toEqual({
@@ -300,13 +300,15 @@ describe('Pick the right value (v3 F4b)', () => {
       side: 'katscor1::kv:birth.scope:5',
       shown: 'Isar 3rd, 4A 300',
     });
-    expect(await screen.findByText('prop_88')).toBeInTheDocument();
+    // v3 F12 (ADR 0081): the confirmed pick runs at once as one job.
+    expect(await screen.findByText('job_88')).toBeInTheDocument();
+    expect(screen.getByText(/Applying as job/)).toBeInTheDocument();
   });
 
   it('sends a typed value', async () => {
     const api = installApi(
       routes({
-        'POST /audits/findings/9/consistency-pick': { proposalId: 'prop_89', items: [], untouched: [] },
+        'POST /audits/findings/9/consistency-pick': { jobId: 'job_89', items: [], untouched: [] },
       }),
     );
     const user = userEvent.setup();
@@ -315,8 +317,8 @@ describe('Pick the right value (v3 F4b)', () => {
     const row = table.querySelector('[data-finding="9"]') as HTMLElement;
     await user.click(within(row).getByRole('button', { name: 'Pick the right value' }));
     await user.type(await screen.findByLabelText('Or the right value'), 'Isar 4th, 4A 300');
-    await user.click(screen.getByRole('button', { name: 'Propose this value' }));
-    await user.click(await screen.findByRole('button', { name: 'Pick and propose' }));
+    await user.click(screen.getByRole('button', { name: 'Apply this value…' }));
+    await user.click(await screen.findByRole('button', { name: 'Pick and apply' }));
     await waitFor(() => expect(api.find('POST', '/audits/findings/9/consistency-pick')).toHaveLength(1));
     expect(api.find('POST', '/audits/findings/9/consistency-pick')[0]!.body).toMatchObject({
       value: 'Isar 4th, 4A 300',

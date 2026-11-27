@@ -196,31 +196,37 @@ describe('health: refresh, invalid_grant, disconnect', () => {
 });
 
 describe('re-authentication and secrecy', () => {
-  it('every sensitive action needs a re-authentication within 10 minutes (ADR 0062)', async () => {
+  it('every credential change needs a re-authentication within the window (ADR 0081); settings and folders do not', async () => {
     stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = NULL').run();
     const sensitive: [string, string, unknown][] = [
-      ['PUT', '/offsite/settings', { settings: { bandwidthLimit: 'off' } }],
       ['PUT', '/offsite/client', { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET }],
       ['POST', '/offsite/connect', {}],
       ['POST', '/offsite/disconnect', { confirm: true }],
       ['POST', '/offsite/keys/generate', {}],
       ['POST', '/offsite/keys/confirm', { confirmId: '0'.repeat(32), passwordEnd: 'x', saltEnd: 'y' }],
       ['PUT', '/offsite/keys', { password: 'a'.repeat(20), salt: 'b'.repeat(20) }],
-      ['POST', '/offsite/folders/1/delete', { confirm: true }],
-      ['POST', '/offsite/adopt', { confirm: true }],
     ];
     for (const [m, p, b] of sensitive) {
       const r = await stack.call(m, `/api/admin${p}`, { body: b });
       expect(r.status, `${m} ${p}`).toBe(403);
       expect(r.json.error.code, `${m} ${p}`).toBe('REAUTH_REQUIRED');
     }
+    // ADR 0081: the settings and the folders are not credentials: no step-up (whatever else they answer).
+    for (const [m, p, b] of [
+      ['PUT', '/offsite/settings', { settings: { bandwidthLimit: 'off' } }],
+      ['POST', '/offsite/folders/1/delete', { confirm: true }],
+      ['POST', '/offsite/adopt', { confirm: true }],
+    ] as const) {
+      const r = await stack.call(m, `/api/admin${p}`, { body: b });
+      expect(r.json?.error?.code, `${m} ${p}`).not.toBe('REAUTH_REQUIRED');
+    }
     // Reads and requests are not sensitive.
     expect((await api.get('/offsite')).status).toBe(200);
   });
 
-  it('a re-authentication older than 10 minutes no longer counts', async () => {
+  it('a re-authentication older than 12 hours no longer counts', async () => {
     await reauth();
-    stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = reauth_at - 601').run(); // ADR 0062: 10 minutes
+    stack.db.prepare('UPDATE auth_owner_sessions SET reauth_at = reauth_at - 43201').run(); // ADR 0081: 12 hours
     const r = await api.put('/offsite/client', { clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
     expect(r.json.error.code).toBe('REAUTH_REQUIRED');
   });

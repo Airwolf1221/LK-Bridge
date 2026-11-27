@@ -3,12 +3,12 @@
  * CR-2026-11-R4 pass 2: an agent at scope `write` steering the owner's pick with an ordinary direct edit (the class of
  * R3-12 and R3-25: an ordinary edit, an agent's included, made an owner-approved change apply where the owner had not
  * approved it). After the audit an agent edits a page the finding names (write_page, set_facts: direct writes at scope
- * write, each followed by its change snapshot); the owner then picks on the dashboard and approves. Each test asserts the
+ * write, each followed by its change snapshot); the owner then picks on the dashboard (v3 F12: it runs at once). Each test asserts the
  * safe behaviour: the owner's approved edit lands on the restated value only, never on text the agent chose.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
-  approveAndWait,
+  pickDone,
   coreOf,
   findingOf,
   heading,
@@ -63,7 +63,8 @@ afterAll(async () => {
 });
 
 async function agent(name: string, args: Record<string, unknown>) {
-  const c = await w.stack.connect();
+  // v3 F12: the world's own agent is at scope propose; this one is at scope write, where its edit is direct.
+  const c = await w.stack.connect(w.stack.newToken('r4-pick-writer', 'write').token);
   const r = await w.stack.call(c, name, { project: 'test', ...args });
   expect(r.isError, r.text).toBe(false);
   await w.stack.runtime.snapshots.settled();
@@ -84,7 +85,7 @@ describe('an agent’s direct edit after the audit, then the owner’s pick', ()
     expect((await valuesOf(w, f)).map((v) => v.excerpt)).toContain('Wynn Ostra was born in 4A 103.');
     const { r } = await pickPage(w, f, coreOf(WYNN));
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    const done = await approveAndWait(w, String(r.json.proposalId));
+    const done = await pickDone(w, r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     const body = (w.repo.blocks.get(w.mainOf('wynnreg1'))!.blocks as any[]).filter(
       (b) => b.kind === 'paragraph',
@@ -102,7 +103,7 @@ describe('an agent’s direct edit after the audit, then the owner’s pick', ()
     });
     const { r } = await pickPage(w, f, 'yarareg1');
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    const done = await approveAndWait(w, String(r.json.proposalId));
+    const done = await pickDone(w, r.json);
     expect(done.job?.status, JSON.stringify(done.job?.lastError ?? null)).toBe('succeeded');
     expect(rowText(w, coreOf(YARA), 'Temporal Scope')).toBe('Married 4A 103; Born 4A 100');
   });

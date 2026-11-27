@@ -4,7 +4,6 @@ import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useCon
 import { fmtAgo, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
-import { useReauth } from '../reauth';
 import { Link } from '../router';
 import { rowCandidates, tieFromError, TieChoices, type TieCandidate } from './chronology-ties';
 import { ConsistencyPick } from './consistency-pick';
@@ -31,11 +30,10 @@ import type {
  * - Summary: findings by category and severity; a row filters the list below.
  * - Findings: filters (category, code, severity, page path, new, acknowledged, resolved), per-page grouping, each
  *   finding's evidence, source snapshot (with a link to the page's snapshot history) and age, acknowledging with a
- *   reason, "Propose a fix" (one ordinary proposal, never applied by the audit) and "Re-check now" (the only two
+ *   reason, "Apply fix" (v3 F12, ADR 0081: confirmed in a dialog, then one job at once; the audit itself never applies anything) and "Re-check now" (the only two
  *   requests that read LegendKeeper).
  * - Runs: each with its duration and snapshot.
- * - Rules and settings: the rules editor (saving asks you to sign in again, as the canon rules do), the
- *   tag-definition source and the audit settings.
+ * - Rules and settings: the rules editor, the tag-definition source and the audit settings (ADR 0081: no fresh code).
  */
 
 const SEVERITY_TONE: Record<AuditSeverity, 'bad' | 'warn' | 'info'> = {
@@ -93,8 +91,8 @@ export function AuditsPage() {
       </PageHeader>
       <p className="muted">
         What the audits found in the newest full snapshot (and the change snapshots since). Findings only:
-        nothing here changes your world. “Propose a fix” makes an ordinary proposal for you to approve on the{' '}
-        <Link to="/proposals">Proposals</Link> page.
+        nothing here changes your world until you ask. “Apply fix…” says what it does, then runs it as one job
+        (on the <Link to="/jobs">Jobs</Link> page).
       </p>
       {!overview.data ? (
         overview.error ? (
@@ -553,7 +551,6 @@ function FindingRow({
   const [reason, setReason] = useState<string | null>(null);
   // v3 F6c (ADR 0080): "Keep it here" on a source outside its category's homes (its reason, while being written).
   const [keepReason, setKeepReason] = useState<string | null>(null);
-  const withReauthKeep = useReauth();
   const [note, setNote] = useState<string | null>(null);
   // v3 F4b (ADR 0064, D6): a consistency finding's values side by side, to pick the right one.
   const [picking, setPicking] = useState(false);
@@ -561,7 +558,21 @@ function FindingRow({
   // v3 F2.1: a chronology tie: the candidates of a refused fix, or of an event in a tie (`chronology_pair`).
   const [tie, setTie] = useState<TieCandidate[] | null>(null);
   const pairRows = f.fix?.kind === 'chronology_pair' ? rowCandidates(f.fix.args.candidates) : [];
-  const choose = (choice: { eventId?: string; createNew?: true; rowId?: string }) => {
+  const choose = async (choice: { eventId?: string; createNew?: true; rowId?: string }) => {
+    // v3 F12 (ADR 0081): confirmed first; then it runs at once as one job.
+    const ok = await confirm({
+      title: 'Apply this choice?',
+      message: (
+        <p>
+          {choice.createNew
+            ? 'A new timeline event is made for this row.'
+            : 'The row and the event you chose are paired, and the event brought into line with the row.'}{' '}
+          It runs at once as one job; follow it on the Jobs page.
+        </p>
+      ),
+      confirmLabel: 'Apply',
+    });
+    if (!ok) return;
     const send = (confirmShapeChange: boolean) =>
       api.post<AuditProposeFixResponse>(`/audits/findings/${f.id}/propose-fix`, {
         confirm: true,
@@ -586,36 +597,40 @@ function FindingRow({
               before you propose it.
             </p>
           ),
-          confirmLabel: 'Propose the change',
+          confirmLabel: 'Apply the change',
         });
         return yes ? send(true) : undefined;
       }
     }).then((r) => {
       if (!r) return;
       setTie(null);
-      setNote(
-        r.status === 'proposal_captured'
-          ? `Proposed (${r.proposalId}). Nothing is changed until you approve it.`
-          : r.message,
-      );
+      setNote(fixOutcome(r));
     });
   };
   const propose = async () => {
-    // v2 E6 (ADR 0048): a chronology repair that turns a range into a single date (or the reverse) is never one click.
+    // v3 F12 (ADR 0081): one confirmed action. The dialog says what the fix does; confirmed, it runs at once as one job
+    // (no proposal to approve next). v2 E6 (ADR 0048): a chronology repair that turns a range into a single date (or
+    // the reverse) says so too.
     const shape = f.fix?.confirm?.shapeChange;
-    if (shape) {
-      const yes = await confirm({
-        title: 'This fix changes the event’s shape',
-        message: (
-          <p>
-            The timeline event would change: <strong>{shape}</strong>. Check that the row and the event are
-            the same chronology event before you propose it.
+    const yes = await confirm({
+      title: shape ? 'This fix changes the event’s shape' : 'Apply this fix?',
+      message: (
+        <>
+          <p>{f.fix?.summary ?? 'The bridge plans the fix from the page as it is now and applies it.'}</p>
+          {shape && (
+            <p>
+              The timeline event would change: <strong>{shape}</strong>. Check that the row and the event are
+              the same chronology event first.
+            </p>
+          )}
+          <p className="small-text">
+            It runs at once as one job, every guard checking it again; follow it on the Jobs page.
           </p>
-        ),
-        confirmLabel: 'Propose the change',
-      });
-      if (!yes) return;
-    }
+        </>
+      ),
+      confirmLabel: 'Apply fix',
+    });
+    if (!yes) return;
     void run(async () => {
       try {
         return await api.post<AuditProposeFixResponse>(`/audits/findings/${f.id}/propose-fix`, {
@@ -631,11 +646,7 @@ function FindingRow({
       }
     }).then((r) => {
       if (!r) return;
-      setNote(
-        r.status === 'proposal_captured'
-          ? `Proposed (${r.proposalId}). Nothing is changed until you approve it.`
-          : r.message,
-      );
+      setNote(fixOutcome(r));
     });
   };
   const recheck = () =>
@@ -673,13 +684,11 @@ function FindingRow({
   const keepHome = () =>
     void run(
       () =>
-        withReauthKeep(() =>
-          api.post(`/audits/findings/${f.id}/keep-home`, {
-            confirm: true,
-            project,
-            reason: (keepReason ?? '').trim(),
-          }),
-        ),
+        api.post(`/audits/findings/${f.id}/keep-home`, {
+          confirm: true,
+          project,
+          reason: (keepReason ?? '').trim(),
+        }),
       'Kept here: silent until its tags or its parent change.',
     ).then((ok) => {
       if (ok) {
@@ -762,7 +771,7 @@ function FindingRow({
                 onClick={() => void propose()}
                 title={f.fix.summary}
               >
-                Propose a fix
+                Apply fix…
               </Button>
             )}
             {f.state === 'open' && f.fix?.confirm && (
@@ -820,8 +829,8 @@ function FindingRow({
               candidates={tie ?? pairRows}
               busy={busy}
               disabled={busy || !project}
-              onUse={(c) => choose(c.kind === 'event' ? { eventId: c.eventId } : { rowId: c.rowId })}
-              onCreateNew={() => choose({ createNew: true })}
+              onUse={(c) => void choose(c.kind === 'event' ? { eventId: c.eventId } : { rowId: c.rowId })}
+              onCreateNew={() => void choose({ createNew: true })}
             />
           )}
           {note && <div className="small-text note note-ok">{note}</div>}
@@ -1106,7 +1115,6 @@ function RulesEditor({
   reload: () => void;
 }) {
   const { run, busy } = useAction();
-  const withReauth = useReauth();
   const [rules, setRules] = useState<RuleDraft[]>(cfg.effectiveRules.map(draftOf));
   const [useDefaults, setUseDefaults] = useState(cfg.seeded);
   const [settings, setSettings] = useState<AuditSettingsView>(cfg.settings);
@@ -1123,7 +1131,7 @@ function RulesEditor({
   const set = (i: number, patch: Partial<RuleDraft>) =>
     setRules(rules.map((r, k) => (k === i ? { ...r, ...patch } : r)));
   const save = (body: Record<string, unknown>, ok: string) =>
-    void run(() => withReauth(() => api.put('/audits/config', { confirm: true, project, ...body })), ok).then(
+    void run(() => api.put('/audits/config', { confirm: true, project, ...body }), ok).then(
       (r) => r && reload(),
     );
   const pick = (pageId: string) => {
@@ -1143,7 +1151,6 @@ function RulesEditor({
         A rule selects pages (by Reference Type, a registry type and role, a name prefix, an ancestor’s name,
         or a kind; all the given selectors must match) and names the template their sidebar and tabs are
         compared with. Overlapping rules, duplicate names and unmatched pages are findings, never guesses.
-        Saving asks you to sign in again.
       </p>
       <label className="row">
         <input type="checkbox" checked={useDefaults} onChange={(e) => setUseDefaults(e.target.checked)} /> Use
@@ -1472,3 +1479,11 @@ const lines = (s: string): string[] =>
     .split('\n')
     .map((x) => x.trim())
     .filter(Boolean);
+
+/** v3 F12 (ADR 0081): what a fix's request did, in a line. */
+function fixOutcome(r: AuditProposeFixResponse): string {
+  if (r.status === 'job_submitted') return `Applying: job ${r.jobId} (follow it on the Jobs page).`;
+  if (r.status === 'proposal_captured')
+    return `Proposed (${r.proposalId}). Nothing is changed until you approve it.`;
+  return r.message;
+}

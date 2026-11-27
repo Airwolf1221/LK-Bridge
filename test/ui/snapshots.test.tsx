@@ -327,7 +327,7 @@ describe('the Snapshots page', () => {
     });
   });
 
-  it('a page’s history: its diff with now, then "Propose a restore" (a dry run first, then the proposal)', async () => {
+  it('a page’s history: its diff with now, then "Restore…" (a dry run first, then confirmed, one job)', async () => {
     const restoreBodies: unknown[] = [];
     const api = installApi(
       routes({
@@ -363,7 +363,7 @@ describe('the Snapshots page', () => {
           restoreBodies.push(c.body);
           return (c.body as { dryRun?: boolean }).dryRun
             ? { status: 'dry_run', plan }
-            : { status: 'proposal_captured', proposalId: 'prop_rst1', restoreId: 'rst_1', plan };
+            : { status: 'submitted', jobId: 'job_rst1', restoreId: 'rst_1', plan };
         },
       }),
     );
@@ -378,9 +378,9 @@ describe('the Snapshots page', () => {
     expect(api.find('GET', '/snapshots/diff')[0]!.query).toContain('ref=docmain1');
     expect(await screen.findByText('Notes rewritten.')).toBeInTheDocument();
 
-    // Propose a restore of the document: the dry run first.
-    await user.click(within(history).getByRole('button', { name: 'Propose a restore' }));
-    const form = await screen.findByRole('form', { name: `Propose a restore to ${SNAP}` });
+    // Restore the document: the dry run first.
+    await user.click(within(history).getByRole('button', { name: 'Restore…' }));
+    const form = await screen.findByRole('form', { name: `Restore to ${SNAP}` });
     await user.selectOptions(within(form).getByLabelText('What to restore'), 'document');
     await user.click(within(form).getByRole('button', { name: 'Preview' }));
     expect(await within(form).findByText(/Cannot be restored exactly/)).toBeInTheDocument();
@@ -392,16 +392,22 @@ describe('the Snapshots page', () => {
       document: 'docmain1',
       dryRun: true,
     });
-    await user.click(within(form).getByRole('button', { name: 'Propose this restore' }));
-    expect(await within(form).findByRole('link', { name: 'Open it on the Proposals page' })).toHaveAttribute(
+    // v3 F12 (ADR 0081): one confirmed action; then it runs at once as one job.
+    await user.click(within(form).getByRole('button', { name: 'Restore…' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('It runs at once as one job');
+    expect(restoreBodies).toHaveLength(1);
+    await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    expect(await within(form).findByRole('link', { name: 'Follow it on the Jobs page' })).toHaveAttribute(
       'href',
-      '/ui/proposals?id=prop_rst1',
+      '/ui/jobs?id=job_rst1',
     );
     expect(restoreBodies[1]).toEqual({
       page: 'atlas5np',
       snapshot: SNAP,
       scope: 'document',
       document: 'docmain1',
+      confirm: true,
     });
   });
 
@@ -423,8 +429,8 @@ describe('the Snapshots page', () => {
           return (c.body as { dryRun?: boolean }).dryRun
             ? { status: 'dry_run', old: { name: 'Weeping Sea' }, references: refs, image }
             : {
-                status: 'proposal_captured',
-                proposalId: 'prop_img1',
+                status: 'submitted',
+                jobId: 'job_img1',
                 old: {},
                 references: refs,
                 image: { ...image, stagedId: 'img_1' },
@@ -439,17 +445,23 @@ describe('the Snapshots page', () => {
     const card = screen.getByRole('region', { name: 'Restore a deleted image' });
     await user.click(within(card).getByRole('button', { name: 'Preview' }));
     expect(await within(card).findByText(/Main \(image blocks\)/)).toBeInTheDocument();
-    // v3 F3c (ADR 0051): where it goes back; nothing is sent to LegendKeeper before approval.
+    // v3 F3c (ADR 0051): where it goes back; nothing is sent to LegendKeeper before the owner restores it.
     expect(within(card).getByText(/Goes back to/)).toHaveTextContent(
-      'Goes back to Characters as “Weeping Sea”. Nothing is sent to LegendKeeper until the proposal is approved',
+      'Goes back to Characters as “Weeping Sea”. Nothing is sent to LegendKeeper until you restore it.',
     );
-    await user.click(within(card).getByRole('button', { name: 'Propose it' }));
-    expect(
-      await within(card).findByRole('link', { name: 'Open it on the Proposals page' }),
-    ).toBeInTheDocument();
+    // v3 F12 (ADR 0081): one confirmed action; then it runs at once as one job.
+    await user.click(within(card).getByRole('button', { name: 'Restore it…' }));
+    expect(bodies).toHaveLength(1);
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Restore the image' }),
+    );
+    expect(await within(card).findByRole('link', { name: 'Follow it on the Jobs page' })).toHaveAttribute(
+      'href',
+      '/ui/jobs?id=job_img1',
+    );
     expect(bodies).toEqual([
       { snapshot: CHANGE, asset: 'imgsea01', updateReferences: true, dryRun: true },
-      { snapshot: CHANGE, asset: 'imgsea01', updateReferences: true },
+      { snapshot: CHANGE, asset: 'imgsea01', updateReferences: true, confirm: true },
     ]);
   });
 
@@ -669,11 +681,11 @@ describe('the Snapshots page', () => {
     renderApp('/ui/snapshots');
     await user.click(await screen.findByRole('button', { name: 'Atlas' }));
     const history = await screen.findByRole('table', { name: 'Page history' });
-    await user.click(within(history).getByRole('button', { name: 'Propose a restore' }));
-    const form = await screen.findByRole('form', { name: `Propose a restore to ${SNAP}` });
+    await user.click(within(history).getByRole('button', { name: 'Restore…' }));
+    const form = await screen.findByRole('form', { name: `Restore to ${SNAP}` });
     await user.click(within(form).getByRole('button', { name: 'Preview' }));
     const line = await within(form).findByLabelText('Restore estimate');
-    expect(line).toHaveTextContent('Once approved: 1 write and 2 reads, about 2 s.');
+    expect(line).toHaveTextContent('When it runs: 1 write and 2 reads, about 2 s.');
     expect(line).toHaveTextContent('Figures used: a write takes at least the 500 ms spacing');
     expect(api.find('POST', '/snapshots/restore')).toHaveLength(1);
     const view = figuresText({

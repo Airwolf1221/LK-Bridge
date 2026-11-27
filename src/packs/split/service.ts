@@ -11,13 +11,13 @@
  * - **A stopped phase 1** (a verification failure, a conflict): no phase 2; Resume and Revert stay available.
  * - **Revert of phase 1**: the revert job puts the moved content back (the Revert service's own targets: the source's
  *   text, the existing owners' appends, the remapped Dependencies, the index lines, Last Major Revision); once it has
- *   succeeded, the pages phase 1 made go to ONE deletion proposal for the owner (the deletes rail's way: a delete is a
- *   proposal; an Authoritative page's is canonical), each only while it is exactly as the job made it; one changed
- *   since is kept and listed.
+ *   succeeded, the pages phase 1 made are deleted by ONE job (v3 F12, ADR 0081: the owner's confirmed action, no longer
+ *   a proposal), each only while it is exactly as the job made it; one changed since is kept and listed.
  */
 import type { BackgroundRunner } from '../../background.js';
 import type { Db } from '../../db/open.js';
 import type { JobEngine } from '../../jobs/engine.js';
+import { directJob } from '../../jobs/write-guard.js';
 import { SYSTEM_PRINCIPAL, type JobView, type StepSpec } from '../../jobs/types.js';
 import { stateHash } from '../../jobs/sidebar-state.js';
 import { expandFacts } from '../../facts/expand.js';
@@ -80,11 +80,13 @@ export interface SplitRevert {
   readonly revertJobId: string | null;
   /** The proposal deleting the pages phase 1 made (null when none could be proposed). */
   readonly deletionProposalId: string | null;
+  /** v3 F12 (ADR 0081): the job deleting the pages phase 1 made (the owner's Revert runs it at once). */
+  readonly deletionJobId?: string | null;
   readonly deleted: readonly { readonly id: string; readonly name: string }[];
   /** Pages kept because they changed since phase 1 made them (or could not be read). */
   readonly kept: readonly { readonly id: string; readonly name: string; readonly why: string }[];
   /**
-   * CR-2026-11-R3 (R3-66): a source phase 1 upgraded to its Character Core: whether the deletion proposal puts it back to
+   * CR-2026-11-R3 (R3-66): a source phase 1 upgraded to its Character Core: whether the deletion job puts it back to
    * its Compact Character Reference (after the deletions), or why not.
    */
   readonly core?: { readonly back: boolean; readonly why?: string };
@@ -151,13 +153,21 @@ const toRecord = (r: Row): SplitRecord => ({
   updatedAt: r.updated_at,
 });
 
-/** Proposes archiving a page as the bridge (src/packs/split/archive.ts `bridgeArchiver`). */
+/**
+ * Archives a page for phase 2 (src/packs/split/archive.ts `bridgeArchiver`): proposed as the bridge, or (v3 F12, ADR
+ * 0081) run as the agent whose direct phase 1 it follows (`as`, that job's origin), at that agent's scope now.
+ */
 export type Archiver = (
   projectId: string,
   pageId: string,
-  because: { readonly detail: string; readonly summary: string },
+  because: {
+    readonly detail: string;
+    readonly summary: string;
+    readonly as?: JobView['origin'];
+  },
 ) => Promise<
-  { ok: true; proposalId: string; summary: string } | { ok: false; code: string; message: string }
+  | { ok: true; proposalId?: string; jobId?: string; summary: string }
+  | { ok: false; code: string; message: string }
 >;
 
 export interface SplitServiceDeps {
@@ -430,7 +440,7 @@ export class SplitService {
       });
       return;
     }
-    if (rec.phase2?.proposalId || this.proposing.has(rec.id)) return;
+    if (rec.phase2?.proposalId || rec.phase2?.jobId || this.proposing.has(rec.id)) return;
     const items = rec.proposalId ? (this.d.proposals.itemsOf?.(rec.proposalId) ?? null) : null;
     const omitted = items?.omitted ?? [];
     const skipped = this.d.engine.skippedItems?.(rec.projectId, job.id) ?? [];
@@ -473,6 +483,8 @@ export class SplitService {
         r = await this.archiver(rec.projectId, rec.sourceId, {
           detail: `split:${rec.id} phase 2`,
           summary: `phase 2 of split ${rec.id}: phase 1 verified (job ${job.id})`,
+          // v3 F12 (ADR 0081): an agent's direct split retires its source directly too, as that agent.
+          ...(directJob(job) && job.principalId !== SYSTEM_PRINCIPAL.principalId ? { as: job.origin } : {}),
         });
       } catch (e) {
         r = { ok: false, code: 'NOT_PROPOSED', message: e instanceof Error ? e.message : String(e) };
@@ -480,11 +492,17 @@ export class SplitService {
       if (r.ok) {
         this.update(rec.id, {
           state: 'retiring',
-          phase2: { proposalId: r.proposalId, summary: r.summary, at: this.d.now() },
+          phase2: {
+            ...(r.proposalId ? { proposalId: r.proposalId } : {}),
+            ...(r.jobId ? { jobId: r.jobId } : {}),
+            summary: r.summary,
+            at: this.d.now(),
+          },
         });
-        this.d.audit('system', 'split.phase2_proposed', rec.id, null, {
+        this.d.audit('system', r.jobId ? 'split.phase2_submitted' : 'split.phase2_proposed', rec.id, null, {
           job: job.id,
-          proposal: r.proposalId,
+          ...(r.proposalId ? { proposal: r.proposalId } : {}),
+          ...(r.jobId ? { phase2Job: r.jobId } : {}),
         });
       } else {
         this.update(rec.id, {
@@ -507,7 +525,7 @@ export class SplitService {
     return this.byJob(projectId, jobId) !== null;
   }
 
-  /** How many pages a split's phase 1 made (they go to a deletion proposal when it is reverted). */
+  /** How many pages a split's phase 1 made (they are deleted by a job when it is reverted). */
   pagesMade(projectId: string, jobId: string): number {
     return (this.d.engine.stepRecords(projectId, jobId) ?? []).filter(
       (s) =>
@@ -682,7 +700,7 @@ export class SplitService {
   }
 
   /**
-   * After a revert of phase 1 has succeeded: the pages it made go to ONE deletion proposal, children before their
+   * After a revert of phase 1 has succeeded: the pages it made go to ONE deletion job, children before their
    * parents, each only while it is exactly as phase 1 made it (its text as written, its name).
    */
   async afterRevert(
@@ -782,6 +800,20 @@ export class SplitService {
         kept.push({ ...p, why: `it could not be read (${e instanceof Error ? e.message : String(e)})` });
       }
     }
+    // v3 F12 (ADR 0081): a page the split made is kept while any page under it is kept (it cannot be deleted with a
+    // child, and the kept page needs its parent): its index, say, when a page in it changed since. Up the chain.
+    for (let moved = true; moved;) {
+      moved = false;
+      const keptIds = new Set(kept.map((k) => k.id));
+      for (let i = deleted.length - 1; i >= 0; i--) {
+        const p = deleted[i]!;
+        const under = kept.some((k) => keptIds.has(k.id) && this.d.parentOf?.(projectId, k.id) === p.id);
+        if (!under) continue;
+        deleted.splice(i, 1);
+        kept.push({ ...p, why: 'a page under it is kept' });
+        moved = true;
+      }
+    }
     // Children first (a page made under another made page, as specialist pages under a new character index).
     const ids = new Set(deleted.map((p) => p.id));
     const depth = (id: string): number => {
@@ -794,7 +826,8 @@ export class SplitService {
       return n;
     };
     const order = [...deleted].sort((a, b) => depth(b.id) - depth(a.id));
-    let deletionProposalId: string | null = null;
+    const deletionProposalId: string | null = null;
+    let deletionJobId: string | null = null;
     let problem: string | undefined;
     // CR-2026-11-R3 (R3-66): a source phase 1 upgraded to its Character Core goes back to its Compact Character Reference
     // in the same proposal, after the deletions (renaming an Authoritative page is canon, which the owner approves), and
@@ -854,22 +887,23 @@ export class SplitService {
           steps,
           onError: 'stop',
           priority: 'P1',
+          // v3 F12 (ADR 0081): part of the owner's confirmed Revert, so it runs at once (each page checked first).
           origin: {
             kind: 'ui',
             client: 'dashboard',
             tool: SPLIT_TOOL,
             detail: `revert:${jobId}`,
             principal: SYSTEM_PRINCIPAL,
+            ownerConfirmed: true,
           },
           title: summary.slice(0, 300),
-          forceProposal: true,
           internal: true,
           // Part of the revert: no date of its own (the revert put Last Major Revision back where the split set it).
           lastMajorRevision: 'skip',
           proposal: { summary },
         });
-        deletionProposalId = 'proposalId' in r && typeof r.proposalId === 'string' ? r.proposalId : null;
-        if (!deletionProposalId) problem = 'the deletion was not captured as a proposal';
+        deletionJobId = 'jobId' in r && typeof r.jobId === 'string' ? r.jobId : null;
+        if (!deletionJobId) problem = 'the deletion did not run';
       } catch (e) {
         problem = e instanceof Error ? e.message : String(e);
       }
@@ -877,6 +911,7 @@ export class SplitService {
     const revert: SplitRevert = {
       revertJobId,
       deletionProposalId,
+      deletionJobId,
       deleted: order,
       kept,
       ...(core ? { core } : {}),
@@ -886,7 +921,7 @@ export class SplitService {
     this.d.audit('system', 'split.reverted', rec.id, null, {
       job: jobId,
       revertJob: revertJobId,
-      deletionProposal: deletionProposalId,
+      deletionJob: deletionJobId,
       deleted: order.map((p) => p.id),
       kept: kept.map((p) => ({ id: p.id, why: p.why })),
     });

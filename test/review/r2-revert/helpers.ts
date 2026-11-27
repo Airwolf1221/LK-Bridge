@@ -12,7 +12,7 @@ export { PROJECT };
 export const jobOf = (r: { body: Record<string, unknown> }): string =>
   typeof r.body.jobId === 'string' ? r.body.jobId : String((r.body.job as { id?: string } | undefined)?.id);
 
-/** An agent at scope `write` (default rails), with the low-level tools shown. */
+/** An agent at scope `write`, with the low-level tools shown. */
 export async function writeAgent(
   stack: Stack,
   label: string,

@@ -414,11 +414,15 @@ describe('placement by role (C5)', () => {
     });
     expect(dry.isError, dry.text).toBe(false);
     expect(dry.text).toContain('[NAV] Zarvia Unique Magic & Technologies');
-    const r = await w.call('create_index', {
+    // v3 F12 (ADR 0081): this world's agent is at scope propose (packWorld's default); at scope write the role form is
+    // direct, one job, and the binding is recorded when it succeeds.
+    const writer = await w.stack.connect(w.stack.newToken('f6c-role-writer', 'write').token);
+    const r = await w.stack.call(writer, 'create_index', {
       project: 'test',
       roleFor: { nation: 'Cantha', role: 'Household & Court' },
     });
     expect(r.isError, r.text).toBe(false);
+    expect(r.body.proposalId, r.text).toBeUndefined();
     const jobId = String(r.body.jobId);
     const job = await rt().engine.wait(PROJECT, jobId, 20_000);
     expect(job?.status, JSON.stringify(job?.lastError)).toBe('succeeded');

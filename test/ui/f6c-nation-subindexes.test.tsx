@@ -11,7 +11,6 @@ import { baseRoutes, installApi, renderApp, useDom, type Call } from './helpers'
 
 useDom();
 
-const PASSWORD = 'the owner password for the dialog';
 const ROLES = [
   'Government & Administration',
   'Institutions',
@@ -114,26 +113,20 @@ const response = {
   now: Date.now(),
 };
 
-function needsReauth(then: (c: Call) => unknown) {
-  let confirmed = false;
+/** ADR 0081: the bridge asks no fresh code for these actions: the route answers at once, and no step-up is sent. */
+function answersAtOnce(then: (c: Call) => unknown) {
   return {
-    route: (c: Call) =>
-      confirmed
-        ? then(c)
-        : {
-            status: 403,
-            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
-          },
-    reauth: () => {
-      confirmed = true;
-      return { until: Date.now() + 600_000 };
-    },
+    route: then,
+    reauth: () => ({
+      status: 500,
+      body: { error: { code: 'NOT_ASKED', message: 'ADR 0081: no step-up here.' } },
+    }),
   };
 }
-const passwordDialog = async (user: ReturnType<typeof userEvent.setup>) => {
-  const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
-  await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
-  await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+/** ADR 0081: no step-up dialog: the action goes straight on. */
+const passwordDialog = async (_user: ReturnType<typeof userEvent.setup>) => {
+  await Promise.resolve();
+  expect(screen.queryByRole('dialog', { name: 'Confirm it’s you' })).toBeNull();
 };
 const rowEl = async (id: string) =>
   waitFor(() => {
@@ -161,7 +154,7 @@ describe('the Nation Subindexes page', () => {
   });
 
   it('Accept asks for the step-up and sends the decision', async () => {
-    const gate = needsReauth(() => ({ decision: { id: 'nsd_2' }, row: {} }));
+    const gate = answersAtOnce(() => ({ decision: { id: 'nsd_2' }, row: {} }));
     const api = installApi({
       ...baseRoutes(),
       'GET /nation-subindexes': response,
@@ -222,7 +215,7 @@ describe('the Nation Subindexes page', () => {
   });
 
   it('Accept all matched shows the count before confirming, then sends those ids in ONE request', async () => {
-    const gate = needsReauth(() => ({
+    const gate = answersAtOnce(() => ({
       accepted: 1,
       skipped: [],
       remaining: 0,
