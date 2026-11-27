@@ -152,6 +152,8 @@ describe('G7: the findings', () => {
       // v3 F6c (ADR 0080): Apply allowed, default Off.
       'nation_subindex_nonstandard',
       'territory_category_missing',
+      // v3 F6d (ADR 0082): Apply allowed, default Off; Propose one proposal per run (a batch code).
+      'name_nontemplated',
       // v3 F10 (ADR 0078): the chronology's codes, Propose by default, Apply the owner's switch.
       'chronology_row_without_event',
       'chronology_date_mismatch',
@@ -171,6 +173,8 @@ describe('G7: the findings', () => {
       'index_tags',
       'nation_subindex_nonstandard',
       'territory_category_missing',
+      // v3 F6d (ADR 0082): Apply allowed, default Off; Propose one proposal per run (a batch code).
+      'name_nontemplated',
       // v3 F10 (ADR 0078): the chronology's codes, Propose by default, Apply the owner's switch.
       'chronology_row_without_event',
       'chronology_date_mismatch',
@@ -181,8 +185,13 @@ describe('G7: the findings', () => {
       'chronology_row_out_of_order',
       'chronology_date_text_differs',
     ]);
-    // v3 F6a and F6c: default Off (no defaultMode).
-    const OFF = ['reference_type_noncanonical', 'nation_subindex_nonstandard', 'territory_category_missing'];
+    // v3 F6a, F6c and F6d: default Off (no defaultMode).
+    const OFF = [
+      'reference_type_noncanonical',
+      'nation_subindex_nonstandard',
+      'territory_category_missing',
+      'name_nontemplated',
+    ];
     for (const e of PROPOSE_ONLY.filter((x) => !OFF.includes(x.code)))
       expect(e).toMatchObject({ automatable: 'propose', defaultMode: 'propose' });
     expect(entryOf('reference_type_noncanonical')?.defaultMode).toBeUndefined();
