@@ -2,6 +2,14 @@
 
 ## Unreleased: v3 F12, direct writes with the Review page as the safety net
 
+**Follow-up (27 November 2026, [ADR 0081 amendment 1](adr/0081-v3-f12-direct-writes-review-safety-net.md#amendment-1-the-owners-decisions-of-27-november-2026)):**
+a rename that puts `[BSRC]` on or takes it off so the prefix disagrees with Status is refused at every scope, naming
+`archive_page`, `move_to_working` or `promote_page`; a Status or Continuity Type value that only looks like an allowed
+one (Unicode's confusables, UTS #39, vendored as `spec/unicode/confusables.txt`, `npm run gen:confusables`) is refused as
+an invalid value, the allowed values listed; a chronology change that only records a link is direct at write (on Review,
+whose Revert takes the link off) and a proposal at propose; dry runs say what a protected change will do at the caller's
+scope (no `requiresCanonicalApproval` at write).
+
 [ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md). Migration `4900`. Pack seed `arkona-2026-11-28-f12` (after F5b.1's `-f5b1`, which it supersedes).
 New settings: `DELETE_COPY_RETENTION_DAYS` (90) and `AUTH_STEP_UP_WINDOW_SECONDS` (43,200). Removed: the per-profile
 safety rails and the pack's per-tool "always propose" switches. Built and tested against the mock; nothing live was

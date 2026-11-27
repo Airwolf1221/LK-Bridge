@@ -161,8 +161,6 @@ edit there is drift until it is approved).
 
 ## Deferred
 
-- **A chronology change that only adds a link** (`timelines.ts`) stays a proposal at every scope (`forceProposal`): the
-  sync's own check decides it, and its Revert path is not yet built.
 - **A document LegendKeeper has purged** is not recreated by Revert: the result names the copy's snapshot for a restore
   from the Snapshots page.
 - **The lifecycle record** (the bridge's own lifecycle history) is not reset by Revert; the page is.
@@ -173,9 +171,8 @@ edit there is drift until it is approved).
   pre-image); and the split's preview estimate does not count the pre-image reads yet (a split of 89 writes: 175
   estimated, 209 made). Measured on the mock: the compact character package 20 → 35 reads, the developed one 57 → 88,
   a rename of a character 185 → 194 requests, a split's phase 1 248 → 298. The writes are unchanged.
-- **A dry run of a protected change** still answers `requiresCanonicalApproval: true` at both scopes (the dry run does
-  not know the caller's scope); its message says what each scope does: direct at `write`, a canonical proposal at
-  `propose`.
+- (Both items deferred here at first, the link-only chronology change and the dry runs' approval flag, were done by
+  [amendment 1](#amendment-1-the-owners-decisions-of-27-november-2026).)
 
 ## Tests
 
@@ -189,3 +186,45 @@ edit there is drift until it is approved).
 - Sandbox `f12-direct` (`test/sandbox/f12-direct.ts`, D0 to D5, `ensureSandboxGovernance`, a `propose`-scope principal
   kept for the proposal path) and its mock dry run (`test/sandbox-mock/f12-direct.test.ts`). The `write-scope` sandbox
   check now expects direct writes and checks the delete's copy.
+
+## Amendment 1: the owner's decisions of 27 November 2026
+
+- Status: **Proposed** (F12 follow-up, 27 November 2026). Built and tested against the mock only.
+
+1. **A rename whose lifecycle prefix would disagree with Status is refused**, at every scope (never direct, never a
+   proposal), in the lifecycle guard at entry and again inside the lock (`renameAgainstStatus` in
+   `src/lifecycle/guard.ts`). Taking `[BSRC]` off a page whose Status is Authoritative names `archive_page or
+move_to_working`; putting `[BSRC]` on a page whose Status is not Authoritative names `promote_page`: the tools that
+   set prefix, Status and tags together. A rename that keeps `[BSRC]`, or brings it back into step with Status, is
+   unchanged (direct at `write`). Renames into or out of `[BWRK]` and `[BARC]` were refused already; the high-level
+   `update_resource` never changes a prefix at all (`PREFIX_CHANGE`). The inside-the-lock check reads the sidebar once,
+   only for a rename into or out of `[BSRC]`.
+2. **A look-alike of an allowed lifecycle value is an invalid value**, refused at every scope and by every route, the
+   allowed values listed: Status (Authoritative, Working, Archived) and Continuity Type (CANON, AU, the non-current
+   value), the two lifecycle fields with closed values. Look-alikes are Unicode's own (UTS #39, Unicode Security
+   Mechanisms, confusable detection: equal skeletons), from `confusables.txt` vendored unchanged at
+   `spec/unicode/confusables.txt` (Unicode 18.0.0) and generated into `src/text/confusables.generated.ts` by
+   `npm run gen:confusables` (`-- --check` in `npm run ci`; a test keeps the two in step); invisible characters
+   (default-ignorable code points) count as a disguise; case alone does not. The refusal is undeclarable: no lifecycle
+   marker carries one through. The canonical guard's older look-alike handling (RV2-3) still judges protected values;
+   the lifecycle guard's refusal comes first. **Chosen:** the existing hand list used to fold keys and values
+   (`src/facts/rules.ts`) is left as it is: it reads a disguised key or value as what it looks like, which this refusal
+   now backs with Unicode's list for the values that matter.
+3. **A chronology change that only records a link** (`sync_timeline_event` with `event_id` on an event that already
+   agrees; no LegendKeeper write) is direct at scope `write`, on the owner's Review page (a completed chronology record
+   with a link now lists a job there, `src/review/store.ts`), and its Revert takes the link off while it still pairs that
+   row with that event (`linkOnly`, `src/review/revert-chronology.ts`: the record's own steps, no LegendKeeper write).
+   At scope `propose` it is a proposal (the tool asks for one: the job holds only the bridge's own steps, which the gate
+   never turns into one); from automation at Propose, a proposal as before. A link that replaced another is not
+   revertible (the earlier link is not recorded), with that reason.
+4. **Dry runs say what a protected change will do at the caller's scope** (`protectedDryRun`, `protectedDryRunText` in
+   `src/mcp/tools/shape.ts`): at `write`, "runs directly and appears on the owner's Review page, with Revert", with
+   `protectedChanges` and no `requiresCanonicalApproval`; at `propose`, "becomes a proposal only the owner can accept as
+   canon", with `requiresCanonicalApproval: true`. Applied to `set_facts`, `create_resource` and the other creates,
+   `delete_resource`, `delete_document`, the four lifecycle tools and their whole-set forms, the pack packages,
+   `arkona_rename` and `arkona_split_owner`. Every tool's dry-run text was checked for approval wording at scope `write`.
+
+Tests: `test/lifecycle/f12-rename-status.test.ts`, `test/lifecycle/f12-lookalike.test.ts`,
+`test/unit/confusables.test.ts`, `test/chronology/f12-link.test.ts`, `test/lifecycle/f12-dry-run.test.ts`, the dry run
+at scope write in `test/resources/resources.test.ts` and `test/packs/character.test.ts`; RV2-3, F3 (cr-canon-bypass),
+C2b (canon-lifecycle), and the chronology link tests updated to the new rules.

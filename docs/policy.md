@@ -366,6 +366,17 @@ is judged whether or not the caller gave the copy an id. A page made `[BSRC]` (A
 that no creation tool or lifecycle tool declares is not refused but becomes a **canonical proposal** (at scope `propose`; direct for an agent at `write`, F12), as
 an Authoritative create through the creation tools is (CR-2026-11, CR-16; ADR 0036 decision 1, accepted by the owner).
 
+**A rename whose prefix would disagree with Status is refused** (the owner, 27 November 2026; [ADR 0081 amendment
+1](adr/0081-v3-f12-direct-writes-review-safety-net.md#amendment-1-the-owners-decisions-of-27-november-2026)), at every
+scope, at entry and inside the lock: taking `[BSRC]` off a page whose Status is Authoritative (use `archive_page` or
+`move_to_working`), or putting `[BSRC]` on a page whose Status is not Authoritative (use `promote_page`). A rename that
+keeps `[BSRC]`, or puts it back on a page whose Status is Authoritative, is not refused.
+
+**A look-alike lifecycle value is refused** (the same amendment): a Status or Continuity Type value that only looks like
+an allowed one (Unicode's confusables, UTS #39: `Authoritаtive` with a Cyrillic а, a zero-width space inside) is an
+invalid value, refused at every scope and by every route with the allowed values listed; no marker carries one through.
+Case alone is no disguise.
+
 **The status tags (C2d, ADR 0036 decision 7, accepted by the owner on 11 November 2026).** The lifecycle settings' three
 status tags are compared without case, invisible characters and look-alikes (the same fold as keys and prefixes). A
 request that adds or removes one, other than through a lifecycle tool's marker or a creation tool's (which declare the
@@ -512,7 +523,8 @@ What changed in the guards, the rails (removed in F12) and Revert after [CR-2026
 - **The fold** reads Latin small capitals and Cherokee and Lisu look-alikes as the Latin letters they look like (R2-15).
 - **A job with no job-level lock** (a setting pack's package) runs its checks again when it starts again before its
   first write, as a locked job does (CR-06; R2-29).
-- **A chosen chronology link** is a proposal at every scope (R2-08; ADR 0057 decision 3, accepted).
+- **A chosen chronology link** is a proposal at every scope (R2-08; ADR 0057 decision 3, accepted). Since ADR 0081
+  amendment 1: direct at scope `write` (on the Review page, whose Revert takes the link off), a proposal at `propose`.
 - **Re-authentication** for every change to what a connection may do (R2-50; [dashboard.md](dashboard.md); ADR 0057
   decision 1, accepted; ADR 0081: a connection's scope changed either way, made, moved or revoked, and every token).
 - **An orphan event beside a row whose date cannot be read** is not deleted (ADR 0057 decision 2; R2-49): while the age's

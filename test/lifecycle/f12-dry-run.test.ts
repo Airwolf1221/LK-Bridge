@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * v3 F12 follow-up (the owner, 27 November 2026; ADR 0081 amendment 1, decision 4): a dry run of a protected (canon or
  * lifecycle) change says what it will do at the caller's scope. At scope write: it runs directly and appears on the

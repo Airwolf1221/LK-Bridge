@@ -721,7 +721,11 @@ made), never as not written (CR-2026-11).
 since v3 F12 ([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md)): on the owner's Review page with Revert,
 made only when the owner asked for it. At scope `propose` it becomes a canonical proposal: `status:
 "proposal_captured"`, `requiresCanonicalApproval: true` and the `reason`, which only the owner's "Approve and accept as
-canon" can run ([policy.md](policy.md)). A `dryRun` says `requiresCanonicalApproval` with the `protectedChanges`.
+canon" can run ([policy.md](policy.md)). A `dryRun` lists the `protectedChanges` and says what they will do at your
+scope ([ADR 0081 amendment 1](adr/0081-v3-f12-direct-writes-review-safety-net.md#amendment-1-the-owners-decisions-of-27-november-2026)):
+at `write` it runs directly and appears on the owner's Review page (no `requiresCanonicalApproval`); at `propose`
+`requiresCanonicalApproval: true`, a proposal only the owner can accept as canon. A Status or Continuity Type value that
+only looks like an allowed one (Unicode's confusables) is refused, the allowed values listed.
 
 **At scope `propose`** the same plan is captured as ONE proposal that holds the high-level operation (the page, the
 facts table before and after, the links added and removed) and its expansion: the check, the writes and the verify
