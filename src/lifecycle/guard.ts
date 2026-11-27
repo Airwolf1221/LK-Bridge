@@ -346,7 +346,7 @@ const madeHere = (ch: LifecycleChange): LifecycleChange => ({ ...ch, made: true 
 const looseKindIsPlain = (name: string): boolean => !['bsrc', 'bwrk', 'barc'].includes(looseKind(name));
 
 /** CR-2026-11 (CR-15): whether a name is (or looks like) one of the project's lifecycle index names. */
-function isLifecycleIndexName(c: LifecycleConfig, name: string): boolean {
+export function isLifecycleIndexName(c: LifecycleConfig, name: string): boolean {
   if (looseKind(name) !== 'index') return false;
   const display = factKey(name).replace(/^\[\s*index\s*\]\s*/, '');
   return display === factKey(c.indexNames.working) || display === factKey(c.indexNames.archived);

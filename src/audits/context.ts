@@ -23,6 +23,7 @@ import type { ClassificationRecord, RetagContext, TagRuling } from '../packs/ret
 import type { NarrativeRules } from '../packs/types.js';
 import type { Calendar, DateTextStyle } from '../calendar/index.js';
 import { nkey, rootsOf, type NView } from '../narrative/layout.js';
+import { isLifecycleIndexName } from '../lifecycle/guard.js';
 import { childrenByRank, SnapshotTree } from './snapshot-tree.js';
 import type { UnknownWriteItem } from '../jobs/reconcile.js';
 import type { ReferenceTypeAuditInput } from '../packs/reftypes/service.js';
@@ -201,6 +202,34 @@ export function narrativePagesOf(model: AuditModel, rules: NarrativeRules): Set<
   };
   walk(roots.narratives.id);
   return out;
+}
+
+/**
+ * v3 F5b.2: why the lifecycle guard always refuses to rename (or retag) this page, or null. The two lifecycle indexes
+ * (by their confirmed ids, else by name as `lifecycle.find` does) and the Narratives index are protected by design: a
+ * finding about one carries no fix, so automation never picks it and the "skipped in a row" brake never counts it.
+ * `to` is a name the page would be renamed to: a name that is itself a lifecycle index's is refused whoever takes it.
+ */
+const narrativeRootCache = new WeakMap<AuditContext, string | null>();
+export function guardedIndexReason(ctx: AuditContext, page: AuditPage, to?: string): string | null {
+  const c = ctx.lifecycle;
+  if (page.kind === 'index') {
+    const byId = page.id === c.workingIndexId || page.id === c.archiveIndexId;
+    if (byId || isLifecycleIndexName(c, page.rawName))
+      return 'a lifecycle index: rename it by hand in LegendKeeper, then confirm the lifecycle indexes again on the dashboard';
+    if (ctx.narrative) {
+      if (!narrativeRootCache.has(ctx))
+        narrativeRootCache.set(
+          ctx,
+          rootsOf(modelView(ctx.model), ctx.narrative.rules).narratives?.id ?? null,
+        );
+      if (narrativeRootCache.get(ctx) === page.id)
+        return 'the Narratives index: change it by hand in LegendKeeper, then run the narrative audit again';
+    }
+  }
+  if (to !== undefined && isLifecycleIndexName(c, to))
+    return 'a name that is a lifecycle index’s: change it by hand in LegendKeeper if that is what is meant';
+  return null;
 }
 
 /** v3 F4c: whether a page is a narrative page (E2: exempt from the owner rules, tagging and lifecycle checks). */
