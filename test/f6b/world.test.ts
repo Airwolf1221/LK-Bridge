@@ -82,11 +82,7 @@ describe('the pack while the tag section is unpublished', () => {
     expect(g.indexTags?.state).toBe('draft');
     expect(rt().packs.approvedRules('arkona')!.indexTaxonomy).toMatchObject({ status: 'draft' });
     expect(svc().auditInput(PROJECT)).toMatchObject({ navOrdering: true, tagsInForce: false });
-<<<<<<< HEAD
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-26-f12'); // v3 F12 (ADR 0081): -f12 supersedes -f6c
-=======
-    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-28-f5b1'); // v3 F5b.1 (ADR 0068 amendment 1): -f5b1 supersedes -f6c
->>>>>>> origin/main
+    expect(ARKONA_PACK.seed).toBe('arkona-2026-11-28-f12'); // v3 F12 (ADR 0081): -f12 supersedes -f5b1
   });
 });
 

@@ -1563,14 +1563,14 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // classifier, the territory categories' nesting (Conflicts in Historical Events), the Lost Realmships, and the ruling
   // `nation-subindex-roles`. No new pinned section: Source Formatting's "Nation-Centred Territorial Navigation" is pinned
   // already, so the reviewer's paragraph shows as governance drift and the owner approves again.
-<<<<<<< HEAD
-  // `-f12` (ADR 0081, 26 November 2026; session F12): the per-tool "always propose" switches dropped (`settings` is
-  // empty); every pack tool follows the agent's scope. Nothing else changed.
-  seed: 'arkona-2026-11-26-f12',
-=======
-  seed: 'arkona-2026-11-28-f5b1',
->>>>>>> origin/main
+  // `-f5b1` (ADR 0068 amendment 2, 28 November 2026; session F5b.1): the automation caps leave the rules (they are
+  // settings, AUTOMATION_CAP_PER_CODE / _PER_RUN).
+  // `-f12` (ADR 0081, 28 November 2026; session F12, after F5b.1): the per-tool "always propose" switches dropped
+  // (`settings` is empty); every pack tool follows the agent's scope. Nothing else changed.
+  seed: 'arkona-2026-11-28-f12',
   supersedes: [
+    'arkona-2026-11-28-f5b1',
+    'arkona-2026-11-26-f12', // F12's seed before F5b.1 merged (never released)
     'arkona-2026-11-27-f6c',
     'arkona-2026-11-25-f6b',
     'arkona-2026-11-24-f6a',

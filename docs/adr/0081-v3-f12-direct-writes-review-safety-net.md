@@ -14,7 +14,7 @@
   effect: automation codes at Propose still propose; the owner's "Apply fix" is one confirmed action).
 - Migration `4900_f12_direct_writes.sql`: drops `agent_profiles.write_rails`; rebuilds `snapshot_restores` (a `job_id`,
   the state `running`, a `follow_up_job_id`); adds `consistency_picks.job_id`; creates `delete_copies`. Pack seed
-  `arkona-2026-11-26-f12` (supersedes `arkona-2026-11-27-f6c`; it drops `settings.alwaysPropose` and `settings.tools`).
+  `arkona-2026-11-28-f12` (supersedes F5b.1's `arkona-2026-11-28-f5b1` and `arkona-2026-11-27-f6c`; it drops `settings.alwaysPropose` and `settings.tools`).
 
 ## Rulings (the brief)
 

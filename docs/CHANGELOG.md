@@ -1,9 +1,8 @@
 # Changelog
 
-<<<<<<< HEAD
 ## Unreleased: v3 F12, direct writes with the Review page as the safety net
 
-[ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md). Migration `4900`. Pack seed `arkona-2026-11-26-f12`.
+[ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md). Migration `4900`. Pack seed `arkona-2026-11-28-f12` (after F5b.1's `-f5b1`, which it supersedes).
 New settings: `DELETE_COPY_RETENTION_DAYS` (90) and `AUTH_STEP_UP_WINDOW_SECONDS` (43,200). Removed: the per-profile
 safety rails and the pack's per-tool "always propose" switches. Built and tested against the mock; nothing live was
 touched.
@@ -25,7 +24,7 @@ touched.
   MCP tokens, API keys and off-site credentials; its window is 12 hours by default.
 - **Guidance**: the MCP instructions' rule 3 and the bridge guide say writes are direct and on the Review page; one line
   for scope `propose`.
-=======
+
 ## Unreleased: v3 F5b.1, automation paces itself
 
 [ADR 0068 amendment 2](adr/0068-v3-f5b-automatic-actions-for-audits.md). Pack seed `arkona-2026-11-28-f5b1`. New
@@ -38,7 +37,6 @@ and `AUTOMATION_CAP_PER_RUN` (100). Built and tested against the mock; nothing l
 - The caps are settings, not pack rules; the codes' governance paragraphs say "within the automation caps set on the
   Settings page" and the existing ones are amended once, the approval carried. The Automation page shows a pause and
   links to the caps.
->>>>>>> origin/main
 
 ## Unreleased: v3 F6c, territories, nations and their subindexes
 

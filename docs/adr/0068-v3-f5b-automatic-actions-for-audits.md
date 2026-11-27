@@ -305,13 +305,6 @@ The owner's two requests on the pull request.
    writes nothing to `test`; the other routes refuse a mismatch; and an automation setting from `test`'s page is refused
    while from Arkona's it is written into Arkona's Repository Automation only.
 
-<<<<<<< HEAD
-## Amendment 2: F12 (26 November 2026)
-
-[ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md): a code at Propose still makes one proposal per code, and a
-`propose`-scope connection still proposes; these are now the only sources of proposals. The owner's "Apply fix" on the
-Audits page is one confirmed action (a confirmation dialog, then the job), no longer a proposal to approve next.
-=======
 ## Amendment 2 (28 November 2026, F5b.1): automation paces itself, and the caps are settings
 
 The owner's nightly run stopped after three codes with "Stopped: the P3 budget says wait; the rest waits for the next
@@ -343,4 +336,9 @@ Tests (`test/automation/pacing.test.ts`): a minute-tier wait of 20 s twice, then
 logged); a 2 h wait and a day-tier wait (stop, naming the tier); a `waiting_budget` job that clears, and one past the
 limit; a stop during a pause (prompt, item recorded, a second "run now" joins); the ceiling; caps from settings with no
 pack change; the paragraph upgrade carried without drift, once, the old wording accepted until then.
->>>>>>> origin/main
+
+## Amendment 3: F12 (26 November 2026)
+
+[ADR 0081](0081-v3-f12-direct-writes-review-safety-net.md): a code at Propose still makes one proposal per code, and a
+`propose`-scope connection still proposes; these are now the only sources of proposals. The owner's "Apply fix" on the
+Audits page is one confirmed action (a confirmation dialog, then the job), no longer a proposal to approve next.

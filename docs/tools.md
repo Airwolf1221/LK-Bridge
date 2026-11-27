@@ -1308,7 +1308,7 @@ serves (the list changes at the next `tools/list` when that changes); called for
 the owner reviews it afterwards on the Review page with Revert; at `propose` every call is **one proposal** (canonical,
 "Approve and accept as canon", when it makes canon). The per-tool **always propose** switches of v3 F3.4
 ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D), with the pack's `alwaysPropose` and `tools`, were
-removed in F12 (pack seed `arkona-2026-11-26-f12`).
+removed in F12 (pack seed `arkona-2026-11-28-f12`).
 
 **`arkona_create_character`** `{ name, depth?, status?, identity, pages, index?, target?, upgradeToCore?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
 a whole character from one package, by Arkona's Character Architecture, Source Formatting and Controlled Native

@@ -33,7 +33,7 @@ and the owner-approved [F3c design](design/F3c-appraisal.md) (F3c). The tools' r
 One versioned JSON document, its **rules** (`src/packs/types.ts` checks its shape):
 
 - **settings**: empty since v3 F12 ([ADR 0081](adr/0081-v3-f12-direct-writes-review-safety-net.md), seed
-  `arkona-2026-11-26-f12`). Every pack tool follows its connection's scope: at scope `write` the package runs directly,
+  `arkona-2026-11-28-f12`). Every pack tool follows its connection's scope: at scope `write` the package runs directly,
   canon included, and the owner reviews it afterwards on the Review page with Revert; at `propose` it is one proposal.
   The former `alwaysPropose` (every package a proposal, whatever the agent's scope) and v3 F3.4's **`tools`** (a switch
   per writing tool, `propose` or `scope`; [ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D) are
@@ -126,7 +126,7 @@ packages cannot both create it).
    offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-18-f3e`, v3 F3e, the split
    rules, supersedes every earlier one: F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b`, F3b.1's
    `arkona-2026-11-16-f3b1`, F3.3's `arkona-2026-11-17-f3d`, which was named after the wrong session, and F3.4's
-   `arkona-2026-11-17-f3-4`, the tool switches; the current seed is v3 F12's `arkona-2026-11-26-f12`, which drops the
+   `arkona-2026-11-17-f3-4`, the tool switches; the current seed is v3 F12's `arkona-2026-11-28-f12`, which drops the
    switches and supersedes every earlier seed, `arkona-2026-11-27-f6c` included), and a pack stored from one of them is given
    the new seed's rules as a NEW version at start
    (audited `pack.seed_upgrade`), keeping the owner's token maps and the governance sources' places, taking the seed's
