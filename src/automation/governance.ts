@@ -77,12 +77,13 @@ export const CONCURRENCY =
 export const STOP_CONDITIONS =
   'the first failed verification, an unexpected error or a write whose outcome is unknown stops the code’s run and switches it off, with the reason recorded and shown; three findings skipped in a row for the same reason pause it for the owner’s review; when the budget runs out the run ends cleanly and the rest waits for the next run; the canon guard, the lifecycle guard and the safety rails are never bypassed, and a change one of them catches becomes an ordinary proposal and pauses the code; nothing runs while writes are paused or draining, while the project is read-only, while Pause all automation is on, or while Repository Automation has drifted from the approved pack';
 
-/** The paragraph's text for a code, from its journal of changes (newest first, as the store gives them). */
-export function paragraphText(
-  e: CodeEntry,
-  changes: readonly ChangeRow[],
-  caps: { readonly perCode: number; readonly perRun: number },
-): string {
+/**
+ * The paragraph's text for a code. v3 F5b.1 (ADR 0068 amendment 1): the caps are settings, so the paragraph names no
+ * numbers and a change to a cap never touches governance. Paragraphs written before it ("at most 25 pages a run …")
+ * stay as recorded, and are accepted by `inspect`, until the bridge amends them once.
+ */
+/* The paragraph's text for a code, from its journal of changes (newest first, as the store gives them). */
+export function paragraphText(e: CodeEntry, changes: readonly ChangeRow[]): string {
   const asc = [...changes].sort((a, b) => a.id - b.id);
   const firstOn = asc.find((c) => c.to !== 'off');
   const current = asc.at(-1);
@@ -98,7 +99,7 @@ export function paragraphText(
   return (
     `Bridge automation ${e.code}: ${e.name} (owner approval through the bridge dashboard, ${approvedOn}). ` +
     `Setting: ${setting}. ` +
-    `Scope: ${scopeOf(e)}; at most ${caps.perCode} pages a run for this code and ${caps.perRun} for every code together. ` +
+    `Scope: ${scopeOf(e)}; within the automation caps set on the Settings page. ` +
     `Prerequisites: the pack approved and Repository Automation as approved; the night’s audit or appraisal finding. ` +
     `Transformation: ${e.transformation}. ` +
     `Verification: ${VERIFICATION}. ` +

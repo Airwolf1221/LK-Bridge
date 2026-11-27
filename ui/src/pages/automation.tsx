@@ -110,6 +110,13 @@ export function AutomationPage() {
         proposals wait on the <Link to="/proposals">Proposals</Link> page.
       </p>
 
+      {d.pausing && (
+        <p className="note" role="status">
+          <Badge tone="info">Running</Badge> pausing for budget ({d.pausing.label}, {d.pausing.seconds} s):
+          the run carries on by itself, and “Run automation now” joins it.
+        </p>
+      )}
+
       <section className="card" aria-labelledby="brake-h">
         <h2 id="brake-h">Pause all automation</h2>
         {d.global.paused ? (
@@ -150,7 +157,8 @@ export function AutomationPage() {
         <h2 id="codes-h">Finding codes</h2>
         <p className="muted small-text">
           At most {d.caps.perCode} pages a run for each code and {d.caps.perRun} for every code together, at
-          the lowest priority. A failed verification, an unexpected error or a write whose outcome is unknown
+          the lowest priority (the caps are settings: <Link to="/settings">Settings</Link>, search
+          “automation”). A failed verification, an unexpected error or a write whose outcome is unknown
           switches a code off; three skips in a row for the same reason, or a guard catching a change, pause
           it for you to look.
         </p>

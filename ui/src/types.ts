@@ -2910,6 +2910,8 @@ export interface AutomationPayload {
   project: { id: string; name: string };
   global: { paused: boolean; pausedAt: number | null; pausedBy: string | null };
   caps: { perCode: number; perRun: number };
+  /** v3 F5b.1: what a run in this project is pausing for, or null. */
+  pausing: { label: string; seconds: number; since: number } | null;
   codes: AutomationCode[];
   runs: AutomationRun[];
   never: { code: string; name: string; why: string[]; transformation: string }[];

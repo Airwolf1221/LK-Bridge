@@ -207,6 +207,10 @@ describe('the registry agrees with the schemas', () => {
       NATION_SUBINDEX_BULK_MAX: [500, 1, 5000],
       // v3 F10 (ADR 0078): the chronology check after an edit (10 minutes).
       CHRONOLOGY_CHECK_DELAY_MS: [600000, 1000, 86400000],
+      AUTOMATION_CAP_PER_CODE: [25, 1, 500],
+      AUTOMATION_CAP_PER_RUN: [100, 1, 2000],
+      AUTOMATION_BUDGET_MAX_WAIT_SECONDS: [600, 0, 86400],
+      AUTOMATION_RUN_MAX_MINUTES: [120, 1, 1440],
       SLOW_REQUEST_WARN_MS: [30000, 1000, 3600000],
       SLOW_REQUEST_REPEAT_MS: [60000, 1000, 3600000],
       EVENT_LOOP_LAG_WARN_MS: [2000, 50, 600000],

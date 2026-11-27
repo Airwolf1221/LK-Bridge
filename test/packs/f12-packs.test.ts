@@ -1,4 +1,3 @@
- 
 /**
  * v3 F12 (ADR 0081, D1): the pack's per-tool "always propose" switches are gone. The seed carries none; a pack stored
  * from an earlier seed (with `alwaysPropose` and `tools`) is offered the F12 seed's rules without them, and a version

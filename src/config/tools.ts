@@ -120,6 +120,15 @@ export const TOOLS_ENV_SCHEMA = z.object({
    * timeline) the project's chronology check runs (debounced: a burst of edits is one check).
    */
   CHRONOLOGY_CHECK_DELAY_MS: intFrom(600_000, 1_000, 86_400_000),
+  // ---- v3 F5b.1 (ADR 0068 amendment): automation paces itself instead of stopping on a short budget wait
+  /** The longest budget wait (seconds) a run sleeps through before carrying on; a longer one stops the run. */
+  AUTOMATION_BUDGET_MAX_WAIT_SECONDS: intFrom(600, 0, 86_400),
+  /** The most pages one code acts on in a run (a pack rule until F5b.1). */
+  AUTOMATION_CAP_PER_CODE: intFrom(25, 1, 500),
+  /** The most pages every code together act on in a run. */
+  AUTOMATION_CAP_PER_RUN: intFrom(100, 1, 2000),
+  /** The whole-run ceiling (minutes): after it the run stops and the rest waits for the next run. */
+  AUTOMATION_RUN_MAX_MINUTES: intFrom(120, 1, 1_440),
   /** A request still running after this long is logged as a warning (method, URL, tool name; never the body). */
   SLOW_REQUEST_WARN_MS: intFrom(30_000, 1_000, 3_600_000),
   /** ...and again every this long while it runs. */
@@ -144,6 +153,10 @@ export const DEFAULT_INDEX_CLASSIFY_BULK_MAX = 500;
 export const DEFAULT_NATION_SUBINDEX_BULK_MAX = 500;
 /** v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS's default, 10 minutes. */
 export const DEFAULT_CHRONOLOGY_CHECK_DELAY_MS = 600_000;
+/** v3 F5b.1 (ADR 0068 amendment 1): AUTOMATION_BUDGET_MAX_WAIT_SECONDS' default, 10 minutes. */
+export const DEFAULT_AUTOMATION_BUDGET_MAX_WAIT_SECONDS = 600;
+/** v3 F5b.1 (ADR 0068 amendment 1): AUTOMATION_RUN_MAX_MINUTES' default, 2 hours. */
+export const DEFAULT_AUTOMATION_RUN_MAX_MINUTES = 120;
 
 export interface ToolsSettings {
   readonly upload: {
@@ -174,6 +187,14 @@ export interface ToolsSettings {
   readonly nationSubindexBulkMax?: number;
   /** v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS. Optional: the default (10 minutes) applies. */
   readonly chronologyCheckDelayMs?: number;
+  /** v3 F5b.1: AUTOMATION_BUDGET_MAX_WAIT_SECONDS. Optional: the default (600) applies. */
+  readonly automationBudgetMaxWaitSeconds?: number;
+  /** v3 F5b.1: AUTOMATION_RUN_MAX_MINUTES. Optional: the default (120) applies. */
+  readonly automationRunMaxMinutes?: number;
+  /** v3 F5b.1: AUTOMATION_CAP_PER_CODE. Optional: the default (25) applies. */
+  readonly automationCapPerCode?: number;
+  /** v3 F5b.1: AUTOMATION_CAP_PER_RUN. Optional: the default (100) applies. */
+  readonly automationCapPerRun?: number;
   /** v3 F6a.1: SLOW_REQUEST_WARN_MS. */
   readonly slowRequestWarnMs?: number;
   /** v3 F6a.1: SLOW_REQUEST_REPEAT_MS. */
@@ -292,6 +313,10 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   indexClassifyBulkMax: DEFAULT_INDEX_CLASSIFY_BULK_MAX,
   nationSubindexBulkMax: DEFAULT_NATION_SUBINDEX_BULK_MAX,
   chronologyCheckDelayMs: DEFAULT_CHRONOLOGY_CHECK_DELAY_MS,
+  automationBudgetMaxWaitSeconds: DEFAULT_AUTOMATION_BUDGET_MAX_WAIT_SECONDS,
+  automationRunMaxMinutes: DEFAULT_AUTOMATION_RUN_MAX_MINUTES,
+  automationCapPerCode: 25,
+  automationCapPerRun: 100,
   ...DEFAULT_WATCHDOG_SETTINGS,
   artCallMaxImages: DEFAULT_ART_CALL_MAX_IMAGES,
   artCallMaxGroups: DEFAULT_ART_CALL_MAX_GROUPS,
@@ -352,6 +377,10 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
     indexClassifyBulkMax: e.INDEX_CLASSIFY_BULK_MAX,
     nationSubindexBulkMax: e.NATION_SUBINDEX_BULK_MAX,
     chronologyCheckDelayMs: e.CHRONOLOGY_CHECK_DELAY_MS,
+    automationBudgetMaxWaitSeconds: e.AUTOMATION_BUDGET_MAX_WAIT_SECONDS,
+    automationRunMaxMinutes: e.AUTOMATION_RUN_MAX_MINUTES,
+    automationCapPerCode: e.AUTOMATION_CAP_PER_CODE,
+    automationCapPerRun: e.AUTOMATION_CAP_PER_RUN,
     slowRequestWarnMs: e.SLOW_REQUEST_WARN_MS,
     slowRequestRepeatMs: e.SLOW_REQUEST_REPEAT_MS,
     eventLoopLagWarnMs: e.EVENT_LOOP_LAG_WARN_MS,

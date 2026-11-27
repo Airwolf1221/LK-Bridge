@@ -1214,7 +1214,6 @@ function chronologyUnit(
   page: (id: string | undefined | null) => PageRef | null,
 ): { target: Target; steps: number[] } | null {
   const record = rec.chronology!;
-  const tool = record.tool;
   const mine = writes.filter(
     (s) =>
       CHRONOLOGY_OPS.has(s.opId) &&

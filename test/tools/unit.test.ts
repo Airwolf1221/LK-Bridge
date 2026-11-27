@@ -40,6 +40,10 @@ describe('tools configuration', () => {
       artCallMaxImages: 120,
       // v3 F10 (ADR 0078): CHRONOLOGY_CHECK_DELAY_MS.
       chronologyCheckDelayMs: 600000,
+      automationBudgetMaxWaitSeconds: 600,
+      automationRunMaxMinutes: 120,
+      automationCapPerCode: 25,
+      automationCapPerRun: 100,
       artCallMaxGroups: 40,
     });
     expect(loadToolsConfig({ ART_CACHE_DIR: '/srv/art', ART_CACHE_MAX_MB: '20' }).artCache).toEqual({

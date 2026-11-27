@@ -45,7 +45,7 @@ describe('all registry operations through lk_api_read / lk_api_write', () => {
     // LegendKeeper app), LK_ALLOW_MEMBER_ADMIN or not: its contract is the refusal, and nothing reaches LegendKeeper.
     if (op.operationId in AGENT_REFUSED) {
       expect(r.isError, r.text.slice(0, 600)).toBe(true);
-      expect(r.body.error.code).toBe('POLICY_DENIED');
+      expect((r.body.error as { code?: unknown } | undefined)?.code).toBe('POLICY_DENIED');
       expect(stack.mock.calls.slice(before).filter((c) => c.method !== 'GET')).toEqual([]);
       return;
     }
