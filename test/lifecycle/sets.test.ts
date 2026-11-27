@@ -71,7 +71,8 @@ describe('archive_page with subtree: an Authoritative character set', () => {
     expect(r.body, r.text).toMatchObject({
       status: 'dry_run',
       subtree: true,
-      requiresCanonicalApproval: true,
+      // v3 F12 follow-up (ADR 0081 amendment 1, decision 4): at scope write the set runs directly, on the Review page.
+      atYourScope: 'runs directly, on the owner’s Review page',
       set: {
         pages: 4,
         contentPages: 2,

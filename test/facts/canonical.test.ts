@@ -147,7 +147,10 @@ describe('through set_facts', () => {
       facts: { Status: 'Authoritative' },
       dryRun: true,
     });
-    expect(r.body).toMatchObject({ status: 'dry_run', requiresCanonicalApproval: true });
+    // v3 F12 follow-up (ADR 0081 amendment 1, decision 4): at scope write it runs directly, on the Review page.
+    expect(r.body.status, r.text).toBe('dry_run');
+    expect(r.body.requiresCanonicalApproval, r.text).toBeUndefined();
+    expect(String(r.body.message)).toMatch(/runs directly and appears on the owner’s Review page/);
     expect(r.body.protectedChanges[0]).toMatch(/Status would be set to Authoritative/);
   });
 });
