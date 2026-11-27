@@ -281,13 +281,25 @@ describe('F3: Unicode look-alike keys and values are not normalised', () => {
     ],
   ];
   for (const [label, key, value] of cases) {
-    it(`a new row (${label}) is judged as Status Authoritative`, async () => {
+    // v3 F12 follow-up (ADR 0081 amendment 1, decision 2): a disguised VALUE is an invalid value, refused outright (the
+    // allowed values listed); a disguised KEY with the plain value is Status Authoritative, as before.
+    const disguisedValue = value !== 'Authoritative';
+    it(`a new row (${label}) is ${disguisedValue ? 'refused as a look-alike of Authoritative' : 'judged as Status Authoritative'}`, async () => {
       const page = PAGES.f3o[0];
       const r = await w.stack.call(writer, 'lk_api_write', {
         operationId: 'createPropertyRow',
         params: { path: { resourceId: page, propertyId: kvId(page) }, body: { key, text: value } },
       });
-      expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
+      if (disguisedValue) {
+        expect(r.body.error?.code, r.text).toBe('POLICY_DENIED');
+        expect(r.body.error?.message, r.text).toMatch(
+          /only looks like “Authoritative”.*not an allowed value/,
+        );
+      } else
+        expect(r.body, r.text).toMatchObject({
+          status: 'proposal_captured',
+          requiresCanonicalApproval: true,
+        });
       expect(writesSince()).toHaveLength(0);
     });
   }

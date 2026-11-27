@@ -130,13 +130,16 @@ describe('status tags arriving through a template copy (ADR 0036 decision 7: add
 
 describe('renaming canon (ADR 0035 decision 11, ADR 0036 decision 1, CR-14)', () => {
   // v3 F12 (ADR 0081): canon changes at scope `write` are direct; each is a job on the owner's Review page, with Revert.
-  it('C2b: renaming [BSRC] Old Harbour (Status Authoritative) to drop its [BSRC] prefix runs directly, on Review', async () => {
+  // v3 F12 follow-up (the owner, 27 November 2026): a rename that takes [BSRC] off an Authoritative page leaves its prefix
+  // disagreeing with its Status: refused at every scope, naming the tools that keep them in step.
+  it('C2b: renaming [BSRC] Old Harbour (Status Authoritative) to drop its [BSRC] prefix is refused, naming archive_page or move_to_working', async () => {
     const r = await call('lk_api_write', {
       operationId: 'updateResource',
       params: { path: { resourceId: L.harbour }, body: { name: 'Old Harbour' } },
     });
-    expect(await direct(r), r.text).toEqual({ status: 'succeeded', onReview: true, revertible: true });
-    expect(w.repo.live(L.harbour)!.name).toBe('Old Harbour');
+    expect(r.body.error?.code, r.text).toBe('POLICY_DENIED');
+    expect(r.body.error?.message, r.text).toMatch(/archive_page or move_to_working/);
+    expect(w.repo.live(L.harbour)!.name).toBe('[BSRC] Old Harbour');
   });
 
   // ADR 0057 decision 5 (WS-C2a), v3 F12 (ADR 0081): renaming an Authoritative page by every route is a direct job at

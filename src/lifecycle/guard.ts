@@ -49,6 +49,7 @@ import { areaOf, lifecycleFrom, type LifecycleConfig } from './settings.js';
 import type { LifecycleTagRules } from './tags.js';
 import type { RestoreSet, RestoredWith } from './deleted.js';
 import { lifecycleSignals } from '../narrative/signals.js';
+import { lookalikeOf } from '../text/confusables.js';
 
 type Obj = Record<string, unknown>;
 type Area = 'working' | 'archived' | null;
@@ -97,6 +98,8 @@ export interface LifecycleChange {
    * its marker gives it, as LegendKeeper holds that area now).
    */
   readonly undeclarable?: true;
+  /** v3 F12 follow-up: an invalid value (a look-alike of an allowed one), refused as such, never a lifecycle change. */
+  readonly invalid?: true;
   /**
    * CR-2026-11-R4 (F2): the change is the first state of a page the same request (or job) creates: its name, place, and
    * the Status and tags its template gives it. A marker's `to: null` declares it; for a page that exists it declares only
@@ -395,6 +398,101 @@ function canonRename(
       tool: BSRC_LEAVE_TOOL,
     };
   return null;
+}
+
+/**
+ * v3 F12 follow-up (the owner, 27 November 2026): a rename that puts the [BSRC] prefix on, or takes it off, so that the
+ * prefix disagrees with the page's Status is refused, at every scope (never direct, never a proposal), naming the tool
+ * that keeps prefix, Status and tags in step. A rename that brings them back into step stays a canon change.
+ */
+function renameAgainstStatus(
+  c: LifecycleConfig,
+  fromKind: string | null,
+  toKind: string,
+  name: string,
+  statuses: readonly string[] | null,
+): { readonly to: State | null; readonly text: string; readonly tool: string } | null {
+  if (statuses === null) return null; // the sidebar could not be read: judged inside the lock
+  const states = statuses.map((v) => statusClass(c, v)).filter((x): x is State => x !== 'other');
+  const status = states[0] ?? null;
+  const shown = status === null ? 'it has no lifecycle Status' : `its Status is ${c.status[status]}`;
+  if (toKind === 'bsrc' && fromKind !== 'bsrc' && status !== 'authoritative')
+    return {
+      to: 'authoritative',
+      text: `the page would be renamed to ${name}, whose [BSRC] prefix says Authoritative while ${shown}`,
+      tool: 'promote_page (it sets the prefix, Status and tags together)',
+    };
+  if (fromKind === 'bsrc' && toKind !== 'bsrc' && status !== null)
+    return {
+      to: null,
+      text: `the page would be renamed to ${name}, which takes the [BSRC] prefix off while ${shown}`,
+      tool:
+        status === 'authoritative'
+          ? 'archive_page or move_to_working (each sets the prefix, Status and tags together)'
+          : BSRC_LEAVE_TOOL,
+    };
+  return null;
+}
+
+/**
+ * v3 F12 follow-up (the owner, 27 November 2026; ADR 0081 amendment 1): a lifecycle field's value that only looks like
+ * an allowed value (Unicode's confusables, UTS #39: "Authoritаtive" with a Cyrillic а, a zero-width space inside) is an
+ * invalid value: refused at every scope, the allowed values listed, whatever tool or marker sends it. Only values the
+ * write sets (not already on the page as they are) are judged.
+ */
+function lookalikeValues(
+  c: LifecycleConfig,
+  before: readonly SidebarProperty[],
+  after: readonly SidebarProperty[],
+): { readonly what: 'status'; readonly to: null; readonly text: string; readonly tool: string }[] {
+  const fields: [string, string[]][] = [
+    [c.fields.status, [c.status.authoritative, c.status.working, c.status.archived]],
+    [c.fields.continuityType, [c.continuityTypes.canon, c.continuityTypes.au, c.continuityTypes.nonCurrent]],
+  ];
+  const out: { what: 'status'; to: null; text: string; tool: string }[] = [];
+  for (const [field, allowed] of fields) {
+    const k = factKey(field);
+    const had = new Set(
+      factRows(before)
+        .filter((r) => factKey(r.key) === k)
+        .map((r) => valueText(r.content)),
+    );
+    for (const r of factRows(after)) {
+      if (factKey(r.key) !== k) continue;
+      const v = valueText(r.content);
+      if (v === '' || had.has(v)) continue;
+      const like = lookalikeOf(v, allowed);
+      if (like === null) continue;
+      out.push({
+        what: 'status',
+        to: null,
+        text: `${field} would be set to “${v}”, which only looks like “${like}” (it is spelt with other characters, as Unicode’s confusables list them): not an allowed value. The allowed values of ${field} are ${allowed.map((a) => `“${a}”`).join(', ')}`,
+        tool: `set_facts with one of the allowed values, typed plainly`,
+      });
+    }
+  }
+  return out;
+}
+
+/** Whether a request's own text could be a look-alike of a lifecycle value (so the lock reads the sidebar to judge it). */
+function writesLookalike(c: LifecycleConfig, params: OpParams): boolean {
+  const allowed = [
+    c.status.authoritative,
+    c.status.working,
+    c.status.archived,
+    c.continuityTypes.canon,
+    c.continuityTypes.au,
+    c.continuityTypes.nonCurrent,
+  ];
+  const texts: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 6) return;
+    if (typeof v === 'string') texts.push(v);
+    else if (Array.isArray(v)) for (const x of v) walk(x, depth + 1);
+    else if (v !== null && typeof v === 'object') for (const x of Object.values(v)) walk(x, depth + 1);
+  };
+  walk(params.body, 0);
+  return texts.some((t) => lookalikeOf(t, allowed) !== null);
 }
 
 /** CR-2026-11 (CR-11): a Status written as a page mention, which shows that page's name (the bridge cannot judge it). */
@@ -1237,6 +1335,11 @@ export class LifecycleGuard implements WriteGuard {
       return sb;
     };
     const created = new Set<string>();
+    /** The page's Status values as this request leaves them so far (null: its sidebar could not be read). */
+    const statusesOf = async (rid: string): Promise<string[] | null> => {
+      const sb = await read(rid);
+      return sb ? statusValues(c, sb) : null;
+    };
     // C2d (ADR 0036 decision 7): the status tags, when the project's `statusTags` rule is on.
     const tagsGuarded = statusTagsGuarded(canonConfigFrom(this.d.settings(input.project)).active);
     const tagChanges = (
@@ -1287,6 +1390,8 @@ export class LifecycleGuard implements WriteGuard {
           stepIndex: i,
         });
       }
+      for (const l of lookalikeValues(c, before, after))
+        out.push({ resourceId: rid, page, ...l, undeclarable: true, invalid: true, stepIndex: i });
       const ch = statusChange(c, statusValues(c, before), statusValues(c, after), created.has(rid));
       if (ch)
         out.push({
@@ -1548,6 +1653,10 @@ export class LifecycleGuard implements WriteGuard {
         const toKind = looseKind(body.name);
         const ch = prefixChange(fromKind, toKind);
         const canon = ch ? null : canonRename(fromKind, toKind, body.name);
+        const against =
+          canon && !created.has(rid)
+            ? renameAgainstStatus(c, fromKind, toKind, body.name, await statusesOf(rid))
+            : null;
         if (ch)
           out.push({
             resourceId: rid,
@@ -1558,6 +1667,7 @@ export class LifecycleGuard implements WriteGuard {
             tool: ch.tool,
             stepIndex: i,
           });
+        else if (against) out.push({ resourceId: rid, page: name(rid), what: 'prefix', ...against, stepIndex: i });
         else if (canon) out.push({ resourceId: rid, page: name(rid), what: 'canon', ...canon, stepIndex: i });
         if (isLifecycleIndexName(c, body.name))
           out.push({
@@ -1974,6 +2084,17 @@ export class LifecycleGuard implements WriteGuard {
       const ch = prefixChange(fromKind, toKind);
       const canon = ch ? null : canonRename(fromKind, toKind, body.name);
       const page = fromName ?? rid;
+      // v3 F12 follow-up: judged again on the sidebar as it is now (one read, only for a rename into or out of [BSRC]).
+      const against =
+        canon && !this.createdHere(project, input.job.id, rid)
+          ? renameAgainstStatus(
+              c,
+              fromKind,
+              toKind,
+              body.name,
+              statusValues(c, sidebarFrom(await read('listProperties', { path: { resourceId: rid } }))),
+            )
+          : null;
       if (ch)
         refuse({
           resourceId: rid,
@@ -1983,6 +2104,7 @@ export class LifecycleGuard implements WriteGuard {
           text: `the page would be renamed to ${body.name}`,
           tool: ch.tool,
         });
+      else if (against) refuse({ resourceId: rid, page, what: 'prefix', ...against });
       else if (canon) refuse({ resourceId: rid, page, what: 'canon', ...canon });
       if (isLifecycleIndexName(c, body.name))
         refuse({
@@ -2100,11 +2222,20 @@ export class LifecycleGuard implements WriteGuard {
       input.step.options.ifMatchFrom !== undefined
     )
       return;
-    // Only a write that can touch the Status row needs the whole sidebar (one more read).
-    if (!touchesKey(input, factKey(c.fields.status))) return;
+    // Only a write that can touch the Status row (or v3 F12: the Continuity Type row, for a look-alike value) needs the
+    // whole sidebar (one more read).
+    const touchesStatus = touchesKey(input, factKey(c.fields.status));
+    if (
+      !touchesStatus &&
+      !(touchesKey(input, factKey(c.fields.continuityType)) && writesLookalike(c, input.params))
+    )
+      return;
     const whole = sidebarFrom(await input.read('listProperties', { path: { resourceId: rid } }));
     const after = applySidebarWrite(whole, input.opId, input.params);
     if (!after) return;
+    for (const l of lookalikeValues(c, whole, after))
+      refuse({ resourceId: rid, page: rid, ...l, undeclarable: true, invalid: true });
+    if (!touchesStatus) return;
     if (newStatusMention(c, whole, after))
       refuse({
         resourceId: rid,
@@ -2210,6 +2341,8 @@ function narrativeReason(list: readonly LifecycleChange[], canonical: boolean): 
 }
 
 function refusal(changes: readonly LifecycleChange[]): string {
+  const invalid = changes.find((ch) => ch.invalid === true);
+  if (invalid) return `refused: ${invalid.page}: ${invalid.text} — use ${invalid.tool}; nothing was written`;
   const parts = changes.slice(0, 3).map((ch) => `${ch.page}: ${ch.text} — use ${ch.tool}`);
   return (
     `refused: this changes a page’s lifecycle state (${parts.join('; ')}${changes.length > 3 ? `; and ${changes.length - 3} more` : ''}). ` +

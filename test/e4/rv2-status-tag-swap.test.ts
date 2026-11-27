@@ -57,38 +57,29 @@ describe('RV2-3: the genuine status tag swapped for a look-alike', () => {
     expect(tags, `1: ${a.text}\n2: ${b.text}`).toContain('CANON');
   });
 
-  it('at scope propose, the genuine Status Authoritative replaced by a look-alike is a canonical proposal, not written', async () => {
-    const r = await propose('get_resource', { page: L.guild });
-    const fv = r.body.factsVersion ?? r.body.page?.factsVersion;
-    const set = await propose('set_facts', {
-      page: L.guild,
-      facts: { Status: 'Authorit\u0430tive' }, // Cyrillic a
-      ...(fv ? { baseFactsVersion: fv } : {}),
+  // v3 F12 follow-up (the owner, 27 November 2026; ADR 0081 amendment 1, decision 2): a look-alike of an allowed Status
+  // is an invalid value, refused at every scope (Unicode's confusables, UTS #39), the allowed values listed.
+  for (const [scope, run] of [
+    ['propose', () => propose],
+    ['write', () => call],
+  ] as const) {
+    it(`at scope ${scope}, the genuine Status Authoritative replaced by a look-alike is refused as an invalid value, not written`, async () => {
+      const ask = run();
+      const r = await ask('get_resource', { page: L.guild });
+      const fv = r.body.factsVersion ?? r.body.page?.factsVersion;
+      const set = await ask('set_facts', {
+        page: L.guild,
+        facts: { Status: 'Authorit\u0430tive' }, // Cyrillic a
+        ...(fv ? { baseFactsVersion: fv } : {}),
+      });
+      expect(set.body.status, set.text).not.toBe('proposal_captured');
+      expect(set.body.error?.code, set.text).toBe('POLICY_DENIED');
+      expect(set.body.error?.message, set.text).toMatch(
+        /only looks like “Authoritative”.*not an allowed value/,
+      );
+      expect(set.body.error?.message, set.text).toMatch(/“Authoritative”, “Working”, “Archived”/);
+      // SAFE: Status stays exactly Authoritative.
+      expect(status(L.guild), set.text).toBe('Authoritative');
     });
-    // SAFE: Status stays exactly Authoritative until the owner accepts the change as canon.
-    expect(set.body, set.text).toMatchObject({
-      status: 'proposal_captured',
-      requiresCanonicalApproval: true,
-    });
-    expect(status(L.guild), set.text).toBe('Authoritative');
-  });
-
-  it('at scope write, the same look-alike Status is a direct write of a protected change, on the owner’s Review page', async () => {
-    const r = await call('get_resource', { page: L.guild });
-    const fv = r.body.factsVersion ?? r.body.page?.factsVersion;
-    const set = await call('set_facts', {
-      page: L.guild,
-      facts: { Status: 'Authorit\u0430tive' }, // Cyrillic a
-      ...(fv ? { baseFactsVersion: fv } : {}),
-    });
-    expect(set.body, set.text).toMatchObject({
-      status: 'written',
-      facts: { changed: [{ key: 'Status', before: 'Authoritative', after: 'Authorit\u0430tive' }] },
-    });
-    expect(set.body.requiresCanonicalApproval).toBeUndefined();
-    const jobId = String(set.body.jobId);
-    expect(
-      w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).some((i) => i.jobId === jobId),
-    ).toBe(true);
-  });
+  }
 });
